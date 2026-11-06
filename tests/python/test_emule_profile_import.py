@@ -6,13 +6,15 @@ import sqlite3
 import struct
 from pathlib import Path
 
+from emule_test_harness.paths import get_required_emule_workspace_root
+
 import pytest
 
 from emule_test_harness import mfc_known_met, mfc_profile_import, rust_client, rust_metadata
 
 
 def _rust_repo() -> Path:
-    return Path(__file__).resolve().parents[2].parent / "emulebb-rust"
+    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
 
 
 def _tag_string(name_id: int, value: str) -> bytes:
@@ -129,7 +131,7 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     assert summary["kadBootstrapEndpoints"] == 1
     assert summary["importedUserHash"] is True
     assert summary["hashes"]["importedKnownRecords"] == 1
-    assert summary["hashes"]["manifestImport"]["importedRecords"] == 1
+    assert summary["hashes"]["pathMatches"]["importedRecords"] == 1
     assert summary["restBaseUrl"] == "http://192.0.2.10:58381/api/v1"
     assert summary["p2pBindIp"] is None
     assert summary["p2pBindInterface"] == "hide.me"
@@ -157,16 +159,8 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
             FROM imported_known_files
             """
         ).fetchall()
-        manifests = conn.execute(
-            """
-            SELECT lower(hex(known_files.ed2k_hash)), known_files.display_name,
-                   known_files.size_bytes, local_paths.display_path,
-                   transfers.removed_at_ms IS NOT NULL
-            FROM transfers
-            JOIN known_files ON known_files.id = transfers.known_file_id
-            LEFT JOIN local_paths ON local_paths.id = transfers.source_path_id
-            """
-        ).fetchall()
+        downloads = conn.execute("SELECT count(*) FROM transfers").fetchone()[0]
+        local_instances = conn.execute("SELECT count(*) FROM local_file_instances").fetchone()[0]
         profile = conn.execute(
             "SELECT id, created_by FROM profile"
         ).fetchall()
@@ -197,17 +191,10 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
             4,
         )
     ]
-    assert manifests == [
-        (
-            "00112233445566778899aabbccddeeff",
-            payload.name,
-            payload.stat().st_size,
-            str(payload),
-            1,
-        )
-    ]
+    assert downloads == 0
+    assert local_instances == 0
     assert profile == [(1, "emulebb-rust")]
-    assert transfer_name_states == [(0, 0)]
+    assert transfer_name_states == []
     rust_metadata.require_current_profile_database(_rust_repo(), db_path)
 
 
@@ -244,6 +231,10 @@ def test_upsert_stock_mfc_profile_hashes_reuses_existing_profile(
         rust_profile_dir=rust_profile,
     )
     metadata_db = rust_profile / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.seed_transfer_manifest(
+        metadata_db, ed2k_hash="00112233445566778899aabbccddeeff",
+        name=payload.name, size_bytes=payload.stat().st_size, piece_size=9_728_000,
+    )
     with sqlite3.connect(metadata_db) as connection:
         connection.execute(
             "UPDATE known_files SET all_time_uploaded_bytes = 987654321"
@@ -256,10 +247,9 @@ def test_upsert_stock_mfc_profile_hashes_reuses_existing_profile(
     )
 
     assert summary["operation"] == "upsert-hashes"
-    assert summary["hashes"]["manifestImport"]["writeMode"] == "refresh-existing"
-    assert summary["hashes"]["manifestImport"]["importedSourcePaths"] == 1
-    assert summary["hashes"]["manifestImport"]["matchedSourcePaths"] == 1
-    assert summary["hashes"]["fingerprintRefresh"]["sharedSourceCount"] == 1
+    assert summary["hashes"]["pathMatches"]["writeMode"] == "import-cache"
+    assert summary["hashes"]["pathMatches"]["importedSourcePaths"] == 0
+    assert summary["hashes"]["pathMatches"]["matchedSourcePaths"] == 1
     with sqlite3.connect(metadata_db) as connection:
         uploaded = connection.execute(
             "SELECT all_time_uploaded_bytes FROM known_files"

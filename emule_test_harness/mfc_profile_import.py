@@ -247,7 +247,7 @@ def import_stock_mfc_profile(
         scan_shared_roots=True,
         dry_run=dry_run,
     )
-    hash_summary["manifestImport"] = manifest_summary
+    hash_summary["pathMatches"] = manifest_summary
 
     return {
         "schemaVersion": 1,
@@ -314,14 +314,9 @@ def upsert_stock_mfc_profile_hashes(
         known2_64_met=known2_64_met if known2_64_met.is_file() else None,
         shared_roots=shared_roots,
         scan_shared_roots=True,
-        preserve_existing_runtime_state=True,
         dry_run=dry_run,
     )
-    cache_summary["manifestImport"] = manifest_summary
-    if not dry_run:
-        cache_summary["fingerprintRefresh"] = (
-            rust_metadata.refresh_matching_share_source_fingerprints(metadata_db)
-        )
+    cache_summary["pathMatches"] = manifest_summary
 
     return {
         "schemaVersion": 1,

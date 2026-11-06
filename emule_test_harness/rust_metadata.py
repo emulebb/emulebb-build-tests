@@ -25,8 +25,6 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from emule_test_harness import rust_native_fingerprint
-
 ED2K_PART_SIZE = 9_728_000
 RUST_PROFILE_METADATA_FILE = "emulebb-rust-metadata.db"
 
@@ -65,7 +63,7 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
 
     The Rust ``MetadataStore`` keeps a pre-existing database only when the
     ``metadata_schema`` marker matches its compiled ``SCHEMA_ID``/``SCHEMA_VERSION``;
-    otherwise it resets every table. Writing the marker here lets seeded rows survive
+    otherwise startup fails and requires a fresh profile. The marker lets seed rows survive
     daemon startup.
     """
 
@@ -410,8 +408,6 @@ def seed_transfer_manifest(
     last_upload_request_ms: int = 0,
     comment: str = "",
     rating: int = 0,
-    source_path: str | None = None,
-    source_mtime_ms: int | None = None,
 ) -> None:
     """Seed a full ED2K transfer manifest (mirrors ``MetadataStore::upsert_transfer_manifest``).
 
@@ -433,27 +429,22 @@ def seed_transfer_manifest(
     now = _now_ms()
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        source_path_id = _optional_local_path_id(conn, source_path, now)
         conn.execute(
             """
             INSERT INTO known_files(
                 ed2k_hash, size_bytes, display_name,
-                part_size, part_count, completed, md4_hashset_acquired,
-                aich_hashset_acquired, aich_root, upload_priority,
+                part_size, part_count, aich_root, upload_priority,
                 auto_upload_priority, comment, rating, all_time_uploaded_bytes,
                 all_time_upload_requests, all_time_upload_accepts,
                 last_upload_request_ms,
                 first_seen_ms, last_seen_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
                 size_bytes = excluded.size_bytes,
                 display_name = excluded.display_name,
                 part_size = excluded.part_size,
                 part_count = excluded.part_count,
-                completed = excluded.completed,
-                md4_hashset_acquired = excluded.md4_hashset_acquired,
-                aich_hashset_acquired = excluded.aich_hashset_acquired,
                 aich_root = excluded.aich_root,
                 upload_priority = excluded.upload_priority,
                 auto_upload_priority = excluded.auto_upload_priority,
@@ -472,9 +463,6 @@ def seed_transfer_manifest(
                 name,
                 piece_size,
                 piece_count,
-                1 if completed else 0,
-                1 if md4_hashset_acquired else 0,
-                1 if aich_hashset_acquired else 0,
                 bytes.fromhex(aich_root) if aich_root else None,
                 upload_priority,
                 1 if auto_upload_priority else 0,
@@ -495,71 +483,33 @@ def seed_transfer_manifest(
         conn.execute(
             """
             INSERT INTO transfers(
-                known_file_id, visible_state, control_state, download_priority,
-                payload_directory, delivery_state, delivery_ownership,
-                source_path_id, source_fingerprint,
-                created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
+                known_file_id, completed, md4_hashset_acquired, aich_hashset_acquired,
+                visible_state, control_state, download_priority, payload_directory,
+                delivery_state, delivery_ownership, created_at_ms, updated_at_ms,
+                completed_at_ms
             )
-            VALUES (?, ?, ?, 'normal', ?, ?, 'none', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, 'pending', 'none', ?, ?, ?)
             ON CONFLICT(known_file_id) DO UPDATE SET
+                completed = excluded.completed,
+                md4_hashset_acquired = excluded.md4_hashset_acquired,
+                aich_hashset_acquired = excluded.aich_hashset_acquired,
                 visible_state = excluded.visible_state,
                 control_state = excluded.control_state,
-                download_priority = excluded.download_priority,
-                payload_directory = excluded.payload_directory,
-                delivery_state = excluded.delivery_state,
-                delivery_ownership = excluded.delivery_ownership,
-                source_path_id = excluded.source_path_id,
-                source_fingerprint = excluded.source_fingerprint,
                 updated_at_ms = excluded.updated_at_ms,
-                completed_at_ms = excluded.completed_at_ms,
-                removed_at_ms = excluded.removed_at_ms
+                completed_at_ms = excluded.completed_at_ms
             """,
-            (
-                known_file_id,
-                visible_state,
-                control_state,
-                ed2k_hash,
-                "not_applicable" if source_path_id is not None else "pending",
-                source_path_id,
-                _native_file_fingerprint(source_path),
-                now,
-                now,
-                now if completed else None,
-                now if source_path_id is not None else None,
-            ),
+            (known_file_id, int(completed), int(md4_hashset_acquired),
+             int(aich_hashset_acquired), visible_state, control_state,
+             ed2k_hash, now, now, now if completed else None),
         )
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
         _replace_transfer_name_state(conn, transfer_id)
-        if source_path_id is not None:
-            conn.execute(
-                """
-                INSERT INTO shared_file_sources(
-                    known_file_id, path_id, file_size, source_fingerprint,
-                    created_at_ms, updated_at_ms
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(path_id) DO UPDATE SET
-                    known_file_id = excluded.known_file_id,
-                    file_size = excluded.file_size,
-                    source_fingerprint = excluded.source_fingerprint,
-                    updated_at_ms = excluded.updated_at_ms
-                """,
-                (
-                    known_file_id,
-                    source_path_id,
-                    size_bytes,
-                    _native_file_fingerprint(source_path),
-                    now,
-                    now,
-                ),
-            )
-            conn.execute("DELETE FROM shared_file_scan_failures WHERE path_id = ?", (source_path_id,))
         conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
-        conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
-        conn.execute("DELETE FROM verified_ranges WHERE known_file_id = ?", (known_file_id,))
+        conn.execute("DELETE FROM ed2k_part_hashes WHERE transfer_id = ?", (transfer_id,))
+        conn.execute("DELETE FROM aich_part_hashes WHERE transfer_id = ?", (transfer_id,))
+        conn.execute("DELETE FROM verified_ranges WHERE transfer_id = ?", (transfer_id,))
         conn.execute("DELETE FROM transfer_sources WHERE transfer_id = ?", (transfer_id,))
         for piece_index in range(piece_count):
             state = "Verified" if completed else "Missing"
@@ -573,13 +523,13 @@ def seed_transfer_manifest(
             )
         for index, part_hash in enumerate(md4_hashset):
             conn.execute(
-                "INSERT INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",
-                (known_file_id, index, bytes.fromhex(part_hash)),
+                "INSERT INTO ed2k_part_hashes(transfer_id, part_index, md4_hash) VALUES (?, ?, ?)",
+                (transfer_id, index, bytes.fromhex(part_hash)),
             )
         for index, part_hash in enumerate(aich_hashset):
             conn.execute(
-                "INSERT INTO aich_part_hashes(known_file_id, part_index, aich_hash) VALUES (?, ?, ?)",
-                (known_file_id, index, bytes.fromhex(part_hash)),
+                "INSERT INTO aich_part_hashes(transfer_id, part_index, aich_hash) VALUES (?, ?, ?)",
+                (transfer_id, index, bytes.fromhex(part_hash)),
             )
         for source in sources:
             user_hash = source.get("user_hash")
@@ -600,61 +550,12 @@ def seed_transfer_manifest(
         if completed:
             conn.execute(
                 """
-                INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
+                INSERT INTO verified_ranges(transfer_id, start_offset, end_offset, created_at_ms)
                 VALUES (?, 0, ?, ?)
                 """,
-                (known_file_id, size_bytes, now),
+                (transfer_id, size_bytes, now),
             )
         conn.commit()
-
-
-def seed_share_in_place_manifest(
-    db_path: Path,
-    *,
-    ed2k_hash: str,
-    name: str,
-    size_bytes: int,
-    source_path: str,
-    source_mtime_ms: int,
-    md4_hashset: list[str] | None = None,
-    aich_root: str | None = None,
-    aich_hashset: list[str] | None = None,
-    upload_priority: str = "normal",
-    auto_upload_priority: bool = False,
-    all_time_uploaded_bytes: int = 0,
-    all_time_upload_requests: int = 0,
-    all_time_upload_accepts: int = 0,
-    last_upload_request_ms: int = 0,
-) -> None:
-    """Seed a completed shared-file manifest with schema-current path identity.
-
-    The row mirrors Rust's local ingest result: completed transfer, verified
-    pieces and ranges, original ``source_path``, and a native file fingerprint.
-    ``source_mtime_ms`` remains an accepted input for callers that parse stock
-    metadata, while the persisted identity is derived from the actual file.
-    """
-
-    seed_transfer_manifest(
-        db_path,
-        ed2k_hash=ed2k_hash,
-        name=name,
-        size_bytes=size_bytes,
-        piece_size=ED2K_PART_SIZE,
-        completed=True,
-        md4_hashset_acquired=True,
-        md4_hashset=md4_hashset or [],
-        aich_hashset_acquired=aich_root is not None,
-        aich_root=aich_root,
-        aich_hashset=aich_hashset or [],
-        upload_priority=upload_priority,
-        auto_upload_priority=auto_upload_priority,
-        all_time_uploaded_bytes=all_time_uploaded_bytes,
-        all_time_upload_requests=all_time_upload_requests,
-        all_time_upload_accepts=all_time_upload_accepts,
-        last_upload_request_ms=last_upload_request_ms,
-        source_path=source_path,
-        source_mtime_ms=source_mtime_ms,
-    )
 
 
 def seed_imported_known_files(db_path: Path, rows: list[dict[str, object]]) -> None:
@@ -733,396 +634,11 @@ def _required_hex(row: dict[str, object], key: str, byte_len: int) -> bytes:
     return raw
 
 
-def seed_share_in_place_manifests(
-    db_path: Path,
-    manifests: list[dict[str, object]],
-    *,
-    seed_piece_rows: bool = True,
-) -> None:
-    """Seed many completed share-in-place manifests in one SQLite transaction."""
-
-    now = _now_ms()
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        if not seed_piece_rows:
-            _seed_share_in_place_manifests_fast_conn(conn, now=now, manifests=manifests)
-            conn.commit()
-            return
-        for manifest in manifests:
-            _seed_share_in_place_manifest_conn(
-                conn,
-                now=now,
-                seed_piece_rows=seed_piece_rows,
-                **manifest,
-            )
-        conn.commit()
-
-
-def upsert_share_in_place_hash_manifests(
-    db_path: Path,
-    manifests: list[dict[str, object]],
-) -> None:
-    """Refresh share hash metadata without replacing persisted Rust runtime state."""
-
-    now = _now_ms()
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        _seed_share_in_place_manifests_fast_conn(
-            conn,
-            now=now,
-            manifests=manifests,
-            preserve_existing_runtime_state=True,
-        )
-        conn.commit()
-
-
-def refresh_matching_share_source_fingerprints(db_path: Path) -> dict[str, int]:
-    """Add the current change timestamp to trustworthy persisted share hashes."""
-
-    summary = {
-        "sharedSourceCount": 0,
-        "alreadyCurrentCount": 0,
-        "upgradedCount": 0,
-        "missingFingerprintCount": 0,
-        "invalidFingerprintCount": 0,
-        "unavailableSourceCount": 0,
-        "baseMismatchCount": 0,
-        "missingChangeTimestampCount": 0,
-    }
-    with closing(sqlite3.connect(db_path)) as conn:
-        rows = conn.execute(
-            """
-            SELECT shared_file_sources.path_id, local_paths.display_path,
-                   shared_file_sources.source_fingerprint
-            FROM shared_file_sources
-            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
-            ORDER BY shared_file_sources.path_id
-            """
-        ).fetchall()
-        summary["sharedSourceCount"] = len(rows)
-        for path_id, display_path, persisted_payload in rows:
-            if persisted_payload is None:
-                summary["missingFingerprintCount"] += 1
-                continue
-            try:
-                persisted = rust_native_fingerprint.decode_fingerprint(
-                    bytes(persisted_payload)
-                )
-            except ValueError:
-                summary["invalidFingerprintCount"] += 1
-                continue
-            current_payload = _native_file_fingerprint(str(display_path))
-            if current_payload is None:
-                summary["unavailableSourceCount"] += 1
-                continue
-            try:
-                current = rust_native_fingerprint.decode_fingerprint(current_payload)
-            except ValueError:
-                summary["invalidFingerprintCount"] += 1
-                continue
-            if (
-                persisted.identity_kind != current.identity_kind
-                or persisted.identity_bytes != current.identity_bytes
-                or persisted.size_bytes != current.size_bytes
-                or persisted.modified != current.modified
-            ):
-                summary["baseMismatchCount"] += 1
-                continue
-            if current.changed is None:
-                summary["missingChangeTimestampCount"] += 1
-                continue
-            if persisted.changed == current.changed:
-                summary["alreadyCurrentCount"] += 1
-                continue
-            if persisted.changed is not None:
-                summary["baseMismatchCount"] += 1
-                continue
-            conn.execute(
-                """
-                UPDATE shared_file_sources
-                SET source_fingerprint = ?, updated_at_ms = ?
-                WHERE path_id = ? AND source_fingerprint = ?
-                """,
-                (current_payload, _now_ms(), path_id, persisted_payload),
-            )
-            conn.execute(
-                """
-                UPDATE transfers
-                SET source_fingerprint = ?, updated_at_ms = ?
-                WHERE source_path_id = ? AND source_fingerprint = ?
-                """,
-                (current_payload, _now_ms(), path_id, persisted_payload),
-            )
-            summary["upgradedCount"] += 1
-        conn.commit()
-    return summary
-
-
-def _seed_share_in_place_manifests_fast_conn(
-    conn: sqlite3.Connection,
-    *,
-    now: int,
-    manifests: list[dict[str, object]],
-    preserve_existing_runtime_state: bool = False,
-) -> None:
-    """Bulk seed completed share-in-place manifests for fresh migration profiles."""
-
-    platform = current_platform()
-    path_rows = []
-    known_rows = []
-    transfer_rows = []
-    source_rows = []
-    range_rows = []
-    md4_rows = []
-    aich_rows = []
-    existing_transfer_known_ids = (
-        {row[0] for row in conn.execute("SELECT known_file_id FROM transfers")}
-        if preserve_existing_runtime_state
-        else set()
-    )
-
-    for manifest in manifests:
-        source_path = str(manifest["source_path"])
-        path_rows.append(
-            (
-                source_path,
-                _native_path_storage_bytes(source_path),
-                normalize_path_key(source_path),
-                platform,
-            )
-        )
-
-    conn.executemany(
-        """
-        INSERT INTO local_paths(
-            display_path, native_path, search_key, platform
-        )
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(platform, native_path) DO UPDATE SET
-            display_path = excluded.display_path,
-            search_key = excluded.search_key
-        """,
-        path_rows,
-    )
-    path_ids = {
-        row[1]: row[0]
-        for row in conn.execute(
-            "SELECT id, search_key FROM local_paths WHERE platform = ?",
-            (platform,),
-        )
-    }
-
-    for manifest in manifests:
-        ed2k_hash = str(manifest["ed2k_hash"])
-        size_bytes = int(manifest["size_bytes"])
-        piece_count = (size_bytes + ED2K_PART_SIZE - 1) // ED2K_PART_SIZE if size_bytes else 0
-        aich_root = manifest.get("aich_root")
-        known_rows.append(
-            (
-                bytes.fromhex(ed2k_hash),
-                size_bytes,
-                str(manifest["name"]),
-                ED2K_PART_SIZE,
-                piece_count,
-                1 if aich_root is not None else 0,
-                bytes.fromhex(str(aich_root)) if aich_root else None,
-                str(manifest.get("upload_priority", "normal")),
-                1 if manifest.get("auto_upload_priority", False) else 0,
-                int(manifest.get("all_time_uploaded_bytes", 0)),
-                int(manifest.get("all_time_upload_requests", 0)),
-                int(manifest.get("all_time_upload_accepts", 0)),
-                int(manifest.get("last_upload_request_ms", 0)),
-                now,
-                now,
-                now,
-            )
-        )
-    known_file_upsert = (
-        """
-        INSERT INTO known_files(
-            ed2k_hash, size_bytes, display_name, part_size, part_count,
-            completed, md4_hashset_acquired, aich_hashset_acquired, aich_root,
-            upload_priority, auto_upload_priority, all_time_uploaded_bytes,
-            all_time_upload_requests, all_time_upload_accepts,
-            last_upload_request_ms, first_seen_ms, last_seen_ms, updated_at_ms
-        )
-        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ed2k_hash) DO UPDATE SET
-            size_bytes = excluded.size_bytes,
-            display_name = excluded.display_name,
-            part_size = excluded.part_size,
-            part_count = excluded.part_count,
-            completed = excluded.completed,
-            md4_hashset_acquired = excluded.md4_hashset_acquired,
-            aich_hashset_acquired = excluded.aich_hashset_acquired,
-            aich_root = excluded.aich_root,
-            upload_priority = excluded.upload_priority,
-            auto_upload_priority = excluded.auto_upload_priority,
-            all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
-            all_time_upload_requests = excluded.all_time_upload_requests,
-            all_time_upload_accepts = excluded.all_time_upload_accepts,
-            last_upload_request_ms = excluded.last_upload_request_ms,
-            last_seen_ms = excluded.last_seen_ms,
-            updated_at_ms = excluded.updated_at_ms
-        """
-        if not preserve_existing_runtime_state
-        else """
-        INSERT INTO known_files(
-            ed2k_hash, size_bytes, display_name, part_size, part_count,
-            completed, md4_hashset_acquired, aich_hashset_acquired, aich_root,
-            upload_priority, auto_upload_priority, all_time_uploaded_bytes,
-            all_time_upload_requests, all_time_upload_accepts,
-            last_upload_request_ms, first_seen_ms, last_seen_ms, updated_at_ms
-        )
-        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ed2k_hash) DO UPDATE SET
-            size_bytes = excluded.size_bytes,
-            display_name = excluded.display_name,
-            part_size = excluded.part_size,
-            part_count = excluded.part_count,
-            completed = excluded.completed,
-            md4_hashset_acquired = excluded.md4_hashset_acquired,
-            aich_hashset_acquired = excluded.aich_hashset_acquired,
-            aich_root = excluded.aich_root,
-            last_seen_ms = excluded.last_seen_ms,
-            updated_at_ms = excluded.updated_at_ms
-        """
-    )
-    conn.executemany(known_file_upsert, known_rows)
-    known_ids = {row[1]: row[0] for row in conn.execute("SELECT id, lower(hex(ed2k_hash)) FROM known_files")}
-
-    for manifest in manifests:
-        ed2k_hash = str(manifest["ed2k_hash"])
-        known_file_id = known_ids[ed2k_hash]
-        path_id = path_ids[normalize_path_key(str(manifest["source_path"]))]
-        size_bytes = int(manifest["size_bytes"])
-        source_fingerprint = _native_file_fingerprint(str(manifest["source_path"]))
-        transfer_rows.append(
-            (known_file_id, ed2k_hash, path_id, source_fingerprint, now, now, now, now)
-        )
-        source_rows.append((known_file_id, path_id, size_bytes, source_fingerprint, now, now))
-        if known_file_id not in existing_transfer_known_ids:
-            range_rows.append((known_file_id, size_bytes, now))
-        for index, part_hash in enumerate(manifest.get("md4_hashset", []) or []):
-            md4_rows.append((known_file_id, index, bytes.fromhex(str(part_hash))))
-        for index, part_hash in enumerate(manifest.get("aich_hashset", []) or []):
-            aich_rows.append((known_file_id, index, bytes.fromhex(str(part_hash))))
-
-    transfer_upsert = (
-        """
-        INSERT INTO transfers(
-            known_file_id, visible_state, download_priority, payload_directory,
-            delivery_state, delivery_ownership, source_path_id, source_fingerprint,
-            created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
-        )
-        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(known_file_id) DO UPDATE SET
-            visible_state = excluded.visible_state,
-            download_priority = excluded.download_priority,
-            payload_directory = excluded.payload_directory,
-            delivery_state = excluded.delivery_state,
-            delivery_ownership = excluded.delivery_ownership,
-            source_path_id = excluded.source_path_id,
-            source_fingerprint = excluded.source_fingerprint,
-            updated_at_ms = excluded.updated_at_ms,
-            completed_at_ms = excluded.completed_at_ms,
-            removed_at_ms = excluded.removed_at_ms
-        """
-        if not preserve_existing_runtime_state
-        else """
-        INSERT INTO transfers(
-            known_file_id, visible_state, download_priority, payload_directory,
-            delivery_state, delivery_ownership, source_path_id, source_fingerprint,
-            created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
-        )
-        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(known_file_id) DO UPDATE SET
-            source_path_id = excluded.source_path_id,
-            source_fingerprint = excluded.source_fingerprint,
-            updated_at_ms = excluded.updated_at_ms
-        WHERE transfers.source_path_id IS NOT NULL
-        """
-    )
-    conn.executemany(transfer_upsert, transfer_rows)
-    transfer_ids = []
-    for known_file_id in {row[0] for row in transfer_rows}:
-        transfer_id = conn.execute(
-            "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
-        ).fetchone()[0]
-        transfer_ids.append(transfer_id)
-    if preserve_existing_runtime_state:
-        conn.executemany(
-            """
-            INSERT OR IGNORE INTO transfer_name_state(
-                transfer_id, display_name_pinned, follow_majority_filename
-            )
-            VALUES (?, 0, 0)
-            """,
-            [(transfer_id,) for transfer_id in transfer_ids],
-        )
-    else:
-        for transfer_id in transfer_ids:
-            _replace_transfer_name_state(conn, transfer_id)
-    conn.executemany(
-        """
-        INSERT INTO shared_file_sources(
-            known_file_id, path_id, file_size, source_fingerprint,
-            created_at_ms, updated_at_ms
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(path_id) DO UPDATE SET
-            known_file_id = excluded.known_file_id,
-            file_size = excluded.file_size,
-            source_fingerprint = excluded.source_fingerprint,
-            updated_at_ms = excluded.updated_at_ms
-        """,
-        source_rows,
-    )
-    conn.executemany(
-        "DELETE FROM shared_file_scan_failures WHERE path_id = ?",
-        [(row[1],) for row in source_rows],
-    )
-    known_file_ids = sorted({row[0] for row in source_rows})
-    conn.executemany(
-        "DELETE FROM ed2k_part_hashes WHERE known_file_id = ?",
-        [(known_file_id,) for known_file_id in known_file_ids],
-    )
-    conn.executemany(
-        "DELETE FROM aich_part_hashes WHERE known_file_id = ?",
-        [(known_file_id,) for known_file_id in known_file_ids],
-    )
-    if not preserve_existing_runtime_state:
-        conn.executemany(
-            "DELETE FROM verified_ranges WHERE known_file_id = ?",
-            [(known_file_id,) for known_file_id in known_file_ids],
-        )
-    if md4_rows:
-        conn.executemany(
-            "INSERT OR REPLACE INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",
-            md4_rows,
-        )
-    if aich_rows:
-        conn.executemany(
-            "INSERT OR REPLACE INTO aich_part_hashes(known_file_id, part_index, aich_hash) VALUES (?, ?, ?)",
-            aich_rows,
-        )
-    if range_rows:
-        conn.executemany(
-            """
-            INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
-            VALUES (?, 0, ?, ?)
-            """,
-            {row[0]: row for row in range_rows}.values(),
-        )
-
-
 def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> None:
     """Seed Rust shared-directory roots before daemon startup.
 
-    Preseeded share-in-place manifests are pruned by Rust's startup reload when
-    no shared roots exist yet. Live parity harnesses therefore write the roots
-    into metadata before launching the daemon; the later REST patch remains an
-    idempotent confirmation of the same desired state.
+    The daemon validates files and admits memberships during its root scan.
+    This helper seeds configuration only; it grants no file serving authority.
     """
 
     now = _now_ms()
@@ -1162,174 +678,6 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
         conn.commit()
 
 
-def _seed_share_in_place_manifest_conn(
-    conn: sqlite3.Connection,
-    *,
-    now: int,
-    ed2k_hash: str,
-    name: str,
-    size_bytes: int,
-    source_path: str,
-    source_mtime_ms: int,
-    md4_hashset: list[str] | None = None,
-    aich_root: str | None = None,
-    aich_hashset: list[str] | None = None,
-    upload_priority: str = "normal",
-    auto_upload_priority: bool = False,
-    all_time_uploaded_bytes: int = 0,
-    all_time_upload_requests: int = 0,
-    all_time_upload_accepts: int = 0,
-    last_upload_request_ms: int = 0,
-    seed_piece_rows: bool = True,
-) -> None:
-    md4_hashset = md4_hashset or []
-    aich_hashset = aich_hashset or []
-    hash_blob = bytes.fromhex(ed2k_hash)
-    piece_size = ED2K_PART_SIZE
-    piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
-    source_path_id = _upsert_local_path(conn, source_path, now)
-    conn.execute(
-        """
-        INSERT INTO known_files(
-            ed2k_hash, size_bytes, display_name,
-            part_size, part_count, completed, md4_hashset_acquired,
-            aich_hashset_acquired, aich_root, upload_priority,
-            auto_upload_priority, all_time_uploaded_bytes,
-            all_time_upload_requests, all_time_upload_accepts,
-            last_upload_request_ms,
-            first_seen_ms, last_seen_ms, updated_at_ms
-        )
-        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ed2k_hash) DO UPDATE SET
-            size_bytes = excluded.size_bytes,
-            display_name = excluded.display_name,
-            part_size = excluded.part_size,
-            part_count = excluded.part_count,
-            completed = excluded.completed,
-            md4_hashset_acquired = excluded.md4_hashset_acquired,
-            aich_hashset_acquired = excluded.aich_hashset_acquired,
-            aich_root = excluded.aich_root,
-            upload_priority = excluded.upload_priority,
-            auto_upload_priority = excluded.auto_upload_priority,
-            all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
-            all_time_upload_requests = excluded.all_time_upload_requests,
-            all_time_upload_accepts = excluded.all_time_upload_accepts,
-            last_upload_request_ms = excluded.last_upload_request_ms,
-            last_seen_ms = excluded.last_seen_ms,
-            updated_at_ms = excluded.updated_at_ms
-        """,
-        (
-            hash_blob,
-            size_bytes,
-            name,
-            piece_size,
-            piece_count,
-            1 if aich_root is not None else 0,
-            bytes.fromhex(aich_root) if aich_root else None,
-            upload_priority,
-            1 if auto_upload_priority else 0,
-            all_time_uploaded_bytes,
-            all_time_upload_requests,
-            all_time_upload_accepts,
-            last_upload_request_ms,
-            now,
-            now,
-            now,
-        ),
-    )
-    known_file_id = conn.execute(
-        "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
-    ).fetchone()[0]
-    conn.execute(
-        """
-        INSERT INTO transfers(
-            known_file_id, visible_state, download_priority, payload_directory,
-            delivery_state, delivery_ownership, source_path_id, source_fingerprint,
-            created_at_ms, updated_at_ms, completed_at_ms, removed_at_ms
-        )
-        VALUES (?, 'completed', 'normal', ?, 'not_applicable', 'none', ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(known_file_id) DO UPDATE SET
-            visible_state = excluded.visible_state,
-            download_priority = excluded.download_priority,
-            payload_directory = excluded.payload_directory,
-            delivery_state = excluded.delivery_state,
-            delivery_ownership = excluded.delivery_ownership,
-            source_path_id = excluded.source_path_id,
-            source_fingerprint = excluded.source_fingerprint,
-            updated_at_ms = excluded.updated_at_ms,
-            completed_at_ms = excluded.completed_at_ms,
-            removed_at_ms = excluded.removed_at_ms
-        """,
-        (
-            known_file_id,
-            ed2k_hash,
-            source_path_id,
-            _native_file_fingerprint(source_path),
-            now,
-            now,
-            now,
-            now,
-        ),
-    )
-    transfer_id = conn.execute(
-        "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
-    ).fetchone()[0]
-    _replace_transfer_name_state(conn, transfer_id)
-    conn.execute(
-        """
-        INSERT INTO shared_file_sources(
-            known_file_id, path_id, file_size, source_fingerprint,
-            created_at_ms, updated_at_ms
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(path_id) DO UPDATE SET
-            known_file_id = excluded.known_file_id,
-            file_size = excluded.file_size,
-            source_fingerprint = excluded.source_fingerprint,
-            updated_at_ms = excluded.updated_at_ms
-        """,
-        (
-            known_file_id,
-            source_path_id,
-            size_bytes,
-            _native_file_fingerprint(source_path),
-            now,
-            now,
-        ),
-    )
-    conn.execute("DELETE FROM shared_file_scan_failures WHERE path_id = ?", (source_path_id,))
-    conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
-    conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
-    conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
-    conn.execute("DELETE FROM verified_ranges WHERE known_file_id = ?", (known_file_id,))
-    if seed_piece_rows:
-        for piece_index in range(piece_count):
-            conn.execute(
-                """
-                INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
-                VALUES (?, ?, 'Verified', ?, ?)
-                """,
-                (transfer_id, piece_index, expected_piece_length(size_bytes, piece_size, piece_index), now),
-            )
-    for index, part_hash in enumerate(md4_hashset):
-        conn.execute(
-            "INSERT INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",
-            (known_file_id, index, bytes.fromhex(part_hash)),
-        )
-    for index, part_hash in enumerate(aich_hashset):
-        conn.execute(
-            "INSERT INTO aich_part_hashes(known_file_id, part_index, aich_hash) VALUES (?, ?, ?)",
-            (known_file_id, index, bytes.fromhex(part_hash)),
-        )
-    conn.execute(
-        """
-        INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, created_at_ms)
-        VALUES (?, 0, ?, ?)
-        """,
-        (known_file_id, size_bytes, now),
-    )
-
-
 def expected_piece_length(file_size: int, piece_size: int, piece_index: int) -> int:
     start = piece_index * piece_size
     return max(0, min(start + piece_size, file_size) - start)
@@ -1361,10 +709,8 @@ def seed_remembered_source_transfer(
 def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
     """Read a persisted ED2K transfer manifest from the Rust profile metadata DB.
 
-    Mirrors ``MetadataStore::transfer_manifest_by_hash`` and returns the same
-    field shape the legacy ``resume-manifest.json`` exposed, so harness checks can
-    verify internal hashset/AICH metadata that has no REST surface. Returns
-    ``None`` when no known file with that hash exists.
+    Inspect internal download hashsets and sources without fabricating a local
+    shared-file transfer. Return ``None`` when no download exists for the hash.
     """
 
     hash_blob = bytes.fromhex(ed2k_hash)
@@ -1374,8 +720,8 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
             SELECT known_files.id, transfers.id, transfers.control_state,
                    known_files.display_name, known_files.size_bytes,
                    coalesce(known_files.part_size, 0),
-                   known_files.completed, known_files.md4_hashset_acquired,
-                   known_files.aich_hashset_acquired,
+                   transfers.completed, transfers.md4_hashset_acquired,
+                   transfers.aich_hashset_acquired,
                    CASE WHEN known_files.aich_root IS NULL THEN NULL
                         ELSE lower(hex(known_files.aich_root)) END,
                    known_files.upload_priority, known_files.comment, known_files.rating,
@@ -1383,17 +729,15 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
                    known_files.all_time_upload_requests,
                    known_files.all_time_upload_accepts,
                    known_files.last_upload_request_ms,
-                   source_paths.display_path, transfers.source_fingerprint
+                   transfers.source_fingerprint
             FROM known_files
-            LEFT JOIN transfers ON transfers.known_file_id = known_files.id
-            LEFT JOIN local_paths source_paths ON source_paths.id = transfers.source_path_id
+            JOIN transfers ON transfers.known_file_id = known_files.id
             WHERE known_files.ed2k_hash = ?
             """,
             (hash_blob,),
         ).fetchone()
         if row is None:
             return None
-        known_file_id = row[0]
         transfer_id = row[1]
         sources = []
         if transfer_id is not None:
@@ -1416,15 +760,15 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         md4_hashset = [
             r[0]
             for r in conn.execute(
-                "SELECT lower(hex(md4_hash)) FROM ed2k_part_hashes WHERE known_file_id = ? ORDER BY part_index",
-                (known_file_id,),
+                "SELECT lower(hex(md4_hash)) FROM ed2k_part_hashes WHERE transfer_id = ? ORDER BY part_index",
+                (transfer_id,),
             )
         ]
         aich_hashset = [
             r[0]
             for r in conn.execute(
-                "SELECT lower(hex(aich_hash)) FROM aich_part_hashes WHERE known_file_id = ? ORDER BY part_index",
-                (known_file_id,),
+                "SELECT lower(hex(aich_hash)) FROM aich_part_hashes WHERE transfer_id = ? ORDER BY part_index",
+                (transfer_id,),
             )
         ]
     return {
@@ -1445,18 +789,10 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         "all_time_upload_requests": row[15],
         "all_time_upload_accepts": row[16],
         "last_upload_request_ms": row[17],
-        "source_path": row[18],
-        "source_mtime_ms": _fingerprint_modified_ms(row[19]),
         "md4_hashset": md4_hashset,
         "aich_hashset": aich_hashset,
         "sources": sources,
     }
-
-
-def _optional_local_path_id(conn: sqlite3.Connection, display_path: str | None, now: int) -> int | None:
-    if display_path is None:
-        return None
-    return _upsert_local_path(conn, display_path, now)
 
 
 def _upsert_local_path(conn: sqlite3.Connection, display_path: str, now: int) -> int:
@@ -1486,71 +822,6 @@ def _native_path_storage_bytes(display_path: str) -> bytes:
     if current_platform() == "windows":
         return display_path.encode("utf-16-le", errors="surrogatepass")
     return os.fsencode(display_path)
-
-
-def _native_file_fingerprint(source_path: str | None) -> bytes | None:
-    if source_path is None:
-        return None
-    path = Path(source_path)
-    try:
-        metadata = path.stat()
-    except OSError:
-        return None
-    if not path.is_file():
-        return None
-
-    if current_platform() == "windows":
-        try:
-            return rust_native_fingerprint.encode_fingerprint(
-                rust_native_fingerprint.windows_native_fingerprint(path)
-            )
-        except OSError:
-            return None
-    else:
-        identity = b"\x01" + int(metadata.st_dev).to_bytes(8, "little") + int(
-            metadata.st_ino
-        ).to_bytes(8, "little")
-        changed_ns = metadata.st_ctime_ns
-    if identity is None:
-        return None
-
-    output = bytearray(b"\x01")
-    output.extend(identity)
-    output.extend(int(metadata.st_size).to_bytes(8, "little"))
-    _append_native_timestamp(output, metadata.st_mtime_ns)
-    if changed_ns is None:
-        output.append(0)
-    else:
-        output.append(1)
-        _append_native_timestamp(output, changed_ns)
-    return bytes(output)
-
-
-def _append_native_timestamp(output: bytearray, timestamp_ns: int) -> None:
-    seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
-    output.extend(int(seconds).to_bytes(8, "little", signed=True))
-    output.extend(int(nanoseconds).to_bytes(4, "little"))
-
-
-def _fingerprint_modified_ms(fingerprint: bytes | None) -> int | None:
-    if fingerprint is None or len(fingerprint) < 2 or fingerprint[0] != 1:
-        return None
-    identity_end = {1: 18, 2: 14, 3: 26}.get(fingerprint[1])
-    if identity_end is None:
-        return None
-    timestamp_start = identity_end + 8
-    timestamp_end = timestamp_start + 12
-    if len(fingerprint) < timestamp_end:
-        return None
-    seconds = int.from_bytes(
-        fingerprint[timestamp_start : timestamp_start + 8], "little", signed=True
-    )
-    nanoseconds = int.from_bytes(
-        fingerprint[timestamp_start + 8 : timestamp_end], "little"
-    )
-    if nanoseconds >= 1_000_000_000:
-        return None
-    return seconds * 1_000 + nanoseconds // 1_000_000
 
 
 def normalize_path_key(value: str) -> str:
