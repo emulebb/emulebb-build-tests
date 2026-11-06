@@ -276,21 +276,23 @@ def import_mfc_known_met_cache(
     scans promote a cached row only when the exact stock identity is unique.
     """
 
-    if not dry_run and not metadata_db.exists():
-        rust_metadata.create_metadata_db(rust_repo, metadata_db)
-
-    imported_rows, summary = build_imported_known_rows(
-        known_met=known_met,
-        known2_met=known2_64_met,
-    )
+    imported_rows, summary = build_imported_known_rows(known_met=known_met,known2_met=known2_64_met)
     if not dry_run:
-        rust_metadata.seed_imported_known_files(metadata_db, imported_rows)
-
-    return {
-        **summary,
-        "dryRun": dry_run,
-        "metadataDb": str(metadata_db),
-    }
+        from .emule_profile_export import ExportJob
+        from .profile_exchange import write_exchange
+        from .profile_import_audit import run_json
+        from .paths import get_workspace_output_root
+        from datetime import datetime, timezone
+        import uuid
+        if metadata_db.name != rust_metadata.RUST_PROFILE_METADATA_FILE:
+            raise ValueError("hash import requires a Rust profile directory, not an arbitrary database filename")
+        output=get_workspace_output_root()
+        archive=output/"reports"/"profile-import"/(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+uuid.uuid4().hex[:8])/"hashes.sqlite"
+        job=ExportJob(archive,known_met.parent,"auto","windows",archive,())
+        write_exchange(job,hashes_only=True)
+        summary["liveImport"]=run_json([str(output/"tools/emulebb-rust/bin/emulebb-rust.exe"),"--profile",str(metadata_db.parent),"import-emule-profile","--hashes-only",str(archive)],7200)
+        summary["archive"]=str(archive)
+    return {**summary,"dryRun":dry_run,"metadataDb":str(metadata_db)}
 
 
 def import_mfc_known_met_hashes(
@@ -478,27 +480,7 @@ def import_mfc_shared_file_rows_hashes(
         parsed_rows.append((parsed, entry, stat.st_mtime_ns // 1_000_000, aich_hashset))
 
     if not dry_run:
-        rust_metadata.seed_imported_known_files(
-            metadata_db,
-            [
-                {
-                    "ed2k_hash": parsed.ed2k_hash,
-                    "name": parsed.name,
-                    "size_bytes": parsed.size_bytes,
-                    "modified_s": entry.modified_s,
-                    "md4_hashset": entry.md4_hashset,
-                    "aich_root": entry.aich_root,
-                    "aich_hashset": aich_hashset,
-                    "upload_priority": entry.upload_priority,
-                    "auto_upload_priority": entry.auto_upload_priority,
-                    "all_time_uploaded_bytes": entry.all_time_uploaded_bytes,
-                    "all_time_upload_requests": entry.all_time_upload_requests,
-                    "all_time_upload_accepts": entry.all_time_upload_accepts,
-                    "last_upload_request_ms": entry.last_upload_request_ms,
-                }
-                for parsed, entry, source_mtime_ms, aich_hashset in parsed_rows
-            ],
-        )
+        import_mfc_known_met_cache(rust_repo=rust_repo,metadata_db=metadata_db,known_met=known_met,known2_64_met=known2_64_met,dry_run=False)
 
     return {
         "knownMetRecords": len(known_entries),

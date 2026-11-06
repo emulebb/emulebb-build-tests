@@ -245,7 +245,7 @@ def import_stock_mfc_profile(
         known2_64_met=known2_64_met if known2_64_met.is_file() else None,
         shared_roots=seed_roots,
         scan_shared_roots=True,
-        dry_run=dry_run,
+        dry_run=True,
     )
     hash_summary["pathMatches"] = manifest_summary
 
@@ -314,7 +314,7 @@ def upsert_stock_mfc_profile_hashes(
         known2_64_met=known2_64_met if known2_64_met.is_file() else None,
         shared_roots=shared_roots,
         scan_shared_roots=True,
-        dry_run=dry_run,
+        dry_run=True,
     )
     cache_summary["pathMatches"] = manifest_summary
 
