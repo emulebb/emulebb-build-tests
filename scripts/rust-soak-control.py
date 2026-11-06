@@ -4373,6 +4373,8 @@ def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, obj
     high_prefix = normalized_root_prefix(args.high_root)
     connection = sqlite3.connect(args.metadata_db)
     try:
+        # WHY: cached paths survive root withdrawal; only current eligible
+        # memberships may satisfy the guard or receive a publishing priority.
         rows = connection.execute(
             """
             SELECT verified_local_content.known_file_id,
@@ -4380,25 +4382,29 @@ def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, obj
                    verified_local_content.auto_upload_priority,
                    local_paths.display_path
             FROM verified_local_content
-            LEFT JOIN local_file_instances
+            JOIN local_file_instances
               ON local_file_instances.known_file_id = verified_local_content.known_file_id
-            LEFT JOIN local_paths ON local_paths.id = local_file_instances.path_id
+            JOIN local_paths ON local_paths.id = local_file_instances.path_id
+            WHERE EXISTS (
+                SELECT 1 FROM shared_file_memberships AS membership
+                JOIN shared_directory_roots AS root ON root.id = membership.root_id
+                WHERE membership.path_id = local_file_instances.path_id
+                  AND membership.removed_at_ms IS NULL
+                  AND root.deleted_at_ms IS NULL
+                  AND root.enabled = 1 AND root.accessible = 1 AND root.shareable = 1
+            )
             ORDER BY verified_local_content.known_file_id
             """
         ).fetchall()
         target_by_id: dict[int, str] = {}
         current_by_id: dict[int, tuple[str, int]] = {}
         source_rows = 0
-        no_source_files: set[int] = set()
         high_source_rows = 0
         suppressed_source_rows = 0
         for known_file_id, upload_priority, auto_upload_priority, source_path in rows:
             known_file_id = int(known_file_id)
             current_by_id[known_file_id] = (str(upload_priority), int(auto_upload_priority or 0))
             target_by_id.setdefault(known_file_id, "not-published")
-            if source_path is None:
-                no_source_files.add(known_file_id)
-                continue
             source_rows += 1
             source_is_high = normalized_windows_path_key(source_path).startswith(high_prefix)
             if source_is_high:
@@ -4456,7 +4462,6 @@ def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, obj
         "metadataDb": str(args.metadata_db),
         "highRootFingerprint": private_path_fingerprint(high_prefix),
         "matchedSharedSourceRows": source_rows,
-        "noSourceSharedFiles": len(no_source_files),
         "highPrioritySourceRows": high_source_rows,
         "notPublishedSourceRows": suppressed_source_rows,
         "matchedSharedFiles": len(target_by_id),

@@ -3692,6 +3692,10 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
         )
         connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
         connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
+        connection.execute("CREATE TABLE shared_directory_roots(id INTEGER, enabled INTEGER, "
+                           "accessible INTEGER, shareable INTEGER, deleted_at_ms INTEGER)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES(1, 1, 1, 1, NULL)")
+        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_ms INTEGER)")
         rows = [
             (1, "F:/share/keep/a.bin"),
             (2, "F:/share/keep/nested/b.bin"),
@@ -3707,6 +3711,7 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
         connection.execute("INSERT INTO local_paths VALUES (4, 'F:/share/other/duplicate-b.bin')")
         connection.execute("INSERT INTO local_file_instances VALUES (2, 4)")
         connection.execute("INSERT INTO verified_local_content VALUES (5, 'normal', 1)")
+        connection.execute("INSERT INTO shared_file_memberships SELECT id, 1, NULL FROM local_paths")
         connection.commit()
     finally:
         connection.close()
@@ -3722,17 +3727,16 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
 
     assert result["highPrioritySourceRows"] == 2
     assert result["notPublishedSourceRows"] == 2
-    assert result["noSourceSharedFiles"] == 1
-    assert result["matchedSharedFiles"] == 4
+    assert result["matchedSharedFiles"] == 3
     assert result["highPriorityFiles"] == 2
-    assert result["notPublishedFiles"] == 2
-    assert result["changedFiles"] == 4
+    assert result["notPublishedFiles"] == 1
+    assert result["changedFiles"] == 3
     assert "F:/share/keep" not in json.dumps(result)
     with sqlite3.connect(metadata_db) as conn:
         priorities = dict(conn.execute("SELECT known_file_id, upload_priority FROM verified_local_content").fetchall())
         auto = dict(conn.execute("SELECT known_file_id, auto_upload_priority FROM verified_local_content").fetchall())
-    assert priorities == {1: "high", 2: "high", 3: "not-published", 5: "not-published"}
-    assert auto == {1: 0, 2: 0, 3: 0, 5: 0}
+    assert priorities == {1: "high", 2: "high", 3: "not-published", 5: "normal"}
+    assert auto == {1: 0, 2: 0, 3: 0, 5: 1}
 
 
 def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) -> None:
@@ -3785,9 +3789,18 @@ def test_set_shared_publish_priority_split_refuses_empty_high_root(tmp_path: Pat
         )
         connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
         connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
+        connection.execute("CREATE TABLE shared_directory_roots(id INTEGER, enabled INTEGER, "
+                           "accessible INTEGER, shareable INTEGER, deleted_at_ms INTEGER)")
+        connection.execute("INSERT INTO shared_directory_roots VALUES(1, 1, 1, 1, NULL)")
+        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_ms INTEGER)")
         connection.execute("INSERT INTO verified_local_content VALUES (1, 'normal', 0)")
         connection.execute("INSERT INTO local_paths VALUES (1, 'F:/share/other/c.bin')")
         connection.execute("INSERT INTO local_file_instances VALUES (1, 1)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES(1, 1, NULL)")
+        connection.execute("INSERT INTO verified_local_content VALUES(2, 'normal', 0)")
+        connection.execute("INSERT INTO local_paths VALUES(2, 'F:/share/keep/removed.bin')")
+        connection.execute("INSERT INTO local_file_instances VALUES(2, 2)")
+        connection.execute("INSERT INTO shared_file_memberships VALUES(2, 1, 123)")
         connection.commit()
     finally:
         connection.close()
