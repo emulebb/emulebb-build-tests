@@ -8,7 +8,7 @@ flavor = "auto"
 platform = "windows"
 
 [output]
-manifest = 'C:\path\to\emule-profile-import.json'
+manifest = 'C:\path\to\emule-profile-import.sqlite'
 
 # Windows-to-Windows imports preserve unmatched paths. For Docker/Linux, set
 # target.platform = "linux" and map every discovered source root.
