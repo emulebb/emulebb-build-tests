@@ -1277,6 +1277,97 @@ def test_shared_directory_model_persistence_lists_preserve_mfc_semantics() -> No
     }
 
 
+@pytest.fixture
+def offline_mfc_share_tree(tmp_path: Path, monkeypatch):
+    control = _load_rust_soak_control()
+    config = tmp_path / "profile" / "config"
+    config.mkdir(parents=True)
+    root = tmp_path / "library"
+    child = root / "Sample \u00e9\u6f22\U0001f3b5"
+    child.mkdir(parents=True)
+    target = config / "shareddir.dat"
+    original = b"\xff\xfe" + f"{root}\r\n".encode("utf-16-le")
+    target.write_bytes(original)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "schema": "emulebb-rust.profile-import.v1",
+        "targetPlatform": "windows",
+        "sharedRoots": [{"path": str(root)}],
+    }), encoding="utf-8")
+
+    def enumerate_directories(path, *, strict):
+        assert path == root
+        assert strict is True
+        return [str(root), str(child)]
+
+    monkeypatch.setattr(control, "collect_processes", lambda: [])
+    monkeypatch.setattr(control.soak_launch, "load_scripts_module", lambda *args: SimpleNamespace(
+        enumerate_recursive_directories=enumerate_directories,
+    ))
+    args = SimpleNamespace(manifest=manifest, target_profile_dir=config.parent, dry_run=False)
+    return control, args, target, original, child
+
+
+def test_expand_mfc_share_tree_preserves_backup_and_unicode(offline_mfc_share_tree) -> None:
+    control, args, target, original, child = offline_mfc_share_tree
+    result = control.expand_mfc_shareddir_from_manifest(args)
+
+    assert target.with_name("shareddir.dat.bak_BAK").read_bytes() == original
+    assert target.read_bytes() == original + f"{child}\r\n".encode("utf-16-le")
+    assert result["addedDirectoryCount"] == 1
+    assert result["finalDirectoryCount"] == 2
+    assert result["backupVerified"] is True
+    assert list(target.parent.glob("shareddir-*.tmp")) == []
+
+
+def test_expand_mfc_share_tree_dry_run_changes_nothing(offline_mfc_share_tree) -> None:
+    control, args, target, original, _ = offline_mfc_share_tree
+    args.dry_run = True
+    result = control.expand_mfc_shareddir_from_manifest(args)
+
+    assert result["addedDirectoryCount"] == 1
+    assert result["written"] is False
+    assert target.read_bytes() == original
+    assert not target.with_name("shareddir.dat.bak_BAK").exists()
+
+
+@pytest.mark.parametrize("blocker", ["running", "backup_exists", "encoding", "missing_root", "changed_during_scan"])
+def test_expand_mfc_share_tree_refuses_unsafe_write(offline_mfc_share_tree, monkeypatch, blocker) -> None:
+    control, args, target, original, _ = offline_mfc_share_tree
+    backup = target.with_name("shareddir.dat.bak_BAK")
+    expected = original
+    if blocker == "running":
+        monkeypatch.setattr(control, "collect_processes", lambda: [SimpleNamespace(name="emulebb.exe")])
+    elif blocker == "backup_exists":
+        backup.write_bytes(b"previous backup")
+    elif blocker == "encoding":
+        expected = b"legacy encoding\r\n"
+        target.write_bytes(expected)
+    elif blocker == "missing_root":
+        args.manifest.write_text(json.dumps({
+            "schema": "emulebb-rust.profile-import.v1", "targetPlatform": "windows",
+            "sharedRoots": [{"path": str(target.parent / "absent")}],
+        }), encoding="utf-8")
+    else:
+        expected = original + "changed\r\n".encode("utf-16-le")
+
+        def change_during_scan(*args, **kwargs):
+            target.write_bytes(expected)
+            return ["additional directory"]
+
+        monkeypatch.setattr(control.soak_launch, "load_scripts_module", lambda *args: SimpleNamespace(
+            enumerate_recursive_directories=change_during_scan,
+        ))
+
+    with pytest.raises((RuntimeError, ValueError, FileExistsError)):
+        control.expand_mfc_shareddir_from_manifest(args)
+    assert target.read_bytes() == expected
+    if blocker == "backup_exists":
+        assert backup.read_bytes() == b"previous backup"
+    else:
+        assert not backup.exists()
+
+
 def test_write_mfc_shareddir_from_rest_writes_three_profile_files(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     profile_dir = tmp_path / "profile-base"

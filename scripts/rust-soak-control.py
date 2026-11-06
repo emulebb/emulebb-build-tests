@@ -24,6 +24,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter
 from datetime import UTC, datetime
@@ -4165,6 +4166,94 @@ def shared_directory_model_persistence_lists(model: dict[str, object]) -> dict[s
     }
 
 
+def expand_mfc_shareddir_from_manifest(args: argparse.Namespace) -> dict[str, object]:
+    """Append an audited Windows sharing tree offline, preserving original bytes."""
+
+    from emule_test_harness.emule_profile_export import MANIFEST_SCHEMA
+
+    def require_stopped() -> None:
+        if any(is_mfc_client_process(process) for process in collect_processes()):
+            raise RuntimeError("Stop MFC before expanding its persisted shared directories")
+
+    require_stopped()
+    manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
+    if manifest.get("schema") != MANIFEST_SCHEMA or manifest.get("targetPlatform") != "windows":
+        raise ValueError("Shared-directory expansion requires a Windows profile-import manifest")
+    roots = manifest.get("sharedRoots")
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("The manifest must contain shared roots")
+    target = args.target_profile_dir / "config" / "shareddir.dat"
+    backup = target.with_name("shareddir.dat.bak_BAK")
+    original = target.read_bytes()
+    if not original.startswith(b"\xff\xfe"):
+        raise ValueError("Expected native UTF-16LE BOM; refusing to change the profile encoding")
+    text = original[2:].decode("utf-16-le", errors="strict")
+    if text.replace("\r\n", "").count("\n") or text.replace("\r\n", "").count("\r"):
+        raise ValueError("Expected CRLF line endings; refusing to normalize the original file")
+    existing = text.splitlines()
+    seen = {normalize_private_path(line) for line in existing if line.strip()}
+    additions: list[str] = []
+    common = soak_launch.load_scripts_module("mfc_share_tree_common", "emule-live-profile-common.py")
+    for index, row in enumerate(roots, 1):
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not row["path"].strip():
+            raise ValueError(f"Invalid shared root at index {index}")
+        root = Path(mfc_known_met.normal_windows_display_path(row["path"]))
+        if not root.is_absolute() or not root.is_dir():
+            raise ValueError(f"Shared root {index} is not an accessible native directory")
+        for directory in common.enumerate_recursive_directories(root, strict=True):
+            key = normalize_private_path(directory)
+            if key not in seen:
+                seen.add(key)
+                additions.append(directory)
+    # WHY: append rather than rewrite so existing Unicode spelling, BOM and
+    # line bytes survive unchanged; UTF-16LE encoding applies only to new entries.
+    appended = "".join(f"{directory}\r\n" for directory in additions).encode("utf-16-le")
+    separator = b"\r\x00\n\x00" if additions and text and not text.endswith("\r\n") else b""
+    expanded = original + separator + appended
+    if not args.dry_run and additions:
+        require_stopped()
+        if target.read_bytes() != original:
+            raise RuntimeError("Shared-directory file changed during enumeration; no changes made")
+        # Exclusive creation preserves any prior backup rather than overwriting it.
+        with backup.open("xb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if backup.read_bytes() != original:
+            raise RuntimeError("Shared-directory backup verification failed; original left untouched")
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix="shareddir-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(expanded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            require_stopped()
+            if target.read_bytes() != original:
+                raise RuntimeError("Shared-directory file changed before replacement; original left untouched")
+            os.replace(temporary, target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        if target.read_bytes() != expanded:
+            raise RuntimeError("Expanded shared-directory verification failed; original backup is available")
+    return {
+        "written": not args.dry_run and bool(additions),
+        "rootCount": len(roots),
+        "originalDirectoryCount": len(existing),
+        "addedDirectoryCount": len(additions),
+        "finalDirectoryCount": len(existing) + len(additions),
+        "encoding": "UTF-16LE with BOM",
+        "newlines": "CRLF",
+        "originalBytesPreserved": expanded.startswith(original),
+        "backupVerified": not args.dry_run and bool(additions),
+        "originalSha256": hashlib.sha256(original).hexdigest(),
+        "expandedSha256": hashlib.sha256(expanded).hexdigest(),
+        "target": str(target),
+        "backup": str(backup),
+    }
+
+
 def write_mfc_shareddir_from_rest(args: argparse.Namespace) -> dict[str, object]:
     """Writes MFC shared-directory profile files from a live REST model."""
 
@@ -7171,6 +7260,15 @@ def build_parser() -> argparse.ArgumentParser:
     apply_rest_roots_parser.add_argument("--collection", choices=("roots", "items"), default="roots")
     apply_rest_roots_parser.add_argument("--timeout-seconds", type=float, default=120.0)
     apply_rest_roots_parser.set_defaults(func=apply_mfc_rest_shared_roots)
+
+    expand_mfc_shareddir_parser = sub.add_parser(
+        "expand-mfc-shareddir-from-manifest",
+        help="Append a Windows manifest's complete directory trees offline with a verified .bak_BAK backup.",
+    )
+    expand_mfc_shareddir_parser.add_argument("--manifest", type=Path, required=True)
+    expand_mfc_shareddir_parser.add_argument("--target-profile-dir", type=Path, required=True)
+    expand_mfc_shareddir_parser.add_argument("--dry-run", action="store_true")
+    expand_mfc_shareddir_parser.set_defaults(func=expand_mfc_shareddir_from_manifest)
 
     write_mfc_shareddir_parser = sub.add_parser(
         "write-mfc-shareddir-from-rest",

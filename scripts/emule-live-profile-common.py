@@ -129,12 +129,18 @@ def prune_walk_dirs(dir_names: list[str], excluded_dir_prefixes: tuple[str, ...]
     dir_names.sort(key=str.lower)
 
 
-def enumerate_recursive_directories(root: Path, excluded_dir_prefixes: tuple[str, ...] = ()) -> list[str]:
-    """Returns one deterministic shared-directory list for a recursively shared root."""
+def enumerate_recursive_directories(
+    root: Path, excluded_dir_prefixes: tuple[str, ...] = (), *, strict: bool = False
+) -> list[str]:
+    """Enumerate a shared tree; strict mode fails on inaccessible descendants."""
 
     resolved_root = root.resolve()
     directories: list[str] = []
-    for current_root, dir_names, _ in os.walk(resolved_root):
+    def on_error(error: OSError) -> None:
+        if strict:
+            raise error
+
+    for current_root, dir_names, _ in os.walk(resolved_root, onerror=on_error):
         prune_walk_dirs(dir_names, excluded_dir_prefixes)
         directories.append(win_path(Path(current_root), trailing_slash=True))
     return directories
