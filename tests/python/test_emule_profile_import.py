@@ -154,9 +154,9 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
         ).fetchone()[0]
         imported = conn.execute(
             """
-            SELECT lower(hex(ed2k_hash)), display_name, size_bytes, modified_s,
-                   all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts
-            FROM imported_known_files
+            SELECT lower(hex(f.ed2k_hash)), f.display_name, f.size_bytes, i.verified_fingerprint,
+                   f.all_time_uploaded_bytes, f.all_time_upload_requests, f.all_time_upload_accepts
+            FROM known_files f JOIN local_file_instances i ON i.known_file_id=f.id
             """
         ).fetchall()
         downloads = conn.execute("SELECT count(*) FROM transfers").fetchone()[0]
@@ -180,6 +180,8 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     assert daemon_settings.get("initialSharedDirectoryReload") is False
     assert "p2pBindIp" not in daemon_settings
     assert identity == "aaaaaaaaaa0eccddeeff001122336f55"
+    from emule_test_harness.rust_native_fingerprint import decode_fingerprint
+    imported=[(*r[:3],decode_fingerprint(r[3]).modified.seconds,*r[4:]) for r in imported]
     assert imported == [
         (
             "00112233445566778899aabbccddeeff",
@@ -192,7 +194,7 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
         )
     ]
     assert downloads == 0
-    assert local_instances == 0
+    assert local_instances == 1
     assert profile == [(1, "emulebb-rust")]
     assert transfer_name_states == []
     rust_metadata.require_current_profile_database(_rust_repo(), db_path)

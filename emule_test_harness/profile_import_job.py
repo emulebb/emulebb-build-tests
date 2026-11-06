@@ -71,8 +71,8 @@ def load_job(config: Path) -> ImportJob:
         raise ValueError("selected backend does not match the host OS")
     profile = resolve(export._require_string(target, "profile"))
     out = resolve(export._require_string(output, "directory"))
-    if profile.exists() and (not profile.is_dir() or any(profile.iterdir())):
-        raise ValueError("destination must be new or empty; merging is not supported by this tool")
+    if profile.exists() and not profile.is_dir():
+        raise ValueError("destination must be a directory")
     mappings, hosts = [], []
     seen_sources, seen_targets = set(), set()
     raw = data.get("path_mappings", [])
@@ -187,7 +187,7 @@ def remove_container(docker: list[str], name: str, timeout: int) -> None:
 
 
 def run_job(job: ImportJob) -> tuple[int, dict]:
-    """Execute one fresh offline import and retain a diagnostic on failure."""
+    """Apply one offline import/merge and retain a diagnostic on failure."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     report_dir = job.output / stamp
     report_dir.mkdir(parents=True)
@@ -197,9 +197,7 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
     code = 1
     try:
         archive = report_dir / "hashes.sqlite"
-        report["export"] = write_exchange(export.replace(job.exchange, output_manifest=archive))["summary"]
-        if job.profile.exists() and any(job.profile.iterdir()):
-            raise ValueError("destination became nonempty; refusing to merge")
+        report["export"] = write_exchange(export.replace(job.exchange, output_manifest=archive), host_mappings=job.hosts)["summary"]
         job.profile.mkdir(parents=True, exist_ok=True)
         with ExitStack() as cleanup:
             prefix = command_prefix(job, report_dir, cleanup)
@@ -209,15 +207,17 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
             report["hashValidation"] = audit.validate_imported_hashes(
                 job.profile, archive, rejected_recovery_sets=report["import"]["rejectedRecoverySets"],
             )
-            report["stockValidation"] = audit.validate_stock_records(job.profile, job.exchange.source_profile)
+            report["stockValidation"] = audit.validate_stock_records(job.profile, job.exchange.source_profile, archive)
             progress = report["reconciliation"] = audit.run_json(prefix + ["reconcile-shared-files"], job.timeout)
             audit.validate_reconciliation(progress)
             report["bindingValidation"] = audit.validate_native_bindings(
-                job.profile, job.exchange, host_mappings=job.hosts if job.hosts else None,
+                job.profile, job.exchange, exchange=archive, host_mappings=job.hosts if job.hosts else None,
+                allow_unrelated=True, conflicting_paths=report["import"].get("conflictingPaths",0),
             )
             report["counts"] = audit.profile_counts(job.profile)
             attention = any(progress[k] for k in ("plannedHashCount", "statFailedCount", "skippedFailedCount", "skippedIntakeCount"))
             attention |= progress.get("scannedCount", 0) == 0
+            attention |= bool(report["import"].get("unmatchedPaths",0) or report["import"].get("conflictingPaths",0))
             attention |= bool(report["export"]["recoveryMissingSets"] or report["export"]["skippedKnown"]
                               or report["import"]["rejectedRecoverySets"])
             code = 2 if attention else 0

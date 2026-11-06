@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import mfc_known_met as known
 
-SCHEMA = "emulebb.profile-exchange.v1"
+SCHEMA = "emulebb.profile-exchange.v2"
 PART = 9_728_000
 BLOCK = 184_320
 MAX_FILE = 0x4000000000
@@ -30,7 +30,7 @@ def read_exchange_header(path):
     return header
 
 
-def write_exchange(job, *, hashes_only=False):
+def write_exchange(job, *, hashes_only=False, host_mappings=None):
     """Publish one closed, indexed exchange database after a consistent export."""
     from . import emule_profile_export as export
     config = export.resolve_emule_config_dir(job.source_profile)
@@ -55,6 +55,9 @@ def write_exchange(job, *, hashes_only=False):
             db.executescript('''
                 CREATE TABLE header(value TEXT NOT NULL);
                 CREATE TABLE known_files(id INTEGER PRIMARY KEY, record TEXT NOT NULL, md4 BLOB NOT NULL, aich BLOB NOT NULL);
+                CREATE INDEX known_match ON known_files(json_extract(record,'$.displayName'),json_extract(record,'$.fileSize'),json_extract(record,'$.modifiedS'));
+                CREATE TABLE file_paths(path TEXT PRIMARY KEY,known_file_id INTEGER NOT NULL REFERENCES known_files(id));
+                CREATE INDEX file_paths_known_idx ON file_paths(known_file_id);
                 CREATE UNIQUE INDEX known_identity ON known_files(json_extract(record,'$.fileHash'),json_extract(record,'$.displayName'),json_extract(record,'$.fileSize'),json_extract(record,'$.modifiedS'));
                 CREATE TABLE recovery_sets(root BLOB NOT NULL, size_bytes INTEGER NOT NULL, PRIMARY KEY(root,size_bytes));
                 CREATE TABLE recovery_parts(root BLOB NOT NULL,size_bytes INTEGER NOT NULL,part_index INTEGER NOT NULL,leaves BLOB NOT NULL,PRIMARY KEY(root,size_bytes,part_index));
@@ -74,6 +77,35 @@ def write_exchange(job, *, hashes_only=False):
                 if entry.aich_root:
                     db.execute("INSERT OR IGNORE INTO wanted_roots VALUES (?,?)", (bytes.fromhex(entry.aich_root),size))
                 summary["knownRecords"] += 1
+            summary["matchedPaths"] = 0
+            summary["unmatchedPaths"] = 0
+            summary["ambiguousPaths"] = 0
+            from .profile_import_audit import source_path_for_binding
+            for root in export.discover_shared_roots(config, flavor):
+                mapped_root = export.map_shared_root(root.path, job) if not hashes_only else root.path
+                host = (source_path_for_binding("unix", mapped_root.encode(), host_mappings)
+                        if host_mappings and job.target_platform == "unix" else Path(root.path))
+                if not host.is_dir():
+                    continue
+                for directory, _, names in os.walk(host):
+                    for name in names:
+                        path = Path(directory) / name
+                        try:
+                            info = path.stat()
+                            if not path.is_file():
+                                continue
+                        except OSError:
+                            summary["unmatchedPaths"] += 1
+                            continue
+                        matches = db.execute("SELECT id FROM known_files WHERE json_extract(record,'$.displayName')=? AND json_extract(record,'$.fileSize')=? AND json_extract(record,'$.modifiedS')=?", (name,info.st_size,info.st_mtime_ns//1_000_000_000)).fetchall()
+                        if len(matches) != 1:
+                            summary["ambiguousPaths" if matches else "unmatchedPaths"] += 1
+                            continue
+                        relative = path.relative_to(host)
+                        target = (export.ntpath.join(mapped_root, *relative.parts) if job.target_platform == "windows"
+                                  else export.posixpath.join(mapped_root, *relative.parts))
+                        db.execute("INSERT OR IGNORE INTO file_paths VALUES (?,?)", (target,matches[0][0]))
+                        summary["matchedPaths"] += 1
             recovery = config / "known2_64.met"
             if recovery.exists():
                 _copy_recovery(recovery, db, summary)

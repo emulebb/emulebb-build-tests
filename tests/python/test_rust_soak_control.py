@@ -1291,7 +1291,7 @@ def offline_mfc_share_tree(tmp_path: Path, monkeypatch):
     manifest = tmp_path / "manifest.sqlite"
     with sqlite3.connect(manifest) as db:
         db.execute("CREATE TABLE header(value TEXT)")
-        db.execute("INSERT INTO header VALUES(?)",(json.dumps({"schema":"emulebb.profile-exchange.v1","targetPlatform":"windows","sharedRoots":[{"path":str(root)}]}),))
+        db.execute("INSERT INTO header VALUES(?)",(json.dumps({"schema":"emulebb.profile-exchange.v2","targetPlatform":"windows","sharedRoots":[{"path":str(root)}]}),))
 
     def enumerate_directories(path, *, strict):
         assert path == root
@@ -1357,7 +1357,7 @@ def test_expand_mfc_share_tree_refuses_unsafe_write(offline_mfc_share_tree, monk
         target.write_bytes(expected)
     elif blocker == "missing_root":
         with sqlite3.connect(args.manifest) as db:
-            db.execute("UPDATE header SET value=?",(json.dumps({"schema":"emulebb.profile-exchange.v1","targetPlatform":"windows","sharedRoots":[{"path":str(target.parent / "absent") }]}),))
+            db.execute("UPDATE header SET value=?",(json.dumps({"schema":"emulebb.profile-exchange.v2","targetPlatform":"windows","sharedRoots":[{"path":str(target.parent / "absent") }]}),))
 
     else:
         expected = original + "changed\r\n".encode("utf-16-le")
