@@ -32,6 +32,11 @@ DEFAULT_DURATION_SECONDS = 300.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 5.0
 DEFAULT_PAYLOAD_MIB = 64
 DEFAULT_UPLOAD_LIMIT_KIBPS = 64
+KAD_FIREWALL_LOG_FILTER = (
+    "info,emulebb_core::kad_udp_firewall_check=debug,"
+    "emulebb_core::kad_hello=debug,"
+    "emulebb_ed2k::ed2k_tcp::listener::session=debug"
+)
 
 
 def utc_run_id(now: datetime | None = None) -> str:
@@ -198,7 +203,7 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def recheck_kad_after_bootstrap(
-    seeder_base: str, leecher_base: str, api_key: str
+    seeder_base: str, leecher_base: str, api_key: str, seeder_ip: str
 ) -> dict[str, object]:
     """Queue a real UDP reachability check after both local Kad peers connect."""
 
@@ -215,6 +220,27 @@ def recheck_kad_after_bootstrap(
             description=f"{role} Kad connected",
         )
         connected[role] = safe_int(status.get("contactCount"))
+    nodes = request_json(seeder_base, "GET", "/api/v1/kad/nodes?limit=100", api_key)
+    rows = nodes.get("items") if isinstance(nodes.get("items"), list) else []
+    contact_evidence = [
+        {
+            "sameBindIp": row.get("ip") == seeder_ip,
+            "kadVersion": safe_int(row.get("kadVersion")),
+            "udpPortPresent": safe_int(row.get("udpPort")) > 0,
+            "tcpPortPresent": safe_int(row.get("tcpPort")) > 0,
+            "udpFirewalled": row.get("udpFirewalled") is True,
+        }
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    eligible_helpers = sum(
+        not row["sameBindIp"]
+        and row["kadVersion"] >= 6
+        and row["udpPortPresent"]
+        and row["tcpPortPresent"]
+        and not row["udpFirewalled"]
+        for row in contact_evidence
+    )
     # WHY: the driver's warmup can fire before bootstrap, then defer its next
     # round for the normal long interval. The explicit operation preserves the
     # stock reachability gate while testing it during this bounded local run.
@@ -228,6 +254,8 @@ def recheck_kad_after_bootstrap(
     return {
         "seederConnectedContacts": connected["seeder"],
         "leecherConnectedContacts": connected["leecher"],
+        "seederFirewallContacts": contact_evidence,
+        "seederEligibleFirewallHelpers": eligible_helpers,
         "recheckQueued": recheck.get("operationQueued") is True,
     }
 
@@ -320,6 +348,7 @@ def start_rust(
     profile_dir: Path,
     log_path: Path,
     diag_dir: Path,
+    rust_log: str | None = None,
 ) -> tuple[subprocess.Popen, object]:
     """Starts one staged Rust diagnostics daemon with packet dumps enabled."""
 
@@ -328,6 +357,8 @@ def start_rust(
     handle = log_path.open("w", encoding="utf-8")
     env = os.environ.copy()
     env["EMULEBB_RUST_LOG_DIR"] = str(diag_dir)
+    if rust_log is not None:
+        env["RUST_LOG"] = rust_log
     process = rust_client.spawn_rust_daemon(exe, profile_dir, output_handle=handle, env=env)
     return process, handle
 
@@ -584,6 +615,7 @@ def run(argv: list[str] | None = None) -> int:
                 ["--profile", wsl_metadata_path(wsl_mountpoint, seeder_profile)],
                 artifacts_dir / "logs" / "seeder.out",
                 artifacts_dir / "logs" / "seeder.pid",
+                rust_log=KAD_FIREWALL_LOG_FILTER,
             )
         else:
             seeder_process, seeder_log = start_rust(
@@ -597,6 +629,7 @@ def run(argv: list[str] | None = None) -> int:
             profile_dir=leecher_profile,
             log_path=artifacts_dir / "logs" / "leecher.out",
             diag_dir=leecher_diag,
+            rust_log=KAD_FIREWALL_LOG_FILTER if kad_wsl else None,
         )
         seeder_base = f"http://127.0.0.1:{seeder_rest_port}"
         leecher_base = f"http://127.0.0.1:{leecher_rest_port}"
@@ -620,7 +653,7 @@ def run(argv: list[str] | None = None) -> int:
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
         if kad_wsl:
             report["checks"]["kadReachabilityRecheck"] = recheck_kad_after_bootstrap(
-                seeder_base, leecher_base, args.api_key
+                seeder_base, leecher_base, args.api_key, seeder_addr
             )
         share = publish_shared_tree(
             seeder_base,

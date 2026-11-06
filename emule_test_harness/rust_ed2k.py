@@ -267,24 +267,36 @@ def start_wsl_managed_executable(
     pid_path: Path,
     *,
     distribution: str | None = None,
+    rust_log: str | None = None,
 ) -> RustWslProcess:
     """Starts one Linux executable with the shared PID-backed WSL lifecycle."""
 
     linux_exe = wsl_path(executable, distribution)
     linux_pid = wsl_path(pid_path, distribution)
     linux_helper = wsl_path(Path(__file__).with_name("wsl_managed_process.sh"), distribution)
+    child_command = wsl_managed_child_command(linux_exe, linux_args, rust_log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb", buffering=0) as log_handle:
         proxy = subprocess.Popen(
             _wsl_command(
                 distribution,
                 "setsid", "--wait", "/bin/sh", linux_helper,
-                "--pid-file", linux_pid, "--", linux_exe, *linux_args,
+                "--pid-file", linux_pid, "--", *child_command,
             ),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
     return RustWslProcess(proxy=proxy, pid_path=pid_path, distribution=distribution)
+
+
+def wsl_managed_child_command(
+    linux_exe: str, linux_args: list[str], rust_log: str | None
+) -> list[str]:
+    """Build a child-only log filter without changing inherited WSL state."""
+
+    if rust_log is None:
+        return [linux_exe, *linux_args]
+    return ["/usr/bin/env", f"RUST_LOG={rust_log}", linux_exe, *linux_args]
 
 
 def start_server(

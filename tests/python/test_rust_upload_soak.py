@@ -62,23 +62,37 @@ def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPa
 
     def request(base: str, method: str, path: str, _key: str, _body=None):
         calls.append((base, method, path))
+        if path.startswith("/api/v1/kad/nodes"):
+            return {"items": [{
+                "ip": "192.0.2.20", "kadVersion": 9, "udpPort": 4672,
+                "tcpPort": 4662, "udpFirewalled": False,
+            }]}
         if method == "GET":
             return {"connected": True, "contactCount": 2}
         return {"operationQueued": True}
 
     monkeypatch.setattr(rust_upload_soak, "request_json", request)
     result = rust_upload_soak.recheck_kad_after_bootstrap(
-        "http://seed", "http://leech", "local-key"
+        "http://seed", "http://leech", "local-key", "192.0.2.10"
     )
 
     assert result == {
         "seederConnectedContacts": 2,
         "leecherConnectedContacts": 2,
+        "seederFirewallContacts": [{
+            "sameBindIp": False,
+            "kadVersion": 9,
+            "udpPortPresent": True,
+            "tcpPortPresent": True,
+            "udpFirewalled": False,
+        }],
+        "seederEligibleFirewallHelpers": 1,
         "recheckQueued": True,
     }
     assert calls == [
         ("http://seed", "GET", "/api/v1/kad"),
         ("http://leech", "GET", "/api/v1/kad"),
+        ("http://seed", "GET", "/api/v1/kad/nodes?limit=100"),
         ("http://seed", "POST", "/api/v1/kad/operations/recheck-firewall"),
     ]
 
