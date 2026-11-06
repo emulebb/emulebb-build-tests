@@ -113,17 +113,35 @@ class BinaryReader:
 
 
 def parse_known_met(path: Path) -> list[KnownMetEntry]:
-    reader = BinaryReader(path.read_bytes())
-    header = reader.u8()
-    if header not in {MET_HEADER, MET_HEADER_I64TAGS}:
-        raise ValueError(f"unsupported known.met header 0x{header:02x}")
-    record_count = reader.u32()
-    entries = []
-    for _ in range(record_count):
-        entries.append(_read_known_met_record(reader))
-    if reader.remaining() != 0:
-        raise ValueError("known.met has trailing bytes")
-    return entries
+    return list(iter_known_met(path))
+
+
+def iter_known_met(path: Path):
+    """Decode one known-file record at a time without retaining the source file."""
+    with path.open("rb") as stream:
+        class StreamReader(BinaryReader):
+            def __init__(self):
+                self.length = os.fstat(stream.fileno()).st_size
+
+            def remaining(self):
+                return self.length - stream.tell()
+
+            def read(self, count):
+                if count < 0 or count > self.remaining():
+                    raise ValueError("truncated known.met")
+                value = stream.read(count)
+                if len(value) != count:
+                    raise ValueError("truncated known.met")
+                return value
+
+        reader = StreamReader()
+        header = reader.u8()
+        if header not in {MET_HEADER, MET_HEADER_I64TAGS}:
+            raise ValueError(f"unsupported known.met header 0x{header:02x}")
+        for _ in range(reader.u32()):
+            yield _read_known_met_record(reader)
+        if reader.remaining():
+            raise ValueError("known.met has trailing bytes")
 
 
 def parse_known2_64_met(path: Path, wanted_roots: set[str] | None = None) -> dict[str, list[str]]:
