@@ -1304,7 +1304,7 @@ def offline_mfc_share_tree(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(control.soak_launch, "load_scripts_module", lambda *args: SimpleNamespace(
         enumerate_recursive_directories=enumerate_directories,
     ))
-    args = SimpleNamespace(manifest=manifest, target_profile_dir=config.parent, dry_run=False)
+    args = SimpleNamespace(manifest=manifest, target_profile_dir=config.parent, dry_run=False, exclude_root=[])
     return control, args, target, original, child
 
 
@@ -1318,6 +1318,20 @@ def test_expand_mfc_share_tree_preserves_backup_and_unicode(offline_mfc_share_tr
     assert result["finalDirectoryCount"] == 2
     assert result["backupVerified"] is True
     assert list(target.parent.glob("shareddir-*.tmp")) == []
+
+
+@pytest.mark.parametrize("exclude_whole_root", [False, True])
+def test_expand_mfc_share_tree_respects_exclusions(offline_mfc_share_tree, exclude_whole_root) -> None:
+    control, args, target, original, child = offline_mfc_share_tree
+    args.exclude_root = [child.parent if exclude_whole_root else child]
+
+    result = control.expand_mfc_shareddir_from_manifest(args)
+
+    assert result["written"] is False
+    assert result["addedDirectoryCount"] == 0
+    assert result["excludedRootCount"] == int(exclude_whole_root)
+    assert target.read_bytes() == original
+    assert not target.with_name("shareddir.dat.bak_BAK").exists()
 
 
 def test_expand_mfc_share_tree_dry_run_changes_nothing(offline_mfc_share_tree) -> None:
