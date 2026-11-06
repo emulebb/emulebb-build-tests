@@ -38,11 +38,19 @@ def test_exchange_failure_preserves_previous_export(tmp_path):
     job,config=job_fixture(tmp_path)
     write_exchange(job)
     before=job.output_manifest.read_bytes()
-    (config/'known2_64.met').write_bytes(b'\x02truncated')
-    with pytest.raises(ValueError,match='truncated'):
+    (config/'known.met').write_bytes(b'\x0ftruncated')
+    with pytest.raises(ValueError):
         write_exchange(job)
     assert job.output_manifest.read_bytes()==before
     assert list(tmp_path.glob('profile-exchange-*.tmp'))==[]
+
+
+def test_broken_optional_recovery_cache_preserves_md4_export(tmp_path):
+    job,config=job_fixture(tmp_path)
+    (config/'known2_64.met').write_bytes(b'\x02truncated')
+    result=write_exchange(job)
+    assert result['summary']['knownRecords']==1
+    assert result['summary']['malformedRecoveryRecords']==1
 
 
 def test_exchange_streams_100k_aliases_with_bounded_python_memory(tmp_path,monkeypatch):
