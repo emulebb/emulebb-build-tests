@@ -6,15 +6,17 @@ import argparse
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 import time
 from contextlib import ExitStack, closing
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import emule_profile_export
 from .paths import get_workspace_output_root
+from . import mfc_known_met, rust_native_fingerprint
 
 
 def run_json(command: list[str], timeout: int) -> dict:
@@ -89,6 +91,142 @@ def mount_argument(value: str) -> tuple[str, str]:
     if not separator or not source.startswith("/") or not target.startswith("/"):
         raise argparse.ArgumentTypeError("mount must be /host/path=/container/path")
     return source, target
+
+
+def validate_stock_records(profile: Path, config: Path) -> dict[str, int]:
+    """Compare imported identities and MD4 hashes directly with the stock reader."""
+    result = {"verifiedStockRecords": 0, "verifiedStockMd4Parts": 0, "unusableStockRecords": 0}
+    with closing(open_profile_snapshot(profile)) as target:
+        for entry in mfc_known_met.iter_known_met(config / "known.met"):
+            if (not entry.name or not entry.size_bytes or not 0 < entry.size_bytes <= 0x4000000000
+                    or entry.modified_s <= 0
+                    or len(entry.md4_hashset) != mfc_known_met.expected_md4_hash_count(entry.size_bytes)):
+                result["unusableStockRecords"] += 1
+                continue
+            row = target.execute(
+                "SELECT id,aich_root FROM imported_known_files "
+                "WHERE ed2k_hash=? AND display_name=? AND size_bytes=? AND modified_s=?",
+                (bytes.fromhex(entry.ed2k_hash), entry.name, entry.size_bytes, entry.modified_s),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("stock record is missing from the imported aliases")
+            root = bytes.fromhex(entry.aich_root) if entry.aich_root else None
+            md4 = [r[0].hex() for r in target.execute(
+                "SELECT md4_hash FROM imported_known_file_md4_hashes "
+                "WHERE imported_known_file_id=? ORDER BY part_index", (row[0],),
+            )]
+            if row[1] != root or md4 != entry.md4_hashset:
+                raise RuntimeError("stock identity or MD4 hashset differs from the imported alias")
+            if entry.aich_hashset:
+                aich = [r[0].hex() for r in target.execute(
+                    "SELECT aich_hash FROM imported_known_file_aich_hashes "
+                    "WHERE imported_known_file_id=? ORDER BY part_index", (row[0],),
+                )]
+                if aich != entry.aich_hashset:
+                    raise RuntimeError("stock AICH part hashes differ from the imported alias")
+            result["verifiedStockRecords"] += 1
+            result["verifiedStockMd4Parts"] += len(md4)
+    return result
+
+
+def source_path_for_binding(platform: str, native: bytes,
+                            mappings: tuple[emule_profile_export.PathMapping, ...]) -> Path:
+    """Decode native path bytes and reverse explicit container mappings by boundary."""
+    if platform == "windows":
+        return Path(mfc_known_met.normal_windows_display_path(native.decode("utf-16-le", "surrogatepass")))
+    if platform != "unix":
+        raise RuntimeError("unsupported native path platform in import audit")
+    path = PurePosixPath(native.decode("utf-8", "surrogateescape"))
+    if not path.is_absolute() or ".." in path.parts:
+        raise RuntimeError("invalid native path in import audit")
+    for mapping in sorted(mappings, key=lambda item: len(PurePosixPath(item.target).parts), reverse=True):
+        try:
+            relative = path.relative_to(PurePosixPath(mapping.target))
+        except ValueError:
+            continue
+        return Path(mapping.source).joinpath(*relative.parts)
+    raise RuntimeError("native path has no explicit source mapping")
+
+
+def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob) -> dict[str, int]:
+    """Independently check every accepted path, stock match, and native hashset.
+
+    Files are only stat-ed; Windows file-ID checks open handles without reading
+    payload bytes. The lookup uses the path's actual basename and current mtime,
+    not the content ID already chosen by the Rust importer.
+    """
+    config = emule_profile_export.resolve_emule_config_dir(job.source_profile)
+    flavor = emule_profile_export.detect_profile_flavor(config)
+    roots = [Path(r.path) for r in emule_profile_export.discover_shared_roots(config, flavor)]
+    result = {"verifiedPathBindings": 0, "verifiedNativeMd4Parts": 0,
+              "verifiedNativeAichParts": 0, "verifiedWindowsFingerprints": 0,
+              "verifiedRemappedPaths": 0}
+    with closing(open_profile_snapshot(profile)) as target:
+        rows = target.execute(
+            "SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,"
+            "k.id,k.ed2k_hash,k.size_bytes,k.aich_root,c.aich_root "
+            "FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id "
+            "JOIN known_files k ON k.id=i.known_file_id "
+            "JOIN verified_local_content c ON c.known_file_id=k.id"
+        )
+        for platform, native, size, stored, content_id, file_hash, content_size, root, verified_root in rows:
+            path = source_path_for_binding(platform, native, job.path_mappings)
+            if not any(path.is_relative_to(parent) for parent in roots):
+                raise RuntimeError("native binding is outside the stock shared roots")
+            current = path.stat()
+            fingerprint = rust_native_fingerprint.decode_fingerprint(stored)
+            if (not stat.S_ISREG(current.st_mode) or size != current.st_size or content_size != size
+                    or fingerprint.size_bytes != size
+                    or (fingerprint.modified.seconds, fingerprint.modified.nanoseconds)
+                    != divmod(current.st_mtime_ns, 1_000_000_000)):
+                raise RuntimeError("native binding fingerprint differs from the current source file")
+            if platform == "windows":
+                if os.name != "nt":
+                    raise RuntimeError("Windows file-ID validation requires Windows")
+                if rust_native_fingerprint.windows_native_fingerprint(path) != fingerprint:
+                    raise RuntimeError("native Windows file identity differs from the source file")
+                result["verifiedWindowsFingerprints"] += 1
+            else:
+                if fingerprint.identity_kind != rust_native_fingerprint.IDENTITY_UNIX:
+                    raise RuntimeError("native binding fingerprint belongs to another platform")
+                result["verifiedRemappedPaths"] += 1
+            candidates = target.execute(
+                "SELECT id,ed2k_hash,aich_root FROM imported_known_files "
+                "WHERE display_name=? AND size_bytes=? AND modified_s=?",
+                (path.name, size, current.st_mtime_ns // 1_000_000_000),
+            )
+            signature = None
+            for alias_id, candidate_hash, candidate_root in candidates:
+                parts = []
+                for table, column in (("imported_known_file_md4_hashes", "md4_hash"),
+                                      ("imported_known_file_aich_hashes", "aich_hash")):
+                    parts.append(tuple(r[0] for r in target.execute(
+                        f"SELECT {column} FROM {table} WHERE imported_known_file_id=? ORDER BY part_index",
+                        (alias_id,),
+                    )))
+                candidate = (candidate_hash, candidate_root, *parts)
+                if signature is not None and candidate != signature:
+                    raise RuntimeError("native binding has no unambiguous stock identity match")
+                signature = candidate
+            if signature is None:
+                raise RuntimeError("native binding has no unambiguous stock identity match")
+            expected_hash, expected_root, md4, aich = signature
+            if file_hash != expected_hash or root != expected_root or verified_root != expected_root:
+                raise RuntimeError("native content identity differs from the matched stock record")
+            for table, column, expected, counter in (
+                ("verified_local_md4_hashes", "md4_hash", md4, "verifiedNativeMd4Parts"),
+                ("verified_local_aich_hashes", "aich_hash", aich, "verifiedNativeAichParts"),
+            ):
+                actual = tuple(r[0] for r in target.execute(
+                    f"SELECT {column} FROM {table} WHERE known_file_id=? ORDER BY part_index", (content_id,),
+                ))
+                if actual != expected:
+                    raise RuntimeError("native content hashset differs from the matched stock record")
+                result[counter] += len(actual)
+            result["verifiedPathBindings"] += 1
+        if result["verifiedPathBindings"] != target.execute("SELECT count(*) FROM local_file_instances").fetchone()[0]:
+            raise RuntimeError("native bindings contain content without verified hash metadata")
+    return result
 
 
 def validate_reconciliation(report: dict, *, require_complete_reuse: bool = False) -> None:
@@ -211,15 +349,27 @@ def main(argv: list[str] | None = None) -> int:
             prepare_windows_mounts(wsl, job, args.mount, cleanup)
         report["import"] = run_json(prefix + ["import-emule-profile", import_path], args.timeout)
         report["hashValidation"] = validate_imported_hashes(profile, manifest_path)
+        report["stockValidation"] = validate_stock_records(
+            profile, emule_profile_export.resolve_emule_config_dir(job.source_profile),
+        )
         report["firstPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
         validate_reconciliation(report["firstPass"],require_complete_reuse=args.require_complete_reuse)
         report["firstCounts"] = profile_counts(profile)
+        report["firstBindingValidation"] = validate_native_bindings(profile, job)
+        if report["firstBindingValidation"]["verifiedPathBindings"] != report["firstPass"]["reusedCount"]:
+            raise RuntimeError("accepted native bindings differ from the reported reused files")
         report["hashOnlyReimport"] = run_json(
             prefix + ["import-emule-profile", "--hashes-only", hashes_path], args.timeout,
         )
         report["secondPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
         validate_reconciliation(report["secondPass"],require_complete_reuse=args.require_complete_reuse)
         report["secondCounts"] = profile_counts(profile)
+        report["secondHashValidation"] = validate_imported_hashes(profile, manifest_path)
+        report["secondBindingValidation"] = validate_native_bindings(profile, job)
+        if report["hashValidation"] != report["secondHashValidation"]:
+            raise RuntimeError("hash validation changed across the hash-only reimport")
+        if report["firstBindingValidation"] != report["secondBindingValidation"]:
+            raise RuntimeError("native bindings changed across the hash-only reimport")
         if report["firstCounts"] != report["secondCounts"]:
             raise RuntimeError("durable hash counts changed on the repeated offline pass")
         if report["firstPass"]["reusedCount"] == 0:

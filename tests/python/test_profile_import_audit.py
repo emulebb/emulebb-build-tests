@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from contextlib import ExitStack
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 from emule_test_harness import profile_import_audit, rust_upload_soak
 from emule_test_harness.emule_profile_export import PathMapping
 from emule_test_harness.profile_import_audit import mount_argument, validate_imported_hashes, validate_reconciliation
+from emule_test_harness.rust_native_fingerprint import NativeFingerprint, NativeTimestamp, encode_fingerprint
 
 
 @pytest.mark.parametrize("field", ["hashedCount", "completedReadBytes", "activeHashCount", "running"])
@@ -116,3 +118,98 @@ def test_offline_failure_retains_the_actual_diagnostic(monkeypatch: pytest.Monke
                         SimpleNamespace(returncode=1, stderr="sample failure", stdout=""))
     with pytest.raises(RuntimeError, match="sample failure"):
         profile_import_audit.run_json(["sample"], 10)
+
+
+@pytest.fixture
+def binding_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Provide two content identities so a wrong binding can keep all row counts."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    payload = shared / "Sample.bin"
+    payload.write_bytes(b"abc")
+    config = tmp_path / "stock"
+    config.mkdir()
+    (config / "known.met").touch()
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    current = payload.stat()
+    seconds, nanos = divmod(current.st_mtime_ns, 1_000_000_000)
+    fingerprint = encode_fingerprint(NativeFingerprint(1, b"\0" * 16, 3,
+                                    NativeTimestamp(seconds, nanos), None))
+    database = profile / "emulebb-rust-metadata.db"
+    with sqlite3.connect(database) as db:
+        db.executescript("""
+            CREATE TABLE local_paths(id,platform,native_path);
+            CREATE TABLE local_file_instances(path_id,known_file_id,file_size,verified_fingerprint);
+            CREATE TABLE known_files(id,ed2k_hash,size_bytes,aich_root);
+            CREATE TABLE verified_local_content(known_file_id,aich_root);
+            CREATE TABLE imported_known_files(id,ed2k_hash,display_name,size_bytes,modified_s,aich_root);
+            CREATE INDEX stock_identity ON imported_known_files(display_name,size_bytes,modified_s);
+            CREATE TABLE imported_known_file_md4_hashes(imported_known_file_id,part_index,md4_hash);
+            CREATE TABLE imported_known_file_aich_hashes(imported_known_file_id,part_index,aich_hash);
+            CREATE TABLE verified_local_md4_hashes(known_file_id,part_index,md4_hash);
+            CREATE TABLE verified_local_aich_hashes(known_file_id,part_index,aich_hash);
+        """)
+        db.execute("INSERT INTO local_paths VALUES(1,'unix',?)", (b"/data/sample/Sample.bin",))
+        db.execute("INSERT INTO local_file_instances VALUES(1,1,3,?)", (fingerprint,))
+        for i in (1, 2):
+            db.execute("INSERT INTO known_files VALUES(?,?,3,?)", (i, bytes([i]) * 16, b"a" * 20))
+            db.execute("INSERT INTO verified_local_content VALUES(?,?)", (i, b"a" * 20))
+        db.execute("INSERT INTO imported_known_files VALUES(1,?,'Sample.bin',3,?,?)",
+                   (b"\1" * 16, seconds, b"a" * 20))
+    monkeypatch.setattr(profile_import_audit.emule_profile_export, "discover_shared_roots",
+                        lambda *args: [SimpleNamespace(path=str(shared))])
+    job = SimpleNamespace(source_profile=config, path_mappings=(PathMapping(str(shared), "/data/sample"),))
+    return profile, job, database, payload
+
+
+def test_native_binding_validation_uses_actual_source_metadata(binding_profile) -> None:
+    profile, job, _, _ = binding_profile
+    result = profile_import_audit.validate_native_bindings(profile, job)
+    assert result["verifiedPathBindings"] == 1
+    assert result["verifiedRemappedPaths"] == 1
+
+
+@pytest.mark.parametrize(("mutation", "message"), [
+    ("UPDATE local_file_instances SET known_file_id=2", "content identity differs"),
+    ("UPDATE verified_local_content SET aich_root=zeroblob(20)", "content identity differs"),
+    ("UPDATE imported_known_files SET display_name='sample.bin'", "unambiguous stock identity"),
+    ("UPDATE imported_known_files SET modified_s=modified_s+1", "unambiguous stock identity"),
+    ("UPDATE imported_known_files SET size_bytes=4", "unambiguous stock identity"),
+    ("INSERT INTO imported_known_files SELECT 2,zeroblob(16),display_name,size_bytes,modified_s,aich_root FROM imported_known_files", "unambiguous stock identity"),
+    ("INSERT INTO verified_local_md4_hashes VALUES(1,0,zeroblob(16))", "hashset differs"),
+    ("INSERT INTO verified_local_aich_hashes VALUES(1,0,zeroblob(20))", "hashset differs"),
+    ("DELETE FROM verified_local_content WHERE known_file_id=1", "without verified hash metadata"),
+])
+def test_native_binding_validation_rejects_wrong_matches_with_same_counts(binding_profile, mutation, message) -> None:
+    profile, job, database, _ = binding_profile
+    with sqlite3.connect(database) as db:
+        db.execute(mutation)
+    with pytest.raises(RuntimeError, match=message):
+        profile_import_audit.validate_native_bindings(profile, job)
+
+
+def test_native_binding_validation_rejects_changed_file_without_reading_it(binding_profile) -> None:
+    profile, job, _, payload = binding_profile
+    before = payload.stat()
+    os.utime(payload, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    with pytest.raises(RuntimeError, match="fingerprint differs"):
+        profile_import_audit.validate_native_bindings(profile, job)
+
+
+@pytest.mark.parametrize("path", [b"/data/sample-other/Sample.bin", b"/data/sample/../Sample.bin"])
+def test_reverse_path_mapping_enforces_boundaries(path: bytes, tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="mapping|invalid native path"):
+        profile_import_audit.source_path_for_binding("unix", path, (PathMapping(str(tmp_path), "/data/sample"),))
+
+
+def test_stock_comparison_detects_exporter_identity_corruption(binding_profile, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile, job, database, payload = binding_profile
+    entry = SimpleNamespace(name="Sample.bin", size_bytes=3, modified_s=payload.stat().st_mtime_ns // 1_000_000_000,
+                            ed2k_hash="01" * 16, aich_root="61" * 20, md4_hashset=[], aich_hashset=[])
+    monkeypatch.setattr(profile_import_audit.mfc_known_met, "iter_known_met", lambda path: iter([entry]))
+    assert profile_import_audit.validate_stock_records(profile, job.source_profile)["verifiedStockRecords"] == 1
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE imported_known_files SET ed2k_hash=zeroblob(16)")
+    with pytest.raises(RuntimeError, match="stock record is missing"):
+        profile_import_audit.validate_stock_records(profile, job.source_profile)
