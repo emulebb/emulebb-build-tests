@@ -44,47 +44,43 @@ def profile_counts(profile: Path) -> dict[str, int]:
             for table in (
                 "imported_known_files", "known_files", "verified_local_content",
                 "verified_local_md4_hashes", "verified_local_aich_hashes", "local_file_instances",
-                "transfers", "shared_directory_roots",
+                "transfers", "shared_directory_roots", "aich_recovery_sets", "aich_recovery_parts",
             )
         }
 
 
-def validate_imported_hashes(profile: Path, manifest: dict) -> dict[str, int]:
-    """Compare every imported hash and ordered part hashset with the export."""
-    with closing(open_profile_snapshot(profile)) as connection:
-        md4: dict[int, list[str]] = {}
-        aich: dict[int, list[str]] = {}
-        for table, column, destination in (
-            ("imported_known_file_md4_hashes", "md4_hash", md4),
-            ("imported_known_file_aich_hashes", "aich_hash", aich),
-        ):
-            for row_id, value in connection.execute(
-                f"SELECT imported_known_file_id, lower(hex({column})) FROM {table} "
-                "ORDER BY imported_known_file_id, part_index"
-            ):
-                destination.setdefault(row_id, []).append(value)
-        expected = {
-            (row["fileHash"], row["displayName"], row["fileSize"], row["modifiedS"]): row
-            for row in manifest["knownFiles"]
-        }
-        matched = 0
-        for row_id, file_hash, name, size, modified, root in connection.execute(
-            "SELECT id, lower(hex(ed2k_hash)), display_name, size_bytes, modified_s, "
-            "CASE WHEN aich_root IS NULL THEN NULL ELSE lower(hex(aich_root)) END "
-            "FROM imported_known_files"
-        ):
-            exported = expected.get((file_hash, name, size, modified))
-            if exported is None:
-                continue
-            if (root, md4.get(row_id, []), aich.get(row_id, [])) != (
-                exported["aichRoot"], exported["md4Hashset"], exported["aichHashset"],
-            ):
+def validate_imported_hashes(profile: Path, exchange: Path) -> dict[str, int]:
+    """Compare every ordered hashset using indexed lookups and bounded memory."""
+    result = {"verifiedImportedRecords":0,"verifiedMd4Parts":0,"verifiedAichParts":0,"verifiedRecoverySets":0,"verifiedRecoveryParts":0}
+    with closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
+        for record,md4,aich in source.execute("SELECT record,md4,aich FROM known_files ORDER BY id"):
+            record=json.loads(record)
+            row=target.execute("SELECT id,lower(hex(aich_root)) FROM imported_known_files WHERE display_name=? AND size_bytes=? AND modified_s=? AND ed2k_hash=?",(record["displayName"],record["fileSize"],record["modifiedS"],bytes.fromhex(record["fileHash"]))).fetchone()
+            if row is None:
+                raise RuntimeError("the profile is missing exported known-file records")
+            if (row[1] or None)!=record["aichRoot"]:
                 raise RuntimeError("imported hashset differs from the export")
-            matched += 1
-        if matched != len(expected):
-            raise RuntimeError("the profile is missing exported known-file records")
-        return {"verifiedImportedRecords": matched, "verifiedMd4Parts": sum(map(len, md4.values())),
-                "verifiedAichParts": sum(map(len, aich.values()))}
+            for table,column,expected,counter in [("imported_known_file_md4_hashes","md4_hash",md4,"verifiedMd4Parts"),("imported_known_file_aich_hashes","aich_hash",aich,"verifiedAichParts")]:
+                hashes=[r[0] for r in target.execute(f"SELECT {column} FROM {table} WHERE imported_known_file_id=? ORDER BY part_index",(row[0],))]
+                if column=="aich_hash" and not expected and hashes and record["aichRoot"]:
+                    # A complete recovery import legitimately enriches a stock
+                    # entry that had a master but no separate part-hash list.
+                    recovered=[r[0] for r in target.execute("SELECT part_root FROM aich_recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index",(bytes.fromhex(record["aichRoot"]),record["fileSize"]))]
+                    if recovered!=hashes:
+                        raise RuntimeError("enriched AICH part hashes differ from recovery cache")
+                    expected=b"".join(recovered)
+                if b"".join(hashes)!=expected:
+                    raise RuntimeError("imported hashset differs from the export")
+                result[counter]+=len(hashes)
+            result["verifiedImportedRecords"]+=1
+        for root,size in source.execute("SELECT root,size_bytes FROM recovery_sets"):
+            for index,leaves in source.execute("SELECT part_index,leaves FROM recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index",(root,size)):
+                row=target.execute("SELECT leaves FROM aich_recovery_parts WHERE root=? AND size_bytes=? AND part_index=?",(root,size,index)).fetchone()
+                if row is None or row[0]!=leaves:
+                    raise RuntimeError("imported AICH recovery leaves differ from the export")
+                result["verifiedRecoveryParts"]+=1
+            result["verifiedRecoverySets"]+=1
+    return result
 
 
 def mount_argument(value: str) -> tuple[str, str]:
@@ -138,14 +134,12 @@ def main(argv: list[str] | None = None) -> int:
     job = emule_profile_export.load_export_job(args.config)
     if not args.image:
         job = replace(job, target_platform="windows", path_mappings=())
-    manifest = emule_profile_export.build_export_manifest(job)
+    from .profile_exchange import write_exchange
     report_root.mkdir(parents=True, exist_ok=False)
-    manifest_path = report_root / "profile-import.json"
-    emule_profile_export.export_manifest(replace(job, output_manifest=manifest_path), manifest)
-    # The same hash records must be usable independently of the export platform.
-    hash_manifest = {**manifest, "targetPlatform": "windows" if args.image else "unix", "sharedRoots": []}
-    hash_manifest_path = report_root / "portable-hashes.json"
-    emule_profile_export.export_manifest(replace(job, output_manifest=hash_manifest_path), hash_manifest)
+    manifest_path = report_root / "profile-import.sqlite"
+    manifest=write_exchange(replace(job,output_manifest=manifest_path))
+    hash_manifest_path=report_root/"portable-hashes.sqlite"
+    write_exchange(replace(job,output_manifest=hash_manifest_path,target_platform="windows" if args.image else "unix"),hashes_only=True)
 
     wsl = ["wsl.exe", "-d", args.wsl_distro, "--"]
     if args.image:
@@ -163,13 +157,13 @@ def main(argv: list[str] | None = None) -> int:
         prefix = wsl + ["docker", "run", "--rm", "--network", "none", "--no-healthcheck", "--user", "1000:1000",
                         "--entrypoint", "/usr/lib/emulebb-rust/emulebb-rust",
                         "--mount", f"type=bind,src={args.profile},dst=/profile",
-                        "--mount", f"type=bind,src={manifest_wsl},dst=/import.json,readonly",
-                        "--mount", f"type=bind,src={hashes_wsl},dst=/hashes.json,readonly"]
+                        "--mount", f"type=bind,src={manifest_wsl},dst=/import.sqlite,readonly",
+                        "--mount", f"type=bind,src={hashes_wsl},dst=/hashes.sqlite,readonly"]
         for source, target in args.mount:
             prefix += ["--mount", f"type=bind,src={source},dst={target},readonly"]
         prefix += [args.image, "--profile", "/profile"]
-        import_path = "/import.json"
-        hashes_path = "/hashes.json"
+        import_path = "/import.sqlite"
+        hashes_path = "/hashes.sqlite"
     else:
         if os.name != "nt":
             raise RuntimeError("native audit requires Windows; use --image for Docker")
@@ -207,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--prepare-windows-mounts requires --image")
             prepare_windows_mounts(wsl, job, args.mount, cleanup)
         report["import"] = run_json(prefix + ["import-emule-profile", import_path], args.timeout)
-        report["hashValidation"] = validate_imported_hashes(profile, manifest)
+        report["hashValidation"] = validate_imported_hashes(profile, manifest_path)
         report["firstPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
         validate_reconciliation(report["firstPass"])
         report["firstCounts"] = profile_counts(profile)

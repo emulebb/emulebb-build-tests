@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 from contextlib import ExitStack
 from pathlib import Path
@@ -51,11 +52,16 @@ def test_hash_validation_detects_corruption_even_when_row_counts_match(tmp_path:
         "fileHash": "11" * 16, "displayName": "Sample.bin", "fileSize": 1024,
         "modifiedS": 1700000000, "aichRoot": None, "md4Hashset": ["22" * 16], "aichHashset": [],
     }]}
-    assert validate_imported_hashes(tmp_path, manifest)["verifiedImportedRecords"] == 1
+    exchange=tmp_path/"exchange.sqlite"
+    with sqlite3.connect(exchange) as source:
+        source.executescript("CREATE TABLE known_files(id INTEGER PRIMARY KEY,record TEXT,md4 BLOB,aich BLOB); CREATE TABLE recovery_sets(root,size_bytes);")
+        record=manifest["knownFiles"][0]
+        source.execute("INSERT INTO known_files VALUES(1,?,?,?)",(json.dumps(record),bytes.fromhex("22"*16),b""))
+    assert validate_imported_hashes(tmp_path, exchange)["verifiedImportedRecords"] == 1
     with sqlite3.connect(database) as connection:
         connection.execute("UPDATE imported_known_file_md4_hashes SET md4_hash = ?", (bytes.fromhex("33" * 16),))
     with pytest.raises(RuntimeError, match="hashset differs"):
-        validate_imported_hashes(tmp_path, manifest)
+        validate_imported_hashes(tmp_path, exchange)
 
 
 def test_audit_restores_only_its_own_read_only_data_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

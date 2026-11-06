@@ -4169,15 +4169,15 @@ def shared_directory_model_persistence_lists(model: dict[str, object]) -> dict[s
 def expand_mfc_shareddir_from_manifest(args: argparse.Namespace) -> dict[str, object]:
     """Append an audited Windows sharing tree offline, preserving original bytes."""
 
-    from emule_test_harness.emule_profile_export import MANIFEST_SCHEMA
+    from emule_test_harness.profile_exchange import read_exchange_header
 
     def require_stopped() -> None:
         if any(is_mfc_client_process(process) for process in collect_processes()):
             raise RuntimeError("Stop MFC before expanding its persisted shared directories")
 
     require_stopped()
-    manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
-    if manifest.get("schema") != MANIFEST_SCHEMA or manifest.get("targetPlatform") != "windows":
+    manifest = read_exchange_header(args.manifest)
+    if manifest.get("targetPlatform") != "windows":
         raise ValueError("Shared-directory expansion requires a Windows profile-import manifest")
     roots = manifest.get("sharedRoots")
     if not isinstance(roots, list) or not roots:
