@@ -712,10 +712,14 @@ def run(argv: list[str] | None = None) -> int:
                 "daemon",
                 {"incomingDir": wsl_metadata_path(wsl_mountpoint, leecher_profile / "incoming"), "p2pBindIp": seeder_addr},
             )
+            # Include the product's 5 GiB free-space reserve. This is virtual
+            # tmpfs capacity; pages are allocated only for the small fixture.
+            native_capacity_mib = max(8192, args.payload_mib * 4 + 6144)
             for profile in (seeder_profile, leecher_profile):
-                native = mount_native_wsl_profile(wsl_mountpoint, profile, max(128, args.payload_mib * 4 + 64))
+                native = mount_native_wsl_profile(wsl_mountpoint, profile, native_capacity_mib)
                 native_profiles.append((native, artifacts_dir / f"{profile.name}-snapshot.tar"))
             report["profileStorage"] = "bounded-native-linux-tmpfs"
+            report["profileStorageCapacityMiB"] = native_capacity_mib
         seeder_diag = artifacts_dir / "diagnostics" / "seeder"
         leecher_diag = artifacts_dir / "diagnostics" / "leecher"
         if kad_wsl:
