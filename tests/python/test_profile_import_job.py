@@ -108,6 +108,51 @@ def test_operator_status_keeps_valid_import_without_hashing(job, quiet_roots, mo
     assert Path(report["report"]).is_file()
 
 
+@pytest.fixture
+def directory_alias(tmp_path):
+    """Create a real Windows junction or Unix directory symlink in the test root."""
+    actual, alias = tmp_path / "actual media", tmp_path / "alias"
+    actual.mkdir()
+    if os.name == "nt":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(actual)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+    else:
+        alias.symlink_to(actual, target_is_directory=True)
+    assert alias.samefile(actual)
+    return alias, actual
+
+
+def test_physical_overlap_handles_aliases_and_nonexistent_children(directory_alias):
+    alias, actual = directory_alias
+    assert module.paths_overlap(alias, actual / "new" / "profile")
+    assert module.paths_overlap(actual, alias / "new" / "reports")
+    assert not module.paths_overlap(actual, actual.with_name("actual media-other"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows mapping semantics")
+def test_windows_mapping_accepts_junction_identity(job, quiet_roots, directory_alias):
+    alias, actual = directory_alias
+    text = job.read_text(encoding="utf-8").replace("host='media'", "host=" + json.dumps(str(actual)))
+    text = text.replace("target=" + json.dumps(str(job.parent / "media")), "target=" + json.dumps(str(alias)))
+    job.write_text(text, encoding="utf-8")
+    module.load_job(job)
+
+
+@pytest.mark.parametrize("output", [False, True])
+def test_preflight_rejects_profile_or_reports_inside_aliased_share(job, quiet_roots, directory_alias, monkeypatch, output):
+    if os.name != "nt":
+        pytest.skip("Windows unmapped stock root")
+    alias, actual = directory_alias
+    text = job.read_text(encoding="utf-8").split("[[path_mappings]]")[0]
+    text = text.replace("directory='reports'" if output else "profile='destination'",
+                        ("directory=" if output else "profile=") + json.dumps(str(actual / "new")))
+    job.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(module.export, "discover_shared_roots", lambda *a: [SimpleNamespace(path=str(alias))])
+    with pytest.raises(ValueError, match="overlaps"):
+        module.load_job(job)
+    assert not (actual / "new").exists()
+
+
 def test_failure_retains_diagnostic(job, quiet_roots, monkeypatch):
     parsed = module.load_job(job)
     def fail(*args, **kwargs):
