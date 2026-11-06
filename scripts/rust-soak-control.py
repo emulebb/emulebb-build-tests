@@ -4968,18 +4968,14 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
             "metadataDb": str(metadata_db),
             "metadataDbExists": True,
             "knownFilesTotal": sqlite_count_table(connection, tables, "known_files"),
-            "knownFilesCompleted": sqlite_count_truthy(
-                connection,
-                tables,
-                "known_files",
-                ("completed", "is_completed"),
-            ),
-            "knownCompletedBytes": sqlite_sum_column_where_truthy(
-                connection,
-                tables,
-                "known_files",
-                ("completed_bytes", "size", "size_bytes", "file_size"),
-                ("completed", "is_completed"),
+            "knownFilesCompleted": sqlite_count_table(connection, tables, "verified_local_content"),
+            "knownCompletedBytes": (
+                connection.execute(
+                    "SELECT coalesce(sum(known_files.size_bytes), 0) FROM known_files "
+                    "JOIN verified_local_content ON verified_local_content.known_file_id = known_files.id"
+                ).fetchone()[0]
+                if {"known_files", "verified_local_content"} <= tables
+                else None
             ),
             "knownUploadedBytes": sqlite_sum_column(
                 connection,

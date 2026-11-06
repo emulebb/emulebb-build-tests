@@ -3601,9 +3601,11 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
     )
     connection = sqlite3.connect(metadata_db)
     try:
-        connection.execute("CREATE TABLE known_files (completed INTEGER, size INTEGER, uploaded_bytes INTEGER, upload_requests INTEGER, upload_accepts INTEGER)")
+        connection.execute("CREATE TABLE known_files (id INTEGER, size_bytes INTEGER, all_time_uploaded_bytes INTEGER, all_time_upload_requests INTEGER, all_time_upload_accepts INTEGER)")
         connection.execute("INSERT INTO known_files VALUES (1, 100, 10, 2, 1)")
-        connection.execute("INSERT INTO known_files VALUES (0, 200, 20, 3, 2)")
+        connection.execute("INSERT INTO known_files VALUES (2, 200, 20, 3, 2)")
+        connection.execute("CREATE TABLE verified_local_content(known_file_id INTEGER)")
+        connection.execute("INSERT INTO verified_local_content VALUES(1)")
         connection.execute("CREATE TABLE shared_directory_roots (enabled INTEGER, accessible INTEGER, deleted_at_ms INTEGER)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 0, NULL)")
