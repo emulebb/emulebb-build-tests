@@ -4193,14 +4193,25 @@ def expand_mfc_shareddir_from_manifest(args: argparse.Namespace) -> dict[str, ob
     existing = text.splitlines()
     seen = {normalize_private_path(line) for line in existing if line.strip()}
     additions: list[str] = []
+    excluded_roots = [root.resolve() for root in args.exclude_root]
+    excluded_root_count = 0
+
+    def is_excluded(path: Path) -> bool:
+        return bool(excluded_roots) and any(path.resolve().is_relative_to(root) for root in excluded_roots)
+
     common = soak_launch.load_scripts_module("mfc_share_tree_common", "emule-live-profile-common.py")
     for index, row in enumerate(roots, 1):
         if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not row["path"].strip():
             raise ValueError(f"Invalid shared root at index {index}")
         root = Path(mfc_known_met.normal_windows_display_path(row["path"]))
+        if is_excluded(root):
+            excluded_root_count += 1
+            continue
         if not root.is_absolute() or not root.is_dir():
             raise ValueError(f"Shared root {index} is not an accessible native directory")
         for directory in common.enumerate_recursive_directories(root, strict=True):
+            if is_excluded(Path(mfc_known_met.normal_windows_display_path(directory))):
+                continue
             key = normalize_private_path(directory)
             if key not in seen:
                 seen.add(key)
@@ -4240,6 +4251,7 @@ def expand_mfc_shareddir_from_manifest(args: argparse.Namespace) -> dict[str, ob
     return {
         "written": not args.dry_run and bool(additions),
         "rootCount": len(roots),
+        "excludedRootCount": excluded_root_count,
         "originalDirectoryCount": len(existing),
         "addedDirectoryCount": len(additions),
         "finalDirectoryCount": len(existing) + len(additions),
@@ -7267,6 +7279,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     expand_mfc_shareddir_parser.add_argument("--manifest", type=Path, required=True)
     expand_mfc_shareddir_parser.add_argument("--target-profile-dir", type=Path, required=True)
+    expand_mfc_shareddir_parser.add_argument(
+        "--exclude-root", action="append", type=Path, default=[],
+        help="Do not add this directory or its descendants; existing entries are preserved.",
+    )
     expand_mfc_shareddir_parser.add_argument("--dry-run", action="store_true")
     expand_mfc_shareddir_parser.set_defaults(func=expand_mfc_shareddir_from_manifest)
 
