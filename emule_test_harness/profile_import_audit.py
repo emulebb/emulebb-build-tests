@@ -35,7 +35,7 @@ def profile_counts(profile: Path) -> dict[str, int]:
             for table in (
                 "imported_known_files", "known_files", "verified_local_content",
                 "verified_local_md4_hashes", "verified_local_aich_hashes", "local_file_instances",
-                "transfers",
+                "transfers", "shared_directory_roots",
             )
         }
 
@@ -134,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
     report_root.mkdir(parents=True, exist_ok=False)
     manifest_path = report_root / "profile-import.json"
     emule_profile_export.export_manifest(replace(job, output_manifest=manifest_path), manifest)
+    # The same hash records must be usable independently of the export platform.
+    hash_manifest = {**manifest, "targetPlatform": "windows" if args.image else "unix", "sharedRoots": []}
+    hash_manifest_path = report_root / "portable-hashes.json"
+    emule_profile_export.export_manifest(replace(job, output_manifest=hash_manifest_path), hash_manifest)
 
     wsl = ["wsl.exe", "-d", args.wsl_distro, "--"]
     if args.image:
@@ -145,16 +149,19 @@ def main(argv: list[str] | None = None) -> int:
         profile = Path(windows_profile)
         profile.mkdir(parents=True, exist_ok=True)
         manifest_wsl = subprocess.check_output(wsl + ["wslpath", "-a", "-u", str(manifest_path)], text=True).strip()
+        hashes_wsl = subprocess.check_output(wsl + ["wslpath", "-a", "-u", str(hash_manifest_path)], text=True).strip()
         # Each invocation creates and removes a distinct container. Data mounts
         # are read-only; the image init and all network startup are bypassed.
         prefix = wsl + ["docker", "run", "--rm", "--network", "none", "--user", "1000:1000",
                         "--entrypoint", "/usr/lib/emulebb-rust/emulebb-rust",
                         "--mount", f"type=bind,src={args.profile},dst=/profile",
-                        "--mount", f"type=bind,src={manifest_wsl},dst=/import.json,readonly"]
+                        "--mount", f"type=bind,src={manifest_wsl},dst=/import.json,readonly",
+                        "--mount", f"type=bind,src={hashes_wsl},dst=/hashes.json,readonly"]
         for source, target in args.mount:
             prefix += ["--mount", f"type=bind,src={source},dst={target},readonly"]
         prefix += [args.image, "--profile", "/profile"]
         import_path = "/import.json"
+        hashes_path = "/hashes.json"
     else:
         if os.name != "nt":
             raise RuntimeError("native audit requires Windows; use --image for Docker")
@@ -164,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
             raise FileNotFoundError(binary)
         prefix = [str(binary), "--profile", str(profile)]
         import_path = str(manifest_path)
+        hashes_path = str(hash_manifest_path)
 
     report = {
         "schema": "emulebb.stock-hash-import-audit.v1",
@@ -177,6 +185,15 @@ def main(argv: list[str] | None = None) -> int:
     report_path = report_root / "summary.json"
     cleanup = ExitStack()
     try:
+        if args.image and profile.resolve().is_relative_to(output.resolve()):
+            # Reuse the harness's metadata-enabled output view so Linux can
+            # enforce private settings permissions without moving generated data
+            # outside the inherited workspace output root.
+            from .rust_upload_soak import mount_wsl_output_with_metadata, unmount_wsl_output, wsl_metadata_path
+            metadata_mount = mount_wsl_output_with_metadata(stamp, profile, distribution=args.wsl_distro)
+            cleanup.callback(unmount_wsl_output, metadata_mount, distribution=args.wsl_distro)
+            profile_mount = f"type=bind,src={args.profile},dst=/profile"
+            prefix[prefix.index(profile_mount)] = f"type=bind,src={wsl_metadata_path(metadata_mount, profile)},dst=/profile"
         if args.prepare_windows_mounts:
             if not args.image:
                 raise ValueError("--prepare-windows-mounts requires --image")
@@ -186,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
         report["firstPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
         validate_reconciliation(report["firstPass"])
         report["firstCounts"] = profile_counts(profile)
+        report["hashOnlyReimport"] = run_json(
+            prefix + ["import-emule-profile", "--hashes-only", hashes_path], args.timeout,
+        )
         report["secondPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
         validate_reconciliation(report["secondPass"])
         report["secondCounts"] = profile_counts(profile)
@@ -201,8 +221,10 @@ def main(argv: list[str] | None = None) -> int:
         report["error"] = str(error)
         raise
     finally:
-        cleanup.close()
-        report["elapsedSeconds"] = round(time.monotonic() - started, 3)
-        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({"report": str(report_path), **report}, indent=2))
+        try:
+            cleanup.close()
+        finally:
+            report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+            report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            print(json.dumps({"report": str(report_path), **report}, indent=2))
     return 0

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from emule_test_harness import profile_import_audit, rust_upload_soak
+from emule_test_harness.emule_profile_export import PathMapping
 from emule_test_harness.profile_import_audit import mount_argument, validate_imported_hashes, validate_reconciliation
 
 
@@ -52,3 +56,30 @@ def test_hash_validation_detects_corruption_even_when_row_counts_match(tmp_path:
         connection.execute("UPDATE imported_known_file_md4_hashes SET md4_hash = ?", (bytes.fromhex("33" * 16),))
     with pytest.raises(RuntimeError, match="hashset differs"):
         validate_imported_hashes(tmp_path, manifest)
+
+
+def test_audit_restores_only_its_own_read_only_data_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=1 if "mountpoint" in command else 0)
+    monkeypatch.setattr(profile_import_audit.subprocess, "run", run)
+    job = SimpleNamespace(path_mappings=(PathMapping(str(tmp_path), "/data/sample"),))
+    with ExitStack() as cleanup:
+        profile_import_audit.prepare_windows_mounts(
+            ["wsl.exe", "-d", "SampleDistro", "--"], job,
+            [("/mnt/sample", "/data/sample")], cleanup,
+        )
+        assert calls[-1][-5:] == ["drvfs", "-o", "ro", str(tmp_path), "/mnt/sample"]
+    assert calls[-1][-2:] == ["umount", "/mnt/sample"]
+
+
+def test_metadata_output_mount_uses_selected_distribution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="1000\n")
+    monkeypatch.setattr(rust_upload_soak.subprocess, "run", run)
+    mountpoint = rust_upload_soak.mount_wsl_output_with_metadata("test", tmp_path, distribution="SampleDistro")
+    rust_upload_soak.unmount_wsl_output(mountpoint, distribution="SampleDistro")
+    assert all(command[:3] == ["wsl.exe", "-d", "SampleDistro"] for command in calls)

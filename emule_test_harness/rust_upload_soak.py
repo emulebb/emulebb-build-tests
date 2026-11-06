@@ -197,34 +197,38 @@ def export_wsl_delivery(mountpoint: str, profile: Path, source: str, target: Pat
     return target
 
 
-def mount_wsl_output_with_metadata(run_id: str, output_path: Path) -> str:
+def mount_wsl_output_with_metadata(run_id: str, output_path: Path, *, distribution: str | None = None) -> str:
     """Mounts the output drive with DrvFs metadata for Linux secret permissions."""
 
     mountpoint = f"/mnt/emulebb-rust-output-{run_id}-{os.getpid()}"
-    uid = subprocess.run(["wsl.exe", "--", "id", "-u"], capture_output=True, text=True, check=True).stdout.strip()
-    gid = subprocess.run(["wsl.exe", "--", "id", "-g"], capture_output=True, text=True, check=True).stdout.strip()
-    subprocess.run(["wsl.exe", "--user", "root", "--", "mkdir", mountpoint], check=True)
+    wsl = ["wsl.exe"] + (["-d", distribution] if distribution else [])
+    root = wsl + ["--user", "root", "--"]
+    uid = subprocess.run(wsl + ["--", "id", "-u"], capture_output=True, text=True, check=True).stdout.strip()
+    gid = subprocess.run(wsl + ["--", "id", "-g"], capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(root + ["mkdir", mountpoint], check=True)
     try:
         subprocess.run(
-            ["wsl.exe", "--user", "root", "--", "mount", "-t", "drvfs", output_path.drive,
+            root + ["mount", "-t", "drvfs", output_path.drive,
              mountpoint, "-o", f"metadata,uid={uid},gid={gid}"],
             check=True,
         )
     except Exception:
-        subprocess.run(["wsl.exe", "--user", "root", "--", "rmdir", mountpoint], check=False)
+        subprocess.run(root + ["rmdir", mountpoint], check=False)
         raise
     return mountpoint
 
 
-def unmount_wsl_output(mountpoint: str | None) -> None:
+def unmount_wsl_output(mountpoint: str | None, *, distribution: str | None = None) -> None:
     """Releases the alternate DrvFs view and its empty mountpoint."""
 
     if mountpoint is None:
         return
-    mounted = subprocess.run(["wsl.exe", "--", "mountpoint", "-q", mountpoint], check=False)
+    wsl = ["wsl.exe"] + (["-d", distribution] if distribution else [])
+    root = wsl + ["--user", "root", "--"]
+    mounted = subprocess.run(wsl + ["--", "mountpoint", "-q", mountpoint], check=False)
     if mounted.returncode == 0:
-        subprocess.run(["wsl.exe", "--user", "root", "--", "umount", "-l", mountpoint], check=True)
-    subprocess.run(["wsl.exe", "--user", "root", "--", "rmdir", mountpoint], check=True)
+        subprocess.run(root + ["umount", "-l", mountpoint], check=True)
+    subprocess.run(root + ["rmdir", mountpoint], check=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
