@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import emule_profile_export, mfc_known_met
+from emule_test_harness.profile_exchange import write_exchange
 
 
 def _tag_string(name_id: int, value: str) -> bytes:
@@ -99,7 +100,7 @@ def test_windows_export_discovers_compact_mfc_roots(
     profile = tmp_path / "legacy-profile"
     _write_mfc_profile(profile)
     job_path = tmp_path / "import.toml"
-    output = tmp_path / "manifest.json"
+    output = tmp_path / "profile.sqlite"
     _write_job(job_path, source_profile=profile, output_manifest=output)
     collapsed_inputs: list[list[str]] = []
 
@@ -113,7 +114,7 @@ def test_windows_export_discovers_compact_mfc_roots(
         record_collapse,
     )
 
-    manifest = emule_profile_export.build_export_manifest(
+    manifest = write_exchange(
         emule_profile_export.load_export_job(job_path)
     )
 
@@ -124,7 +125,7 @@ def test_windows_export_discovers_compact_mfc_roots(
         "C:\\Shared",
         "D:\\Explicit",
     ]
-    assert manifest["summary"]["importedKnownRecords"] == 1
+    assert manifest["summary"]["knownRecords"] == 1
 
 
 def test_hash_only_export_requires_neither_roots_nor_path_mappings(tmp_path: Path) -> None:
@@ -133,11 +134,11 @@ def test_hash_only_export_requires_neither_roots_nor_path_mappings(tmp_path: Pat
     _write_known_met(profile / "known.met")
     job_path = tmp_path / "import.toml"
     _write_job(job_path, source_profile=profile, output_manifest=tmp_path / "hashes.json", target_platform="linux")
-    manifest = emule_profile_export.build_export_manifest(
+    manifest = write_exchange(
         emule_profile_export.load_export_job(job_path), hashes_only=True,
     )
     assert manifest["sharedRoots"] == []
-    assert len(manifest["knownFiles"]) == 1
+    assert manifest["summary"]["knownRecords"] == 1
 
 
 def test_stock_export_accepts_config_dir_and_collapses_roots(
@@ -149,7 +150,7 @@ def test_stock_export_accepts_config_dir_and_collapses_roots(
     (config / "shareddir.monitored.dat").unlink()
     (config / "shareddir.monitor-owned.dat").unlink()
     job_path = tmp_path / "import.toml"
-    output = tmp_path / "manifest.json"
+    output = tmp_path / "profile.sqlite"
     _write_job(job_path, source_profile=config, output_manifest=output)
     collapsed_inputs: list[list[str]] = []
 
@@ -163,7 +164,7 @@ def test_stock_export_accepts_config_dir_and_collapses_roots(
         record_collapse,
     )
 
-    manifest = emule_profile_export.build_export_manifest(
+    manifest = write_exchange(
         emule_profile_export.load_export_job(job_path)
     )
 
@@ -187,7 +188,7 @@ def test_unix_export_uses_longest_prefix_mapping(
     _write_job(
         job_path,
         source_profile=profile,
-        output_manifest=tmp_path / "manifest.json",
+        output_manifest=tmp_path / "profile.sqlite",
         target_platform=target_platform,
         mappings=[
             ("C:\\", "/mnt/c"),
@@ -196,7 +197,7 @@ def test_unix_export_uses_longest_prefix_mapping(
         ],
     )
 
-    manifest = emule_profile_export.build_export_manifest(
+    manifest = write_exchange(
         emule_profile_export.load_export_job(job_path)
     )
 
@@ -215,13 +216,13 @@ def test_linux_export_rejects_unmapped_root(tmp_path: Path) -> None:
     _write_job(
         job_path,
         source_profile=profile,
-        output_manifest=tmp_path / "manifest.json",
+        output_manifest=tmp_path / "profile.sqlite",
         target_platform="linux",
         mappings=[("C:\\", "/mnt/c")],
     )
 
     with pytest.raises(ValueError, match="requires a path mapping"):
-        emule_profile_export.build_export_manifest(
+        write_exchange(
             emule_profile_export.load_export_job(job_path)
         )
 
@@ -244,7 +245,7 @@ def test_job_rejects_mapping_target_traversal(
     _write_job(
         job_path,
         source_profile=profile,
-        output_manifest=tmp_path / "manifest.json",
+        output_manifest=tmp_path / "profile.sqlite",
         target_platform=target_platform,
         mappings=[("C:\\", target)],
     )
@@ -257,13 +258,13 @@ def test_export_writes_configured_manifest_atomically(tmp_path: Path) -> None:
     profile = tmp_path / "legacy-profile"
     _write_mfc_profile(profile)
     job_path = tmp_path / "import.toml"
-    output = tmp_path / "nested" / "manifest.json"
+    output = tmp_path / "nested" / "profile.sqlite"
     _write_job(job_path, source_profile=profile, output_manifest=output)
     job = emule_profile_export.load_export_job(job_path)
-    manifest = emule_profile_export.build_export_manifest(job)
+    manifest = write_exchange(job)
 
-    written = emule_profile_export.export_manifest(job, manifest)
+    written = manifest["outputManifest"]
 
-    assert written == output
+    assert written == str(output)
     assert output.is_file()
-    assert not output.with_name("manifest.json.tmp").exists()
+    assert not output.with_name("profile.sqlite.tmp").exists()

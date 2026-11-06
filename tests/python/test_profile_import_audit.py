@@ -37,6 +37,13 @@ def test_container_mount_requires_absolute_explicit_paths() -> None:
         mount_argument("relative=/data/sample")
 
 
+def test_complete_reuse_rejects_pending_hashing_without_executing_it():
+    report={"hashedCount":0,"completedReadBytes":0,"activeHashCount":0,"running":False,"plannedHashCount":1}
+    validate_reconciliation(report)
+    with pytest.raises(RuntimeError,match="queued for hashing"):
+        validate_reconciliation(report,require_complete_reuse=True)
+
+
 def test_hash_validation_detects_corruption_even_when_row_counts_match(tmp_path: Path) -> None:
     database = tmp_path / "emulebb-rust-metadata.db"
     with sqlite3.connect(database) as connection:
