@@ -84,8 +84,8 @@ def test_destination_cannot_overlap_media(job, quiet_roots):
         module.load_job(job)
 
 
-@pytest.mark.parametrize("pending,missing,expected", [(0, 0, 0), (1, 0, 2), (0, 1, 2)])
-def test_operator_status_keeps_valid_import_without_hashing(job, quiet_roots, monkeypatch, pending, missing, expected):
+@pytest.mark.parametrize("pending,missing,rejected,expected", [(0, 0, 0, 0), (1, 0, 0, 2), (0, 1, 0, 2), (0, 0, 1, 2)])
+def test_operator_status_keeps_valid_import_without_hashing(job, quiet_roots, monkeypatch, pending, missing, rejected, expected):
     parsed = module.load_job(job)
     monkeypatch.setattr(module, "write_exchange", lambda *a, **k: {"summary": {"recoveryMissingSets": missing, "skippedKnown": 0}})
     monkeypatch.setattr(module, "command_prefix", lambda *a: ["sample-client"])
@@ -96,7 +96,7 @@ def test_operator_status_keeps_valid_import_without_hashing(job, quiet_roots, mo
             return {"hashedCount": 0, "completedReadBytes": 0, "activeHashCount": 0, "running": False,
                     "plannedHashCount": pending, "statFailedCount": 0, "skippedFailedCount": 0, "skippedIntakeCount": 0,
                     "scannedCount": 1}
-        return {"rejectedRecoverySets": 0}
+        return {"rejectedRecoverySets": rejected}
     monkeypatch.setattr(module.audit, "run_json", run)
     for name in ("validate_imported_hashes", "validate_stock_records", "validate_native_bindings", "profile_counts"):
         monkeypatch.setattr(module.audit, name, lambda *a, **k: {})
@@ -130,6 +130,45 @@ def test_docker_command_is_network_none_and_media_readonly(job, quiet_roots, mon
     assert command[command.index("--network") + 1] == "none"
     assert command[command.index("--entrypoint") + 1] == "/usr/lib/emulebb-rust/emulebb-rust"
     assert sum("readonly" in x for x in command) == 2
+
+
+@pytest.mark.native
+def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path):
+    """A corrupt optional tree must reach reconciliation, not fail verification early."""
+    if os.name != "nt":
+        pytest.skip("Windows executable integration")
+    from emule_test_harness.paths import get_workspace_output_root
+    from emule_test_harness.profile_import_audit import create_import_fixture
+    binary = get_workspace_output_root() / "tools/emulebb-rust/bin/emulebb-rust.exe"
+    if not binary.is_file():
+        pytest.skip("requires staged Rust executable")
+    fixture = tmp_path / "fixture"
+    create_import_fixture(fixture)
+    cache = fixture / "stock/config/known2_64.met"
+    data = bytearray(cache.read_bytes())
+    # Fixture records contain root(20), count(4), and a single leaf(20).
+    # Alter the second record's leaf; keep its framing and master unchanged.
+    data[1 + 44 + 24] ^= 1
+    cache.write_bytes(data)
+    config = tmp_path / "job.toml"
+    config.write_text('\n'.join([
+        'schema_version=1', '[source]', 'profile=' + json.dumps(str(fixture / 'stock')),
+        '[target]', 'backend="windows"', 'profile=' + json.dumps(str(tmp_path / 'destination')),
+        'binary=' + json.dumps(str(binary)), '[output]', 'directory=' + json.dumps(str(tmp_path / 'reports')),
+    ]), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in
+           ("EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT", "CARGO_TARGET_DIR", "X_LOCAL_IP")}
+    script = Path(__file__).resolve().parents[2] / "scripts/import-emule-profile.py"
+    result = subprocess.run([sys.executable, "-B", str(script), "--config", str(config)],
+                            env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 2, result.stdout + result.stderr
+    report = json.loads(next((tmp_path / "reports").glob("*/summary.json")).read_text(encoding="utf-8"))
+    assert report["import"]["rejectedRecoverySets"] == 1
+    assert report["hashValidation"]["unavailableRecoverySets"] == 1
+    assert report["reconciliation"]["reusedCount"] == 4
+    assert report["reconciliation"]["plannedHashCount"] == 0
+    assert report["reconciliation"]["completedReadBytes"] == 0
+    assert report["bindingValidation"]["verifiedPathBindings"] == 4
 
 
 @pytest.mark.native

@@ -189,7 +189,9 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
             report["destinationModified"] = True
             path = str(archive) if job.backend == "windows" else "/import/hashes.sqlite"
             report["import"] = audit.run_json(prefix + ["import-emule-profile", path], job.timeout)
-            report["hashValidation"] = audit.validate_imported_hashes(job.profile, archive)
+            report["hashValidation"] = audit.validate_imported_hashes(
+                job.profile, archive, rejected_recovery_sets=report["import"]["rejectedRecoverySets"],
+            )
             report["stockValidation"] = audit.validate_stock_records(job.profile, job.exchange.source_profile)
             progress = report["reconciliation"] = audit.run_json(prefix + ["reconcile-shared-files"], job.timeout)
             audit.validate_reconciliation(progress)
