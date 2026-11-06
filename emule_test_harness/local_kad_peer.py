@@ -1,9 +1,10 @@
-"""Bounded local Kad firewall witness with no routing or file-sharing state.
+"""Bounded local Kad index peer and initially unbiased firewall witness.
 
 A client learns this contact through the stock nodes.dat import facility. A positive UDP
 probe is allowed only if this witness has received no prior UDP from that IP;
-otherwise it reports the stock biased-test error. It never publishes or finds
-file sources, so the real clients must prove those paths themselves.
+otherwise it reports the stock biased-test error. Its small in-memory source
+index is a rendezvous for the real clients' publish and search packets. It has
+no payload bytes and never initiates a download or peer transfer.
 The owning local scenario explicitly disables transport obfuscation; this
 fixture is product workflow evidence and makes no cross-client parity claim.
 """
@@ -11,6 +12,7 @@ fixture is product workflow evidence and makes no cross-client parity claim.
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import select
 import socket
 import struct
@@ -20,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .docker_ed2k_source_publisher import encode_hello_answer
 from .kad_nodes import BootstrapContact, encode_nodes_dat
+from . import ed2k_wire
 
 KAD_HEADER = 0xE4
 FIREWALL_UDP = 0x62
@@ -45,7 +48,7 @@ def receive_frame(stream: socket.socket) -> tuple[int, int, bytes]:
     return header[0], header[5], exact(length - 1)
 
 
-class KadFirewallHelper:
+class LocalKadPeer:
     """Own one local TCP listener and UDP socket until explicit cleanup."""
 
     def __init__(self, bind_ip: str, allowed_peers: set[str]) -> None:
@@ -63,6 +66,10 @@ class KadFirewallHelper:
             raise
         self.udp_port = self._udp.getsockname()[1]
         self.tcp_port = self._tcp.getsockname()[1]
+        self.node_id = hashlib.sha256(
+            f"{self.bind_ip}:{self.udp_port}".encode("ascii")
+        ).digest()[:16]
+        self._sources: dict[bytes, dict[bytes, tuple[int, bytes]]] = {}
         self._known_udp_ips: set[str] = set()
         self._counts: Counter[str] = Counter()
         fixture = self
@@ -117,7 +124,7 @@ class KadFirewallHelper:
         """Return counters without peer addresses or UDP verification keys."""
 
         return {
-            "role": "unbiased-firewall-witness",
+            "role": "local-kad-index-and-firewall-witness",
             "transport": "plaintext-local-fixture",
             **dict(self._counts),
         }
@@ -159,11 +166,115 @@ class KadFirewallHelper:
                         self._counts["sessionErrors"] += 1
 
     def _handle_udp(self) -> None:
-        _packet, peer = self._udp.recvfrom(65536)
+        packet, peer = self._udp.recvfrom(65536)
         if peer[0] not in self.allowed_peers:
             return
         self._known_udp_ips.add(peer[0])
         self._counts["priorUdpPackets"] += 1
+        try:
+            reply = self._kad_reply(packet, peer)
+            if reply is not None:
+                self._udp.sendto(reply, peer)
+        except (ValueError, ed2k_wire.Ed2kWireError, struct.error):
+            self._counts["malformedKadPackets"] += 1
+
+    def _kad_reply(self, packet: bytes, peer: tuple[str, int]) -> bytes | None:
+        """Handle the bounded stock Kad2 variants used by the local proof.
+
+        Layout authority: KademliaUDPListener.cpp bootstrap/REQ/source publish/
+        source search handlers, mirrored by emulebb-kad-proto packet types.
+        Source result IP is always the observed publisher IP, never a supplied tag.
+        """
+
+        if len(packet) < 2 or packet[0] != KAD_HEADER:
+            return None
+        opcode, body = packet[1], packet[2:]
+        if opcode == 0x01 and not body:
+            return b"\xe4\x09" + self.node_id + struct.pack("<HBH", self.tcp_port, 9, 0)
+        if opcode == 0x11 and len(body) >= 20:
+            return b"\xe4\x19" + self.node_id + struct.pack("<HBB", self.tcp_port, 9, 0)
+        if opcode == 0x60 and not body:
+            return b"\xe4\x61" + struct.pack("<H", peer[1])
+        if opcode == 0x21 and len(body) == 33 and body[17:] == self.node_id:
+            self._counts["routingReplies"] += 1
+            return b"\xe4\x29" + body[1:17] + b"\x00"
+        if opcode == 0x44:
+            return self._store_source(body, peer[0])
+        if opcode == 0x34:
+            return self._search_sources(body)
+        return None
+
+    def _store_source(self, body: bytes, publisher_ip: str) -> bytes | None:
+        if len(body) < 33 or len(body) > 4096 or body[32] > 63:
+            raise ValueError("source publish exceeds fixture bounds")
+        tags = ed2k_wire.decode_tag_sequence(body[33:], body[32])
+        values = {name: value for name, value, _raw in tags}
+        port = values.get(0xFD)
+        if (
+            not isinstance(values.get(0xFF), int)
+            or not isinstance(port, int)
+            or not 0 < port <= 65535
+        ):
+            raise ValueError("source publish has no type or TCP port")
+        size = values.get(0x02, 0)
+        if not isinstance(size, int) or not 0 <= size < 2**64:
+            raise ValueError("invalid source size")
+        raw_tags = [raw for name, _value, raw in tags if name != 0xFE]
+        raw_tags.insert(
+            0, b"\x83\xfe" + struct.pack("<I", int(ipaddress.IPv4Address(publisher_ip)))
+        )
+        target, publisher = body[:16], body[16:32]
+        record = publisher + bytes([len(raw_tags)]) + b"".join(raw_tags)
+        total_bytes = sum(
+            len(record)
+            for sources in self._sources.values()
+            for _size, record in sources.values()
+        )
+        sources = self._sources.get(target, {})
+        old_bytes = len(sources[publisher][1]) if publisher in sources else 0
+        if (
+            target not in self._sources
+            and len(self._sources) >= 64
+            or publisher not in sources
+            and len(sources) >= 32
+            or total_bytes - old_bytes + len(record) > 65536
+        ):
+            self._counts["capacityRejects"] += 1
+            return None
+        self._sources.setdefault(target, {})[publisher] = (size, record)
+        self._counts["sourcePublishes"] += 1
+        return b"\xe4\x4b" + target + b"\x01"
+
+    def _search_sources(self, body: bytes) -> bytes:
+        if len(body) == 26:
+            start, size = struct.unpack_from("<HQ", body, 16)
+            start &= 0x7FFF
+        elif len(body) in (20, 24):
+            start = 0
+            size = int.from_bytes(body[16:], "little")
+        else:
+            raise ValueError("invalid source search")
+        records = [
+            record
+            for stored_size, record in self._sources.get(body[:16], {}).values()
+            if size == 0 or stored_size == 0 or size == stored_size
+        ][start:]
+        selected = []
+        payload_bytes = 36
+        for record in records:
+            if payload_bytes + len(record) > 60000:
+                break
+            selected.append(record)
+            payload_bytes += len(record)
+        self._counts["sourceSearches"] += 1
+        self._counts["sourceResults"] += len(selected)
+        return (
+            b"\xe4\x3b"
+            + self.node_id
+            + body[:16]
+            + struct.pack("<H", len(selected))
+            + b"".join(selected)
+        )
 
     def _handle_tcp(self, stream: socket.socket, peer_ip: str) -> None:
         marker, opcode, payload = receive_frame(stream)

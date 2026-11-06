@@ -836,6 +836,22 @@ def _decode_tag(reader: _Reader) -> tuple[int | str, Any]:
     return name, value
 
 
+def decode_tag_sequence(payload: bytes, count: int) -> list[tuple[int | str, Any, bytes]]:
+    """Decode an exact tag vector while preserving each tag's wire bytes."""
+
+    if not 0 <= count <= 255:
+        raise Ed2kWireError("Tag vector count must fit in u8")
+    reader = _Reader(payload)
+    tags = []
+    for _ in range(count):
+        start = reader.offset
+        name, value = _decode_tag(reader)
+        tags.append((name, value, payload[start:reader.offset]))
+    if reader.remaining:
+        raise Ed2kWireError("Tag vector has trailing bytes")
+    return tags
+
+
 def decode_search_results(payload: bytes) -> list[dict[str, object]]:
     """Decodes one SEARCHRESULT page into normalized file rows."""
 

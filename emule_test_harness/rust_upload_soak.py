@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import ed2k_server as ed2k_harness, kad_nodes, live_process_monitor, rust_client, rust_ed2k, rust_metadata
-from .kad_firewall_helper import KadFirewallHelper
+from .local_kad_peer import LocalKadPeer
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
     ed2k_link_with_source,
@@ -579,7 +579,7 @@ def run(argv: list[str] | None = None) -> int:
     leecher_base = ""
     file_hash = ""
     wsl_mountpoint: str | None = None
-    kad_helper: KadFirewallHelper | None = None
+    kad_helper: LocalKadPeer | None = None
     try:
         payload = write_payload(
             artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
@@ -705,7 +705,7 @@ def run(argv: list[str] | None = None) -> int:
         wait_for_ed2k_connected(seeder_base, args.api_key, 45.0)
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
         if kad_wsl:
-            kad_helper = KadFirewallHelper(lan, {seeder_addr})
+            kad_helper = LocalKadPeer(lan, {seeder_addr})
             kad_helper.start()
             report["checks"]["kadReachabilityRecheck"] = recheck_kad_after_bootstrap(
                 seeder_base, leecher_base, args.api_key, seeder_addr,
@@ -736,19 +736,29 @@ def run(argv: list[str] | None = None) -> int:
             def published_kad_source() -> dict[str, object] | None:
                 diagnostics = request_json(seeder_base, "GET", "/api/v1/diagnostics", args.api_key)
                 publish = diagnostics.get("kadPublish") or {}
-                return publish if safe_int(publish.get("sourcePublishedTotal")) > 0 else None
+                indexed = kad_helper is not None and safe_int(kad_helper.evidence().get("sourcePublishes")) > 0
+                return publish if indexed and safe_int(publish.get("sourcePublishedTotal")) > 0 else None
 
             report["checks"]["kadSourcePublication"] = wait_for(
                 published_kad_source, timeout_seconds=90, interval_seconds=1,
                 description="stock-gated Kad source publication acknowledged",
             )
+            imported = request_json(
+                leecher_base, "POST", "/api/v1/kad/operations/import-nodes-url", args.api_key,
+                {"url": kad_helper.nodes_url},
+            )
+            if imported.get("imported") is not True:
+                raise RuntimeError("Kad index contact was not imported by the leecher")
             # A clean leecher has no source hints. Retire its server session so
             # the plain link can discover the first peer only through Kad.
             request_json(leecher_base, "POST", "/api/v1/servers/operations/disconnect", args.api_key)
             isolated = request_json(leecher_base, "GET", "/api/v1/status", args.api_key)
             if isolated.get("stats", {}).get("ed2kConnected") is not False:
                 raise RuntimeError("Kad-only leecher still has a server session")
-            report["checks"]["kadDiscoveryIsolation"] = {"serverDisconnectedBeforeTransfer": True}
+            report["checks"]["kadDiscoveryIsolation"] = {
+                "serverDisconnectedBeforeTransfer": True,
+                "indexImportedBeforeTransfer": True,
+            }
         transfer = request_json(
             leecher_base,
             "POST",
@@ -871,6 +881,8 @@ def run(argv: list[str] | None = None) -> int:
         )
         if kad_helper is not None and safe_int(kad_helper.evidence().get("unbiasedRequests")) == 0:
             raise RuntimeError("Kad run has no unbiased UDP firewall witness")
+        if kad_helper is not None and safe_int(kad_helper.evidence().get("sourceResults")) == 0:
+            raise RuntimeError("Kad run has no indexed source reply to the leecher")
         report["status"] = "passed"
         return 0
     except Exception as exc:
