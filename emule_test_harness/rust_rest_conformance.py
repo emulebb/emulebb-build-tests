@@ -25,7 +25,7 @@ EVENT_STREAM_READ_LINES = 16
 TRANSFER_EVENT_SCHEMA_COMPONENT = "TransferEvent"
 OPENAPI_CONTRACT_ENV = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUST_OPENAPI_CONTRACT_PATH = (
+DEFAULT_RUST_OPENAPI_CONTRACT_PATH = (
     get_emule_workspace_root(REPO_ROOT)
     / "repos"
     / "emulebb-tooling"
@@ -34,6 +34,9 @@ RUST_OPENAPI_CONTRACT_PATH = (
     / "emulebb-rust"
     / "api"
     / "REST-API-OPENAPI.yaml"
+)
+RUST_OPENAPI_CONTRACT_PATH = Path(
+    os.environ.get(OPENAPI_CONTRACT_ENV, str(DEFAULT_RUST_OPENAPI_CONTRACT_PATH))
 )
 EVENT_STREAM_EXPECTED_HEADERS = {
     "Cache-Control": "no-cache, no-transform",

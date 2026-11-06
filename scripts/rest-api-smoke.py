@@ -840,6 +840,8 @@ def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
         path += "?limit=9"
     elif operation_id == "removeSharedDirectoryRoot":
         path += "?" + urllib.parse.urlencode({"path": str(contract_shared_root_path())})
+    elif operation_id == "removeSharedFileIgnorePattern":
+        path += "?" + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"})
     elif operation_id == "removeSharedFileExclusion":
         path += "?" + urllib.parse.urlencode({"path": str(contract_shared_exclusion_path())})
     elif operation_id in {"deleteTransferFiles", "deleteSharedFileContent", "deleteSearches"}:
@@ -3854,6 +3856,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         shared_root = contract_shared_root_path()
         shared_root.mkdir(parents=True, exist_ok=True)
         return {"path": str(shared_root)}
+    if route_name == "addSharedFileIgnorePattern":
+        return {"pattern": "rest-contract-ignored-*.bin"}
     if route_name == "addSharedFileExclusion":
         exclusion = contract_shared_exclusion_path()
         exclusion.parent.mkdir(parents=True, exist_ok=True)

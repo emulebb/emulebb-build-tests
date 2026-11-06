@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from emule_test_harness.rust_rest_conformance import RUST_OPENAPI_CONTRACT_PATH
 from emule_test_harness.paths import get_emule_workspace_root
 from emule_test_harness.rust_rest_contract import RUST_PRIVATE_DIAGNOSTICS_ROUTES
 
@@ -16,7 +17,7 @@ ROUTE_SPEC_FUNCTION = "inline const std::vector<SApiRouteSpec> &GetApiRouteSpecs
 # must still implement every frozen-contract route; these are the documented
 # forward-only additions it is allowed to carry on top.
 FORWARD_ONLY_RUST_ROUTES = {
-    ("DELETE", "/api/v1/shared-directories/exclusions"),
+    ("DELETE", "/api/v1/shared-directories/ignores"),
     ("DELETE", "/api/v1/shared-directories/roots"),
     ("GET", "/api/v1/app/settings"),
     ("GET", "/api/v1/app/settings/surface"),
@@ -27,17 +28,17 @@ FORWARD_ONLY_RUST_ROUTES = {
     ("GET", "/api/v1/kad/nodes"),
     ("GET", "/api/v1/nat"),
     ("GET", "/api/v1/network"),
-    ("GET", "/api/v1/shared-directories/exclusions"),
+    ("GET", "/api/v1/shared-directories/ignores"),
     ("GET", "/api/v1/transfers/{}/comments"),
     ("GET", "/api/v1/vpn-guard"),
     ("GET", "/healthz"),
     ("PATCH", "/api/v1/app/settings"),
-    ("PATCH", "/api/v1/shared-directories/exclusions/rules/{}"),
+    ("PATCH", "/api/v1/shared-directories/ignores/defaults/{}"),
     ("POST", "/api/v1/diagnostics/bundles"),
     ("POST", "/api/v1/ip-filter/operations/reload"),
     ("POST", "/api/v1/nat/operations/refresh"),
     ("POST", "/api/v1/shared-directories/roots"),
-    ("POST", "/api/v1/shared-directories/exclusions"),
+    ("POST", "/api/v1/shared-directories/ignores"),
     ("POST", "/api/v1/vpn-guard/operations/probe"),
 }
 
@@ -82,7 +83,7 @@ REQUEST_SCHEMA_TO_RUST_STRUCT = {
     "KadBootstrapRequest": "KadBootstrapRequest",
     "SearchCreateRequest": "SearchSpec",
     "SearchResultDownloadRequest": "SearchResultDownloadCreate",
-    "SharedFileExclusionRequest": "SharedFileExclusionUpdate",
+    "SharedFileIgnorePatternRequest": "SharedFileIgnorePatternUpdate",
     "SharedFileIgnoreRuleUpdate": "SharedFileIgnoreRuleUpdate",
     "FriendCreateRequest": "FriendCreate",
     "ClearLogsRequest": "LogsClearRequest",
@@ -92,18 +93,7 @@ REQUEST_SCHEMA_TO_RUST_STRUCT = {
 def test_emulebb_rust_request_bodies_accept_contract_fields() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     workspace_root = get_emule_workspace_root(repo_root)
-    contract = yaml.safe_load(
-        (
-            workspace_root
-            / "repos"
-            / "emulebb-tooling"
-            / "docs"
-            / "products"
-            / "emulebb-rust"
-            / "api"
-            / "REST-API-OPENAPI.yaml"
-        ).read_text(encoding="utf-8")
-    )
+    contract = yaml.safe_load(RUST_OPENAPI_CONTRACT_PATH.read_text(encoding="utf-8"))
     schemas = contract["components"]["schemas"]
     rust_structs = rust_request_struct_fields(
         workspace_root / "repos" / "emulebb-rust" / "crates"
@@ -192,16 +182,7 @@ def test_emulebb_rust_routes_match_canonical_emulebb_rest_contract() -> None:
 def test_emulebb_rust_routes_match_openapi_contract() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     workspace_root = get_emule_workspace_root(repo_root)
-    openapi_routes = openapi_emulebb_routes(
-        workspace_root
-        / "repos"
-        / "emulebb-tooling"
-        / "docs"
-        / "products"
-        / "emulebb-rust"
-        / "api"
-        / "REST-API-OPENAPI.yaml"
-    )
+    openapi_routes = openapi_emulebb_routes(RUST_OPENAPI_CONTRACT_PATH)
     rust_routes = emulebb_rust_routes(
         workspace_root
         / "repos"
