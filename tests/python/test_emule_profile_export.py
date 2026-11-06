@@ -127,6 +127,19 @@ def test_windows_export_discovers_compact_mfc_roots(
     assert manifest["summary"]["importedKnownRecords"] == 1
 
 
+def test_hash_only_export_requires_neither_roots_nor_path_mappings(tmp_path: Path) -> None:
+    profile = tmp_path / "stock"
+    profile.mkdir()
+    _write_known_met(profile / "known.met")
+    job_path = tmp_path / "import.toml"
+    _write_job(job_path, source_profile=profile, output_manifest=tmp_path / "hashes.json", target_platform="linux")
+    manifest = emule_profile_export.build_export_manifest(
+        emule_profile_export.load_export_job(job_path), hashes_only=True,
+    )
+    assert manifest["sharedRoots"] == []
+    assert len(manifest["knownFiles"]) == 1
+
+
 def test_stock_export_accepts_config_dir_and_collapses_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
