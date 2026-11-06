@@ -6,6 +6,15 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import emule_profile_export, mfc_known_met
+
+
+def test_root_collapse_uses_windows_boundaries_without_inventing_parents() -> None:
+    assert emule_profile_export.collapse_shared_roots([
+        r"D:\Shared\One", r"d:\shared\one", r"D:\Shared\Two", r"D:\Other",
+    ]) == [r"D:\Shared\One", r"D:\Shared\Two", r"D:\Other"]
+    assert emule_profile_export.collapse_shared_roots([
+        r"D:\Shared\One", r"d:\SHARED", r"D:\Shared-Other",
+    ]) == [r"d:\SHARED", r"D:\Shared-Other"]
 from emule_test_harness.profile_exchange import write_exchange
 
 
@@ -102,23 +111,10 @@ def test_windows_export_discovers_compact_mfc_roots(
     job_path = tmp_path / "import.toml"
     output = tmp_path / "profile.sqlite"
     _write_job(job_path, source_profile=profile, output_manifest=output)
-    collapsed_inputs: list[list[str]] = []
-
-    def record_collapse(roots: list[str]) -> list[str]:
-        collapsed_inputs.append(roots)
-        return roots
-
-    monkeypatch.setattr(
-        emule_profile_export.mfc_profile_import,
-        "_collapse_stock_shareddir_roots",
-        record_collapse,
-    )
-
     manifest = write_exchange(
         emule_profile_export.load_export_job(job_path)
     )
 
-    assert collapsed_inputs == [["D:\\Explicit"]]
     assert manifest["source"]["flavor"] == "mfc"
     assert [root["path"] for root in manifest["sharedRoots"]] == [
         "C:\\Incoming",
@@ -152,27 +148,15 @@ def test_stock_export_accepts_config_dir_and_collapses_roots(
     job_path = tmp_path / "import.toml"
     output = tmp_path / "profile.sqlite"
     _write_job(job_path, source_profile=config, output_manifest=output)
-    collapsed_inputs: list[list[str]] = []
-
-    def record_collapse(roots: list[str]) -> list[str]:
-        collapsed_inputs.append(roots)
-        return ["C:\\Shared", "D:\\Explicit"]
-
-    monkeypatch.setattr(
-        emule_profile_export.mfc_profile_import,
-        "_collapse_stock_shareddir_roots",
-        record_collapse,
-    )
-
     manifest = write_exchange(
         emule_profile_export.load_export_job(job_path)
     )
 
-    assert collapsed_inputs == [["C:\\Shared\\One", "C:\\Shared\\Two", "D:\\Explicit"]]
     assert manifest["source"]["flavor"] == "stock"
     assert [root["path"] for root in manifest["sharedRoots"]] == [
         "C:\\Incoming",
-        "C:\\Shared",
+        "C:\\Shared\\One",
+        "C:\\Shared\\Two",
         "D:\\Explicit",
     ]
 
