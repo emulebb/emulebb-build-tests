@@ -78,8 +78,8 @@ class KadFirewallHelper:
                 super().setup()
 
             def do_GET(self) -> None:
-                # HTTP is the control-plane import. Linux may source it from
-                # docker0, while P2P sockets bind the explicit seeder address.
+                # The HTTP control-plane import is independent of the P2P
+                # peer address selected by the seeder's bound TCP socket.
                 if self.path != "/nodes.dat":
                     self.send_error(404)
                     return
@@ -153,7 +153,9 @@ class KadFirewallHelper:
             if self._tcp in readable:
                 stream, peer = self._tcp.accept()
                 with stream:
+                    self._counts["tcpConnections"] += 1
                     if peer[0] not in self.allowed_peers:
+                        self._counts["disallowedTcpConnections"] += 1
                         continue
                     stream.settimeout(5)
                     try:
@@ -209,7 +211,7 @@ class KadFirewallHelper:
 
 
 class DockerKadFirewallWitness:
-    """Own an isolated helper container on the existing WSL Docker bridge."""
+    """Own an isolated helper container on the existing WSL loopback address."""
 
     def __init__(self, name: str, receipt: Path, distribution: str | None) -> None:
         self.name = name
@@ -229,7 +231,7 @@ class DockerKadFirewallWitness:
         receipt = json.loads(self.receipt.read_text(encoding="utf-8"))
         return {
             **receipt["evidence"],
-            "runtime": "docker-bridge",
+            "runtime": "docker-host-loopback",
             "image": docker_fixture.DOCKER_IMAGE,
         }
 
@@ -278,7 +280,7 @@ def start_docker_witness(
         "--detach",
         "--pull=never",
         "--init",
-        "--network=bridge",
+        "--network=host",
         f"--platform={docker_fixture.DOCKER_PLATFORM}",
         "--name",
         name,
@@ -294,6 +296,8 @@ def start_docker_witness(
         "python",
         "-m",
         "emule_test_harness.kad_firewall_helper",
+        "--bind-ip",
+        "127.0.0.1",
         "--receipt",
         "/run/witness.json",
         "--run-id",
@@ -307,6 +311,8 @@ def start_docker_witness(
             raise RuntimeError("Kad witness container failed to launch")
         return DockerKadFirewallWitness(name, receipt, distribution)
     except Exception:
+        logs = docker_fixture._docker_result(distribution, ["logs", name])
+        (run_dir / "container.log").write_text(logs.stdout + logs.stderr, encoding="utf-8")
         docker_fixture._docker_result(distribution, ["rm", "--force", name])
         raise
 
@@ -316,11 +322,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allowed-peer", action="append", required=True)
+    parser.add_argument("--bind-ip", required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
-    address = socket.gethostbyname(socket.gethostname())
-    helper = KadFirewallHelper(address, set(args.allowed_peer))
+    helper = KadFirewallHelper(args.bind_ip, set(args.allowed_peer))
     stop = threading.Event()
     handlers = docker_fixture._install_stop_handlers(stop)
     helper.start()

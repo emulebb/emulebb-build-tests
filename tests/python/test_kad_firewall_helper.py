@@ -114,7 +114,7 @@ def test_docker_witness_owns_only_its_container(
     assert "192.0.2.20" not in str(helper.evidence())
     helper.close()
     assert commands[0][0] == "run"
-    assert "--network=bridge" in commands[0]
+    assert "--network=host" in commands[0]
     assert fixture.DOCKER_IMAGE in commands[0]
     assert commands[1] == ["stop", "--time", "6", helper.name]
     assert commands[2] == ["rm", "--force", helper.name]
