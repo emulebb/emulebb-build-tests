@@ -40,7 +40,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness.diag_event_runs import select_latest_diag_run
 from emule_test_harness import hideme_split_tunnel
-from emule_test_harness import mfc_known_met
+from emule_test_harness import mfc_known_met, rust_native_fingerprint
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
@@ -4298,6 +4298,12 @@ def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, ob
     }
 
 
+def fingerprint_modified_ms(payload: bytes) -> int:
+    """Read the modification timestamp from the current native fingerprint."""
+    modified = rust_native_fingerprint.decode_fingerprint(payload).modified
+    return modified.seconds * 1000 + modified.nanoseconds // 1_000_000
+
+
 def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes Rust metadata source-path coverage without returning paths."""
 
@@ -4320,9 +4326,9 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
         ).fetchone()[0]
         rows = connection.execute(
             """
-            SELECT local_paths.display_path, shared_file_sources.file_size, shared_file_sources.source_mtime_ms
-            FROM shared_file_sources
-            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
+            SELECT local_paths.display_path, local_file_instances.file_size, local_file_instances.verified_fingerprint
+            FROM local_file_instances
+            JOIN local_paths ON local_paths.id = local_file_instances.path_id
             """
         ).fetchall()
     finally:
@@ -4331,7 +4337,8 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     total_sources = len(rows)
     with_source_mtime = 0
     source_counts: Counter[str] = Counter()
-    for source_path, _file_size, source_mtime_ms in rows:
+    for source_path, _file_size, fingerprint in rows:
+        source_mtime_ms = fingerprint_modified_ms(fingerprint)
         source_key = normalized_windows_path_key(source_path)
         source_counts[source_key] += 1
         for root in roots:
@@ -4350,8 +4357,8 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
         "metadataDbExists": True,
         "totalTransfers": total_transfers,
         "completedTransfers": completed_transfers,
-        "shareInPlaceSources": total_sources,
-        "shareInPlaceSourcesWithMtime": with_source_mtime,
+        "localFileInstances": total_sources,
+        "localFileInstancesWithMtime": with_source_mtime,
         "duplicateSourcePathCount": duplicate_source_paths,
         "duplicateSourcePathRows": duplicate_source_rows,
         "roots": roots,
@@ -4364,25 +4371,19 @@ def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, obj
     if not args.metadata_db.is_file():
         raise RuntimeError("--metadata-db does not exist")
     high_prefix = normalized_root_prefix(args.high_root)
-    now_ms = int(time.time() * 1000)
     connection = sqlite3.connect(args.metadata_db)
     try:
         rows = connection.execute(
             """
-            SELECT known_files.id,
-                   known_files.upload_priority,
-                   known_files.auto_upload_priority,
+            SELECT verified_local_content.known_file_id,
+                   verified_local_content.upload_priority,
+                   verified_local_content.auto_upload_priority,
                    local_paths.display_path
-            FROM known_files
-            LEFT JOIN shared_file_sources ON shared_file_sources.known_file_id = known_files.id
-            LEFT JOIN local_paths ON local_paths.id = shared_file_sources.path_id
-            WHERE known_files.completed != 0
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM unshared_files
-                  WHERE unshared_files.known_file_id = known_files.id
-              )
-            ORDER BY known_files.id
+            FROM verified_local_content
+            LEFT JOIN local_file_instances
+              ON local_file_instances.known_file_id = verified_local_content.known_file_id
+            LEFT JOIN local_paths ON local_paths.id = local_file_instances.path_id
+            ORDER BY verified_local_content.known_file_id
             """
         ).fetchall()
         target_by_id: dict[int, str] = {}
@@ -4426,24 +4427,22 @@ def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, obj
                 for known_file_id in high_ids:
                     connection.execute(
                         """
-                        UPDATE known_files
+                        UPDATE verified_local_content
                         SET upload_priority = 'high',
-                            auto_upload_priority = 0,
-                            updated_at_ms = ?
-                        WHERE id = ?
+                            auto_upload_priority = 0
+                        WHERE known_file_id = ?
                         """,
-                        (now_ms, known_file_id),
+                        (known_file_id,),
                     )
                 for known_file_id in suppressed_ids:
                     connection.execute(
                         """
-                        UPDATE known_files
+                        UPDATE verified_local_content
                         SET upload_priority = 'not-published',
-                            auto_upload_priority = 0,
-                            updated_at_ms = ?
-                        WHERE id = ?
+                            auto_upload_priority = 0
+                        WHERE known_file_id = ?
                         """,
-                        (now_ms, known_file_id),
+                        (known_file_id,),
                     )
                 connection.commit()
             except Exception:
@@ -4526,20 +4525,17 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
         since_ms = int(datetime.fromisoformat(since_text).timestamp() * 1000)
     connection = sqlite3.connect(f"file:{args.metadata_db}?mode=ro", uri=True)
     try:
-        columns = sqlite_columns(connection, "shared_file_sources")
-        created_expr = "shared_file_sources.created_at_ms" if "created_at_ms" in columns else "NULL"
-        updated_expr = "shared_file_sources.updated_at_ms" if "updated_at_ms" in columns else "NULL"
         rows = connection.execute(
-            f"""
-            SELECT shared_file_sources.rowid,
+            """
+            SELECT local_file_instances.path_id,
                    local_paths.display_path,
-                   shared_file_sources.file_size,
-                   shared_file_sources.source_mtime_ms,
-                   {created_expr},
-                   {updated_expr}
-            FROM shared_file_sources
-            JOIN local_paths ON local_paths.id = shared_file_sources.path_id
-            ORDER BY {updated_expr} DESC, shared_file_sources.rowid DESC
+                   local_file_instances.file_size,
+                   local_file_instances.verified_fingerprint,
+                   NULL,
+                   local_file_instances.verified_at_ms
+            FROM local_file_instances
+            JOIN local_paths ON local_paths.id = local_file_instances.path_id
+            ORDER BY local_file_instances.verified_at_ms DESC, local_file_instances.path_id DESC
             """
         ).fetchall()
     finally:
@@ -4551,7 +4547,8 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
     null_mtime_samples: list[dict[str, object]] = []
     path_counts: Counter[str] = Counter()
 
-    for row_id, source_path, db_file_size, db_source_mtime_ms, created_at_ms, updated_at_ms in rows:
+    for row_id, source_path, db_file_size, fingerprint, created_at_ms, updated_at_ms in rows:
+        db_source_mtime_ms = fingerprint_modified_ms(fingerprint)
         source_key = normalized_windows_path_key(source_path)
         path_counts[source_key] += 1
         record = source_stat_record(

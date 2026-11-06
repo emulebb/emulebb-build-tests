@@ -3681,18 +3681,15 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
     try:
         connection.execute(
             """
-            CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY,
-                completed INTEGER,
+            CREATE TABLE verified_local_content (
+                known_file_id INTEGER PRIMARY KEY,
                 upload_priority TEXT,
-                auto_upload_priority INTEGER,
-                updated_at_ms INTEGER
+                auto_upload_priority INTEGER
             )
             """
         )
         connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
-        connection.execute("CREATE TABLE shared_file_sources (known_file_id INTEGER, path_id INTEGER)")
-        connection.execute("CREATE TABLE unshared_files (known_file_id INTEGER)")
+        connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
         rows = [
             (1, "F:/share/keep/a.bin"),
             (2, "F:/share/keep/nested/b.bin"),
@@ -3700,14 +3697,14 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
         ]
         for known_file_id, path in rows:
             connection.execute(
-                "INSERT INTO known_files VALUES (?, 1, 'normal', 1, 0)",
+                "INSERT INTO verified_local_content VALUES (?, 'normal', 1)",
                 (known_file_id,),
             )
             connection.execute("INSERT INTO local_paths VALUES (?, ?)", (known_file_id, path))
-            connection.execute("INSERT INTO shared_file_sources VALUES (?, ?)", (known_file_id, known_file_id))
+            connection.execute("INSERT INTO local_file_instances VALUES (?, ?)", (known_file_id, known_file_id))
         connection.execute("INSERT INTO local_paths VALUES (4, 'F:/share/other/duplicate-b.bin')")
-        connection.execute("INSERT INTO shared_file_sources VALUES (2, 4)")
-        connection.execute("INSERT INTO known_files VALUES (5, 1, 'normal', 1, 0)")
+        connection.execute("INSERT INTO local_file_instances VALUES (2, 4)")
+        connection.execute("INSERT INTO verified_local_content VALUES (5, 'normal', 1)")
         connection.commit()
     finally:
         connection.close()
@@ -3730,10 +3727,44 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
     assert result["changedFiles"] == 4
     assert "F:/share/keep" not in json.dumps(result)
     with sqlite3.connect(metadata_db) as conn:
-        priorities = dict(conn.execute("SELECT id, upload_priority FROM known_files").fetchall())
-        auto = dict(conn.execute("SELECT id, auto_upload_priority FROM known_files").fetchall())
+        priorities = dict(conn.execute("SELECT known_file_id, upload_priority FROM verified_local_content").fetchall())
+        auto = dict(conn.execute("SELECT known_file_id, auto_upload_priority FROM verified_local_content").fetchall())
     assert priorities == {1: "high", 2: "high", 3: "not-published", 5: "not-published"}
     assert auto == {1: 0, 2: 0, 3: 0, 5: 0}
+
+
+def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) -> None:
+    from emule_test_harness import rust_native_fingerprint as native
+
+    control = _load_rust_soak_control()
+    source = tmp_path / "payload.bin"
+    source.write_bytes(b"payload")
+    stat = source.stat()
+    seconds, nanoseconds = divmod(stat.st_mtime_ns, 1_000_000_000)
+    fingerprint = native.encode_fingerprint(native.NativeFingerprint(
+        identity_kind=native.IDENTITY_UNIX, identity_bytes=bytes(16),
+        size_bytes=stat.st_size, modified=native.NativeTimestamp(seconds, nanoseconds),
+        changed=None,
+    ))
+    metadata_db = tmp_path / "metadata.sqlite"
+    with sqlite3.connect(metadata_db) as conn:
+        conn.execute("CREATE TABLE transfers(completed_at_ms INTEGER)")
+        conn.execute("CREATE TABLE local_paths(id INTEGER, display_path TEXT)")
+        conn.execute("CREATE TABLE local_file_instances(path_id INTEGER, file_size INTEGER, "
+                     "verified_fingerprint BLOB, verified_at_ms INTEGER)")
+        conn.execute("INSERT INTO local_paths VALUES(1, ?)", (str(source),))
+        conn.execute("INSERT INTO local_file_instances VALUES(1, ?, ?, 123)",
+                     (stat.st_size, fingerprint))
+    summary = control.metadata_source_summary(SimpleNamespace(metadata_db=metadata_db, root=[tmp_path]))
+    assert summary["totalTransfers"] == 0
+    assert summary["localFileInstances"] == 1
+    assert summary["localFileInstancesWithMtime"] == 1
+    sample = control.metadata_source_stat_sample(SimpleNamespace(
+        metadata_db=metadata_db, since_utc=None, sample_limit=2, mismatch_limit=2,
+    ))
+    assert sample["counters"]["mtimeMatches"] == 1
+    assert sample["counters"]["sizeMatches"] == 1
+    assert sample["mismatchSamples"] == []
 
 
 def test_set_shared_publish_priority_split_refuses_empty_high_root(tmp_path: Path) -> None:
@@ -3743,21 +3774,18 @@ def test_set_shared_publish_priority_split_refuses_empty_high_root(tmp_path: Pat
     try:
         connection.execute(
             """
-            CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY,
-                completed INTEGER,
+            CREATE TABLE verified_local_content (
+                known_file_id INTEGER PRIMARY KEY,
                 upload_priority TEXT,
-                auto_upload_priority INTEGER,
-                updated_at_ms INTEGER
+                auto_upload_priority INTEGER
             )
             """
         )
         connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
-        connection.execute("CREATE TABLE shared_file_sources (known_file_id INTEGER, path_id INTEGER)")
-        connection.execute("CREATE TABLE unshared_files (known_file_id INTEGER)")
-        connection.execute("INSERT INTO known_files VALUES (1, 1, 'normal', 0, 0)")
+        connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
+        connection.execute("INSERT INTO verified_local_content VALUES (1, 'normal', 0)")
         connection.execute("INSERT INTO local_paths VALUES (1, 'F:/share/other/c.bin')")
-        connection.execute("INSERT INTO shared_file_sources VALUES (1, 1)")
+        connection.execute("INSERT INTO local_file_instances VALUES (1, 1)")
         connection.commit()
     finally:
         connection.close()
