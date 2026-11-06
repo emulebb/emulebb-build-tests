@@ -83,8 +83,11 @@ def write_exchange(job, *, hashes_only=False, host_mappings=None):
             from .profile_import_audit import source_path_for_binding
             for root in export.discover_shared_roots(config, flavor):
                 mapped_root = export.map_shared_root(root.path, job) if not hashes_only else root.path
-                host = (source_path_for_binding("unix", mapped_root.encode(), host_mappings)
-                        if host_mappings and job.target_platform == "unix" else Path(root.path))
+                # WHY: a relocated Windows library may no longer exist at its
+                # stock path. Operator mappings describe the actual host view.
+                encoding = "utf-16-le" if job.target_platform == "windows" else "utf-8"
+                host = (source_path_for_binding(job.target_platform, mapped_root.encode(encoding), host_mappings)
+                        if host_mappings else Path(root.path))
                 if not host.is_dir():
                     continue
                 for directory, _, names in os.walk(host):

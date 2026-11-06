@@ -1,6 +1,7 @@
 from dataclasses import replace
 from contextlib import closing
 import json
+import os
 import sqlite3
 import tracemalloc
 
@@ -43,6 +44,29 @@ def test_exchange_failure_preserves_previous_export(tmp_path):
         write_exchange(job)
     assert job.output_manifest.read_bytes()==before
     assert list(tmp_path.glob('profile-exchange-*.tmp'))==[]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows host path mappings")
+def test_windows_exchange_discovers_relocated_library(tmp_path):
+    job, config = job_fixture(tmp_path)
+    source = str(tmp_path / "unavailable-stock-library")
+    host = tmp_path / "relocated-library"
+    host.mkdir()
+    payload = host / "sample.bin"
+    payload.write_bytes(b"x" * 1024)
+    os.utime(payload, (1_700_000_000, 1_700_000_000))
+    for name in ("shareddir.monitored.dat", "shareddir.monitor-owned.dat"):
+        (config / name).unlink()
+    (config / "preferences.ini").write_text(f"IncomingDir={source}\r\n", encoding="utf-16")
+    (config / "shareddir.dat").write_text(source + "\r\n", encoding="utf-16")
+    job = replace(job, path_mappings=(export.PathMapping(source, str(host)),))
+
+    result = write_exchange(job, host_mappings=(export.PathMapping(str(host), str(host)),))
+
+    assert not os.path.exists(source)
+    assert result["summary"]["matchedPaths"] == 1
+    with closing(sqlite3.connect(job.output_manifest)) as db:
+        assert db.execute("SELECT path FROM file_paths").fetchall() == [(str(payload),)]
 
 
 def test_broken_optional_recovery_cache_preserves_md4_export(tmp_path):
