@@ -921,6 +921,10 @@ def normalize_contract_path_for_openapi(path: str) -> str:
     normalized = normalized.replace("/servers/192.0.2.254:4669", "/servers/{serverId}")
     normalized = normalized.replace("/searches/123/results/{hash}", "/searches/{searchId}/results/{hash}")
     normalized = normalized.replace(
+        f"/shared-directories/ignores/defaults/{REST_CONTRACT_IGNORE_RULE_KEY}",
+        "/shared-directories/ignores/defaults/{ruleKey}",
+    )
+    normalized = normalized.replace(
         f"/shared-directories/exclusions/rules/{REST_CONTRACT_IGNORE_RULE_KEY}",
         "/shared-directories/exclusions/rules/{ruleKey}",
     )
