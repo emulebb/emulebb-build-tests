@@ -213,3 +213,36 @@ def test_stock_comparison_detects_exporter_identity_corruption(binding_profile, 
         db.execute("UPDATE imported_known_files SET ed2k_hash=zeroblob(16)")
     with pytest.raises(RuntimeError, match="stock record is missing"):
         profile_import_audit.validate_stock_records(profile, job.source_profile)
+
+
+@pytest.mark.parametrize("state,rejections,message", [
+    ("absent", 0, "do not match"),
+    ("absent", 1, None),
+    ("valid", 0, None),
+    ("valid", 1, "do not match"),
+    ("partial", 1, "partial"),
+    ("altered", 0, "leaves differ"),
+    ("extra", 0, "extra parts"),
+    ("orphan", 1, "partial imported leaves"),
+])
+def test_recovery_rejections_only_allow_wholly_absent_sets(tmp_path, state, rejections, message):
+    root, leaves = b"r" * 20, b"h" * 20
+    exchange = tmp_path / "exchange.sqlite"
+    with sqlite3.connect(exchange) as db:
+        db.executescript("CREATE TABLE known_files(id,record,md4,aich); CREATE TABLE recovery_sets(root,size_bytes); CREATE TABLE recovery_parts(root,size_bytes,part_index,leaves);")
+        db.execute("INSERT INTO recovery_sets VALUES(?,3)", (root,))
+        db.execute("INSERT INTO recovery_parts VALUES(?,3,0,?)", (root, leaves))
+    with sqlite3.connect(tmp_path / "emulebb-rust-metadata.db") as db:
+        db.executescript("CREATE TABLE aich_recovery_sets(root,size_bytes); CREATE TABLE aich_recovery_parts(root,size_bytes,part_index,leaves);")
+        if state not in ("absent", "orphan"):
+            db.execute("INSERT INTO aich_recovery_sets VALUES(?,3)", (root,))
+        if state not in ("absent", "partial"):
+            db.execute("INSERT INTO aich_recovery_parts VALUES(?,3,0,?)", (root, b"x" * 20 if state == "altered" else leaves))
+        if state == "extra":
+            db.execute("INSERT INTO aich_recovery_parts VALUES(?,3,1,?)", (root, leaves))
+    if message:
+        with pytest.raises(RuntimeError, match=message):
+            validate_imported_hashes(tmp_path, exchange, rejected_recovery_sets=rejections)
+    else:
+        result = validate_imported_hashes(tmp_path, exchange, rejected_recovery_sets=rejections)
+        assert result["unavailableRecoverySets"] == rejections

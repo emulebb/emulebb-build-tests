@@ -51,9 +51,11 @@ def profile_counts(profile: Path) -> dict[str, int]:
         }
 
 
-def validate_imported_hashes(profile: Path, exchange: Path) -> dict[str, int]:
-    """Compare every ordered hashset using indexed lookups and bounded memory."""
-    result = {"verifiedImportedRecords":0,"verifiedMd4Parts":0,"verifiedAichParts":0,"verifiedRecoverySets":0,"verifiedRecoveryParts":0}
+def validate_imported_hashes(profile: Path, exchange: Path, *, rejected_recovery_sets: int = 0) -> dict[str, int]:
+    """Verify hashes, permitting only wholly absent sets accounted for by Rust rejections."""
+    if type(rejected_recovery_sets) is not int or rejected_recovery_sets < 0:
+        raise ValueError("rejected recovery count must be a nonnegative integer")
+    result = {"verifiedImportedRecords":0,"verifiedMd4Parts":0,"verifiedAichParts":0,"verifiedRecoverySets":0,"verifiedRecoveryParts":0,"unavailableRecoverySets":0}
     with closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
         for record,md4,aich in source.execute("SELECT record,md4,aich FROM known_files ORDER BY id"):
             record=json.loads(record)
@@ -76,12 +78,26 @@ def validate_imported_hashes(profile: Path, exchange: Path) -> dict[str, int]:
                 result[counter]+=len(hashes)
             result["verifiedImportedRecords"]+=1
         for root,size in source.execute("SELECT root,size_bytes FROM recovery_sets"):
+            present = target.execute("SELECT 1 FROM aich_recovery_sets WHERE root=? AND size_bytes=?", (root,size)).fetchone()
+            target_count = target.execute("SELECT count(*) FROM aich_recovery_parts WHERE root=? AND size_bytes=?", (root,size)).fetchone()[0]
+            if present is None:
+                if target_count:
+                    raise RuntimeError("absent recovery set has partial imported leaves")
+                result["unavailableRecoverySets"] += 1
+                continue
+            source_count = source.execute("SELECT count(*) FROM recovery_parts WHERE root=? AND size_bytes=?", (root,size)).fetchone()[0]
+            if not source_count or source_count != target_count:
+                raise RuntimeError("imported AICH recovery set is partial or has extra parts")
             for index,leaves in source.execute("SELECT part_index,leaves FROM recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index",(root,size)):
                 row=target.execute("SELECT leaves FROM aich_recovery_parts WHERE root=? AND size_bytes=? AND part_index=?",(root,size,index)).fetchone()
                 if row is None or row[0]!=leaves:
                     raise RuntimeError("imported AICH recovery leaves differ from the export")
                 result["verifiedRecoveryParts"]+=1
             result["verifiedRecoverySets"]+=1
+        # WHY: optional-cache rejection must not abort valid MD4 reconciliation,
+        # but a rejection count must never excuse partial or altered accepted sets.
+        if result["unavailableRecoverySets"] != rejected_recovery_sets:
+            raise RuntimeError("missing AICH recovery sets do not match reported rejections")
     return result
 
 
