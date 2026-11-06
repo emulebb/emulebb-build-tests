@@ -30,6 +30,23 @@ class ImportJob:
     timeout: int
 
 
+def contains_physical_path(parent: Path, candidate: Path) -> bool:
+    """Compare resolved paths and existing ancestor identities, including volume aliases."""
+    parent, candidate = parent.resolve(), candidate.resolve()
+    if candidate.is_relative_to(parent):
+        return True
+    if parent.exists():
+        for ancestor in (candidate, *candidate.parents):
+            if ancestor.exists() and ancestor.samefile(parent):
+                return True
+    return False
+
+
+def paths_overlap(first: Path, second: Path) -> bool:
+    """Reject containment in either direction, independent of junction spelling."""
+    return contains_physical_path(first, second) or contains_physical_path(second, first)
+
+
 def load_job(config: Path) -> ImportJob:
     """Validate all job fields without creating the destination or output."""
     config = config.resolve()
@@ -76,7 +93,7 @@ def load_job(config: Path) -> ImportJob:
             for p in ("/profile", "/import", "/usr", "/etc", "/proc", "/sys", "/dev")
         )):
             raise ValueError("mapping overlaps a reserved container path")
-        if backend == "windows" and Path(destination) != host:
+        if backend == "windows" and not Path(destination).samefile(host):
             raise ValueError("Windows mapping host and target must identify the same directory")
         seen_sources.add(key)
         seen_targets.add(destination)
@@ -99,9 +116,9 @@ def load_job(config: Path) -> ImportJob:
     if backend == "windows":
         protected += [Path(export.map_shared_root(r.path, job)) for r in roots]
     for path in (profile, out):
-        if any(path.is_relative_to(p) or p.is_relative_to(path) for p in protected):
+        if any(paths_overlap(path, p) for p in protected):
             raise ValueError("destination/output overlaps source metadata or shared data")
-    if profile.is_relative_to(out) or out.is_relative_to(profile):
+    if paths_overlap(profile, out):
         raise ValueError("destination and output directories must be separate")
     binary = resolve(export._require_string(target, "binary")) if backend == "windows" else None
     image = export._require_string(target, "image") if backend != "windows" else None
