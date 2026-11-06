@@ -198,6 +198,8 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
     try:
         archive = report_dir / "hashes.sqlite"
         report["export"] = write_exchange(export.replace(job.exchange, output_manifest=archive), host_mappings=job.hosts)["summary"]
+        baseline = report_dir / "audit-baseline.sqlite"
+        report["auditBaseline"] = audit.capture_import_baseline(job.profile, archive, baseline)
         job.profile.mkdir(parents=True, exist_ok=True)
         with ExitStack() as cleanup:
             prefix = command_prefix(job, report_dir, cleanup)
@@ -206,6 +208,7 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
             report["import"] = audit.run_json(prefix + ["import-emule-profile", path], job.timeout)
             report["hashValidation"] = audit.validate_imported_hashes(
                 job.profile, archive, rejected_recovery_sets=report["import"]["rejectedRecoverySets"],
+                baseline=baseline,
             )
             report["stockValidation"] = audit.validate_stock_records(job.profile, job.exchange.source_profile, archive)
             progress = report["reconciliation"] = audit.run_json(prefix + ["reconcile-shared-files"], job.timeout)
@@ -213,11 +216,13 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
             report["bindingValidation"] = audit.validate_native_bindings(
                 job.profile, job.exchange, exchange=archive, host_mappings=job.hosts if job.hosts else None,
                 allow_unrelated=True, conflicting_paths=report["import"].get("conflictingPaths",0),
+                baseline=baseline,
             )
             report["counts"] = audit.profile_counts(job.profile)
             attention = any(progress[k] for k in ("plannedHashCount", "statFailedCount", "skippedFailedCount", "skippedIntakeCount"))
             attention |= progress.get("scannedCount", 0) == 0
             attention |= bool(report["import"].get("unmatchedPaths",0) or report["import"].get("conflictingPaths",0))
+            attention |= bool(report["hashValidation"].get("preservedConflictingRecords",0))
             attention |= bool(report["export"]["recoveryMissingSets"] or report["export"]["skippedKnown"]
                               or report["import"]["rejectedRecoverySets"])
             code = 2 if attention else 0
