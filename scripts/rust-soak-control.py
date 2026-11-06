@@ -2598,6 +2598,7 @@ def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[st
     upload_accepts = safe_int(metadata.get("knownUploadAccepts")) or 0
     upload_requests = safe_int(metadata.get("knownUploadRequests")) or 0
     known_completed = safe_int(metadata.get("knownFilesCompleted")) or 0
+    completed_downloads = safe_int(metadata.get("downloadHistoryTotal")) or 0
     transfers_total = safe_int(metadata.get("transfersTotal")) or 0
     return {
         "ed2kConnected": sample_row.get("ed2kConnected") is True,
@@ -2613,9 +2614,10 @@ def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[st
         "knownUploadAccepts": upload_accepts,
         "knownUploadRequests": upload_requests,
         "knownFilesCompleted": known_completed,
+        "downloadHistoryTotal": completed_downloads,
         "transfersTotal": transfers_total,
         "hasUploadHistory": known_uploaded > 0 or upload_accepts > 0 or upload_requests > 0,
-        "hasDownloadHistory": known_completed > 0 or transfers_total > 0,
+        "hasDownloadHistory": completed_downloads > 0 or transfers_total > 0,
     }
 
 
@@ -5001,6 +5003,7 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
                 ("upload_accepts", "all_time_upload_accepts"),
             ),
             "transfersTotal": sqlite_count_table(connection, tables, "transfers"),
+            "downloadHistoryTotal": sqlite_count_table(connection, tables, "download_history"),
             "sharedRootsTotal": first_present_int(
                 sqlite_count_table(connection, tables, "shared_directory_roots"),
                 sqlite_count_table(connection, tables, "shared_roots"),

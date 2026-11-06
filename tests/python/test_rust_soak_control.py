@@ -2646,6 +2646,23 @@ def test_regular_log_proof_classifies_logs_and_keeps_report_sanitized(monkeypatc
     assert "0123456789abcdef0123456789abcdef" not in rendered
 
 
+@pytest.mark.parametrize("library_count,history_count,transfer_count,expected", [
+    (7, 0, 0, False), (7, 1, 0, True), (0, 0, 1, True),
+])
+def test_download_log_evidence_uses_download_ownership(
+    library_count: int, history_count: int, transfer_count: int, expected: bool,
+) -> None:
+    control = _load_rust_soak_control()
+    evidence = control.regular_log_status_evidence({}, {
+        "knownFilesCompleted": library_count, "downloadHistoryTotal": history_count,
+        "transfersTotal": transfer_count,
+    })
+    assert evidence["hasDownloadHistory"] is expected
+    assert control.regular_log_missing_categories({}, ["download"], evidence) == (
+        [] if expected else ["download"]
+    )
+
+
 def test_regular_log_proof_fails_when_required_category_missing(monkeypatch, tmp_path: Path) -> None:
     control = _load_rust_soak_control()
 
