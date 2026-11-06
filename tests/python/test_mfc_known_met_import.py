@@ -264,6 +264,27 @@ def test_import_known_met_cache_seeds_pathless_rows_without_shared_files(tmp_pat
     assert transfers == 0
 
 
+def test_empty_stock_cache_replacement_clears_previous_hints(tmp_path: Path) -> None:
+    db_path = tmp_path / "metadata.sqlite"
+    known_met = tmp_path / "known.met"
+    rust_metadata.create_metadata_db(_rust_repo(), db_path)
+    rust_metadata.seed_imported_known_files(db_path, [{
+        "ed2k_hash": "00112233445566778899aabbccddeeff",
+        "name": "Sample.bin", "size_bytes": 8, "modified_s": 1_700_000_000,
+        "md4_hashset": ["11" * 16], "aich_root": "22" * 20,
+        "aich_hashset": ["33" * 20],
+    }])
+    _write_known_met(known_met, [])
+    for dry_run, expected_rows in ((True, 1), (False, 0)):
+        mfc_known_met.import_mfc_known_met_cache(
+            rust_repo=_rust_repo(), metadata_db=db_path,
+            known_met=known_met, dry_run=dry_run,
+        )
+        with sqlite3.connect(db_path) as conn:
+            for table in ("imported_known_files", "imported_known_file_md4_hashes", "imported_known_file_aich_hashes"):
+                assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == expected_rows
+
+
 def test_import_known_met_only_seeds_pathless_cache_hints(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     shared.mkdir()

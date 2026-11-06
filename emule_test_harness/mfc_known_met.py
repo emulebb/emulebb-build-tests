@@ -265,7 +265,7 @@ def import_mfc_known_met_cache(
         known_met=known_met,
         known2_met=known2_64_met,
     )
-    if imported_rows and not dry_run:
+    if not dry_run:
         rust_metadata.seed_imported_known_files(metadata_db, imported_rows)
 
     return {
