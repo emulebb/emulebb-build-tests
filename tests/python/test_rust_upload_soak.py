@@ -47,6 +47,33 @@ def test_wsl_delivered_path_mapping_stays_in_owned_output(
         rust_upload_soak.windows_output_path("/mnt/proof", "/mnt/proof/Windows/foreign.bin")
 
 
+def test_native_profile_mount_cleans_up_after_seed_copy_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _root, output = configure_workspace_env(monkeypatch, tmp_path)
+    profile = output / "profile"
+    profile.mkdir()
+    commands = []
+    monkeypatch.setattr(rust_upload_soak.rust_ed2k, "wsl_path", lambda _path: "/mnt/c/seed")
+    monkeypatch.setattr(rust_upload_soak.subprocess, "check_output", lambda *_args, **_kwargs: "1000\n")
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if "cp" in command:
+            raise rust_upload_soak.subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(rust_upload_soak.subprocess, "run", run)
+    with pytest.raises(rust_upload_soak.subprocess.CalledProcessError):
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", profile, 128)
+    native = rust_upload_soak.wsl_metadata_path("/mnt/proof", profile)
+    assert commands[-1] == ["wsl.exe", "--user", "root", "--", "umount", native]
+    assert "size=128m,uid=1000,gid=1000" in commands[0]
+    commands.clear()
+    with pytest.raises(ValueError):
+        rust_upload_soak.mount_native_wsl_profile("/mnt/proof", tmp_path / "outside", 128)
+    assert commands == []
+
+
 def test_parser_defaults_to_staged_rust_tools(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _workspace_root, output_root = configure_workspace_env(monkeypatch, tmp_path)
     rust_exe = stage_dummy_rust_tools(output_root)

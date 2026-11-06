@@ -144,6 +144,58 @@ def windows_output_path(mountpoint: str, linux_path: str) -> Path:
     return path
 
 
+def mount_native_wsl_profile(mountpoint: str, profile: Path, size_mib: int) -> str:
+    """Overlay an owned test profile with a bounded native Linux filesystem.
+
+    DrvFs does not implement RENAME_NOREPLACE. Linux delivery and retirement
+    require that primitive, so this functional lane uses tmpfs and archives
+    its closed profile before unmounting. The underlying fresh seed is retained.
+    """
+
+    native = wsl_metadata_path(mountpoint, profile)
+    seed = rust_ed2k.wsl_path(profile)
+    uid = subprocess.check_output(["wsl.exe", "--", "id", "-u"], text=True).strip()
+    gid = subprocess.check_output(["wsl.exe", "--", "id", "-g"], text=True).strip()
+    subprocess.run([
+        "wsl.exe", "--user", "root", "--", "mount", "-t", "tmpfs",
+        "-o", f"size={size_mib}m,uid={uid},gid={gid}", "tmpfs", native,
+    ], check=True)
+    try:
+        subprocess.run(["wsl.exe", "--", "cp", "-R", "--", seed + "/.", native + "/"], check=True)
+        subprocess.run([
+            "wsl.exe", "--", "chmod", "600", native + "/" + rust_client.RUST_PROFILE_SETTINGS_FILE,
+        ], check=True)
+    except Exception:
+        subprocess.run(["wsl.exe", "--user", "root", "--", "umount", native], check=True)
+        raise
+    return native
+
+
+def archive_native_wsl_profile(mountpoint: str, native: str, archive: Path) -> None:
+    """Retain the stopped fixture profile before releasing its native mount."""
+
+    windows_output_path(mountpoint, native)
+    try:
+        subprocess.run([
+            "wsl.exe", "--", "tar", "-C", native, "-cf",
+            wsl_metadata_path(mountpoint, archive), ".",
+        ], check=True)
+    finally:
+        subprocess.run(["wsl.exe", "--user", "root", "--", "umount", native], check=True)
+
+
+def export_wsl_delivery(mountpoint: str, profile: Path, source: str, target: Path) -> Path:
+    """Copy the actual native Incoming file into the retained host evidence."""
+
+    windows_output_path(mountpoint, source).relative_to((profile / "incoming").resolve())
+    target_linux = wsl_metadata_path(mountpoint, target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "wsl.exe", "--", "cp", "--", source, target_linux,
+    ], check=True)
+    return target
+
+
 def mount_wsl_output_with_metadata(run_id: str, output_path: Path) -> str:
     """Mounts the output drive with DrvFs metadata for Linux secret permissions."""
 
@@ -580,6 +632,7 @@ def run(argv: list[str] | None = None) -> int:
     leecher_base = ""
     file_hash = ""
     wsl_mountpoint: str | None = None
+    native_profiles: list[tuple[str, Path]] = []
     kad_helper: LocalKadPeer | None = None
     try:
         payload = write_payload(
@@ -659,6 +712,10 @@ def run(argv: list[str] | None = None) -> int:
                 "daemon",
                 {"incomingDir": wsl_metadata_path(wsl_mountpoint, leecher_profile / "incoming"), "p2pBindIp": seeder_addr},
             )
+            for profile in (seeder_profile, leecher_profile):
+                native = mount_native_wsl_profile(wsl_mountpoint, profile, max(128, args.payload_mib * 4 + 64))
+                native_profiles.append((native, artifacts_dir / f"{profile.name}-snapshot.tar"))
+            report["profileStorage"] = "bounded-native-linux-tmpfs"
         seeder_diag = artifacts_dir / "diagnostics" / "seeder"
         leecher_diag = artifacts_dir / "diagnostics" / "leecher"
         if kad_wsl:
@@ -872,7 +929,12 @@ def run(argv: list[str] | None = None) -> int:
         report["finalLeecherSharedFile"] = find_hash_item(leecher_base, args.api_key, "/api/v1/shared-files", file_hash)
         delivery_share = report["finalLeecherSharedFile"]
         if kad_wsl and delivery_share is not None:
-            delivery_share = {**delivery_share, "path": str(windows_output_path(wsl_mountpoint, str(delivery_share["path"])))}
+            retained_delivery = export_wsl_delivery(
+                wsl_mountpoint, leecher_profile, str(delivery_share["path"]),
+                artifacts_dir / "delivery-proof" / Path(payload["path"]).name,
+            )
+            report["retainedDeliveredFile"] = str(retained_delivery)
+            delivery_share = {**delivery_share, "path": str(retained_delivery)}
         report["checks"]["downloadDelivery"] = verify_download_delivery(
             report["finalLeecherTransfer"],
             delivery_share,
@@ -927,6 +989,13 @@ def run(argv: list[str] | None = None) -> int:
         if server_process is not None:
             ed2k_harness.stop_process(server_process)
             ed2k_harness.stop_server_processes()
+        for native, archive in reversed(native_profiles):
+            try:
+                archive_native_wsl_profile(wsl_mountpoint, native, archive)
+            except Exception as archive_error:
+                report.setdefault("profileArchiveErrors", []).append(str(archive_error))
+        if native_profiles:
+            report["profileArchives"] = [str(archive) for _native, archive in native_profiles]
         try:
             unmount_wsl_output(wsl_mountpoint)
         except Exception as unmount_error:
