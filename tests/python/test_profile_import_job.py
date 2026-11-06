@@ -197,6 +197,7 @@ def test_direct_directory_import_hashes_then_reuses(tmp_path):
     first = module.audit.run_json(command, 120)
     assert first["hashing"]["hashedCount"] == 4
     assert first["hashing"]["completedReadBytes"] == 19
+    assert first["missingAichRecoverySets"] == 0
     second = module.audit.run_json(command, 120)
     assert second["hashing"]["hashedCount"] == 0
     assert second["hashing"]["reusedCount"] == 4
@@ -382,7 +383,8 @@ def _hash_until_durable_paths(command, profile, output, target, label):
 
 
 @pytest.mark.native
-def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path):
+@pytest.mark.parametrize("relocated", [False, True])
+def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path, relocated):
     """A corrupt optional tree must reach reconciliation, not fail verification early."""
     if os.name != "nt":
         pytest.skip("Windows executable integration")
@@ -394,6 +396,10 @@ def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path):
         pytest.skip("requires staged Rust executable")
     fixture = tmp_path / "fixture"
     create_import_fixture(fixture)
+    if relocated:
+        destination = fixture / "relocated-library"
+        assert destination.resolve().is_relative_to(get_workspace_output_root().resolve())
+        (fixture / "shared").rename(destination)
     cache = fixture / "stock/config/known2_64.met"
     data = bytearray(cache.read_bytes())
     # Fixture records contain root(20), count(4), and a single leaf(20).
@@ -414,6 +420,10 @@ def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path):
                 "[output]",
                 "directory=" + json.dumps(str(tmp_path / "reports")),
             ]
+            + (["[[path_mappings]]",
+                "source=" + json.dumps(str(fixture / "shared")),
+                "host=" + json.dumps(str(destination)),
+                "target=" + json.dumps(str(destination))] if relocated else [])
         ),
         encoding="utf-8",
     )
@@ -451,12 +461,24 @@ def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path):
     # Completed MD4 work must survive; only missing AICH is enriched.
     data[1 + 44 + 24] ^= 1
     cache.write_bytes(data)
-    for expected in (0, 2):
-        if expected == 2:
-            known = fixture / "stock/config/known.met"
-            source = bytearray(known.read_bytes())
+    known = fixture / "stock/config/known.met"
+    original_known = known.read_bytes()
+    for scenario in ("clean", "recovery-conflict", "aich-conflict", "ed2k-conflict"):
+        import base64
+        import hashlib
+        source = bytearray(original_known)
+        cache.write_bytes(data)
+        if scenario == "recovery-conflict":
+            corrupt = bytearray(data)
+            corrupt[1 + 44 + 24] ^= 1
+            cache.write_bytes(corrupt)
+        elif scenario == "aich-conflict":
+            master = base64.b32encode(hashlib.sha1(b"abc").digest()).rstrip(b"=")
+            assert source.count(master) == 1
+            source = source.replace(master, b"A" * len(master))
+        elif scenario == "ed2k-conflict":
             source[9:25] = bytes.fromhex("11" * 16)
-            known.write_bytes(source)
+        known.write_bytes(source)
         result = subprocess.run(
             [sys.executable, "-B", str(script), "--config", str(config)],
             env=env,
@@ -464,17 +486,19 @@ def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path):
             text=True,
             timeout=120,
         )
-        assert result.returncode == expected, result.stdout + result.stderr
+        assert result.returncode == (0 if scenario == "clean" else 2), result.stdout + result.stderr
         latest = max(
             (tmp_path / "reports").glob("*/summary.json"),
             key=lambda p: p.stat().st_mtime_ns,
         )
         merged = json.loads(latest.read_text(encoding="utf-8"))
-        assert merged["hashValidation"]["verifiedRecoverySets"] == 3
+        assert merged["hashValidation"]["verifiedRecoverySets"] == (2 if scenario in ("recovery-conflict", "aich-conflict") else 3)
+        assert merged["hashValidation"]["retainedExistingRecoverySets"] == (1 if scenario == "recovery-conflict" else 0)
+        assert merged["hashValidation"]["preservedConflictingRecords"] == (1 if scenario == "aich-conflict" else 0)
         assert merged["counts"]["known_files"] == 3
         assert merged["reconciliation"]["reusedCount"] == 4
         assert merged["reconciliation"]["completedReadBytes"] == 0
-        assert merged["import"]["conflictingPaths"] == (1 if expected == 2 else 0)
+        assert merged["import"]["conflictingPaths"] == (1 if scenario in ("aich-conflict", "ed2k-conflict") else 0)
 
 
 @pytest.mark.native

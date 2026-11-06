@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sqlite3
+import tracemalloc
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,6 +73,89 @@ def test_hash_validation_detects_corruption_even_when_row_counts_match(tmp_path:
         connection.execute("UPDATE verified_local_md4_hashes SET md4_hash = ?", (bytes.fromhex("33" * 16),))
     with pytest.raises(RuntimeError, match="hashset differs"):
         validate_imported_hashes(tmp_path, exchange)
+
+
+@pytest.fixture
+def merge_baseline(binding_profile):
+    profile, job, database, payload = binding_profile
+    with sqlite3.connect(database) as db:
+        db.executescript("CREATE TABLE aich_recovery_sets(root,size_bytes); CREATE TABLE aich_recovery_parts(root,size_bytes,part_index,leaves,part_root);")
+        db.execute("INSERT INTO aich_recovery_sets VALUES(?,3)", (b"a" * 20,))
+        db.execute("INSERT INTO aich_recovery_parts VALUES(?,3,0,?,?)", (b"a" * 20,) * 3)
+    with sqlite3.connect(job.output_manifest) as db:
+        db.executescript("CREATE TABLE recovery_sets(root,size_bytes); CREATE TABLE recovery_parts(root,size_bytes,part_index,leaves); CREATE TABLE file_paths(path,known_file_id);")
+        db.execute("INSERT INTO recovery_sets VALUES(?,3)", (b"a" * 20,))
+        db.execute("INSERT INTO recovery_parts VALUES(?,3,0,?)", (b"a" * 20,) * 2)
+        db.execute("INSERT INTO file_paths VALUES('/data/sample/Sample.bin',1)")
+    baseline = profile.parent / "audit-baseline.sqlite"
+    counts = profile_import_audit.capture_import_baseline(profile, job.output_manifest, baseline)
+    assert counts == {"contentRecords": 2, "pathBindings": 1, "recoverySets": 1}
+    return profile, job, database, baseline
+
+
+def test_aich_identity_conflict_proves_existing_hashes_and_binding_unchanged(merge_baseline):
+    profile, job, database, baseline = merge_baseline
+    with sqlite3.connect(job.output_manifest) as db:
+        db.execute("UPDATE known_files SET record=json_set(record,'$.aichRoot',?)", ("62" * 20,))
+    result = validate_imported_hashes(profile, job.output_manifest, baseline=baseline)
+    assert result["preservedConflictingRecords"] == 1
+    assert result["verifiedImportedRecords"] == 0
+    bindings = profile_import_audit.validate_native_bindings(profile, job, allow_unrelated=True,
+                                                           conflicting_paths=1, baseline=baseline)
+    assert bindings["preservedConflictingBindings"] == 1
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE verified_local_content SET aich_root=? WHERE known_file_id=1", (b"c" * 20,))
+    with pytest.raises(RuntimeError, match="hashset differs"):
+        validate_imported_hashes(profile, job.output_manifest, baseline=baseline)
+
+
+def test_rejected_incoming_recovery_can_retain_an_unchanged_existing_tree(merge_baseline):
+    profile, job, database, baseline = merge_baseline
+    with sqlite3.connect(job.output_manifest) as db:
+        db.execute("UPDATE recovery_parts SET leaves=?", (b"b" * 20,))
+    result = validate_imported_hashes(profile, job.output_manifest, rejected_recovery_sets=1, baseline=baseline)
+    assert result["retainedExistingRecoverySets"] == 1
+    assert result["unavailableRecoverySets"] == 0
+    with pytest.raises(RuntimeError, match="differ from the export"):
+        validate_imported_hashes(profile, job.output_manifest, rejected_recovery_sets=1)
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE aich_recovery_parts SET leaves=?", (b"c" * 20,))
+    with pytest.raises(RuntimeError, match="differ from the export"):
+        validate_imported_hashes(profile, job.output_manifest, rejected_recovery_sets=1, baseline=baseline)
+
+
+@pytest.mark.parametrize("mutation,message", [
+    ("DELETE FROM aich_recovery_parts", "partial"),
+    ("DELETE FROM aich_recovery_parts; DELETE FROM aich_recovery_sets", "disappeared"),
+    ("DELETE FROM verified_local_content WHERE known_file_id=1", "disappeared"),
+    ("UPDATE known_files SET size_bytes=4 WHERE id=1", "changed size"),
+])
+def test_merge_baseline_never_excuses_lost_or_partial_existing_data(merge_baseline, mutation, message):
+    profile, job, database, baseline = merge_baseline
+    with sqlite3.connect(database) as db:
+        db.executescript(mutation)
+    with pytest.raises(RuntimeError, match=message):
+        validate_imported_hashes(profile, job.output_manifest, rejected_recovery_sets=1, baseline=baseline)
+
+
+def test_merge_baseline_streams_100k_contents_and_bindings(merge_baseline):
+    profile, job, database, baseline = merge_baseline
+    count = 100_000
+    with sqlite3.connect(database) as db:
+        db.executescript("CREATE INDEX known_id ON known_files(id); CREATE INDEX content_id ON verified_local_content(known_file_id); CREATE INDEX md4_id ON verified_local_md4_hashes(known_file_id); CREATE INDEX aich_id ON verified_local_aich_hashes(known_file_id); CREATE INDEX path_id ON local_paths(id);")
+        db.executemany("INSERT INTO known_files VALUES(?,?,3,?)", ((i, i.to_bytes(16, "little"), b"a" * 20) for i in range(3, count + 3)))
+        db.executemany("INSERT INTO verified_local_content VALUES(?,?)", ((i, b"a" * 20) for i in range(3, count + 3)))
+        db.executemany("INSERT INTO local_paths VALUES(?,'unix',?)", ((i, f"/data/sample/Sample-{i}.bin".encode()) for i in range(3, count + 3)))
+        fingerprint = db.execute("SELECT verified_fingerprint FROM local_file_instances LIMIT 1").fetchone()[0]
+        db.executemany("INSERT INTO local_file_instances VALUES(?,?,3,?)", ((i, i, fingerprint) for i in range(3, count + 3)))
+    tracemalloc.start()
+    try:
+        counts = profile_import_audit.capture_import_baseline(profile, job.output_manifest, baseline.with_name("scale-baseline.sqlite"))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert counts == {"contentRecords": count + 2, "pathBindings": count + 1, "recoverySets": 1}
+    assert peak < 16 * 1024 * 1024
 
 
 def test_audit_restores_only_its_own_read_only_data_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

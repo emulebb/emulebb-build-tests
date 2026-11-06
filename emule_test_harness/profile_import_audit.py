@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -51,34 +52,120 @@ def profile_counts(profile: Path) -> dict[str, int]:
         }
 
 
-def validate_imported_hashes(profile: Path, exchange: Path, *, rejected_recovery_sets: int = 0) -> dict[str, int]:
-    """Verify hashes, permitting only wholly absent sets accounted for by Rust rejections."""
+def _rows_digest(rows) -> bytes:
+    """Fingerprint ordered metadata rows while retaining only one row in memory."""
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update(json.dumps([value.hex() if isinstance(value, bytes) else value for value in row],
+                                 separators=(",", ":")).encode("utf-8") + b"\n")
+    return digest.digest()
+
+
+def _content_digest(connection, content_id: int) -> bytes:
+    header = connection.execute("SELECT f.size_bytes,f.aich_root,c.aich_root FROM known_files f JOIN verified_local_content c ON c.known_file_id=f.id WHERE f.id=?", (content_id,)).fetchone()
+    hashes = [header]
+    # Each child collection contributes its own fixed-size digest, including
+    # indices, so missing/reordered hashes cannot resemble an unchanged record.
+    for table, column in (("verified_local_md4_hashes", "md4_hash"), ("verified_local_aich_hashes", "aich_hash")):
+        hashes.append((_rows_digest(connection.execute(f"SELECT part_index,{column} FROM {table} WHERE known_file_id=? ORDER BY part_index", (content_id,))),))
+    return _rows_digest(hashes)
+
+
+def _recovery_digest(connection, root: bytes, size: int) -> bytes:
+    return _rows_digest(connection.execute("SELECT part_index,leaves,part_root FROM aich_recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index", (root, size)))
+
+
+def capture_import_baseline(profile: Path, exchange: Path, destination: Path) -> dict[str, int]:
+    """Retain bounded-memory preservation evidence outside the live profile DB.
+
+    Only digests are retained for content/tree metadata; no payload is opened.
+    Recovery fingerprints are limited to sets present in the incoming archive.
+    """
+    result = {"contentRecords": 0, "pathBindings": 0, "recoverySets": 0}
+    with closing(sqlite3.connect(destination)) as baseline:
+        baseline.executescript("CREATE TABLE content(file_hash BLOB PRIMARY KEY,signature BLOB); CREATE TABLE bindings(platform TEXT,native_path BLOB,signature BLOB,PRIMARY KEY(platform,native_path)); CREATE TABLE recovery(root BLOB,size_bytes INTEGER,signature BLOB,PRIMARY KEY(root,size_bytes));")
+        if not (profile / "emulebb-rust-metadata.db").exists():
+            return result
+        with closing(open_profile_snapshot(profile)) as target:
+            target.execute("ATTACH DATABASE ? AS exchange", (exchange.as_uri() + "?mode=ro&immutable=1",))
+            for content_id, file_hash in target.execute("SELECT known_file_id,ed2k_hash FROM verified_local_content JOIN known_files ON known_files.id=known_file_id"):
+                baseline.execute("INSERT INTO content VALUES (?,?)", (file_hash, _content_digest(target, content_id)))
+                result["contentRecords"] += 1
+            for row in target.execute("SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,f.ed2k_hash FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id JOIN known_files f ON f.id=i.known_file_id"):
+                baseline.execute("INSERT INTO bindings VALUES (?,?,?)", (row[0], row[1], _rows_digest([row])))
+                result["pathBindings"] += 1
+            for root, size in target.execute("SELECT r.root,r.size_bytes FROM aich_recovery_sets r JOIN exchange.recovery_sets e ON e.root=r.root AND e.size_bytes=r.size_bytes"):
+                baseline.execute("INSERT INTO recovery VALUES (?,?,?)", (root, size, _recovery_digest(target, root, size)))
+                result["recoverySets"] += 1
+        baseline.commit()
+    return result
+
+
+def _unchanged_content(target, baseline, content_id: int, file_hash: bytes) -> bool:
+    if baseline is None:
+        return False
+    before = baseline.execute("SELECT signature FROM content WHERE file_hash=?", (file_hash,)).fetchone()
+    return before is not None and before[0] == _content_digest(target, content_id)
+
+
+def _unchanged_binding(target, baseline, row, content_id: int) -> bool:
+    if baseline is None:
+        return False
+    before = baseline.execute("SELECT signature FROM bindings WHERE platform=? AND native_path=?", row[:2]).fetchone()
+    return (before is not None and before[0] == _rows_digest([row])
+            and _unchanged_content(target, baseline, content_id, row[4]))
+
+
+def _validate_record_hashes(target, record, md4, aich, row) -> tuple[int, int]:
+    if record["aichRoot"] and (row[1] or None) != record["aichRoot"].lower():
+        raise RuntimeError("imported hashset differs from the export")
+    counts = []
+    for table, column, expected in (("verified_local_md4_hashes", "md4_hash", md4), ("verified_local_aich_hashes", "aich_hash", aich)):
+        hashes = [r[0] for r in target.execute(f"SELECT {column} FROM {table} WHERE known_file_id=? ORDER BY part_index", (row[0],))]
+        if column == "aich_hash" and not expected:
+            if not record["aichRoot"]:
+                counts.append(len(hashes))
+                continue
+            if hashes:
+                recovered = [r[0] for r in target.execute("SELECT part_root FROM aich_recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index", (bytes.fromhex(record["aichRoot"]), record["fileSize"]))]
+                if recovered != hashes:
+                    raise RuntimeError("enriched AICH part hashes differ from recovery cache")
+                expected = b"".join(recovered)
+        if b"".join(hashes) != expected:
+            raise RuntimeError("imported hashset differs from the export")
+        counts.append(len(hashes))
+    return tuple(counts)
+
+
+def validate_imported_hashes(profile: Path, exchange: Path, *, rejected_recovery_sets: int = 0,
+                             baseline: Path | None = None) -> dict[str, int]:
+    """Verify accepted hashes and prove rejected preexisting metadata unchanged."""
     if type(rejected_recovery_sets) is not int or rejected_recovery_sets < 0:
         raise ValueError("rejected recovery count must be a nonnegative integer")
-    result = {"verifiedImportedRecords":0,"verifiedMd4Parts":0,"verifiedAichParts":0,"verifiedRecoverySets":0,"verifiedRecoveryParts":0,"unavailableRecoverySets":0}
-    with closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
+    result = {"verifiedImportedRecords":0,"verifiedMd4Parts":0,"verifiedAichParts":0,"verifiedRecoverySets":0,"verifiedRecoveryParts":0,"unavailableRecoverySets":0,
+              "preservedConflictingRecords":0,"retainedExistingRecoverySets":0}
+    with ExitStack() as resources, closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
+        previous = resources.enter_context(closing(sqlite3.connect(baseline.as_uri()+"?mode=ro&immutable=1",uri=True))) if baseline else None
         for record,md4,aich in source.execute("SELECT record,md4,aich FROM known_files ORDER BY id"):
             record=json.loads(record)
             row=target.execute("SELECT c.known_file_id,lower(hex(c.aich_root)) FROM verified_local_content c JOIN known_files f ON f.id=c.known_file_id WHERE f.ed2k_hash=? AND f.size_bytes=?",(bytes.fromhex(record["fileHash"]),record["fileSize"])).fetchone()
             if row is None:
+                if previous is not None and previous.execute("SELECT 1 FROM content WHERE file_hash=?", (bytes.fromhex(record["fileHash"]),)).fetchone():
+                    existing = target.execute("SELECT c.known_file_id FROM verified_local_content c JOIN known_files f ON f.id=c.known_file_id WHERE f.ed2k_hash=?", (bytes.fromhex(record["fileHash"]),)).fetchone()
+                    if existing is None or not _unchanged_content(target, previous, existing[0], bytes.fromhex(record["fileHash"])):
+                        raise RuntimeError("preexisting verified content disappeared or changed size during import")
                 continue
-            if record["aichRoot"] and (row[1] or None)!=record["aichRoot"]:
-                raise RuntimeError("imported hashset differs from the export")
-            for table,column,expected,counter in [("verified_local_md4_hashes","md4_hash",md4,"verifiedMd4Parts"),("verified_local_aich_hashes","aich_hash",aich,"verifiedAichParts")]:
-                hashes=[r[0] for r in target.execute(f"SELECT {column} FROM {table} WHERE known_file_id=? ORDER BY part_index",(row[0],))]
-                if column == "aich_hash" and not expected and not record["aichRoot"]:
-                    result[counter] += len(hashes)
-                    continue
-                if column=="aich_hash" and not expected and hashes and record["aichRoot"]:
-                    # A complete recovery import legitimately enriches a stock
-                    # entry that had a master but no separate part-hash list.
-                    recovered=[r[0] for r in target.execute("SELECT part_root FROM aich_recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index",(bytes.fromhex(record["aichRoot"]),record["fileSize"]))]
-                    if recovered!=hashes:
-                        raise RuntimeError("enriched AICH part hashes differ from recovery cache")
-                    expected=b"".join(recovered)
-                if b"".join(hashes)!=expected:
-                    raise RuntimeError("imported hashset differs from the export")
-                result[counter]+=len(hashes)
+            try:
+                md4_count, aich_count = _validate_record_hashes(target, record, md4, aich, row)
+            except RuntimeError:
+                # WHY: a source conflict is not corruption of accepted data.
+                # Independently prove exact preservation, never waive by count.
+                if not _unchanged_content(target, previous, row[0], bytes.fromhex(record["fileHash"])):
+                    raise
+                result["preservedConflictingRecords"] += 1
+                continue
+            result["verifiedMd4Parts"] += md4_count
+            result["verifiedAichParts"] += aich_count
             result["verifiedImportedRecords"]+=1
         for root,size in source.execute("SELECT root,size_bytes FROM recovery_sets"):
             if target.execute("SELECT 1 FROM verified_local_content c JOIN known_files f ON f.id=c.known_file_id WHERE c.aich_root=? AND f.size_bytes=? LIMIT 1", (root,size)).fetchone() is None:
@@ -88,20 +175,33 @@ def validate_imported_hashes(profile: Path, exchange: Path, *, rejected_recovery
             if present is None:
                 if target_count:
                     raise RuntimeError("absent recovery set has partial imported leaves")
+                if previous is not None and previous.execute("SELECT 1 FROM recovery WHERE root=? AND size_bytes=?", (root, size)).fetchone():
+                    raise RuntimeError("preexisting AICH recovery set disappeared during import")
                 result["unavailableRecoverySets"] += 1
                 continue
-            source_count = source.execute("SELECT count(*) FROM recovery_parts WHERE root=? AND size_bytes=?", (root,size)).fetchone()[0]
-            if not source_count or source_count != target_count:
+            if target_count != (size + 9_727_999) // 9_728_000:
                 raise RuntimeError("imported AICH recovery set is partial or has extra parts")
+            for index, length in target.execute("SELECT part_index,length(leaves) FROM aich_recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index", (root, size)):
+                expected_length = (min(size-index*9_728_000,9_728_000)+184_319)//184_320*20
+                if index < 0 or index >= target_count or length != expected_length:
+                    raise RuntimeError("imported AICH recovery set has invalid part geometry")
+            source_count = source.execute("SELECT count(*) FROM recovery_parts WHERE root=? AND size_bytes=?", (root,size)).fetchone()[0]
+            differs = source_count != target_count
             for index,leaves in source.execute("SELECT part_index,leaves FROM recovery_parts WHERE root=? AND size_bytes=? ORDER BY part_index",(root,size)):
                 row=target.execute("SELECT leaves FROM aich_recovery_parts WHERE root=? AND size_bytes=? AND part_index=?",(root,size,index)).fetchone()
                 if row is None or row[0]!=leaves:
+                    differs = True
+            if differs:
+                before = previous.execute("SELECT signature FROM recovery WHERE root=? AND size_bytes=?", (root, size)).fetchone() if previous else None
+                if before is None or before[0] != _recovery_digest(target, root, size):
                     raise RuntimeError("imported AICH recovery leaves differ from the export")
-                result["verifiedRecoveryParts"]+=1
+                result["retainedExistingRecoverySets"] += 1
+                continue
+            result["verifiedRecoveryParts"] += target_count
             result["verifiedRecoverySets"]+=1
         # WHY: optional-cache rejection must not abort valid MD4 reconciliation,
         # but a rejection count must never excuse partial or altered accepted sets.
-        if result["unavailableRecoverySets"] != rejected_recovery_sets:
+        if result["unavailableRecoverySets"] + result["retainedExistingRecoverySets"] != rejected_recovery_sets:
             raise RuntimeError("missing AICH recovery sets do not match reported rejections")
     return result
 
@@ -153,7 +253,7 @@ def source_path_for_binding(platform: str, native: bytes,
 def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob, *,
                              host_mappings: tuple[emule_profile_export.PathMapping, ...] | None = None,
                              exchange: Path | None = None, allow_unrelated: bool = False,
-                             conflicting_paths: int = 0) -> dict[str, int]:
+                             conflicting_paths: int = 0, baseline: Path | None = None) -> dict[str, int]:
     """Independently check every accepted path, stock match, and native hashset.
 
     Files are only stat-ed; Windows file-ID checks open handles without reading
@@ -173,7 +273,8 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob,
     if exchange is None:
         exchange = job.output_manifest
     untouched = skipped_conflicts = 0
-    with closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
+    with ExitStack() as resources, closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
+        previous = resources.enter_context(closing(sqlite3.connect(baseline.as_uri()+"?mode=ro&immutable=1",uri=True))) if baseline else None
         rows = target.execute(
             "SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,"
             "k.id,k.ed2k_hash,k.size_bytes,k.aich_root,c.aich_root "
@@ -184,11 +285,21 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob,
         for platform, native, size, stored, content_id, file_hash, content_size, root, verified_root in rows:
             if allow_unrelated:
                 display = mfc_known_met.normal_windows_display_path(native.decode("utf-16-le", "surrogatepass")) if platform == "windows" else native.decode("utf-8", "surrogateescape")
-                candidate = source.execute("SELECT k.record FROM file_paths p JOIN known_files k ON k.id=p.known_file_id WHERE p.path=?",(display,)).fetchone()
+                candidate = source.execute("SELECT k.record,k.md4,k.aich FROM file_paths p JOIN known_files k ON k.id=p.known_file_id WHERE p.path=?",(display,)).fetchone()
                 if candidate is None:
                     untouched += 1
                     continue
-                if bytes.fromhex(json.loads(candidate[0])["fileHash"]) != file_hash and conflicting_paths:
+                record = json.loads(candidate[0])
+                differs = (bytes.fromhex(record["fileHash"]) != file_hash or record["fileSize"] != content_size
+                           or bool(record["aichRoot"] and root != bytes.fromhex(record["aichRoot"])))
+                if skipped_conflicts < conflicting_paths:
+                    try:
+                        _validate_record_hashes(target, record, candidate[1], candidate[2], (content_id, verified_root.hex() if verified_root else None))
+                    except RuntimeError:
+                        differs = True
+                if differs and conflicting_paths:
+                    if not _unchanged_binding(target, previous, (platform, native, size, stored, file_hash), content_id):
+                        raise RuntimeError("conflicting native binding lacks unchanged pre-import evidence")
                     skipped_conflicts += 1
                     continue
             path = source_path_for_binding(platform, native, host_mappings if host_mappings is not None else job.path_mappings)
@@ -245,6 +356,7 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob,
             result["verifiedPathBindings"] += 1
         if skipped_conflicts != conflicting_paths:
             raise RuntimeError("live binding conflicts differ from the import report")
+        result["preservedConflictingBindings"] = skipped_conflicts
         if result["verifiedPathBindings"] + untouched + skipped_conflicts != target.execute("SELECT count(*) FROM local_file_instances").fetchone()[0]:
             raise RuntimeError("native bindings contain content without verified hash metadata")
     return result
