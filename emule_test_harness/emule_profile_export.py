@@ -15,7 +15,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib
 
-from . import mfc_known_met, mfc_profile_import
+from . import mfc_known_met
 from .ini import parse_ini_values, read_ini_text
 
 JOB_SCHEMA_VERSION = 1
@@ -139,12 +139,32 @@ def discover_shared_roots(config_dir: Path, flavor: str) -> list[DiscoveredRoot]
             if key in monitor_owned or any(_windows_path_is_under(key, root) for root in monitored_keys):
                 continue
             explicit_shared.append(path)
-        collapsed = mfc_profile_import._collapse_stock_shareddir_roots(explicit_shared)
+        collapsed = collapse_shared_roots(explicit_shared)
         roots.extend(DiscoveredRoot(_normalize_windows_absolute(path), "shareddir") for path in collapsed)
     else:
-        collapsed = mfc_profile_import._collapse_stock_shareddir_roots(shared)
+        collapsed = collapse_shared_roots(shared)
         roots.extend(DiscoveredRoot(_normalize_windows_absolute(path), "shareddir") for path in collapsed)
     return _dedupe_discovered_roots(roots)
+
+
+def collapse_shared_roots(paths: list[str]) -> list[str]:
+    """Remove listed descendants using Windows semantics on every host.
+
+    Never synthesize unlisted parents: inspecting host directories is neither
+    possible for a copied profile on Linux nor evidence of stock share intent.
+    """
+    normalized = {}
+    for path in paths:
+        value = _normalize_windows_absolute(path)
+        normalized.setdefault(ntpath.normcase(value), value)
+    result = []
+    for key, value in normalized.items():
+        parent = ntpath.dirname(key)
+        while parent != key and parent not in normalized:
+            key, parent = parent, ntpath.dirname(parent)
+        if parent not in normalized or parent == key:
+            result.append(value)
+    return result
 
 
 def detect_profile_flavor(config_dir: Path) -> str:
