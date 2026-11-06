@@ -36,6 +36,7 @@ DEFAULT_PAYLOAD_MIB = 64
 DEFAULT_UPLOAD_LIMIT_KIBPS = 64
 KAD_FIREWALL_LOG_FILTER = (
     "info,emulebb_core=debug,emulebb_kad_dht::publish=debug,"
+    "emulebb_kad_dht::traversal=debug,emulebb_kad_net::rpc::receive_loop=debug,"
     "emulebb_ed2k::ed2k_tcp::listener::session=debug"
 )
 

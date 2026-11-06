@@ -70,6 +70,7 @@ class LocalKadPeer:
             f"{self.bind_ip}:{self.udp_port}".encode("ascii")
         ).digest()[:16]
         self._sources: dict[bytes, dict[bytes, tuple[int, bytes]]] = {}
+        self._last_source_reply: bytes | None = None
         self._known_udp_ips: set[str] = set()
         self._counts: Counter[str] = Counter()
         fixture = self
@@ -123,9 +124,31 @@ class LocalKadPeer:
     def evidence(self) -> dict[str, object]:
         """Return counters without peer addresses or UDP verification keys."""
 
+        shapes = []
+        for sources in self._sources.values():
+            for size, record in sources.values():
+                tags = {
+                    name: value
+                    for name, value, _raw in ed2k_wire.decode_tag_sequence(
+                        record[17:], record[16]
+                    )
+                }
+                shapes.append(
+                    {
+                        "sizeBytes": size,
+                        "sourceType": tags.get(0xFF),
+                        "tcpPortPresent": bool(tags.get(0xFD)),
+                        "udpPortPresent": bool(tags.get(0xFC)),
+                        "connectOptions": tags.get(0xF3),
+                    }
+                )
         return {
             "role": "local-kad-index-and-firewall-witness",
             "transport": "plaintext-local-fixture",
+            "sourceShapes": shapes,
+            "lastSourceReplyHex": self._last_source_reply.hex()
+            if self._last_source_reply
+            else None,
             **dict(self._counts),
         }
 
@@ -268,13 +291,14 @@ class LocalKadPeer:
             payload_bytes += len(record)
         self._counts["sourceSearches"] += 1
         self._counts["sourceResults"] += len(selected)
-        return (
+        self._last_source_reply = (
             b"\xe4\x3b"
             + self.node_id
             + body[:16]
             + struct.pack("<H", len(selected))
             + b"".join(selected)
         )
+        return self._last_source_reply
 
     def _handle_tcp(self, stream: socket.socket, peer_ip: str) -> None:
         marker, opcode, payload = receive_frame(stream)
