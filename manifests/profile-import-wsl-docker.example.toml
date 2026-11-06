@@ -1,0 +1,20 @@
+schema_version = 1
+
+[source]
+profile = 'D:\eMule\config'
+
+[target]
+backend = 'wsl-docker'
+profile = 'D:\RustDockerProfile'
+image = 'local/emulebb-rust:current'
+distribution = 'Ubuntu'
+
+[output]
+directory = 'D:\ImportReports'
+
+[[path_mappings]]
+source = 'D:\Shared'
+host = 'D:\Shared'
+target = '/data/shared'
+
+# Add entries covering every configured root, including the stock Incoming root.

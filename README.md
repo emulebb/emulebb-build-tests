@@ -2,7 +2,14 @@
 
 This repository is the shared test harness for the canonical eMuleBB workspace rooted at `EMULEBB_WORKSPACE_ROOT`.
 
-This repo assumes the canonical workspace created by
+The offline stock/MFC import tool can run from this checkout alone with Python
+and an installed Rust executable or Docker image. Start with
+`python scripts/import-emule-profile.py --config import.toml` and the
+[operator guide](https://emulebb.github.io/emulebb-tooling/products/emulebb-rust/reference/GUIDE-PROFILE-IMPORT/).
+Copy a `manifests/profile-import-*.example.toml` job and edit its paths first.
+It never starts networking or executes payload hashing.
+
+Development and live-test workflows assume the canonical workspace created by
 `python -m emule_workspace materialize` from `repos\emulebb-build`.
 
 Minimum expected roots:
@@ -54,7 +61,7 @@ mapping; mappings use longest-prefix, path-boundary matching.
 
 ```powershell
 $job = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "inputs\emule-profile-import.toml"
-$manifest = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "inputs\emule-profile-import.json"
+$manifest = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "inputs\emule-profile-import.sqlite"
 $profile = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "profiles\imported-rust"
 $rust = Join-Path $env:EMULEBB_WORKSPACE_OUTPUT_ROOT "tools\emulebb-rust\bin\emulebb-rust.exe"
 python scripts\export-emule-profile.py check --config $job
@@ -64,7 +71,7 @@ python scripts\export-emule-profile.py export --config $job
 
 Stop both clients before exporting or applying. The Rust command creates a
 fresh explicit target profile when needed, merges into an initialized target,
-applies one SQLite transaction, and exits without starting networking. Re-run
+applies bounded SQLite transactions, and exits without starting networking. Re-run
 the same command safely when validating or resuming an operator workflow.
 
 Rust live OpenVPN lane:

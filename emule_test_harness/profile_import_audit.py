@@ -148,7 +148,8 @@ def source_path_for_binding(platform: str, native: bytes,
     raise RuntimeError("native path has no explicit source mapping")
 
 
-def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob) -> dict[str, int]:
+def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob, *,
+                             host_mappings: tuple[emule_profile_export.PathMapping, ...] | None = None) -> dict[str, int]:
     """Independently check every accepted path, stock match, and native hashset.
 
     Files are only stat-ed; Windows file-ID checks open handles without reading
@@ -158,6 +159,10 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob)
     config = emule_profile_export.resolve_emule_config_dir(job.source_profile)
     flavor = emule_profile_export.detect_profile_flavor(config)
     roots = [Path(r.path) for r in emule_profile_export.discover_shared_roots(config, flavor)]
+    if host_mappings is not None:
+        roots = [Path(emule_profile_export.map_shared_root(str(r), job)) if job.target_platform == "windows"
+                 else source_path_for_binding("unix", emule_profile_export.map_shared_root(str(r), job).encode(), host_mappings)
+                 for r in roots]
     result = {"verifiedPathBindings": 0, "verifiedNativeMd4Parts": 0,
               "verifiedNativeAichParts": 0, "verifiedWindowsFingerprints": 0,
               "verifiedRemappedPaths": 0}
@@ -170,7 +175,7 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob)
             "JOIN verified_local_content c ON c.known_file_id=k.id"
         )
         for platform, native, size, stored, content_id, file_hash, content_size, root, verified_root in rows:
-            path = source_path_for_binding(platform, native, job.path_mappings)
+            path = source_path_for_binding(platform, native, host_mappings if host_mappings is not None else job.path_mappings)
             if not any(path.is_relative_to(parent) for parent in roots):
                 raise RuntimeError("native binding is outside the stock shared roots")
             current = path.stat()

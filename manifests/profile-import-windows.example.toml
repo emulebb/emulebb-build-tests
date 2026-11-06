@@ -1,0 +1,13 @@
+schema_version = 1
+
+[source]
+profile = 'D:\eMule\config'
+flavor = 'auto'
+
+[target]
+backend = 'windows'
+profile = 'D:\RustProfile'
+binary = 'C:\Tools\emulebb-rust.exe'
+
+[output]
+directory = 'D:\ImportReports'

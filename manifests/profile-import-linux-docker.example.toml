@@ -1,0 +1,19 @@
+schema_version = 1
+
+[source]
+profile = '/srv/stock-config'
+
+[target]
+backend = 'docker'
+profile = '/srv/rust-profile'
+image = 'local/emulebb-rust:current'
+
+[output]
+directory = '/srv/import-reports'
+
+[[path_mappings]]
+source = 'D:\Shared'
+host = '/srv/shared'
+target = '/data/shared'
+
+# source is the path recorded in stock metadata; host is the Linux data location.
