@@ -593,6 +593,24 @@ target="/data/sample"
         assert report["reconciliation"]["reusedCount"] == 4
         assert report["reconciliation"]["plannedHashCount"] == 0
         assert report["hashValidation"]["verifiedRecoverySets"] == 3
+        # Repeat against the Linux-created profile, then reject a corrupt
+        # incoming optional tree while proving the existing tree is unchanged.
+        for corrupt in (False, True):
+            if corrupt:
+                cache = fixture / "stock/config/known2_64.met"
+                data = bytearray(cache.read_bytes())
+                data[1 + 44 + 24] ^= 1
+                cache.write_bytes(data)
+            merged_run = subprocess.run(result.args, capture_output=True, text=True, timeout=120)
+            assert merged_run.returncode == (2 if corrupt else 0), merged_run.stdout + merged_run.stderr
+            latest = max((state / "reports").glob("*/summary.json"), key=lambda p: p.stat().st_mtime_ns)
+            merged = json.loads(latest.read_text(encoding="utf-8"))
+            assert merged["auditBaseline"]["contentRecords"] == 3
+            assert merged["auditBaseline"]["recoverySets"] == 3
+            assert merged["hashValidation"]["retainedExistingRecoverySets"] == int(corrupt)
+            assert merged["reconciliation"]["reusedCount"] == 4
+            assert merged["reconciliation"]["plannedHashCount"] == 0
+            assert merged["reconciliation"]["completedReadBytes"] == 0
         # Direct native .dat import uses paths visible inside the container.
         # Exercise the other BOM encoding and the regular MD4/AICH pipeline.
         (control / "shareddir-linux.dat").write_bytes(
