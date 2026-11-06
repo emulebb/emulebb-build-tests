@@ -270,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     job = load_export_job(args.config)
+    if args.command == "export":
+        from .profile_exchange import write_exchange
+        print(json.dumps(write_exchange(job, hashes_only=args.hashes_only), indent=2))
+        return 0
     manifest = build_export_manifest(job, hashes_only=args.hashes_only)
     if args.command == "export":
         export_manifest(job, manifest)
