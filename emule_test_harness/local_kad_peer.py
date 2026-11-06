@@ -231,6 +231,8 @@ class LocalKadPeer:
         if len(body) < 33 or len(body) > 4096 or body[32] > 63:
             raise ValueError("source publish exceeds fixture bounds")
         tags = ed2k_wire.decode_tag_sequence(body[33:], body[32])
+        if any(raw[0] & 0x80 for _name, _value, raw in tags):
+            raise ValueError("Kad tags require the length-prefixed name form")
         values = {name: value for name, value, _raw in tags}
         port = values.get(0xFD)
         if (
@@ -244,7 +246,9 @@ class LocalKadPeer:
             raise ValueError("invalid source size")
         raw_tags = [raw for name, _value, raw in tags if name != 0xFE]
         raw_tags.insert(
-            0, b"\x83\xfe" + struct.pack("<I", int(ipaddress.IPv4Address(publisher_ip)))
+            0,
+            b"\x03\x01\x00\xfe"
+            + struct.pack("<I", int(ipaddress.IPv4Address(publisher_ip))),
         )
         target, publisher = body[:16], body[16:32]
         record = publisher + bytes([len(raw_tags)]) + b"".join(raw_tags)

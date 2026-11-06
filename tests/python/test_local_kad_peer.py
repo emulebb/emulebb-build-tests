@@ -81,7 +81,7 @@ def test_source_publish_and_search_preserve_identity_and_stamp_observed_ip(
 ) -> None:
     target, publisher = b"t" * 16, b"p" * 16
     tags = b"".join(
-        b"\x83" + bytes([name]) + struct.pack("<I", value)
+        b"\x03\x01\x00" + bytes([name]) + struct.pack("<I", value)
         for name, value in [
             (0x02, 12),
             (0xFF, 6),
@@ -102,6 +102,7 @@ def test_source_publish_and_search_preserve_identity_and_stamp_observed_ip(
         result = udp.recvfrom(65536)[0]
     assert result[:36] == b"\xe4\x3b" + witness.node_id + target + b"\x01\x00"
     assert result[36:52] == publisher
+    assert result[53:57] == b"\x03\x01\x00\xfe"
     values = {
         name: value
         for name, value, _raw in ed2k_wire.decode_tag_sequence(result[53:], result[52])
@@ -120,4 +121,9 @@ def test_source_index_rejects_malformed_or_oversized_tag_vectors(
         witness._store_source(b"t" * 16 + b"p" * 16 + b"\x01\x83", "127.0.0.1")
     with pytest.raises(ValueError):
         witness._store_source(b"t" * 16 + b"p" * 16 + b"\x40", "127.0.0.1")
+    with pytest.raises(ValueError, match="length-prefixed"):
+        witness._store_source(
+            b"t" * 16 + b"p" * 16 + b"\x01\x83\xff" + struct.pack("<I", 6),
+            "127.0.0.1",
+        )
     assert witness._sources == {}
