@@ -248,7 +248,11 @@ def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Pat
         local_kad_seed=BootstrapContact("127.0.0.1", 24672, 24662),
     )
 
-    assert len((profile_dir / "nodes.dat").read_bytes()) == 37
+    assert len((profile_dir / "nodes.dat").read_bytes()) == 12
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        assert conn.execute(
+            "SELECT endpoint FROM kad_bootstrap_endpoints ORDER BY position"
+        ).fetchall() == [("127.0.0.1:24672",)]
     assert setting_value(profile_dir, "core", "networkKademlia") is True
 
 

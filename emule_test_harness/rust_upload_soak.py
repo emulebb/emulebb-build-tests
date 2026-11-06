@@ -35,8 +35,7 @@ DEFAULT_SAMPLE_INTERVAL_SECONDS = 5.0
 DEFAULT_PAYLOAD_MIB = 64
 DEFAULT_UPLOAD_LIMIT_KIBPS = 64
 KAD_FIREWALL_LOG_FILTER = (
-    "info,emulebb_core::kad_udp_firewall_check=debug,"
-    "emulebb_core::kad_hello=debug,"
+    "info,emulebb_core=debug,emulebb_kad_dht::publish=debug,"
     "emulebb_ed2k::ed2k_tcp::listener::session=debug"
 )
 
