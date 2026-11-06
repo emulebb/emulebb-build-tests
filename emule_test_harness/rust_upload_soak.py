@@ -11,12 +11,13 @@ import socket
 import subprocess
 import time
 import traceback
+from urllib.parse import urlsplit
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import ed2k_server as ed2k_harness, kad_nodes, live_process_monitor, rust_client, rust_ed2k, rust_metadata
-from .kad_firewall_helper import KadFirewallHelper
+from .kad_firewall_helper import DockerKadFirewallWitness, start_docker_witness
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
     ed2k_link_with_source,
@@ -231,6 +232,11 @@ def recheck_kad_after_bootstrap(
             raise RuntimeError("Kad firewall witness contact was not imported")
     nodes = request_json(seeder_base, "GET", "/api/v1/kad/nodes?limit=100", api_key)
     rows = nodes.get("items") if isinstance(nodes.get("items"), list) else []
+    if witness_nodes_url is not None and not any(
+        isinstance(row, dict) and row.get("ip") == urlsplit(witness_nodes_url).hostname
+        for row in rows
+    ):
+        raise RuntimeError("Kad firewall witness was not admitted to the routing table")
     contact_evidence = [
         {
             "sameBindIp": row.get("ip") == seeder_ip,
@@ -557,7 +563,7 @@ def run(argv: list[str] | None = None) -> int:
     leecher_base = ""
     file_hash = ""
     wsl_mountpoint: str | None = None
-    kad_helper: KadFirewallHelper | None = None
+    kad_helper: DockerKadFirewallWitness | None = None
     try:
         payload = write_payload(
             artifacts_dir / "shared" / "Rust.Local.Upload.Soak.Payload.zip",
@@ -667,8 +673,10 @@ def run(argv: list[str] | None = None) -> int:
         wait_for_ed2k_connected(seeder_base, args.api_key, 45.0)
         wait_for_ed2k_connected(leecher_base, args.api_key, 45.0)
         if kad_wsl:
-            kad_helper = KadFirewallHelper(lan, {lan, seeder_addr})
-            kad_helper.start()
+            kad_helper = start_docker_witness(
+                artifacts_dir / "kad-witness", {seeder_addr},
+                distribution=os.environ.get(rust_ed2k.RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None,
+            )
             report["checks"]["kadReachabilityRecheck"] = recheck_kad_after_bootstrap(
                 seeder_base, leecher_base, args.api_key, seeder_addr,
                 witness_nodes_url=kad_helper.nodes_url,

@@ -63,7 +63,7 @@ def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPa
     def request(base: str, method: str, path: str, _key: str, _body=None):
         calls.append((base, method, path))
         if path == "/api/v1/kad/operations/import-nodes-url":
-            assert _body == {"url": "http://witness/nodes.dat"}
+            assert _body == {"url": "http://192.0.2.20/nodes.dat"}
             return {"imported": True}
         if path.startswith("/api/v1/kad/nodes"):
             return {"items": [{
@@ -77,7 +77,7 @@ def test_kad_recheck_waits_for_both_connected_peers(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(rust_upload_soak, "request_json", request)
     result = rust_upload_soak.recheck_kad_after_bootstrap(
         "http://seed", "http://leech", "local-key", "192.0.2.10",
-        witness_nodes_url="http://witness/nodes.dat",
+        witness_nodes_url="http://192.0.2.20/nodes.dat",
     )
 
     assert result == {

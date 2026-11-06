@@ -11,13 +11,18 @@ fixture is product workflow evidence and makes no cross-client parity claim.
 from __future__ import annotations
 
 import ipaddress
+import argparse
+import json
 import select
 import socket
 import struct
 import threading
+import uuid
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
+from . import docker_ed2k_source_publisher as docker_fixture
 from .docker_ed2k_source_publisher import encode_hello_answer
 from .kad_nodes import BootstrapContact, encode_nodes_dat
 
@@ -202,3 +207,154 @@ class KadFirewallHelper:
                 self._counts["udpProbeReplies"] += 1
             return
         raise ValueError("helper session exceeded its packet budget")
+
+
+class DockerKadFirewallWitness:
+    """Own an isolated helper container on the existing WSL Docker bridge."""
+
+    def __init__(self, name: str, receipt: Path, distribution: str | None) -> None:
+        self.name = name
+        self.receipt = receipt
+        self.distribution = distribution
+        ready = docker_fixture._wait_for_receipt(receipt, 20)
+        if (
+            ready.get("schema") != "emulebb.kad-firewall-witness.v1"
+            or ready.get("runId") != name
+        ):
+            raise RuntimeError("invalid Kad witness readiness receipt")
+        self.nodes_url = str(ready["nodesUrl"])
+
+    def evidence(self) -> dict[str, object]:
+        """Read the child's atomic receipt and omit its private endpoint."""
+
+        receipt = json.loads(self.receipt.read_text(encoding="utf-8"))
+        return {
+            **receipt["evidence"],
+            "runtime": "docker-bridge",
+            "image": docker_fixture.DOCKER_IMAGE,
+        }
+
+    def close(self) -> None:
+        """Ask the child to flush its counters, then remove only this container."""
+
+        try:
+            stopped = docker_fixture._docker_result(
+                self.distribution,
+                ["stop", "--time", "6", self.name],
+            )
+            if stopped.returncode != 0:
+                raise RuntimeError("Kad witness container did not stop cleanly")
+        finally:
+            removed = docker_fixture._docker_result(
+                self.distribution,
+                ["rm", "--force", self.name],
+            )
+            if removed.returncode != 0:
+                raise RuntimeError("Kad witness container was not removed")
+
+
+def start_docker_witness(
+    run_dir: Path,
+    allowed_peers: set[str],
+    *,
+    distribution: str | None = None,
+) -> DockerKadFirewallWitness:
+    """Launch the persisted witness in the pinned local Python image.
+
+    Reuse the existing Docker fixture's image preflight and argument-vector WSL
+    helpers. No host route, adapter, published port, or public service is needed.
+    """
+
+    docker_fixture._preflight_image(distribution)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    root = Path(__file__).resolve().parents[1]
+    linux_root = docker_fixture._wsl_path(root, distribution)
+    linux_output = docker_fixture._wsl_path(run_dir, distribution)
+    name = f"emulebb-kad-witness-{uuid.uuid4().hex}"
+    receipt = run_dir / "witness.json"
+    if receipt.exists():
+        raise ValueError("Kad witness receipt already exists")
+    command = [
+        "run",
+        "--detach",
+        "--pull=never",
+        "--init",
+        "--network=bridge",
+        f"--platform={docker_fixture.DOCKER_PLATFORM}",
+        "--name",
+        name,
+        "--label",
+        "org.emulebb.harness.fixture=kad-firewall-witness",
+        "--mount",
+        f"type=bind,src={linux_root},dst=/workspace,readonly",
+        "--mount",
+        f"type=bind,src={linux_output},dst=/run",
+        "--workdir",
+        "/workspace",
+        docker_fixture.DOCKER_IMAGE,
+        "python",
+        "-m",
+        "emule_test_harness.kad_firewall_helper",
+        "--receipt",
+        "/run/witness.json",
+        "--run-id",
+        name,
+    ]
+    for peer in sorted(allowed_peers):
+        command.extend(["--allowed-peer", str(ipaddress.IPv4Address(peer))])
+    try:
+        launched = docker_fixture._docker_result(distribution, command)
+        if launched.returncode != 0:
+            raise RuntimeError("Kad witness container failed to launch")
+        return DockerKadFirewallWitness(name, receipt, distribution)
+    except Exception:
+        docker_fixture._docker_result(distribution, ["rm", "--force", name])
+        raise
+
+
+def main() -> None:
+    """Run the container child until its owner requests shutdown."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--allowed-peer", action="append", required=True)
+    parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--run-id", required=True)
+    args = parser.parse_args()
+    address = socket.gethostbyname(socket.gethostname())
+    helper = KadFirewallHelper(address, set(args.allowed_peer))
+    stop = threading.Event()
+    handlers = docker_fixture._install_stop_handlers(stop)
+    helper.start()
+    previous = None
+    try:
+        while not stop.is_set():
+            evidence = helper.evidence()
+            if evidence != previous:
+                docker_fixture.write_json_atomic(
+                    args.receipt,
+                    {
+                        "schema": "emulebb.kad-firewall-witness.v1",
+                        "runId": args.run_id,
+                        "nodesUrl": helper.nodes_url,
+                        "evidence": evidence,
+                    },
+                )
+                previous = evidence
+            stop.wait(0.2)
+    finally:
+        helper.close()
+        docker_fixture._restore_stop_handlers(handlers)
+        docker_fixture.write_json_atomic(
+            args.receipt,
+            {
+                "schema": "emulebb.kad-firewall-witness.v1",
+                "runId": args.run_id,
+                "nodesUrl": helper.nodes_url,
+                "evidence": helper.evidence(),
+                "stopped": True,
+            },
+        )
+
+
+if __name__ == "__main__":
+    main()
