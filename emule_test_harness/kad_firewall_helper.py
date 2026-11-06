@@ -78,10 +78,9 @@ class KadFirewallHelper:
                 super().setup()
 
             def do_GET(self) -> None:
-                if (
-                    self.path != "/nodes.dat"
-                    or self.client_address[0] not in fixture.allowed_peers
-                ):
+                # HTTP is the control-plane import. Linux may source it from
+                # docker0, while P2P sockets bind the explicit seeder address.
+                if self.path != "/nodes.dat":
                     self.send_error(404)
                     return
                 body = encode_nodes_dat(
