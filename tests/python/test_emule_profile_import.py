@@ -89,6 +89,7 @@ def _write_nodes_dat(path: Path) -> None:
     path.write_bytes(bytes(data))
 
 
+@pytest.mark.native
 def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
     config = tmp_path / "stock-config"
@@ -200,6 +201,7 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     rust_metadata.require_current_profile_database(_rust_repo(), db_path)
 
 
+@pytest.mark.native
 def test_upsert_stock_mfc_profile_hashes_reuses_existing_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

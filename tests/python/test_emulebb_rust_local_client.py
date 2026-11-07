@@ -349,6 +349,9 @@ def configure_shared_directory(
 
 def terminate_process(process: subprocess.Popen[str]) -> None:
     rust_client.stop_process_tree(process, timeout_seconds=5)
+
+
+@pytest.mark.native
 def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")

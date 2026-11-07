@@ -270,10 +270,10 @@ def import_mfc_known_met_cache(
     known2_64_met: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Import stock ``known.met`` as pathless reusable hash metadata.
+    """Export pathless stock hashes and explicitly enrich accepted live content.
 
-    No shared roots are walked and no payload files are inspected. Runtime shared
-    scans promote a cached row only when the exact stock identity is unique.
+    No shared roots are walked and no payload files are inspected. Unmatched
+    records stay in the external archive; no native staging rows are created.
     """
 
     imported_rows, summary = build_imported_known_rows(known_met=known_met,known2_met=known2_64_met)
