@@ -80,15 +80,25 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
     architecture = platform.removeprefix("linux/")
     run_id = run_id or uuid4().hex
     container = f"emulebb-rust-image-smoke-{architecture}-{run_id}"
+    network = f"emulebb-rust-image-smoke-net-{architecture}-{run_id}"
     if docker("container", "inspect", container, check=False).returncode == 0:
         raise RuntimeError(f"refusing to replace existing container {container}")
+    if docker("network", "inspect", network, check=False).returncode == 0:
+        raise RuntimeError(f"refusing to replace existing network {network}")
     try:
+        docker("network", "create", "--internal", "--label", f"io.emulebb.ci.image-smoke-owner={run_id}", network)
+        if docker("network", "inspect", "--format", "{{.Internal}}", network).stdout.strip() != "true":
+            raise RuntimeError("Image smoke requires an internal Docker network")
         docker(
             "run", "--detach", "--pull", "never", "--name", container, "--platform", platform,
             "--label", f"io.emulebb.ci.image-smoke-owner={run_id}",
-            "--network", "bridge",
+            "--network", network, "--dns", "127.0.0.1", "--dns-option", "attempts:1", "--dns-option", "timeout:1",
             "--tmpfs", "/config", "--tmpfs", "/data",
-            "--env", "PUID=1234", "--env", "PGID=1235", "--env", "TZ=UTC", image,
+            "--env", "PUID=1234", "--env", "PGID=1235", "--env", "TZ=UTC",
+            "--env", "EMULEBB_RUST_P2P_INTERFACE=eth0",
+            # Explicitly contain first-run HTTP discovery, including client proxy defaults.
+            "--env", "HTTP_PROXY=", "--env", "HTTPS_PROXY=", "--env", "ALL_PROXY=",
+            "--env", "http_proxy=", "--env", "https_proxy=", "--env", "all_proxy=", image,
         )
         # The containerd image store's .Image is an index ID, not a config ID.
         # Its platform descriptor binds the running container to exact CPU bytes.
@@ -141,17 +151,23 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             "configOwner": owners[0], "dataOwner": owners[1], "publishedPorts": 0,
             "imageManifestDigest": actual_manifest, "imageConfigDigest": expected_identity["configDigest"],
             "restAuthentication": True, "gracefulShutdown": True,
+            "networkIsolation": "internal-bridge", "dns": "loopback-only",
         }
     finally:
         original_error = sys.exception()
-        try:
-            cleanup = docker("rm", "--force", container, check=False)
-            if cleanup.returncode:
-                raise RuntimeError(f"Could not remove owned smoke container {container}")
-        except Exception as cleanup_error:
+        cleanup_errors = []
+        for arguments in (("rm", "--force", container), ("network", "rm", network)):
+            try:
+                cleanup = docker(*arguments, check=False)
+                if cleanup.returncode:
+                    raise RuntimeError(f"Could not remove owned image-smoke resource: {arguments[-1]}")
+            except Exception as cleanup_error:
+                cleanup_errors.append(str(cleanup_error))
+        if cleanup_errors:
+            detail = "Owned image-smoke cleanup failed: " + "; ".join(cleanup_errors)
             if original_error is None:
-                raise
-            original_error.add_note(f"Owned smoke container cleanup failed: {cleanup_error}")
+                raise RuntimeError(detail)
+            original_error.add_note(detail)
 
 
 def main() -> int:
