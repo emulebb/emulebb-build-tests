@@ -49,8 +49,10 @@ def test_wrong_local_tag_cannot_pass_and_its_container_is_removed(monkeypatch):
     calls = []
     def docker(*arguments, **kwargs):
         calls.append(arguments)
-        if arguments[:2] == ("container", "inspect"):
+        if arguments[:2] in (("container", "inspect"), ("network", "inspect")) and "--format" not in arguments:
             return subprocess.CompletedProcess(arguments, 1, "", "")
+        if "{{.Internal}}" in arguments:
+            return subprocess.CompletedProcess(arguments, 0, "true", "")
         return subprocess.CompletedProcess(arguments, 0, json.dumps({"digest": "sha256:" + "b" * 64}), "")
     monkeypatch.setattr(smoke, "docker", docker)
     with pytest.raises(RuntimeError, match="does not match the OCI archive"):
@@ -59,16 +61,38 @@ def test_wrong_local_tag_cannot_pass_and_its_container_is_removed(monkeypatch):
     assert launch[launch.index("--pull") + 1] == "never"
     assert launch[launch.index("--label") + 1].startswith("io.emulebb.ci.image-smoke-owner=")
     name = launch[launch.index("--name") + 1]
-    assert calls[-1] == ("rm", "--force", name)
+    assert ("rm", "--force", name) in calls
+    assert calls[-1][0:2] == ("network", "rm")
+    assert "--internal" in next(call for call in calls if call[:2] == ("network", "create"))
+    assert launch[launch.index("--dns") + 1] == "127.0.0.1"
+    assert "EMULEBB_RUST_P2P_INTERFACE=eth0" in launch
 
 
 def test_cleanup_failure_does_not_hide_original_image_mismatch(monkeypatch):
     def docker(*arguments, **kwargs):
         if arguments[0] == "rm":
             raise subprocess.TimeoutExpired(arguments, 1)
-        return subprocess.CompletedProcess(arguments, 1 if arguments[0] == "container" else 0,
+        if arguments[:2] in (("container", "inspect"), ("network", "inspect")) and "--format" not in arguments:
+            return subprocess.CompletedProcess(arguments, 1, "", "")
+        if "{{.Internal}}" in arguments:
+            return subprocess.CompletedProcess(arguments, 0, "true", "")
+        return subprocess.CompletedProcess(arguments, 0,
                                            json.dumps({"digest": "sha256:" + "b" * 64}), "")
     monkeypatch.setattr(smoke, "docker", docker)
     with pytest.raises(RuntimeError, match="does not match the OCI archive") as caught:
         smoke.smoke_platform("local/test:beta", "linux/amd64", {"manifestDigest": "sha256:" + "a" * 64})
     assert "cleanup failed" in caught.value.__notes__[0]
+
+
+def test_external_network_cannot_be_used_for_first_run_smoke(monkeypatch):
+    calls = []
+    def docker(*arguments, **kwargs):
+        calls.append(arguments)
+        if arguments[:2] in (("container", "inspect"), ("network", "inspect")) and "--format" not in arguments:
+            return subprocess.CompletedProcess(arguments, 1, "", "")
+        return subprocess.CompletedProcess(arguments, 0, "false", "")
+    monkeypatch.setattr(smoke, "docker", docker)
+    with pytest.raises(RuntimeError, match="internal Docker network"):
+        smoke.smoke_platform("local/test:beta", "linux/amd64", {"manifestDigest": "sha256:" + "a" * 64})
+    assert not any(call[0] == "run" for call in calls)
+    assert calls[-1][:2] == ("network", "rm")
