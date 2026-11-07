@@ -57,6 +57,7 @@ def test_wrong_local_tag_cannot_pass_and_its_container_is_removed(monkeypatch):
         smoke.smoke_platform("local/test:beta", "linux/amd64", "sha256:" + "a" * 64)
     launch = next(call for call in calls if call[0] == "run")
     assert launch[launch.index("--pull") + 1] == "never"
+    assert launch[launch.index("--label") + 1].startswith("io.emulebb.ci.image-smoke-owner=")
     name = launch[launch.index("--name") + 1]
     assert calls[-1] == ("rm", "--force", name)
 
