@@ -21,12 +21,13 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 import time
 import urllib.error
 import urllib.request
 import zipfile
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TextIO
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -500,6 +501,49 @@ def _smoke_windows(
     )
 
 
+def _extract_portable_stream(stream, destination: Path) -> None:
+    """Extract only regular files/directories within the portable package root."""
+    with tarfile.open(fileobj=stream, mode="r|") as archive:
+        for member in archive:
+            name = PurePosixPath(member.name)
+            if (name.is_absolute() or ".." in name.parts or not name.parts
+                    or name.parts[0] != "emulebb-rust" or not (member.isfile() or member.isdir())):
+                raise RuntimeError(f"unsafe portable archive member: {member.name}")
+            archive.extract(member, destination, filter="data")
+
+
+def _verify_portable_manifest(asset: Path, expected_source_sha: str, expected_target: str) -> dict:
+    """Bind the tested bytes to a clean, explicitly selected Rust revision."""
+    manifest = json.loads(asset.with_name(asset.name + ".manifest.json").read_text(encoding="utf-8"))
+    if (manifest.get("asset") != asset.name or manifest.get("sha256") != file_sha256(asset)
+            or manifest.get("sourceDirty") is not False or manifest.get("target") != expected_target
+            or manifest.get("source", {}).get("emulebbRust", {}).get("commit") != expected_source_sha):
+        raise RuntimeError("portable package checksum or source provenance mismatch")
+    return manifest
+
+
+def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
+                         render_webui: bool, expected_source_sha: str, expected_target: str) -> dict[str, object]:
+    manifest = _verify_portable_manifest(asset, expected_source_sha, expected_target)
+    with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(asset)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            _extract_portable_stream(process.stdout, temp_root)
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+        _, errors = process.communicate()
+        if process.returncode:
+            raise RuntimeError(f"portable archive decompression failed: {errors.decode(errors='replace')[-2000:]}")
+    root = temp_root / "emulebb-rust"
+    result = _smoke_binary(root / "emulebb-rust", root / "webui", temp_root,
+                           rust_repo=rust_repo, render_webui=render_webui)
+    result["sourceSha"] = expected_source_sha
+    result["target"] = manifest["target"]
+    return result
+
+
 def _smoke_linux_deb(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool
 ) -> dict[str, object]:
@@ -574,17 +618,28 @@ def main() -> int:
     parser.add_argument("--report-path", type=Path)
     parser.add_argument("--target-os", required=True, choices=("windows", "linux", "macos"))
     parser.add_argument("--platform", required=True, choices=("x64", "ARM64"))
+    parser.add_argument("--linux-libc", choices=("gnu", "musl"), help="Test the selected portable Linux archive.")
+    parser.add_argument("--expected-source-sha", help="Required clean source revision for portable archives.")
     parser.add_argument(
         "--render-webui",
         action="store_true",
         help="Render the packaged WebUI in Chromium and prove stale-key recovery plus all primary views.",
     )
     args = parser.parse_args()
+    if args.linux_libc and (args.target_os != "linux" or not args.expected_source_sha):
+        parser.error("--linux-libc requires --target-os linux and --expected-source-sha")
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
     with _temporary_root() as temp_root:
         if args.target_os == "windows":
             assets = [(f"{stem}-windows-{arch}.zip", _smoke_windows)]
+        elif args.target_os == "linux" and args.linux_libc:
+            package_arch = "amd64" if arch == "x64" else "arm64"
+            expected_target = f"{'x86_64' if arch == 'x64' else 'aarch64'}-unknown-linux-{args.linux_libc}"
+            def portable_smoke(*arguments, **kwargs):
+                return _smoke_linux_archive(*arguments, expected_source_sha=args.expected_source_sha,
+                                             expected_target=expected_target, **kwargs)
+            assets = [(f"{stem}-linux-{package_arch}-{args.linux_libc}.tar.zst", portable_smoke)]
         elif args.target_os == "linux":
             deb_arch, image_arch = ("amd64", "x86_64") if arch == "x64" else ("arm64", "aarch64")
             assets = [(f"{stem}-linux-{deb_arch}.deb", _smoke_linux_deb),
@@ -611,7 +666,7 @@ def main() -> int:
             )
     report = {
         "schema": "emulebb.rust.package-smoke/2",
-        "platform": f"{args.target_os}-{arch}",
+        "platform": f"{args.target_os}-{arch}" + (f"-{args.linux_libc}" if args.linux_libc else ""),
         "results": reports,
     }
     report_json = json.dumps(report, indent=2, sort_keys=True) + "\n"
