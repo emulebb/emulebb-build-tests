@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import emule_test_harness.protocol_parity as protocol_parity
 from emule_test_harness.protocol_parity import (
     build_dumpcap_command,
     build_catalog_report,
@@ -399,7 +400,14 @@ def test_catalog_report_keeps_partially_proven_group_incomplete() -> None:
 
 def test_catalog_cli_json_report_is_machine_readable(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise the CLI report independently of mutable operator checkouts.
+    monkeypatch.setattr(
+        protocol_parity,
+        "validate_protocol_catalog",
+        lambda manifest_path, **kwargs: validate_protocol_catalog(manifest_path),
+    )
     assert (
         run_validate_cli(
             [
