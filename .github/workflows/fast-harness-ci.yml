@@ -110,7 +110,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: emulebb/emulebb-rust
-          ref: f5113b9e28033d3abaee3c676cfa14e79fad285c
+          ref: 5c451cf3bbdb5f9b713f667c73f29591f9be2ece
           path: repos/emulebb-rust
 
       - name: Checkout upstream-clean ed2k-server dependency
