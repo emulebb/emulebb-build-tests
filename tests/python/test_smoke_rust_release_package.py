@@ -87,6 +87,28 @@ def test_failure_diagnostics_preserve_original_error_when_sources_unavailable(mo
     assert all("unavailable" in note for note in error.__notes__)
 
 
+def test_linux_capability_probe_reports_missing_emulated_socket_option(monkeypatch):
+    import errno
+
+    class Probe:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def bind(self, address):
+            assert address == ("127.0.0.1", 0)
+        def setsockopt(self, level, option, index):
+            raise OSError(errno.ENOPROTOOPT, "Protocol not available")
+
+    monkeypatch.setattr(smoke.sys, "platform", "linux")
+    monkeypatch.setattr(smoke.socket, "socket", lambda *args: Probe())
+    monkeypatch.setattr(smoke.socket, "if_nametoindex", lambda name: 1, raising=False)
+    with pytest.raises(RuntimeError, match="SO_BINDTOIFINDEX.*Protocol not available") as caught:
+        smoke._probe_linux_interface_pinning()
+    assert "not passing platform coverage" in str(caught.value)
+    assert caught.value.__cause__.errno == errno.ENOPROTOOPT
+
+
 def test_failed_delivery_retains_transfer_error_context(monkeypatch, tmp_path):
     def fail(*args, **kwargs):
         raise RuntimeError("delivery timed out")

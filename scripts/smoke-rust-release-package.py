@@ -105,6 +105,29 @@ def _local_p2p_ip() -> str:
     return address
 
 
+def _probe_linux_interface_pinning() -> None:
+    """Check the daemon's required socket capability before starting peers.
+
+    QEMU user-mode does not translate every socket option. A successful ELF
+    launch therefore cannot establish that the network runtime is executable.
+    """
+    if sys.platform != "linux":
+        return
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        try:
+            # Linux UAPI SO_BINDTOIFINDEX = 62 on the supported x64/ARM64 ABIs.
+            probe.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_BINDTOIFINDEX", 62),
+                             socket.if_nametoindex("lo"))
+        except OSError as error:
+            raise RuntimeError(
+                "Linux runtime cannot apply required SO_BINDTOIFINDEX interface pinning: "
+                f"{error}. User-mode emulation may lack this socket option; "
+                "run the packaged lifecycle on a native runner or a full-system VM. "
+                "This is a failed runtime check, not passing platform coverage."
+            ) from error
+
+
 def _available_port(host: str = "127.0.0.1", socket_type: int = socket.SOCK_STREAM) -> int:
     with socket.socket(socket.AF_INET, socket_type) as listener:
         listener.bind((host, 0))
@@ -328,6 +351,7 @@ def _smoke_binary(
 ) -> dict[str, object]:
     if not binary.is_file() or not (webui / "index.html").is_file():
         raise RuntimeError("package is missing its daemon or embedded WebUI")
+    _probe_linux_interface_pinning()
     help_result = subprocess.run(
         [str(binary), "--help"], capture_output=True, text=True, timeout=20, check=True
     )
