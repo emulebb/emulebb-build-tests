@@ -66,6 +66,27 @@ def test_api_key_meets_daemon_production_validation() -> None:
     assert not any(character.isspace() for character in smoke.API_KEY)
 
 
+def test_failure_diagnostics_survive_profile_cleanup(monkeypatch, tmp_path):
+    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": [{"message": "socket failure"}]})
+    error = RuntimeError("listener failed")
+    log = tmp_path / "daemon.log"
+    log.write_text("native error context", encoding="utf-8")
+    smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", log)
+    log.unlink()
+    assert "socket failure" in error.__notes__[0]
+    assert "native error context" in error.__notes__[1]
+
+
+def test_failure_diagnostics_preserve_original_error_when_sources_unavailable(monkeypatch, tmp_path):
+    def unavailable(*args):
+        raise RuntimeError("daemon stopped")
+    monkeypatch.setattr(smoke, "request_json", unavailable)
+    error = RuntimeError("original failure")
+    smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", tmp_path / "missing.log")
+    assert str(error) == "original failure"
+    assert all("unavailable" in note for note in error.__notes__)
+
+
 def test_failed_delivery_retains_transfer_error_context(monkeypatch, tmp_path):
     def fail(*args, **kwargs):
         raise RuntimeError("delivery timed out")
