@@ -98,26 +98,70 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
     delivered = incoming / "payload.bin"
     delivered.write_bytes(b"payload")
     expected_sha256 = smoke.file_sha256(delivered)
+    transfer_hash = "00112233445566778899aabbccddeeff"
+    requests = []
+
+    def completed_shared_file(_base_url, method, path, _api_key):
+        requests.append((method, path))
+        return {
+            "hash": transfer_hash,
+            "complete": True,
+            "partFile": False,
+            "sizeBytes": delivered.stat().st_size,
+            "path": str(delivered),
+        }
+
     monkeypatch.setattr(
         smoke,
         "request_json",
-        lambda *_args, **_kwargs: {
-            "state": "completed",
-            "completedBytes": delivered.stat().st_size,
-            "deliveredPath": str(delivered),
-        },
+        completed_shared_file,
     )
 
     report = smoke._wait_for_transfer_delivery(
         "http://127.0.0.1:4711",
-        "00112233445566778899aabbccddeeff",
+        transfer_hash,
         incoming=incoming,
         expected_size=delivered.stat().st_size,
         expected_sha256=expected_sha256,
     )
 
     assert report["deliveredPathWithinIncoming"] is True
+    assert report["sharedFileRegistered"] is True
+    assert requests == [("GET", f"/api/v1/shared-files/{transfer_hash}")]
     assert str(tmp_path) not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("hash", "ff" * 16), ("complete", False), ("partFile", True), ("sizeBytes", 99)],
+)
+def test_transfer_delivery_rejects_wrong_or_incomplete_shared_content(
+    monkeypatch, tmp_path, field, value,
+) -> None:
+    delivered = tmp_path / "payload.bin"
+    delivered.write_bytes(b"payload")
+    transfer_hash = "00112233445566778899aabbccddeeff"
+    shared = {
+        "hash": transfer_hash,
+        "complete": True,
+        "partFile": False,
+        "sizeBytes": 7,
+        "path": str(delivered),
+    }
+    shared[field] = value
+    monkeypatch.setattr(smoke, "request_json", lambda *_args: shared)
+    monkeypatch.setattr(smoke, "wait_for", lambda probe, **_kwargs: probe())
+
+    assert (
+        smoke._wait_for_transfer_delivery(
+            "http://127.0.0.1:4711",
+            transfer_hash,
+            incoming=tmp_path,
+            expected_size=7,
+            expected_sha256=smoke.file_sha256(delivered),
+        )
+        is None
+    )
 
 
 def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> None:
