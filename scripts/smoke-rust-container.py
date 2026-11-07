@@ -21,9 +21,9 @@ def docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[s
     )
 
 
-def oci_platform_configs(path: Path) -> dict[str, str]:
-    """Verify OCI metadata blobs and identify the exact config for each CPU."""
-    configs: dict[str, str] = {}
+def oci_platform_identities(path: Path) -> dict[str, dict[str, str]]:
+    """Verify OCI metadata blobs and identify the manifest/config for each CPU."""
+    identities: dict[str, dict[str, str]] = {}
     with tarfile.open(path, "r:*") as archive:
         members = archive.getmembers()
         def read_json(name: str, expected_digest: str | None = None) -> dict:
@@ -69,14 +69,14 @@ def oci_platform_configs(path: Path) -> dict[str, str]:
                 platform = f"{identity.get('os')}/{identity.get('architecture')}"
                 if platform not in {"linux/amd64", "linux/arm64"}:
                     continue
-                if platform in configs:
+                if platform in identities:
                     raise RuntimeError(f"OCI archive repeats a runnable platform: {platform}")
-                configs[platform] = config["digest"]
+                identities[platform] = {"manifestDigest": descriptor["digest"], "configDigest": config["digest"]}
         visit(read_json("index.json"))
-    return configs
+    return identities
 
 
-def smoke_platform(image: str, platform: str, expected_config: str, *, run_id: str | None = None) -> dict[str, object]:
+def smoke_platform(image: str, platform: str, expected_identity: dict[str, str], *, run_id: str | None = None) -> dict[str, object]:
     architecture = platform.removeprefix("linux/")
     run_id = run_id or uuid4().hex
     container = f"emulebb-rust-image-smoke-{architecture}-{run_id}"
@@ -90,9 +90,12 @@ def smoke_platform(image: str, platform: str, expected_config: str, *, run_id: s
             "--tmpfs", "/config", "--tmpfs", "/data",
             "--env", "PUID=1234", "--env", "PGID=1235", "--env", "TZ=UTC", image,
         )
-        actual_config = docker("inspect", "--format", "{{.Image}}", container).stdout.strip()
-        if actual_config != expected_config:
-            raise RuntimeError(f"Running image does not match the OCI archive: {actual_config} != {expected_config}")
+        # The containerd image store's .Image is an index ID, not a config ID.
+        # Its platform descriptor binds the running container to exact CPU bytes.
+        descriptor = json.loads(docker("inspect", "--format", "{{json .ImageManifestDescriptor}}", container).stdout)
+        actual_manifest = descriptor.get("digest") if isinstance(descriptor, dict) else None
+        if actual_manifest != expected_identity["manifestDigest"]:
+            raise RuntimeError(f"Running platform manifest does not match the OCI archive: {actual_manifest} != {expected_identity['manifestDigest']}")
         deadline = time.monotonic() + 90
         while True:
             running = docker("inspect", "--format", "{{.State.Running}}", container,
@@ -136,7 +139,8 @@ def smoke_platform(image: str, platform: str, expected_config: str, *, run_id: s
             "platform": platform,
             "firstRunProfile": True, "webui": True, "uid": int(uid), "gid": int(gid),
             "configOwner": owners[0], "dataOwner": owners[1], "publishedPorts": 0,
-            "imageConfigDigest": actual_config, "restAuthentication": True, "gracefulShutdown": True,
+            "imageManifestDigest": actual_manifest, "imageConfigDigest": expected_identity["configDigest"],
+            "restAuthentication": True, "gracefulShutdown": True,
         }
     finally:
         original_error = sys.exception()
@@ -163,9 +167,9 @@ def main() -> int:
     if not args.archive.is_file():
         raise RuntimeError(f"OCI archive is missing: {args.archive}")
 
-    configs = oci_platform_configs(args.archive)
+    identities = oci_platform_identities(args.archive)
     selected = args.platform or ["linux/amd64", "linux/arm64"]
-    if not selected or len(set(selected)) != len(selected) or set(selected) - configs.keys():
+    if not selected or len(set(selected)) != len(selected) or set(selected) - identities.keys():
         raise RuntimeError("OCI archive does not contain exactly one image for every requested platform")
     with args.archive.open("rb") as stream:
         archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -177,7 +181,7 @@ def main() -> int:
             raise RuntimeError("Docker could not load the OCI candidate: "
                                + loaded.stderr[-2000:] + loaded.stdout[-2000:])
         for platform in selected:
-            report["platforms"].append(smoke_platform(args.image, platform, configs[platform], run_id=args.run_id))
+            report["platforms"].append(smoke_platform(args.image, platform, identities[platform], run_id=args.run_id))
         report["status"] = "passed"
     except Exception as error:
         report["error"] = str(error)
