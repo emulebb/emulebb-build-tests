@@ -111,7 +111,7 @@ def test_download_seed_owns_flags_hashsets_and_ranges(tmp_path: Path) -> None:
         assert conn.execute("SELECT count(*) FROM verified_local_content").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM local_file_instances").fetchone() == (0,)
         conn.execute("DELETE FROM transfers")
-        for table in ("ed2k_part_hashes", "aich_part_hashes", "verified_ranges", "transfer_name_state"):
+        for table in ("transfer_md4_part_hashes", "transfer_aich_part_hashes", "verified_ranges", "transfer_name_state"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM known_files").fetchone() == (1,)
     assert rust_metadata.read_transfer_manifest(metadata_db, ed2k_hash) is None

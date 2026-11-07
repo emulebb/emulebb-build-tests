@@ -5147,8 +5147,8 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
             "kadBootstrapEndpoints": sqlite_count_table(connection, tables, "kad_bootstrap_endpoints"),
             "peersTotal": sqlite_count_table(connection, tables, "peers"),
             "transferSourcesTotal": sqlite_count_table(connection, tables, "transfer_sources"),
-            "ed2kPartHashRows": sqlite_count_table(connection, tables, "ed2k_part_hashes"),
-            "aichPartHashRows": sqlite_count_table(connection, tables, "aich_part_hashes"),
+            "ed2kPartHashRows": sqlite_count_table(connection, tables, "transfer_md4_part_hashes"),
+            "aichPartHashRows": sqlite_count_table(connection, tables, "transfer_aich_part_hashes"),
             "kadKeywordPublishRows": sqlite_count_table(connection, tables, "kad_keyword_publishes"),
             "kadSourcePublishRows": sqlite_count_table(connection, tables, "kad_source_publishes"),
         }

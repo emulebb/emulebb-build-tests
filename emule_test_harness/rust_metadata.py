@@ -244,7 +244,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
             INSERT INTO servers(
                 address, port, name, description, server_priority, static_server,
                 enabled, failed_count, ping_ms, users, files, soft_files, hard_files,
-                version, obfuscation_tcp_port, udp_flags, first_seen_ms, last_seen_ms, deleted_at_ms
+                version, obfuscation_tcp_port, udp_flags, first_seen_at_ms, last_seen_at_ms, deleted_at_ms
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0, 0, 0, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(address, port) DO UPDATE SET
@@ -256,7 +256,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
                 version = excluded.version,
                 obfuscation_tcp_port = excluded.obfuscation_tcp_port,
                 udp_flags = excluded.udp_flags,
-                last_seen_ms = excluded.last_seen_ms,
+                last_seen_at_ms = excluded.last_seen_at_ms,
                 deleted_at_ms = NULL
             """,
             (
@@ -314,7 +314,7 @@ def seed_indexed_file(
             """
             INSERT INTO known_files(
                 ed2k_hash, size_bytes, display_name,
-                content_type, availability_score, first_seen_ms, last_seen_ms, updated_at_ms
+                content_type, availability_score, first_seen_at_ms, last_seen_at_ms, updated_at_ms
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
@@ -322,7 +322,7 @@ def seed_indexed_file(
                 display_name = excluded.display_name,
                 content_type = excluded.content_type,
                 availability_score = max(known_files.availability_score, excluded.availability_score),
-                last_seen_ms = excluded.last_seen_ms,
+                last_seen_at_ms = excluded.last_seen_at_ms,
                 updated_at_ms = excluded.updated_at_ms
             """,
             (hash_blob, size_bytes, name, content_type, availability_score, now, now, now),
@@ -334,7 +334,7 @@ def seed_indexed_file(
             """
             INSERT INTO known_file_origins(
                 known_file_id, origin, size_bytes, content_type,
-                availability_score, first_seen_ms, last_seen_ms
+                availability_score, first_seen_at_ms, last_seen_at_ms
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id, origin) DO UPDATE SET
@@ -344,7 +344,7 @@ def seed_indexed_file(
                     known_file_origins.availability_score,
                     excluded.availability_score
                 ),
-                last_seen_ms = excluded.last_seen_ms
+                last_seen_at_ms = excluded.last_seen_at_ms
             """,
             (
                 known_file_id,
@@ -358,12 +358,12 @@ def seed_indexed_file(
         )
         conn.execute(
             """
-            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_ms, last_seen_ms)
+            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_at_ms, last_seen_at_ms)
             VALUES (?, ?, ?, 1, ?, ?)
             ON CONFLICT(known_file_id, normalized_name) DO UPDATE SET
                 name = excluded.name,
                 seen_count = file_names.seen_count + 1,
-                last_seen_ms = excluded.last_seen_ms
+                last_seen_at_ms = excluded.last_seen_at_ms
             """,
             (known_file_id, name, normalized, now, now),
         )
@@ -374,11 +374,11 @@ def seed_indexed_file(
         conn.execute(
             """
             INSERT INTO file_name_origins(
-                file_name_id, origin, first_seen_ms, last_seen_ms
+                file_name_id, origin, first_seen_at_ms, last_seen_at_ms
             )
             VALUES (?, ?, ?, ?)
             ON CONFLICT(file_name_id, origin) DO UPDATE SET
-                last_seen_ms = excluded.last_seen_ms
+                last_seen_at_ms = excluded.last_seen_at_ms
             """,
             (file_name_id, origin, now, now),
         )
@@ -432,50 +432,25 @@ def seed_transfer_manifest(
         conn.execute(
             """
             INSERT INTO known_files(
-                ed2k_hash, size_bytes, display_name,
-                part_size, part_count, aich_root, upload_priority,
-                auto_upload_priority, comment, rating, all_time_uploaded_bytes,
-                all_time_upload_requests, all_time_upload_accepts,
-                last_upload_request_ms,
-                first_seen_ms, last_seen_ms, updated_at_ms
+                ed2k_hash, size_bytes, display_name, aich_root, all_time_uploaded_bytes,
+                all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_ms,
+                first_seen_at_ms, last_seen_at_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
                 size_bytes = excluded.size_bytes,
                 display_name = excluded.display_name,
-                part_size = excluded.part_size,
-                part_count = excluded.part_count,
                 aich_root = excluded.aich_root,
-                upload_priority = excluded.upload_priority,
-                auto_upload_priority = excluded.auto_upload_priority,
-                comment = excluded.comment,
-                rating = excluded.rating,
                 all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
                 all_time_upload_requests = excluded.all_time_upload_requests,
                 all_time_upload_accepts = excluded.all_time_upload_accepts,
-                last_upload_request_ms = excluded.last_upload_request_ms,
-                last_seen_ms = excluded.last_seen_ms,
+                last_upload_requested_at_ms = excluded.last_upload_requested_at_ms,
+                last_seen_at_ms = excluded.last_seen_at_ms,
                 updated_at_ms = excluded.updated_at_ms
             """,
-            (
-                hash_blob,
-                size_bytes,
-                name,
-                piece_size,
-                piece_count,
-                bytes.fromhex(aich_root) if aich_root else None,
-                upload_priority,
-                1 if auto_upload_priority else 0,
-                comment,
-                rating,
-                all_time_uploaded_bytes,
-                all_time_upload_requests,
-                all_time_upload_accepts,
-                last_upload_request_ms,
-                now,
-                now,
-                now,
-            ),
+            (hash_blob, size_bytes, name, bytes.fromhex(aich_root) if aich_root else None,
+             all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
+             last_upload_request_ms, now, now, now),
         )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
@@ -484,31 +459,38 @@ def seed_transfer_manifest(
             """
             INSERT INTO transfers(
                 known_file_id, completed, md4_hashset_acquired, aich_hashset_acquired,
-                visible_state, control_state, download_priority, payload_directory,
-                delivery_state, delivery_ownership, created_at_ms, updated_at_ms,
-                completed_at_ms
+                visible_state, control_state, display_name, part_size_bytes, part_count,
+                upload_priority, auto_upload_priority, comment, rating,
+                delivery_state, delivery_ownership, created_at_ms, updated_at_ms, completed_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, 'pending', 'none', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'none', ?, ?, ?)
             ON CONFLICT(known_file_id) DO UPDATE SET
                 completed = excluded.completed,
                 md4_hashset_acquired = excluded.md4_hashset_acquired,
                 aich_hashset_acquired = excluded.aich_hashset_acquired,
                 visible_state = excluded.visible_state,
                 control_state = excluded.control_state,
+                display_name = excluded.display_name,
+                part_size_bytes = excluded.part_size_bytes,
+                part_count = excluded.part_count,
+                upload_priority = excluded.upload_priority,
+                auto_upload_priority = excluded.auto_upload_priority,
+                comment = excluded.comment,
+                rating = excluded.rating,
                 updated_at_ms = excluded.updated_at_ms,
                 completed_at_ms = excluded.completed_at_ms
             """,
-            (known_file_id, int(completed), int(md4_hashset_acquired),
-             int(aich_hashset_acquired), visible_state, control_state,
-             ed2k_hash, now, now, now if completed else None),
+            (known_file_id, int(completed), int(md4_hashset_acquired), int(aich_hashset_acquired),
+             visible_state, control_state, name, piece_size, piece_count, upload_priority,
+             int(auto_upload_priority), comment, rating, now, now, now if completed else None),
         )
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
         _replace_transfer_name_state(conn, transfer_id)
         conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM ed2k_part_hashes WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM aich_part_hashes WHERE transfer_id = ?", (transfer_id,))
+        conn.execute("DELETE FROM transfer_md4_part_hashes WHERE transfer_id = ?", (transfer_id,))
+        conn.execute("DELETE FROM transfer_aich_part_hashes WHERE transfer_id = ?", (transfer_id,))
         conn.execute("DELETE FROM verified_ranges WHERE transfer_id = ?", (transfer_id,))
         conn.execute("DELETE FROM transfer_sources WHERE transfer_id = ?", (transfer_id,))
         for piece_index in range(piece_count):
@@ -523,19 +505,19 @@ def seed_transfer_manifest(
             )
         for index, part_hash in enumerate(md4_hashset):
             conn.execute(
-                "INSERT INTO ed2k_part_hashes(transfer_id, part_index, md4_hash) VALUES (?, ?, ?)",
+                "INSERT INTO transfer_md4_part_hashes(transfer_id, part_index, md4_hash) VALUES (?, ?, ?)",
                 (transfer_id, index, bytes.fromhex(part_hash)),
             )
         for index, part_hash in enumerate(aich_hashset):
             conn.execute(
-                "INSERT INTO aich_part_hashes(transfer_id, part_index, aich_hash) VALUES (?, ?, ?)",
+                "INSERT INTO transfer_aich_part_hashes(transfer_id, part_index, aich_hash) VALUES (?, ?, ?)",
                 (transfer_id, index, bytes.fromhex(part_hash)),
             )
         for source in sources:
             user_hash = source.get("user_hash")
             conn.execute(
                 """
-                INSERT INTO transfer_sources(transfer_id, ip, tcp_port, user_hash, first_seen_ms, last_seen_ms)
+                INSERT INTO transfer_sources(transfer_id, ip, tcp_port, user_hash, first_seen_at_ms, last_seen_at_ms)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -643,17 +625,17 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         row = conn.execute(
             """
             SELECT known_files.id, transfers.id, transfers.control_state,
-                   known_files.display_name, known_files.size_bytes,
-                   coalesce(known_files.part_size, 0),
+                   transfers.display_name, known_files.size_bytes,
+                   coalesce(transfers.part_size_bytes, 0),
                    transfers.completed, transfers.md4_hashset_acquired,
                    transfers.aich_hashset_acquired,
                    CASE WHEN known_files.aich_root IS NULL THEN NULL
                         ELSE lower(hex(known_files.aich_root)) END,
-                   known_files.upload_priority, known_files.comment, known_files.rating,
-                   known_files.auto_upload_priority, known_files.all_time_uploaded_bytes,
+                   transfers.upload_priority, transfers.comment, transfers.rating,
+                   transfers.auto_upload_priority, known_files.all_time_uploaded_bytes,
                    known_files.all_time_upload_requests,
                    known_files.all_time_upload_accepts,
-                   known_files.last_upload_request_ms,
+                   known_files.last_upload_requested_at_ms,
                    transfers.source_fingerprint
             FROM known_files
             JOIN transfers ON transfers.known_file_id = known_files.id
@@ -685,14 +667,14 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         md4_hashset = [
             r[0]
             for r in conn.execute(
-                "SELECT lower(hex(md4_hash)) FROM ed2k_part_hashes WHERE transfer_id = ? ORDER BY part_index",
+                "SELECT lower(hex(md4_hash)) FROM transfer_md4_part_hashes WHERE transfer_id = ? ORDER BY part_index",
                 (transfer_id,),
             )
         ]
         aich_hashset = [
             r[0]
             for r in conn.execute(
-                "SELECT lower(hex(aich_hash)) FROM aich_part_hashes WHERE transfer_id = ? ORDER BY part_index",
+                "SELECT lower(hex(aich_hash)) FROM transfer_aich_part_hashes WHERE transfer_id = ? ORDER BY part_index",
                 (transfer_id,),
             )
         ]
@@ -728,14 +710,16 @@ def _upsert_local_path(conn: sqlite3.Connection, display_path: str, now: int) ->
     conn.execute(
         """
         INSERT INTO local_paths(
-            display_path, native_path, search_key, platform
+            display_path, native_path, search_key, platform, sort_key, file_name_search_key
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(platform, native_path) DO UPDATE SET
             display_path = excluded.display_path,
-            search_key = excluded.search_key
+            search_key = excluded.search_key,
+            sort_key = excluded.sort_key,
+            file_name_search_key = excluded.file_name_search_key
         """,
-        (display_path, native_path, search_key, platform),
+        (display_path, native_path, search_key, platform, display_path.lower(), Path(display_path).name.lower()),
     )
     return conn.execute(
         "SELECT id FROM local_paths WHERE platform = ? AND native_path = ?",

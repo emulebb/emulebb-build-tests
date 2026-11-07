@@ -3736,8 +3736,8 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
             "kad_bootstrap_endpoints",
             "peers",
             "transfer_sources",
-            "ed2k_part_hashes",
-            "aich_part_hashes",
+            "transfer_md4_part_hashes",
+            "transfer_aich_part_hashes",
             "kad_keyword_publishes",
             "kad_source_publishes",
         ):
