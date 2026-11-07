@@ -76,14 +76,16 @@ def oci_platform_configs(path: Path) -> dict[str, str]:
     return configs
 
 
-def smoke_platform(image: str, platform: str, expected_config: str) -> dict[str, object]:
+def smoke_platform(image: str, platform: str, expected_config: str, *, run_id: str | None = None) -> dict[str, object]:
     architecture = platform.removeprefix("linux/")
-    container = f"emulebb-rust-image-smoke-{architecture}-{uuid4().hex}"
+    run_id = run_id or uuid4().hex
+    container = f"emulebb-rust-image-smoke-{architecture}-{run_id}"
     if docker("container", "inspect", container, check=False).returncode == 0:
         raise RuntimeError(f"refusing to replace existing container {container}")
     try:
         docker(
             "run", "--detach", "--pull", "never", "--name", container, "--platform", platform,
+            "--label", f"io.emulebb.ci.image-smoke-owner={run_id}",
             "--network", "bridge",
             "--tmpfs", "/config", "--tmpfs", "/data",
             "--env", "PUID=1234", "--env", "PGID=1235", "--env", "TZ=UTC", image,
@@ -154,7 +156,10 @@ def main() -> int:
     parser.add_argument("--image", required=True)
     parser.add_argument("--platform", choices=("linux/amd64", "linux/arm64"), action="append")
     parser.add_argument("--report-path", type=Path)
+    parser.add_argument("--run-id", default=uuid4().hex, help="Owner token for orchestration cleanup.")
     args = parser.parse_args()
+    if re.fullmatch(r"[0-9a-f]{32}", args.run_id) is None:
+        parser.error("--run-id must be a lowercase UUID hex owner token")
     if not args.archive.is_file():
         raise RuntimeError(f"OCI archive is missing: {args.archive}")
 
@@ -172,7 +177,7 @@ def main() -> int:
             raise RuntimeError("Docker could not load the OCI candidate: "
                                + loaded.stderr[-2000:] + loaded.stdout[-2000:])
         for platform in selected:
-            report["platforms"].append(smoke_platform(args.image, platform, configs[platform]))
+            report["platforms"].append(smoke_platform(args.image, platform, configs[platform], run_id=args.run_id))
         report["status"] = "passed"
     except Exception as error:
         report["error"] = str(error)
