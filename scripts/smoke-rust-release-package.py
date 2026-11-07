@@ -483,6 +483,15 @@ def _smoke_binary(
                 "gracefulShutdowns": 2,
             },
         }
+    except Exception as error:
+        # Preserve bounded diagnostics before temporary profiles are removed.
+        # REST operation errors can contain less context than the daemon logs.
+        for name, base_url, log_path in (
+            ("seeder", seeder_base_url, seeder_log_path),
+            ("leecher", leecher_base_url, leecher_log_path),
+        ):
+            _attach_failure_diagnostics(error, name, base_url, log_path)
+        raise
     finally:
         _shutdown_or_stop(leecher_base_url, leecher_process)
         _shutdown_or_stop(seeder_base_url, seeder_process)
@@ -492,6 +501,19 @@ def _smoke_binary(
         if os.name == "nt":
             # The Windows loader can briefly retain the just-stopped EXE.
             time.sleep(1)
+
+
+def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_path: Path) -> None:
+    """Retain bounded daemon diagnostics without masking the original failure."""
+    try:
+        logs = request_json(base_url, "GET", "/api/v1/logs?limit=20", API_KEY)
+        error.add_note(f"{name} REST logs: {json.dumps(logs, ensure_ascii=True)[-12000:]}")
+    except Exception as diagnostic_error:
+        error.add_note(f"{name} REST diagnostics unavailable: {diagnostic_error}")
+    try:
+        error.add_note(f"{name} process log: {log_path.read_text(encoding='utf-8', errors='replace')[-12000:]}")
+    except OSError as diagnostic_error:
+        error.add_note(f"{name} process diagnostics unavailable: {diagnostic_error}")
 
 
 def _smoke_windows(
