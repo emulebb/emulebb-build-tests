@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import stat
+import io
+import tarfile
 
 import pytest
 
@@ -9,6 +11,45 @@ from emule_test_harness.script_modules import load_script_module
 
 
 smoke = load_script_module("smoke_rust_release_package", "smoke-rust-release-package.py")
+
+
+@pytest.mark.parametrize("name,kind", [("../outside", tarfile.REGTYPE),
+                                      ("emulebb-rust/../../outside", tarfile.REGTYPE),
+                                      ("emulebb-rust/link", tarfile.SYMTYPE)])
+def test_portable_archive_rejects_escape_paths_and_links(tmp_path, name, kind):
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        member = tarfile.TarInfo(name)
+        member.type = kind
+        member.linkname = "/outside"
+        archive.addfile(member)
+    stream.seek(0)
+    with pytest.raises(RuntimeError, match="unsafe"):
+        smoke._extract_portable_stream(stream, tmp_path)
+
+
+def test_portable_manifest_rejects_wrong_revision_dirty_source_and_changed_bytes(tmp_path):
+    asset = tmp_path / "package.tar.zst"
+    asset.write_bytes(b"synthetic archive")
+    data = {"asset": asset.name, "sha256": smoke.file_sha256(asset), "sourceDirty": False, "target": "x86_64-unknown-linux-musl",
+            "source": {"emulebbRust": {"commit": "a" * 40}}}
+    manifest = asset.with_name(asset.name + ".manifest.json")
+    manifest.write_text(json.dumps(data))
+    target = data["target"]
+    assert smoke._verify_portable_manifest(asset, "a" * 40, target) == data
+    with pytest.raises(RuntimeError, match="provenance"):
+        smoke._verify_portable_manifest(asset, "a" * 40, "aarch64-unknown-linux-musl")
+    with pytest.raises(RuntimeError, match="provenance"):
+        smoke._verify_portable_manifest(asset, "b" * 40, target)
+    data["sourceDirty"] = True
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(RuntimeError, match="provenance"):
+        smoke._verify_portable_manifest(asset, "a" * 40, target)
+    data["sourceDirty"] = False
+    manifest.write_text(json.dumps(data))
+    asset.write_bytes(b"changed archive")
+    with pytest.raises(RuntimeError, match="provenance"):
+        smoke._verify_portable_manifest(asset, "a" * 40, target)
 
 
 def test_temporary_root_does_not_suppress_body_error() -> None:
