@@ -66,6 +66,16 @@ def test_api_key_meets_daemon_production_validation() -> None:
     assert not any(character.isspace() for character in smoke.API_KEY)
 
 
+def test_failed_delivery_retains_transfer_error_context(monkeypatch, tmp_path):
+    def fail(*args, **kwargs):
+        raise RuntimeError("delivery timed out")
+    monkeypatch.setattr(smoke, "wait_for", fail)
+    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": [{"error": "synthetic publication failure"}]})
+    with pytest.raises(RuntimeError, match="synthetic publication failure"):
+        smoke._wait_for_transfer_delivery("http://127.0.0.1:4711", "a" * 32,
+                                          incoming=tmp_path, expected_size=1, expected_sha256="b" * 64)
+
+
 def test_write_profile_isolated_before_first_launch(monkeypatch, tmp_path) -> None:
     calls = []
 
