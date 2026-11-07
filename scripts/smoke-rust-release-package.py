@@ -244,16 +244,23 @@ def _wait_for_transfer_delivery(
     observations: list[dict[str, object]] = []
 
     def probe() -> dict[str, object] | None:
-        transfer = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", API_KEY)
+        # WHY: successful promotion removes the active transfer. The completed
+        # shared-file registration and its exact delivered bytes are durable evidence.
+        shared = request_json(base_url, "GET", f"/api/v1/shared-files/{transfer_hash}", API_KEY)
         observations.append(
             {
-                "state": transfer.get("state"),
-                "completedBytes": transfer.get("completedBytes"),
-                "deliveredPathPresent": bool(transfer.get("deliveredPath")),
+                "complete": shared.get("complete"),
+                "sizeBytes": shared.get("sizeBytes"),
+                "deliveredPathPresent": bool(shared.get("path")),
             }
         )
-        delivered_value = transfer.get("deliveredPath")
-        if transfer.get("state") != "completed" or int(transfer.get("completedBytes") or 0) != expected_size:
+        delivered_value = shared.get("path")
+        if (
+            str(shared.get("hash") or "").lower() != transfer_hash.lower()
+            or shared.get("complete") is not True
+            or shared.get("partFile") is not False
+            or int(shared.get("sizeBytes") or 0) != expected_size
+        ):
             return None
         if not delivered_value:
             return None
@@ -267,8 +274,9 @@ def _wait_for_transfer_delivery(
             raise RuntimeError("packaged transfer delivered bytes do not match the shared payload")
         return {
             "hash": transfer_hash,
-            "state": transfer.get("state"),
-            "completedBytes": transfer.get("completedBytes"),
+            "state": "completed",
+            "completedBytes": expected_size,
+            "sharedFileRegistered": True,
             "deliveredPathWithinIncoming": True,
             "deliveredSha256": delivered_sha256,
             "observations": observations[-20:],
