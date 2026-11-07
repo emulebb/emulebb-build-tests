@@ -283,12 +283,20 @@ def _wait_for_transfer_delivery(
             "observations": observations[-20:],
         }
 
-    return wait_for(
-        probe,
-        timeout_seconds=120.0,
-        interval_seconds=0.5,
-        description=f"packaged local transfer {transfer_hash} delivery",
-    )
+    try:
+        return wait_for(
+            probe,
+            timeout_seconds=120.0,
+            interval_seconds=0.5,
+            description=f"packaged local transfer {transfer_hash} delivery",
+        )
+    except RuntimeError as error:
+        try:
+            transfers = request_json(base_url, "GET", "/api/v1/transfers", API_KEY)
+            detail = json.dumps(transfers, sort_keys=True)[-16000:]
+        except Exception as snapshot_error:
+            detail = str(snapshot_error)
+        raise RuntimeError(f"{error}; final transfer state: {detail}") from error
 
 
 def _request(
