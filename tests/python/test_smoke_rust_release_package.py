@@ -4,6 +4,9 @@ import json
 import stat
 import io
 import tarfile
+import subprocess
+from types import SimpleNamespace
+from contextlib import contextmanager
 
 import pytest
 
@@ -28,28 +31,32 @@ def test_portable_archive_rejects_escape_paths_and_links(tmp_path, name, kind):
         smoke._extract_portable_stream(stream, tmp_path)
 
 
-def test_portable_manifest_rejects_wrong_revision_dirty_source_and_changed_bytes(tmp_path):
+def test_package_manifest_rejects_wrong_revision_dirty_source_and_changed_bytes(tmp_path):
     asset = tmp_path / "package.tar.zst"
     asset.write_bytes(b"synthetic archive")
-    data = {"asset": asset.name, "sha256": smoke.file_sha256(asset), "sourceDirty": False, "target": "x86_64-unknown-linux-musl",
+    sbom = tmp_path / "package.spdx.json"
+    sbom.write_text("{}")
+    data = {"schema": "emulebb.rust.package/2", "version": "0.1.0-beta.2",
+            "sbom": sbom.name, "sbomSha256": smoke.file_sha256(sbom),
+            "asset": asset.name, "sha256": smoke.file_sha256(asset), "sourceDirty": False, "target": "x86_64-unknown-linux-musl",
             "source": {"emulebbRust": {"commit": "a" * 40}}}
     manifest = asset.with_name(asset.name + ".manifest.json")
     manifest.write_text(json.dumps(data))
     target = data["target"]
-    assert smoke._verify_portable_manifest(asset, "a" * 40, target) == data
+    assert smoke._verify_package_manifest(asset, "a" * 40, data["version"], target) == data
     with pytest.raises(RuntimeError, match="provenance"):
-        smoke._verify_portable_manifest(asset, "a" * 40, "aarch64-unknown-linux-musl")
+        smoke._verify_package_manifest(asset, "a" * 40, data["version"], "aarch64-unknown-linux-musl")
     with pytest.raises(RuntimeError, match="provenance"):
-        smoke._verify_portable_manifest(asset, "b" * 40, target)
+        smoke._verify_package_manifest(asset, "b" * 40, data["version"], target)
     data["sourceDirty"] = True
     manifest.write_text(json.dumps(data))
     with pytest.raises(RuntimeError, match="provenance"):
-        smoke._verify_portable_manifest(asset, "a" * 40, target)
+        smoke._verify_package_manifest(asset, "a" * 40, data["version"], target)
     data["sourceDirty"] = False
     manifest.write_text(json.dumps(data))
     asset.write_bytes(b"changed archive")
     with pytest.raises(RuntimeError, match="provenance"):
-        smoke._verify_portable_manifest(asset, "a" * 40, target)
+        smoke._verify_package_manifest(asset, "a" * 40, data["version"], target)
 
 
 def test_temporary_root_does_not_suppress_body_error() -> None:
@@ -287,3 +294,207 @@ def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> Non
 
     assert report == {"status": "passed"}
     assert chmod_calls == [(asset, asset.stat().st_mode | stat.S_IXUSR)]
+
+
+def partial_details(*, size=12, verified=True, state="paused", completed=None):
+    first = size * 2 // 3
+    return {"transfer": {"hash": "a" * 32, "sizeBytes": size, "completedBytes": first if completed is None else completed,
+                         "partsTotal": 2, "partsObtained": 1 if verified else 0,
+                         "partsProgressText": "#0" if verified else "00", "state": state},
+            "parts": [{"index": 0, "size": first, "completedBytes": first if verified else 0,
+                       "gapBytes": 0 if verified else first, "complete": verified, "corrupted": False},
+                      {"index": 1, "size": size - first, "completedBytes": 0, "gapBytes": size - first,
+                       "complete": False, "corrupted": False}]}
+
+
+def test_partial_checkpoint_accepts_verified_part_zero_and_omits_paths():
+    result = smoke._partial_snapshot(partial_details(), transfer_hash="a" * 32, expected_size=12)
+    assert result == {"verifiedPartIndices": [0], "verifiedBytes": 8, "completedBytes": 8, "state": "paused"}
+
+
+def test_verified_partial_reads_the_details_resource(monkeypatch):
+    paths = []
+    detail = partial_details()
+    def api(base_url, method, path, key):
+        paths.append(path)
+        return detail if path.endswith("/details") else detail["transfer"]
+    monkeypatch.setattr(smoke, "request_json", api)
+    monkeypatch.setattr(smoke, "wait_for", lambda probe, **kwargs: probe())
+    result = smoke._wait_for_verified_partial("http://127.0.0.1:4711", "a" * 32, 12)
+    assert result["verifiedPartIndices"] == [0]
+    assert paths == ["/api/v1/transfers/" + "a" * 32 + "/details"]
+
+
+@pytest.mark.parametrize("markers,count", [("00", 0), ("0#", 1), ("#0", True)])
+def test_received_bytes_without_matching_verified_markers_are_not_a_checkpoint(markers, count):
+    detail = partial_details()
+    detail["transfer"].update(partsProgressText=markers, partsObtained=count)
+    assert smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12) is None
+
+
+@pytest.mark.parametrize("fault", ["unverified", "corrupted", "zero-progress", "already-complete", "boolean-index", "duplicate-index"])
+def test_partial_checkpoint_cannot_be_satisfied_by_invalid_or_nonpartial_state(fault):
+    detail = partial_details()
+    if fault == "unverified":
+        detail["transfer"]["partsObtained"] = 0
+    elif fault == "corrupted":
+        detail["parts"][0]["corrupted"] = True
+    elif fault == "zero-progress":
+        detail["transfer"]["completedBytes"] = 0
+    elif fault == "already-complete":
+        detail["transfer"]["completedBytes"] = 12
+    else:
+        detail["parts"][0 if fault == "boolean-index" else 1]["index"] = False if fault == "boolean-index" else 0
+        with pytest.raises(RuntimeError, match="part geometry"):
+            smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12)
+        return
+    assert smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12) is None
+
+
+@pytest.mark.parametrize("document,valid", [({"data": {"ok": True}, "meta": {"apiVersion": "v1"}}, True),
+                                            ({"ok": True}, False), ({"data": {}, "meta": {}}, False)])
+def test_package_rest_requires_the_current_envelope(monkeypatch, document, valid):
+    monkeypatch.setattr(smoke, "_request", lambda *args, **kwargs: json.dumps(document).encode())
+    if valid:
+        assert smoke.request_json("http://127.0.0.1:4711", "GET", "/api/v1/app", smoke.API_KEY) == {"ok": True}
+    else:
+        with pytest.raises(RuntimeError, match="v1 data/meta envelope"):
+            smoke.request_json("http://127.0.0.1:4711", "GET", "/api/v1/app", smoke.API_KEY)
+
+
+@pytest.mark.parametrize("fault", [None, "lost-parts", "lost-setting"])
+def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(monkeypatch, tmp_path, fault):
+    binary = tmp_path / "emulebb-rust"
+    binary.write_bytes(b"synthetic binary")
+    webui = tmp_path / "webui"
+    webui.mkdir()
+    (webui / "index.html").write_text("SPA")
+    processes, starts, operations, closed = [], [], [], []
+    state = {"paused": False, "limit": 12207, "leecherStarts": 0}
+    def write_profile(profile, **kwargs):
+        profile.mkdir()
+        (profile / "emulebb-rust-metadata.db").write_bytes(b"synthetic metadata")
+    def start(program, profile, log_path):
+        process = SimpleNamespace(returncode=None, ordinal=len(processes) + 1)
+        process.poll = lambda: process.returncode
+        processes.append(process)
+        starts.append((program, profile))
+        if profile.name == "leecher-profile":
+            state["leecherStarts"] += 1
+            if fault == "lost-setting" and state["leecherStarts"] == 2:
+                state["limit"] = 12207
+        handle = log_path.open("a")
+        return process, handle
+    def shutdown(base_url, process):
+        closed.append(process.ordinal)
+        process.returncode = 0
+    def api(base_url, method, path, key, body=None):
+        operations.append((method, path, body))
+        if path == "/api/v1/app/settings":
+            if method == "PATCH":
+                state["limit"] = body["core"]["downloadLimitKiBps"]
+            return {"core": {"downloadLimitKiBps": state["limit"]}}
+        if path == "/api/v1/transfers" and method == "POST":
+            return {"accepted": True}
+        if path.endswith("/operations/pause"):
+            state["paused"] = True
+            return {"ok": True}
+        if path.endswith("/operations/resume"):
+            state["paused"] = False
+            return {"ok": True}
+        if path == "/api/v1/transfers/" + "a" * 32 + "/details":
+            return partial_details(size=smoke.TRANSFER_SIZE_BYTES,
+                                   verified=not (fault == "lost-parts" and state["leecherStarts"] == 2),
+                                   state="paused" if state["paused"] else "downloading")
+        if path == "/api/v1/transfers/" + "a" * 32:
+            return partial_details(size=smoke.TRANSFER_SIZE_BYTES)["transfer"]
+        return {"ok": True}
+    def request(url, **kwargs):
+        if url.endswith("/"):
+            return b'<title>eMuleBB WebUI</title><div id="app"></div><script src="/assets/app.js"></script>'
+        if "/assets/" in url:
+            return b"bundled asset"
+        return json.dumps({"data": {"stats": {"ed2kConnected": False}}, "meta": {"apiVersion": "v1"}}).encode()
+    ports = iter(range(10000, 10020))
+    monkeypatch.setattr(smoke, "_probe_linux_interface_pinning", lambda: None)
+    monkeypatch.setattr(smoke, "_local_p2p_ip", lambda: "192.0.2.10")
+    monkeypatch.setattr(smoke, "_available_unique_port", lambda *args, **kwargs: next(ports))
+    monkeypatch.setattr(smoke, "_write_profile", write_profile)
+    monkeypatch.setattr(smoke, "_start_daemon", start)
+    monkeypatch.setattr(smoke, "_graceful_shutdown", shutdown)
+    monkeypatch.setattr(smoke, "_wait_for_rest", lambda *args: {"name": "eMuleBB", "apiVersion": "v1", "version": "0.1.0-beta.2",
+                                                               "build": "release", "platform": "x64", "lifecycle": {"state": "running"}})
+    monkeypatch.setattr(smoke, "request_json", api)
+    monkeypatch.setattr(smoke, "_request", request)
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "--profile --p2p-bind-interface"))
+    monkeypatch.setattr(smoke, "publish_shared_tree", lambda *args, **kwargs: {"sharedFiles": {"matched": {
+        "hash": "a" * 32, "name": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
+        "ed2kLink": "ed2k://|file|Sample.Payload.bin|12582912|" + "a" * 32 + "|/"}}})
+    monkeypatch.setattr(smoke, "_wait_for_transfer_delivery", lambda *args, **kwargs: {"state": "completed", "deliveredSha256": kwargs["expected_sha256"]})
+    if fault:
+        with pytest.raises(RuntimeError, match="did not survive|did not preserve"):
+            smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
+    else:
+        result = smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
+        assert result["localTransfer"]["gracefulShutdowns"] == 3
+        assert result["localTransfer"]["partialRestart"]["after"]["verifiedPartIndices"] == [0]
+        assert closed == [2, 3, 1] and state["limit"] == 12207
+    assert len(starts) == 3 and starts[1] == starts[2]
+    assert len([item for item in operations if item[:2] == ("POST", "/api/v1/transfers")]) == 1
+    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/transfers/" + "a" * 32 + "/details")]) == 3
+    assert all(process.poll() == 0 for process in processes)
+
+
+@pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke"])
+def test_main_binds_every_native_package_before_launch_and_retains_exact_source_proof(monkeypatch, tmp_path, fault):
+    version = "0.1.0-beta.2"
+    asset = tmp_path / f"emulebb-rust-v{version}-windows-x64.zip"
+    asset.write_bytes(b"synthetic Windows package")
+    sbom = tmp_path / "package.spdx.json"
+    sbom.write_text("{}")
+    manifest = {"schema": "emulebb.rust.package/2", "version": version, "sourceDirty": False,
+                "asset": asset.name, "sha256": smoke.file_sha256(asset), "sbom": sbom.name,
+                "sbomSha256": smoke.file_sha256(sbom), "source": {"emulebbRust": {"commit": "a" * 40}}}
+    manifest_path = asset.with_name(asset.name + ".manifest.json")
+    if fault == "wrong-source":
+        manifest["source"]["emulebbRust"]["commit"] = "b" * 40
+    manifest_path.write_text(json.dumps(manifest))
+    if fault == "corrupt-sbom":
+        sbom.write_text('{"changed":true}')
+    elif fault == "stem-manifest":
+        manifest_path.rename(asset.with_suffix(".manifest.json"))
+    launches = []
+    def probe(*args, **kwargs):
+        launches.append(args)
+        if fault == "changed-during-smoke":
+            asset.write_bytes(b"new package from another operation")
+            manifest["sha256"] = smoke.file_sha256(asset)
+            manifest_path.write_text(json.dumps(manifest))
+        return {"status": "passed", "appVersion": version, "appBuild": "release",
+                "appPlatform": "arm64" if fault == "wrong-cpu" else "x64"}
+    @contextmanager
+    def temporary():
+        root = tmp_path / "run"
+        root.mkdir()
+        yield root
+    report = tmp_path / "smoke.json"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(smoke, "_temporary_root", temporary)
+    monkeypatch.setattr(smoke, "_smoke_windows", probe)
+    monkeypatch.setattr(smoke.sys, "argv", ["smoke-rust-release-package.py", "--release-dir", str(tmp_path),
+                                           "--release-version", version, "--rust-repo", str(tmp_path),
+                                           "--target-os", "windows", "--platform", "x64",
+                                           "--expected-source-sha", "a" * 40, "--report-path", str(report)])
+    if fault:
+        with pytest.raises((RuntimeError, OSError)):
+            smoke.main()
+        assert not report.exists()
+        assert len(launches) == (1 if fault in {"wrong-cpu", "changed-during-smoke"} else 0)
+    else:
+        assert smoke.main() == 0
+        result = json.loads(report.read_text())
+        assert result["schema"] == "emulebb.rust.package-smoke/3" and result["status"] == "passed"
+        assert result["origin"] == "local-development" and result["workflow"] is None
+        assert result["sourceSha"] == "a" * 40
+        assert result["results"][0]["assetSha256"] == smoke.file_sha256(asset)
+        assert result["results"][0]["packageManifestSha256"] == smoke.file_sha256(manifest_path)

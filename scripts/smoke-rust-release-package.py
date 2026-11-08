@@ -14,6 +14,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -39,7 +40,6 @@ from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
     file_sha256,
     publish_shared_tree,
-    request_json,
     wait_for,
 )
 from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noqa: E402
@@ -47,7 +47,8 @@ from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noq
 API_KEY = "native-package-smoke-secret-0001"
 WEBUI_TITLE = "eMuleBB WebUI"
 TRANSFER_FILE_NAME = "eMuleBB.Native.Package.Transfer.bin"
-TRANSFER_SIZE_BYTES = 256 * 1024
+TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
+PARTIAL_DOWNLOAD_LIMIT_KIBPS = 512
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
     "transfers": "/api/v1/transfers",
@@ -242,19 +243,68 @@ def _shutdown_or_stop(base_url: str, process: subprocess.Popen[str] | None) -> N
 
 def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES) -> dict[str, object]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    seed = hashlib.sha256(b"emulebb-rust native package transfer smoke").digest()
-    with path.open("wb") as handle:
-        remaining = size_bytes
-        while remaining:
-            chunk = seed[: min(remaining, len(seed))]
-            handle.write(chunk)
-            remaining -= len(chunk)
+    # WHY: a repeating payload compresses into one burst and cannot establish a
+    # reliable partial checkpoint. SHAKE supplies deterministic incompressible bytes.
+    path.write_bytes(hashlib.shake_256(b"emulebb-rust native package transfer smoke").digest(size_bytes))
     return {
         "name": path.name,
         "path": str(path),
         "sizeBytes": path.stat().st_size,
         "sha256": file_sha256(path),
     }
+
+
+def _partial_snapshot(details: dict, *, transfer_hash: str, expected_size: int) -> dict | None:
+    """Describe verified parts only while the original transfer remains incomplete."""
+    transfer, parts = details.get("transfer"), details.get("parts")
+    if (not isinstance(transfer, dict) or not isinstance(parts, list)
+            or str(transfer.get("hash", "")).lower() != transfer_hash.lower()
+            or transfer.get("sizeBytes") != expected_size or transfer.get("partsTotal") != len(parts)):
+        raise RuntimeError("Packaged transfer details do not match the expected file")
+    completed = transfer.get("completedBytes")
+    if type(completed) is not int or not 0 <= completed <= expected_size:
+        raise RuntimeError("Packaged transfer has an invalid completed byte count")
+    markers = transfer.get("partsProgressText")
+    if (not isinstance(markers, str) or len(markers) != len(parts)
+            or set(markers) - {"#", "0"}):
+        raise RuntimeError("Packaged transfer has invalid verified part markers")
+    verified, seen = {}, set()
+    for part in parts:
+        if (not isinstance(part, dict) or type(part.get("index")) is not int
+                or not 0 <= part["index"] < len(parts) or part["index"] in seen
+                or type(part.get("size")) is not int or part["size"] <= 0):
+            raise RuntimeError("Packaged transfer has invalid part geometry")
+        seen.add(part["index"])
+        # WHY: fully received bytes can precede hash verification. Bind the
+        # persisted checkpoint to the exact verified indices in this snapshot.
+        if (markers[part["index"]] == "#" and part.get("complete") is True and part.get("corrupted") is False
+                and part.get("completedBytes") == part["size"] and part.get("gapBytes") == 0):
+            verified[part["index"]] = part["size"]
+    verified_bytes = sum(verified.values())
+    if (not verified or type(transfer.get("partsObtained")) is not int
+            or transfer["partsObtained"] != markers.count("#") or markers.count("#") != len(verified)
+            or not 0 < verified_bytes <= completed < expected_size):
+        return None
+    return {"verifiedPartIndices": sorted(verified), "verifiedBytes": verified_bytes,
+            "completedBytes": completed, "state": transfer.get("state")}
+
+
+def _wait_for_verified_partial(base_url: str, transfer_hash: str, expected_size: int, *, paused: bool = False) -> dict:
+    def probe():
+        details = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY)
+        snapshot = _partial_snapshot(details, transfer_hash=transfer_hash, expected_size=expected_size)
+        return snapshot if snapshot and (not paused or snapshot["state"] == "paused") else None
+    return wait_for(probe, timeout_seconds=90.0, interval_seconds=0.1,
+                    description="packaged verified partial transfer" + (" pause" if paused else ""))
+
+
+def _app_metadata(app: dict) -> dict:
+    if (app.get("name") != "eMuleBB" or app.get("apiVersion") != "v1" or app.get("build") != "release"
+            or not isinstance(app.get("version"), str) or not app["version"]
+            or app.get("platform") not in {"x64", "arm64"}
+            or not isinstance(app.get("lifecycle"), dict) or app["lifecycle"].get("state") != "running"):
+        raise RuntimeError("Packaged REST must identify the running release app and CPU")
+    return {"appVersion": app["version"], "appBuild": app["build"], "appPlatform": app["platform"]}
 
 
 def _wait_for_transfer_delivery(
@@ -336,9 +386,18 @@ def _request(
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=3) as response:
-        if response.status != 200:
+        if response.status not in ((200,) if method == "GET" else (200, 201, 202)):
             raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
         return response.read()
+
+
+def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None) -> dict:
+    """Use this smoke's HTTP transport and require the current REST envelope."""
+    document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body))
+    if (not isinstance(document, dict) or not isinstance(document.get("data"), dict)
+            or not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"):
+        raise RuntimeError("Packaged REST must return the current v1 data/meta envelope")
+    return document["data"]
 
 
 def _smoke_binary(
@@ -404,8 +463,9 @@ def _smoke_binary(
         seeder_process, seeder_log = _start_daemon(binary, seeder_profile, seeder_log_path)
         leecher_process, leecher_log = _start_daemon(binary, leecher_profile, leecher_log_path)
         log_handles.extend((seeder_log, leecher_log))
-        _wait_for_rest(seeder_base_url, seeder_process, seeder_log_path)
-        _wait_for_rest(leecher_base_url, leecher_process, leecher_log_path)
+        app = _app_metadata(_wait_for_rest(seeder_base_url, seeder_process, seeder_log_path))
+        if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path)) != app:
+            raise RuntimeError("Packaged peers disagree about their release identity")
         request_json(seeder_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
         request_json(leecher_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
         html = _request(seeder_base_url + "/").decode("utf-8")
@@ -415,7 +475,7 @@ def _smoke_binary(
         assets = _webui_asset_paths(html)
         if not assets or not all(_request(seeder_base_url + asset) for asset in assets):
             raise RuntimeError("packaged WebUI assets are missing")
-        data = status.get("data", status) if isinstance(status, dict) else None
+        data = status.get("data") if isinstance(status, dict) else None
         stats = data.get("stats") if isinstance(data, dict) else None
         if not isinstance(stats, dict) or "ed2kConnected" not in stats:
             raise RuntimeError("packaged REST status is invalid")
@@ -463,6 +523,11 @@ def _smoke_binary(
             p2p_ip,
             seeder_ed2k_port,
         )
+        previous_limit = request_json(leecher_base_url, "GET", "/api/v1/app/settings", API_KEY)["core"]["downloadLimitKiBps"]
+        if type(previous_limit) is not int or not 1 <= previous_limit <= 4294967294:
+            raise RuntimeError("Packaged REST returned an invalid download limit")
+        request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY,
+                     {"core": {"downloadLimitKiBps": PARTIAL_DOWNLOAD_LIMIT_KIBPS}})
         transfer_create = request_json(
             leecher_base_url,
             "POST",
@@ -470,6 +535,30 @@ def _smoke_binary(
             API_KEY,
             {"link": direct_link, "paused": False},
         )
+        _wait_for_verified_partial(leecher_base_url, transfer_hash, int(payload["sizeBytes"]))
+        request_json(leecher_base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/pause", API_KEY)
+        before = _wait_for_verified_partial(leecher_base_url, transfer_hash, int(payload["sizeBytes"]), paused=True)
+        _graceful_shutdown(leecher_base_url, leecher_process)
+        leecher_process = None
+        leecher_log.close()
+        leecher_process, leecher_log = _start_daemon(binary, leecher_profile, leecher_log_path)
+        log_handles.append(leecher_log)
+        if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path)) != app:
+            raise RuntimeError("Restarted packaged daemon has a different release identity")
+        # Read durable progress before reconnecting or resuming; a new transfer
+        # or newly downloaded parts must not conceal missing persisted state.
+        after = _partial_snapshot(request_json(leecher_base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY),
+                                  transfer_hash=transfer_hash, expected_size=int(payload["sizeBytes"]))
+        if (after is None or after["state"] != "paused"
+                or not set(before["verifiedPartIndices"]).issubset(after["verifiedPartIndices"])
+                or after["verifiedBytes"] < before["verifiedBytes"]):
+            raise RuntimeError("Verified partial data did not survive the same-profile packaged restart")
+        settings = request_json(leecher_base_url, "GET", "/api/v1/app/settings", API_KEY)
+        if settings["core"]["downloadLimitKiBps"] != PARTIAL_DOWNLOAD_LIMIT_KIBPS:
+            raise RuntimeError("Packaged restart did not preserve the download setting")
+        request_json(leecher_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
+        request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY, {"core": {"downloadLimitKiBps": previous_limit}})
+        request_json(leecher_base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/resume", API_KEY)
         transfer_delivery = _wait_for_transfer_delivery(
             leecher_base_url,
             transfer_hash,
@@ -482,6 +571,7 @@ def _smoke_binary(
         _graceful_shutdown(seeder_base_url, seeder_process)
         return {
             "status": "passed",
+            **app,
             "webuiAssets": len(assets),
             "restStatus": True,
             "webuiPanelBackends": panel_routes,
@@ -504,7 +594,9 @@ def _smoke_binary(
                 "delivery": transfer_delivery,
                 "sourceDiscovery": "ed2k-link-direct-source",
                 "publicDiscoveryDisabled": True,
-                "gracefulShutdowns": 2,
+                "partialRestart": {"before": before, "after": after, "sameProfile": True, "sameBinary": True,
+                                   "resumeRequested": True, "downloadLimitRestored": True},
+                "gracefulShutdowns": 3,
             },
         }
     except Exception as error:
@@ -566,19 +658,29 @@ def _extract_portable_stream(stream, destination: Path) -> None:
             archive.extract(member, destination, filter="data")
 
 
-def _verify_portable_manifest(asset: Path, expected_source_sha: str, expected_target: str) -> dict:
-    """Bind the tested bytes to a clean, explicitly selected Rust revision."""
+def _verify_package_manifest(asset: Path, expected_source_sha: str, expected_version: str,
+                              expected_target: str | None = None) -> dict:
+    """Verify canonical package provenance and SBOM bytes before any launch."""
+    if re.fullmatch(r"[0-9a-f]{40}", expected_source_sha) is None:
+        raise RuntimeError("Package smoke requires a full lowercase source SHA")
     manifest = json.loads(asset.with_name(asset.name + ".manifest.json").read_text(encoding="utf-8"))
-    if (manifest.get("asset") != asset.name or manifest.get("sha256") != file_sha256(asset)
-            or manifest.get("sourceDirty") is not False or manifest.get("target") != expected_target
+    if (manifest.get("schema") != "emulebb.rust.package/2" or manifest.get("version") != expected_version
+            or manifest.get("asset") != asset.name or manifest.get("sha256") != file_sha256(asset)
+            or manifest.get("sourceDirty") is not False
+            or (expected_target is not None and manifest.get("target") != expected_target)
             or manifest.get("source", {}).get("emulebbRust", {}).get("commit") != expected_source_sha):
-        raise RuntimeError("portable package checksum or source provenance mismatch")
+        raise RuntimeError("Package checksum or source provenance mismatch")
+    sbom_name = manifest.get("sbom")
+    if (not isinstance(sbom_name, str) or not sbom_name or Path(sbom_name).name != sbom_name
+            or "/" in sbom_name or "\\" in sbom_name
+            or not (asset.parent / sbom_name).is_file()
+            or file_sha256(asset.parent / sbom_name) != manifest.get("sbomSha256")):
+        raise RuntimeError("Package SBOM checksum or path does not match provenance")
     return manifest
 
 
 def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
-                         render_webui: bool, expected_source_sha: str, expected_target: str) -> dict[str, object]:
-    manifest = _verify_portable_manifest(asset, expected_source_sha, expected_target)
+                         render_webui: bool) -> dict[str, object]:
     with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(asset)],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
@@ -593,8 +695,6 @@ def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
     root = temp_root / "emulebb-rust"
     result = _smoke_binary(root / "emulebb-rust", root / "webui", temp_root,
                            rust_repo=rust_repo, render_webui=render_webui)
-    result["sourceSha"] = expected_source_sha
-    result["target"] = manifest["target"]
     return result
 
 
@@ -673,27 +773,27 @@ def main() -> int:
     parser.add_argument("--target-os", required=True, choices=("windows", "linux", "macos"))
     parser.add_argument("--platform", required=True, choices=("x64", "ARM64"))
     parser.add_argument("--linux-libc", choices=("gnu", "musl"), help="Test the selected portable Linux archive.")
-    parser.add_argument("--expected-source-sha", help="Required clean source revision for portable archives.")
+    parser.add_argument("--expected-source-sha", required=True, help="Full clean source revision required for every tested package.")
     parser.add_argument(
         "--render-webui",
         action="store_true",
         help="Render the packaged WebUI in Chromium and prove stale-key recovery plus all primary views.",
     )
     args = parser.parse_args()
-    if args.linux_libc and (args.target_os != "linux" or not args.expected_source_sha):
-        parser.error("--linux-libc requires --target-os linux and --expected-source-sha")
+    if args.linux_libc and args.target_os != "linux":
+        parser.error("--linux-libc requires --target-os linux")
+    if re.fullmatch(r"[0-9a-f]{40}", args.expected_source_sha) is None:
+        parser.error("--expected-source-sha must be a full lowercase commit SHA")
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
+    expected_target = None
     with _temporary_root() as temp_root:
         if args.target_os == "windows":
             assets = [(f"{stem}-windows-{arch}.zip", _smoke_windows)]
         elif args.target_os == "linux" and args.linux_libc:
             package_arch = "amd64" if arch == "x64" else "arm64"
             expected_target = f"{'x86_64' if arch == 'x64' else 'aarch64'}-unknown-linux-{args.linux_libc}"
-            def portable_smoke(*arguments, **kwargs):
-                return _smoke_linux_archive(*arguments, expected_source_sha=args.expected_source_sha,
-                                             expected_target=expected_target, **kwargs)
-            assets = [(f"{stem}-linux-{package_arch}-{args.linux_libc}.tar.zst", portable_smoke)]
+            assets = [(f"{stem}-linux-{package_arch}-{args.linux_libc}.tar.zst", _smoke_linux_archive)]
         elif args.target_os == "linux":
             deb_arch, image_arch = ("amd64", "x86_64") if arch == "x64" else ("arm64", "aarch64")
             assets = [(f"{stem}-linux-{deb_arch}.deb", _smoke_linux_deb),
@@ -705,21 +805,31 @@ def main() -> int:
             asset = args.release_dir / name
             if not asset.is_file():
                 raise RuntimeError(f"native package is missing: {asset}")
+            manifest = _verify_package_manifest(asset, args.expected_source_sha, args.release_version, expected_target)
             child = temp_root / str(len(reports))
             child.mkdir()
-            reports.append(
-                {
-                    "asset": name,
-                    **smoke(
-                        asset,
-                        child,
-                        rust_repo=args.rust_repo.resolve(),
-                        render_webui=args.render_webui,
-                    ),
-                }
+            result = smoke(
+                asset, child, rust_repo=args.rust_repo.resolve(), render_webui=args.render_webui,
             )
+            if (result.get("status") != "passed" or result.get("appVersion") != args.release_version or result.get("appBuild") != "release"
+                    or result.get("appPlatform") != ("x64" if arch == "x64" else "arm64")):
+                raise RuntimeError("Running package version/build/CPU does not match the selected release asset")
+            if _verify_package_manifest(asset, args.expected_source_sha, args.release_version, expected_target) != manifest:
+                raise RuntimeError("Package bytes or provenance changed during smoke validation")
+            reports.append({"asset": name, "assetSha256": manifest["sha256"], "sourceSha": args.expected_source_sha,
+                            "packageManifestSha256": file_sha256(asset.with_name(asset.name + ".manifest.json")),
+                            "sbomSha256": manifest["sbomSha256"], **result})
+    machine = platform.machine().lower()
+    native_arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
+    native_os = {"Linux": "linux", "Windows": "windows", "Darwin": "macos"}.get(platform.system())
+    hosted = os.environ.get("GITHUB_ACTIONS") == "true"
     report = {
-        "schema": "emulebb.rust.package-smoke/2",
+        "schema": "emulebb.rust.package-smoke/3", "status": "passed", "sourceSha": args.expected_source_sha,
+        "origin": "github-actions" if hosted else "local-development",
+        "workflow": {key: os.environ.get(name) for key, name in
+                     {"repository": "GITHUB_REPOSITORY", "runId": "GITHUB_RUN_ID",
+                      "runAttempt": "GITHUB_RUN_ATTEMPT", "workflowSha": "GITHUB_WORKFLOW_SHA"}.items()} if hosted else None,
+        "runtimeExecution": "native" if (native_arch, native_os) == (arch, args.target_os) else "emulated",
         "platform": f"{args.target_os}-{arch}" + (f"-{args.linux_libc}" if args.linux_libc else ""),
         "results": reports,
     }
