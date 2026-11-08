@@ -172,12 +172,20 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             raise RuntimeError("Image smoke requires exactly one daemon PID")
         daemon_owner = docker("exec", container, "ps", "-o", "uid=,gid=", "-p", pid).stdout.split()
         ports = docker("port", container).stdout.strip()
-        actual_architecture = docker("exec", container, "dpkg", "--print-architecture").stdout.strip()
+        variant = docker("inspect", "--format", '{{index .Config.Labels "io.emulebb.image.variant"}}', container).stdout.strip()
+        if variant == "ubuntu":
+            actual_architecture = docker("exec", container, "dpkg", "--print-architecture").stdout.strip()
+            expected_architecture = architecture
+        elif variant == "alpine":
+            actual_architecture = docker("exec", container, "apk", "--print-arch").stdout.strip()
+            expected_architecture = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
+        else:
+            raise RuntimeError("Image smoke requires an explicit Ubuntu or Alpine variant label")
         docker("exec", container, "/usr/local/bin/emulebb-rust-healthcheck")
         auth_status = docker("exec", container, "curl", "--silent", "--max-time", "2", "--output", "/dev/null",
                              "--write-out", "%{http_code}", "http://127.0.0.1:4711/api/v1/status").stdout.strip()
         if ((uid, gid) != ("1234", "1235") or owners != ["1234:1235", "1234:1235"]
-                or daemon_owner != ["1234", "1235"] or ports or actual_architecture != architecture):
+                or daemon_owner != ["1234", "1235"] or ports or actual_architecture != expected_architecture):
             raise RuntimeError(f"image PUID/PGID or volume contract failed: uid={uid}, gid={gid}, daemonOwner={daemon_owner}, owners={owners}")
         if auth_status != "401":
             raise RuntimeError(f"Image REST API must reject unauthenticated access, got {auth_status}")
@@ -188,6 +196,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             raise RuntimeError(f"Image did not stop gracefully: exit {exit_code}")
         return {
             "platform": platform,
+            "imageVariant": variant, "osPackageArchitecture": actual_architecture,
             "firstRunProfile": True, "webui": True, "uid": int(uid), "gid": int(gid),
             "daemonUid": int(daemon_owner[0]), "daemonGid": int(daemon_owner[1]),
             "configOwner": owners[0], "dataOwner": owners[1], "publishedPorts": 0,

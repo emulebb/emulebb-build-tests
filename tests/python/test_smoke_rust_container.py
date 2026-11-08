@@ -103,7 +103,7 @@ def test_external_network_cannot_be_used_for_first_run_smoke(monkeypatch):
 def image_runtime(monkeypatch):
     key = "synthetic-image-smoke-credential-123456"
     runtime = SimpleNamespace(
-        calls=[], key=key, architecture="amd64", owner="1234 1235", pid="42",
+        calls=[], key=key, architecture="amd64", variant="ubuntu", os_architecture=None, owner="1234 1235", pid="42",
         settings=f'[rest]\napiKey = "{key}"\n', http_status="200", auth_exit=0,
         app={"name": "eMuleBB", "version": "0.1.0-beta.2", "apiVersion": "v1",
              "build": "release", "platform": "x64", "lifecycle": {"state": "running"}},
@@ -120,6 +120,8 @@ def image_runtime(monkeypatch):
             stdout = json.dumps({"digest": "sha256:" + "a" * 64})
         elif "{{.State.ExitCode}}" in args:
             stdout = "0"
+        elif '{{index .Config.Labels "io.emulebb.image.variant"}}' in args:
+            stdout = runtime.variant
         elif args[0] == "exec":
             if "cat" in args:
                 stdout = runtime.settings
@@ -132,7 +134,9 @@ def image_runtime(monkeypatch):
             elif "id" in args:
                 stdout = "1234" if "-u" in args else "1235"
             elif "dpkg" in args:
-                stdout = runtime.architecture
+                stdout = runtime.os_architecture or runtime.architecture
+            elif "apk" in args:
+                stdout = runtime.os_architecture or {"amd64": "x86_64", "arm64": "aarch64"}[runtime.architecture]
             elif "curl" in args:
                 if "--header" in args:
                     assert args[args.index("--header") + 1] == "@-" and "--interactive" in args
@@ -159,15 +163,27 @@ def run_image_runtime(runtime):
 
 
 @pytest.mark.parametrize("architecture,app_cpu", [("amd64", "x64"), ("arm64", "arm64")])
-def test_image_proves_authenticated_release_and_real_daemon_identity(image_runtime, architecture, app_cpu):
+@pytest.mark.parametrize("variant", ["ubuntu", "alpine"])
+def test_image_proves_authenticated_release_and_real_daemon_identity(image_runtime, architecture, app_cpu, variant):
     image_runtime.architecture = architecture
+    image_runtime.variant = variant
     image_runtime.app["platform"] = app_cpu
     result = run_image_runtime(image_runtime)
     assert (result["unauthenticatedStatus"], result["authenticatedStatus"]) == (401, 200)
     assert (result["daemonUid"], result["daemonGid"]) == (1234, 1235)
     assert (result["appBuild"], result["appPlatform"], result["appVersion"]) == ("release", app_cpu, "0.1.0-beta.2")
+    assert result["imageVariant"] == variant
+    assert any(("apk" if variant == "alpine" else "dpkg") in args for args, _ in image_runtime.calls)
     assert image_runtime.key not in json.dumps(result)
     assert all(image_runtime.key not in str(args) for args, _ in image_runtime.calls)
+    assert image_runtime.calls[-1][0][:2] == ("network", "rm")
+
+
+@pytest.mark.parametrize("variant,os_architecture", [("unknown", None), ("ubuntu", "arm64"), ("alpine", "aarch64")])
+def test_image_rejects_unknown_variant_or_wrong_os_package_cpu(image_runtime, variant, os_architecture):
+    image_runtime.variant, image_runtime.os_architecture = variant, os_architecture
+    with pytest.raises(RuntimeError):
+        run_image_runtime(image_runtime)
     assert image_runtime.calls[-1][0][:2] == ("network", "rm")
 
 
