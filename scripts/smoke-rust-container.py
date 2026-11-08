@@ -11,14 +11,50 @@ import subprocess
 import sys
 import tarfile
 import time
+import tomllib
 from pathlib import Path
 from uuid import uuid4
 
 
-def docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def docker(*arguments: str, check: bool = True, input: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["docker", *arguments], text=True, capture_output=True, check=check, timeout=60
+        ["docker", *arguments], text=True, capture_output=True, check=check, timeout=60, input=input
     )
+
+
+def authenticated_app(container: str, architecture: str) -> dict[str, object]:
+    """Prove the generated key works without placing it in argv or evidence."""
+    try:
+        settings = docker("exec", container, "cat", "/config/emulebb-rust/emulebb-rust-settings.toml", check=False)
+        if settings.returncode or len(settings.stdout) > 64 * 1024:
+            raise ValueError("invalid settings")
+        rest = tomllib.loads(settings.stdout).get("rest")
+        key = rest.get("apiKey") if isinstance(rest, dict) else None
+        if not isinstance(key, str) or len(key) < 32 or not all(33 <= ord(char) <= 126 for char in key):
+            raise ValueError("invalid key")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # WHY: parser diagnostics can include the private TOML input. Keep the
+        # generated credential out of failure reports as well as successful ones.
+        raise RuntimeError("Cannot read a valid generated image REST credential") from None
+    try:
+        response = docker("exec", "--interactive", container, "curl", "--fail", "--silent", "--max-time", "2",
+                          "--header", "@-", "--write-out", "\n%{http_code}", "http://127.0.0.1:4711/api/v1/app",
+                          check=False, input=f"X-API-Key: {key}\n")
+        body, separator, status = response.stdout.rpartition("\n")
+        if response.returncode or not separator or status != "200" or len(body) > 64 * 1024:
+            raise ValueError("invalid HTTP response")
+        document = json.loads(body)
+        app = document.get("data") if isinstance(document, dict) else None
+        expected_cpu = "x64" if architecture == "amd64" else "arm64"
+        if (not isinstance(app, dict) or app.get("name") != "eMuleBB" or app.get("apiVersion") != "v1"
+                or not isinstance(app.get("version"), str) or not app["version"].strip()
+                or app.get("build") != "release" or app.get("platform") != expected_cpu
+                or not isinstance(app.get("lifecycle"), dict) or app["lifecycle"].get("state") != "running"):
+            raise ValueError("invalid app identity")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise RuntimeError("Authenticated image REST must return HTTP 200 and the running release app for the selected CPU") from None
+    return {"authenticatedStatus": 200, "appVersion": app["version"],
+            "appBuild": app["build"], "appPlatform": app["platform"]}
 
 
 def oci_platform_identities(path: Path) -> dict[str, dict[str, str]]:
@@ -131,16 +167,21 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
         owners = docker("exec", container, "stat", "-c", "%u:%g", "/config", "/data/ed2k").stdout.splitlines()
         docker("exec", container, "test", "-f", "/config/emulebb-rust/emulebb-rust-settings.toml")
         daemon = docker("exec", container, "pgrep", "-f", "/usr/lib/emulebb-rust/emulebb-rust")
+        pid = daemon.stdout.strip()
+        if re.fullmatch(r"[1-9][0-9]{0,9}", pid) is None:
+            raise RuntimeError("Image smoke requires exactly one daemon PID")
+        daemon_owner = docker("exec", container, "ps", "-o", "uid=,gid=", "-p", pid).stdout.split()
         ports = docker("port", container).stdout.strip()
         actual_architecture = docker("exec", container, "dpkg", "--print-architecture").stdout.strip()
         docker("exec", container, "/usr/local/bin/emulebb-rust-healthcheck")
         auth_status = docker("exec", container, "curl", "--silent", "--max-time", "2", "--output", "/dev/null",
                              "--write-out", "%{http_code}", "http://127.0.0.1:4711/api/v1/status").stdout.strip()
         if ((uid, gid) != ("1234", "1235") or owners != ["1234:1235", "1234:1235"]
-                or not daemon.stdout.strip() or ports or actual_architecture != architecture):
-            raise RuntimeError(f"image PUID/PGID or volume contract failed: uid={uid}, gid={gid}, owners={owners}")
+                or daemon_owner != ["1234", "1235"] or ports or actual_architecture != architecture):
+            raise RuntimeError(f"image PUID/PGID or volume contract failed: uid={uid}, gid={gid}, daemonOwner={daemon_owner}, owners={owners}")
         if auth_status != "401":
             raise RuntimeError(f"Image REST API must reject unauthenticated access, got {auth_status}")
+        app = authenticated_app(container, architecture)
         docker("stop", "--time", "30", container)
         exit_code = docker("inspect", "--format", "{{.State.ExitCode}}", container).stdout.strip()
         if exit_code != "0":
@@ -148,9 +189,10 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
         return {
             "platform": platform,
             "firstRunProfile": True, "webui": True, "uid": int(uid), "gid": int(gid),
+            "daemonUid": int(daemon_owner[0]), "daemonGid": int(daemon_owner[1]),
             "configOwner": owners[0], "dataOwner": owners[1], "publishedPorts": 0,
             "imageManifestDigest": actual_manifest, "imageConfigDigest": expected_identity["configDigest"],
-            "restAuthentication": True, "gracefulShutdown": True,
+            "unauthenticatedStatus": 401, **app, "restAuthentication": True, "gracefulShutdown": True,
             "networkIsolation": "internal-bridge", "dns": "loopback-only",
         }
     finally:
@@ -189,7 +231,7 @@ def main() -> int:
         raise RuntimeError("OCI archive does not contain exactly one image for every requested platform")
     with args.archive.open("rb") as stream:
         archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
-    report = {"schema": "emulebb.rust.image-smoke/3", "status": "failed", "image": args.image,
+    report = {"schema": "emulebb.rust.image-smoke/4", "status": "failed", "image": args.image,
               "archiveSha256": archive_sha256, "platforms": []}
     try:
         loaded = docker("load", "--input", str(args.archive), check=False)
