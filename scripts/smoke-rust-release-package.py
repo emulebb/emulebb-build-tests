@@ -36,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness.build_provenance import require_clean_git_source  # noqa: E402
 from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
     file_sha256,
@@ -285,7 +286,7 @@ def _partial_snapshot(details: dict, *, transfer_hash: str, expected_size: int) 
             or transfer["partsObtained"] != markers.count("#") or markers.count("#") != len(verified)
             or not 0 < verified_bytes <= completed < expected_size):
         return None
-    return {"verifiedPartIndices": sorted(verified), "verifiedBytes": verified_bytes,
+    return {"partsTotal": len(parts), "verifiedPartIndices": sorted(verified), "verifiedBytes": verified_bytes,
             "completedBytes": completed, "state": transfer.get("state")}
 
 
@@ -550,6 +551,7 @@ def _smoke_binary(
         after = _partial_snapshot(request_json(leecher_base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY),
                                   transfer_hash=transfer_hash, expected_size=int(payload["sizeBytes"]))
         if (after is None or after["state"] != "paused"
+                or after["partsTotal"] != before["partsTotal"]
                 or not set(before["verifiedPartIndices"]).issubset(after["verifiedPartIndices"])
                 or after["verifiedBytes"] < before["verifiedBytes"]):
             raise RuntimeError("Verified partial data did not survive the same-profile packaged restart")
@@ -784,6 +786,7 @@ def main() -> int:
         parser.error("--linux-libc requires --target-os linux")
     if re.fullmatch(r"[0-9a-f]{40}", args.expected_source_sha) is None:
         parser.error("--expected-source-sha must be a full lowercase commit SHA")
+    harness_before = require_clean_git_source(REPO_ROOT, label="Package smoke harness")
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
     expected_target = None
@@ -819,12 +822,18 @@ def main() -> int:
             reports.append({"asset": name, "assetSha256": manifest["sha256"], "sourceSha": args.expected_source_sha,
                             "packageManifestSha256": file_sha256(asset.with_name(asset.name + ".manifest.json")),
                             "sbomSha256": manifest["sbomSha256"], **result})
+    # WHY: a public pass must identify the exact clean validator, including
+    # changes made while the packaged daemons and their restart proof ran.
+    harness_after = require_clean_git_source(REPO_ROOT, label="Package smoke harness")
+    if harness_after.revision != harness_before.revision:
+        raise RuntimeError("Package smoke harness revision changed during validation")
     machine = platform.machine().lower()
     native_arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
     native_os = {"Linux": "linux", "Windows": "windows", "Darwin": "macos"}.get(platform.system())
     hosted = os.environ.get("GITHUB_ACTIONS") == "true"
     report = {
         "schema": "emulebb.rust.package-smoke/3", "status": "passed", "sourceSha": args.expected_source_sha,
+        "harnessSha": harness_before.revision,
         "origin": "github-actions" if hosted else "local-development",
         "workflow": {key: os.environ.get(name) for key, name in
                      {"repository": "GITHUB_REPOSITORY", "runId": "GITHUB_RUN_ID",
