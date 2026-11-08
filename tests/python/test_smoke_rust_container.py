@@ -4,6 +4,7 @@ import io
 import json
 import subprocess
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -96,3 +97,128 @@ def test_external_network_cannot_be_used_for_first_run_smoke(monkeypatch):
         smoke.smoke_platform("local/test:beta", "linux/amd64", {"manifestDigest": "sha256:" + "a" * 64})
     assert not any(call[0] == "run" for call in calls)
     assert calls[-1][:2] == ("network", "rm")
+
+
+@pytest.fixture
+def image_runtime(monkeypatch):
+    key = "synthetic-image-smoke-credential-123456"
+    runtime = SimpleNamespace(
+        calls=[], key=key, architecture="amd64", owner="1234 1235", pid="42",
+        settings=f'[rest]\napiKey = "{key}"\n', http_status="200", auth_exit=0,
+        app={"name": "eMuleBB", "version": "0.1.0-beta.2", "apiVersion": "v1",
+             "build": "release", "platform": "x64", "lifecycle": {"state": "running"}},
+        body=None,
+    )
+    def docker(*args, **kwargs):
+        runtime.calls.append((args, kwargs))
+        status, stdout = 0, ""
+        if args[:2] in (("container", "inspect"), ("network", "inspect")) and "--format" not in args:
+            status = 1
+        elif "{{.Internal}}" in args or "{{.State.Running}}" in args:
+            stdout = "true"
+        elif "{{json .ImageManifestDescriptor}}" in args:
+            stdout = json.dumps({"digest": "sha256:" + "a" * 64})
+        elif "{{.State.ExitCode}}" in args:
+            stdout = "0"
+        elif args[0] == "exec":
+            if "cat" in args:
+                stdout = runtime.settings
+            elif "pgrep" in args:
+                stdout = runtime.pid
+            elif "ps" in args:
+                stdout = runtime.owner
+            elif "stat" in args:
+                stdout = "1234:1235\n1234:1235\n"
+            elif "id" in args:
+                stdout = "1234" if "-u" in args else "1235"
+            elif "dpkg" in args:
+                stdout = runtime.architecture
+            elif "curl" in args:
+                if "--header" in args:
+                    assert args[args.index("--header") + 1] == "@-" and "--interactive" in args
+                    assert kwargs["input"] == f"X-API-Key: {runtime.key}\n"
+                    status = runtime.auth_exit
+                    body = runtime.body if runtime.body is not None else json.dumps({"data": runtime.app})
+                    stdout = body + "\n" + runtime.http_status
+                elif "--output" in args:
+                    stdout = "401"
+                else:
+                    stdout = "eMuleBB WebUI"
+            elif "test" not in args and "/usr/local/bin/emulebb-rust-healthcheck" not in args:
+                pytest.fail(f"Unexpected exec command: {args}")
+        elif args[0] not in {"network", "run", "port", "stop", "rm"}:
+            pytest.fail(f"Unexpected Docker command: {args}")
+        return subprocess.CompletedProcess(args, status, stdout, "")
+    monkeypatch.setattr(smoke, "docker", docker)
+    return runtime
+
+
+def run_image_runtime(runtime):
+    return smoke.smoke_platform("local/test:beta", "linux/" + runtime.architecture,
+                                {"manifestDigest": "sha256:" + "a" * 64, "configDigest": "sha256:" + "b" * 64})
+
+
+@pytest.mark.parametrize("architecture,app_cpu", [("amd64", "x64"), ("arm64", "arm64")])
+def test_image_proves_authenticated_release_and_real_daemon_identity(image_runtime, architecture, app_cpu):
+    image_runtime.architecture = architecture
+    image_runtime.app["platform"] = app_cpu
+    result = run_image_runtime(image_runtime)
+    assert (result["unauthenticatedStatus"], result["authenticatedStatus"]) == (401, 200)
+    assert (result["daemonUid"], result["daemonGid"]) == (1234, 1235)
+    assert (result["appBuild"], result["appPlatform"], result["appVersion"]) == ("release", app_cpu, "0.1.0-beta.2")
+    assert image_runtime.key not in json.dumps(result)
+    assert all(image_runtime.key not in str(args) for args, _ in image_runtime.calls)
+    assert image_runtime.calls[-1][0][:2] == ("network", "rm")
+
+
+@pytest.mark.parametrize("fault", ["root-daemon", "multiple-pids", "http-201", "auth-rejected",
+                                  "wrong-cpu", "debug", "stopping", "malformed-json", "missing-data"])
+def test_invalid_live_identity_or_authenticated_response_cannot_pass(image_runtime, fault):
+    if fault == "root-daemon":
+        image_runtime.owner = "0 0"
+    elif fault == "multiple-pids":
+        image_runtime.pid = "42\n43"
+    elif fault == "http-201":
+        image_runtime.http_status = "201"
+    elif fault == "auth-rejected":
+        image_runtime.auth_exit = 22
+    elif fault == "wrong-cpu":
+        image_runtime.app["platform"] = "arm64"
+    elif fault == "debug":
+        image_runtime.app["build"] = "debug"
+    elif fault == "stopping":
+        image_runtime.app["lifecycle"]["state"] = "shuttingdown"
+    else:
+        image_runtime.body = "not JSON" if fault == "malformed-json" else "{}"
+    with pytest.raises(RuntimeError) as caught:
+        run_image_runtime(image_runtime)
+    assert image_runtime.key not in str(caught.value)
+    assert image_runtime.calls[-1][0][:2] == ("network", "rm")
+
+
+@pytest.mark.parametrize("fault", ["missing", "short", "header-injection", "malformed"])
+def test_generated_credential_errors_are_sanitized_and_cleanup_runs(image_runtime, fault):
+    if fault == "missing":
+        image_runtime.settings = "[rest]\n"
+    elif fault == "short":
+        image_runtime.settings = '[rest]\napiKey = "short"\n'
+    elif fault == "header-injection":
+        image_runtime.settings = '[rest]\napiKey = "' + image_runtime.key + '\\r\\nX-Other: injected"\n'
+    else:
+        image_runtime.settings = '[rest]\napiKey = "' + image_runtime.key
+    with pytest.raises(RuntimeError, match="Cannot read a valid generated image REST credential") as caught:
+        run_image_runtime(image_runtime)
+    assert image_runtime.key not in str(caught.value)
+    assert not any("--header" in args for args, _ in image_runtime.calls)
+    assert image_runtime.calls[-1][0][:2] == ("network", "rm")
+
+
+def test_docker_wrapper_delivers_credentials_only_over_stdin(monkeypatch):
+    calls = []
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(smoke.subprocess, "run", run)
+    smoke.docker("exec", "--interactive", "owned", "curl", "--header", "@-", input="X-API-Key: synthetic\n")
+    command, options = calls[0]
+    assert "synthetic" not in str(command) and options["input"] == "X-API-Key: synthetic\n"
