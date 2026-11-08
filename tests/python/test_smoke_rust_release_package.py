@@ -309,7 +309,7 @@ def partial_details(*, size=12, verified=True, state="paused", completed=None):
 
 def test_partial_checkpoint_accepts_verified_part_zero_and_omits_paths():
     result = smoke._partial_snapshot(partial_details(), transfer_hash="a" * 32, expected_size=12)
-    assert result == {"verifiedPartIndices": [0], "verifiedBytes": 8, "completedBytes": 8, "state": "paused"}
+    assert result == {"partsTotal": 2, "verifiedPartIndices": [0], "verifiedBytes": 8, "completedBytes": 8, "state": "paused"}
 
 
 def test_verified_partial_reads_the_details_resource(monkeypatch):
@@ -362,7 +362,7 @@ def test_package_rest_requires_the_current_envelope(monkeypatch, document, valid
             smoke.request_json("http://127.0.0.1:4711", "GET", "/api/v1/app", smoke.API_KEY)
 
 
-@pytest.mark.parametrize("fault", [None, "lost-parts", "lost-setting"])
+@pytest.mark.parametrize("fault", [None, "lost-parts", "lost-setting", "changed-part-count"])
 def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(monkeypatch, tmp_path, fault):
     binary = tmp_path / "emulebb-rust"
     binary.write_bytes(b"synthetic binary")
@@ -403,9 +403,15 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
             state["paused"] = False
             return {"ok": True}
         if path == "/api/v1/transfers/" + "a" * 32 + "/details":
-            return partial_details(size=smoke.TRANSFER_SIZE_BYTES,
+            details = partial_details(size=smoke.TRANSFER_SIZE_BYTES,
                                    verified=not (fault == "lost-parts" and state["leecherStarts"] == 2),
                                    state="paused" if state["paused"] else "downloading")
+            if fault == "changed-part-count" and state["leecherStarts"] == 2:
+                details["parts"][1]["size"] //= 2
+                details["parts"][1]["gapBytes"] = details["parts"][1]["size"]
+                details["parts"].append({**details["parts"][1], "index": 2})
+                details["transfer"].update(partsTotal=3, partsProgressText="#00")
+            return details
         if path == "/api/v1/transfers/" + "a" * 32:
             return partial_details(size=smoke.TRANSFER_SIZE_BYTES)["transfer"]
         return {"ok": True}
@@ -445,7 +451,8 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
     assert all(process.poll() == 0 for process in processes)
 
 
-@pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke"])
+@pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke",
+                                  "dirty-harness-before", "dirty-harness-during", "harness-head-change"])
 def test_main_binds_every_native_package_before_launch_and_retains_exact_source_proof(monkeypatch, tmp_path, fault):
     version = "0.1.0-beta.2"
     asset = tmp_path / f"emulebb-rust-v{version}-windows-x64.zip"
@@ -478,6 +485,14 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
         root.mkdir()
         yield root
     report = tmp_path / "smoke.json"
+    harness_checks = []
+    def harness_source(root, *, label):
+        assert root == smoke.REPO_ROOT and label == "Package smoke harness"
+        harness_checks.append(root)
+        if (fault == "dirty-harness-before" or fault == "dirty-harness-during" and len(harness_checks) == 2):
+            raise RuntimeError("Package smoke harness worktree must be clean")
+        return SimpleNamespace(revision=("d" if fault == "harness-head-change" and len(harness_checks) == 2 else "c") * 40)
+    monkeypatch.setattr(smoke, "require_clean_git_source", harness_source)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(smoke, "_temporary_root", temporary)
     monkeypatch.setattr(smoke, "_smoke_windows", probe)
@@ -489,12 +504,13 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
         with pytest.raises((RuntimeError, OSError)):
             smoke.main()
         assert not report.exists()
-        assert len(launches) == (1 if fault in {"wrong-cpu", "changed-during-smoke"} else 0)
+        assert len(launches) == (1 if fault in {"wrong-cpu", "changed-during-smoke", "dirty-harness-during", "harness-head-change"} else 0)
     else:
         assert smoke.main() == 0
         result = json.loads(report.read_text())
         assert result["schema"] == "emulebb.rust.package-smoke/3" and result["status"] == "passed"
         assert result["origin"] == "local-development" and result["workflow"] is None
         assert result["sourceSha"] == "a" * 40
+        assert result["harnessSha"] == "c" * 40 and len(harness_checks) == 2
         assert result["results"][0]["assetSha256"] == smoke.file_sha256(asset)
         assert result["results"][0]["packageManifestSha256"] == smoke.file_sha256(manifest_path)
