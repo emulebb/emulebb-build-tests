@@ -142,6 +142,13 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
     assert result["status"] == ("passed" if passed else "failed")
     assert result["scope"] == "guest-boot"
     assert result["applicationQualification"] == "not-run"
+    expected_phase = {"adb-start": "adb-start", "exit": "guest-boot", "timeout": "guest-boot",
+                      "capture": "guest-boot", "guest-mismatch": "guest-validation"}.get(outcome, "complete")
+    assert result["phase"] == expected_phase
+    if outcome == "guest-mismatch":
+        assert result["observedGuest"]["pageSize"] == "4096"
+    if outcome == "exit":
+        assert result["emulatorExitCode"] == 1
     assert commands[-1][-1] == "kill-server"
     stopped.assert_called_once_with(None if outcome == "adb-start" else process)
     if outcome != "adb-start":

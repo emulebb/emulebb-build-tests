@@ -102,7 +102,7 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
     capture = None
     adb_started = False
     value = {"schema": "emulebb.android.emulator-boot/1", "status": "failed", "scope": "guest-boot",
-             "applicationQualification": "not-run", "kvm": True, "guest": None}
+             "applicationQualification": "not-run", "kvm": True, "guest": None, "phase": "adb-start"}
     report = report_dir / "report.json"
 
     def close_capture() -> None:
@@ -120,16 +120,20 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
     try:
         adb_started = True
         command("start-server")
+        value["phase"] = "emulator-start"
         process = subprocess.Popen([emulator, "-avd", name, "-port", "5554", "-no-window", "-no-audio",
                                     "-no-snapshot", "-no-boot-anim", "-gpu", "swiftshader", "-accel", "on"],
                                    env=child, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         capture = AsyncBinaryCapture(report_dir / "emulator.log", max_segment_bytes=1024**2, retained_segments=4)
         capture.start(process.stdout, stop_process=lambda: _stop_group(process))
+        value["phase"] = "guest-boot"
         deadline = time.monotonic() + boot_timeout
         while True:
             capture.raise_if_failed()
-            if process.poll() is not None:
+            returncode = process.poll()
+            if returncode is not None:
+                value["emulatorExitCode"] = returncode
                 raise RuntimeError("Owned Android emulator exited before boot; inspect the private emulator log")
             try:
                 booted = command("-s", "emulator-5554", "shell", "getprop", "sys.boot_completed", check=False)
@@ -143,14 +147,18 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
                 raise RuntimeError("Owned Android emulator did not complete boot within its bound")
             time.sleep(1)
         properties = {}
+        value.update(phase="guest-properties", observedGuest=properties)
         for key, arguments in {
             "sdk": ("getprop", "ro.build.version.sdk"), "codename": ("getprop", "ro.build.version.codename"),
             "abis64": ("getprop", "ro.product.cpu.abilist64"), "qemu": ("getprop", "ro.kernel.qemu"),
             "machine": ("uname", "-m"), "pageSize": ("getconf", "PAGE_SIZE"),
         }.items():
+            value["property"] = key
             properties[key] = command("-s", "emulator-5554", "shell", *arguments)
+        value["phase"] = "guest-validation"
         value["guest"] = validate_guest(properties, api=api, page_size=page_size)
         value["status"] = "passed"
+        value["phase"] = "complete"
     except BaseException as error:
         value["error"] = str(error)
         raise
