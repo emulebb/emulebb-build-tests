@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 
 CLASSIFICATIONS = {
@@ -29,7 +30,7 @@ class IniKeyUse:
 
 
 def _workspace_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return _workspace_root_from_environment()
 
 
 def _strip_cpp_comments(source: str) -> str:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 
 def _app_source_root() -> Path:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     return workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
 

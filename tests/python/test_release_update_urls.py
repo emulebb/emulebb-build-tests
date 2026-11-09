@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 
 def _rc_string_values(path: Path) -> dict[str, str]:
@@ -16,7 +17,7 @@ def _rc_string_values(path: Path) -> dict[str, str]:
 
 
 def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
     emule_cpp = (app_source / "Emule.cpp").read_text(encoding="utf-8", errors="ignore")
@@ -51,7 +52,7 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
 
 
 def test_help_menu_and_update_strings_use_emulebb_copy() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     expected = {
         "IDS_ERR_NOHELP": "Online help is available in the eMuleBB documentation.\\n\\nDo you want to open the online help now?",
@@ -72,7 +73,7 @@ def test_help_menu_and_update_strings_use_emulebb_copy() -> None:
 
 
 def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
     preferences_h = (app_source / "Preferences.h").read_text(encoding="utf-8", errors="ignore")
@@ -91,7 +92,7 @@ def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
 
 
 def test_server_met_dropdown_preserves_current_text() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
     server_wnd_cpp = (app_source / "ServerWnd.cpp").read_text(encoding="utf-8", errors="ignore")

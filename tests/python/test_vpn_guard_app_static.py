@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 
-APP_ROOT = Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "app" / "emulebb-main"
+APP_ROOT = _workspace_root_from_environment() / "workspaces" / "workspace" / "app" / "emulebb-main"
 
 
 def test_rest_status_and_snapshot_expose_network_vpn_guard_diagnostics() -> None:

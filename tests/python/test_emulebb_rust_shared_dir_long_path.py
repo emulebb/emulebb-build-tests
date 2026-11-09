@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 import pytest
 
@@ -21,7 +22,7 @@ RUST_INTEGRATION_TESTS = (
 
 
 def workspace_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return _workspace_root_from_environment()
 
 
 def _run_rust_integration_test(repo: Path, test_target: str) -> None:
