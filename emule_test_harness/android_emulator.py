@@ -9,10 +9,23 @@ import shutil
 import signal
 import socket
 import subprocess
+import struct
 import time
 from uuid import uuid4
 
 from .bounded_process_output import AsyncBinaryCapture
+
+
+def page_size_from_auxv(data: bytes) -> int:
+    """Read AT_PAGESZ from the selected guest's little-endian ELF64 auxiliary vector."""
+    if not isinstance(data, bytes) or not 16 <= len(data) <= 65536 or len(data) % 16:
+        raise RuntimeError("Android guest auxiliary vector must be bounded ELF64 data")
+    entries = list(struct.iter_unpack("<QQ", data))
+    pages = [value for kind, value in entries if kind == 6]  # ELF AT_PAGESZ
+    if (entries[-1] != (0, 0) or any(kind == 0 for kind, _ in entries[:-1])
+            or len(pages) != 1 or pages[0] not in {4096, 16384}):
+        raise RuntimeError("Android guest auxiliary vector has no unambiguous supported page size")
+    return pages[0]
 
 
 def validate_guest(properties: dict[str, str], *, api: int, page_size: int) -> dict:
@@ -110,12 +123,14 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             capture.close()
             capture.raise_if_failed()
 
-    def command(*arguments: str, check: bool = True) -> str:
+    def command(*arguments: str, check: bool = True, binary: bool = False) -> str | bytes:
         result = subprocess.run([adb, "-P", "5037", *arguments], env=child, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=10, check=False)
+                                capture_output=True, text=not binary, timeout=10, check=False)
         if len(result.stdout) > 65536 or len(result.stderr) > 65536 or check and result.returncode:
             raise RuntimeError("Owned Android ADB command failed")
-        return result.stdout.strip() if result.returncode == 0 else ""
+        if result.returncode:
+            return b"" if binary else ""
+        return result.stdout if binary else result.stdout.strip()
 
     try:
         adb_started = True
@@ -151,10 +166,16 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         for key, arguments in {
             "sdk": ("getprop", "ro.build.version.sdk"), "codename": ("getprop", "ro.build.version.codename"),
             "abis64": ("getprop", "ro.product.cpu.abilist64"), "qemu": ("getprop", "ro.kernel.qemu"),
-            "machine": ("uname", "-m"), "pageSize": ("getconf", "PAGE_SIZE"),
+            "machine": ("uname", "-m"),
         }.items():
             value["property"] = key
             properties[key] = command("-s", "emulator-5554", "shell", *arguments)
+        value["property"] = "pageSize"
+        # WHY: Android 9 lacks a usable getconf PAGE_SIZE command. The kernel
+        # supplies AT_PAGESZ on both selected guests; exec-out preserves its
+        # binary bytes. Never publish the auxiliary vector's process addresses.
+        properties["pageSize"] = str(page_size_from_auxv(command(
+            "-s", "emulator-5554", "exec-out", "cat", "/proc/self/auxv", binary=True)))
         value["phase"] = "guest-validation"
         value["guest"] = validate_guest(properties, api=api, page_size=page_size)
         value["status"] = "passed"
