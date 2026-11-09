@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import signal
 import subprocess
+import struct
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -15,6 +16,23 @@ from emule_test_harness import android_emulator as subject
 
 PROPERTIES = {"sdk": "37", "codename": "REL", "machine": "x86_64", "pageSize": "16384",
               "abis64": "x86_64,arm64-v8a", "qemu": "1"}
+
+
+@pytest.mark.parametrize("page", [4096, 16384])
+def test_kernel_auxv_reads_page_size_without_exposing_process_addresses(page):
+    data = struct.pack("<QQQQQQ", 33, 0xABCDEF, 6, page, 0, 0)
+    assert subject.page_size_from_auxv(data) == page
+
+
+@pytest.mark.parametrize("data", [b"", b"x" * 17, b"x" * 65552,
+    struct.pack("<QQ", 0, 0), struct.pack("<QQ", 6, 4096),
+    struct.pack("<QQQQ", 6, 8192, 0, 0), struct.pack("<QQQQQQ", 6, 4096, 6, 4096, 0, 0),
+    struct.pack("<QQQQQQ", 0, 0, 6, 4096, 0, 0), struct.pack("<IIII", 6, 4096, 0, 0),
+], ids=["empty", "truncated", "oversized", "missing-page", "unterminated", "unsupported-page",
+        "duplicate-page", "early-terminator", "elf32"])
+def test_invalid_kernel_auxv_cannot_create_page_size_evidence(data):
+    with pytest.raises(RuntimeError, match="auxiliary vector"):
+        subject.page_size_from_auxv(data)
 
 
 @pytest.mark.parametrize(("key", "bad"), [
@@ -113,7 +131,7 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
     monkeypatch.setattr(subject.time, "monotonic", lambda: next(clock))
     by_property = {"ro.build.version.sdk": "37", "ro.build.version.codename": "REL",
                    "ro.product.cpu.abilist64": "x86_64", "ro.kernel.qemu": "1",
-                   "-m": "x86_64", "PAGE_SIZE": "16384"}
+                   "-m": "x86_64"}
 
     def run(command, **kwargs):
         commands.append(command)
@@ -126,8 +144,9 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
             text = "" if outcome == "timeout" else "1"
         else:
             text = by_property.get(last, "")
-        if outcome == "guest-mismatch" and last == "PAGE_SIZE":
-            text = "4096"
+        if last == "/proc/self/auxv":
+            assert kwargs["text"] is False
+            text = struct.pack("<QQQQ", 6, 4096 if outcome == "guest-mismatch" else 16384, 0, 0)
         return SimpleNamespace(returncode=0, stdout=text, stderr="")
 
     monkeypatch.setattr(subject.subprocess, "run", run)
@@ -154,7 +173,7 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
     if outcome != "adb-start":
         capture.close.assert_called_once()
         for command in commands:
-            if "shell" in command:
+            if "shell" in command or "exec-out" in command:
                 assert command[3:5] == ["-s", "emulator-5554"]
 
 
