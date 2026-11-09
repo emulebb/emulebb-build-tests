@@ -1,4 +1,10 @@
-"""Publishes Rust overnight pytest proof as release-campaign evidence."""
+"""Record overnight pytest results without promoting missing native proof.
+
+The default selection is non-native. Select --case native-bind explicitly for
+the staged-daemon REST scenario; no case stages/builds that daemon. Comprehensive
+overnight local-client evidence remains incomplete until native search/download,
+observed socket binding and source provenance have their required proof.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,7 @@ import json
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +37,7 @@ class PytestCase:
     title: str
     paths: tuple[str, ...]
     evidence: dict[str, bool]
+    native: bool = False
 
 
 PYTEST_CASES: tuple[PytestCase, ...] = (
@@ -38,10 +46,7 @@ PYTEST_CASES: tuple[PytestCase, ...] = (
         title="Rust local client harness surface",
         paths=("..\\emulebb-build-tests\\tests\\python\\test_emulebb_rust_local_client.py",),
         evidence={
-            "localClientPytestPassed": True,
-            "localClientUnicodeCoverageRequired": True,
-            "localClientHashOnlyMetadataCoverageRequired": True,
-            "localClientLanBindCoverageRequired": True,
+            "localClientUnitPytestPassed": True,
         },
     ),
     PytestCase(
@@ -53,6 +58,14 @@ PYTEST_CASES: tuple[PytestCase, ...] = (
             "restContractRouteParityRequired": True,
             "restContractOpenApiParityRequired": True,
         },
+    ),
+    PytestCase(
+        case_id="native-bind",
+        title="Native REST server operations with configured P2P bind",
+        paths=("..\\emulebb-build-tests\\tests\\python\\test_emulebb_rust_local_client.py"
+               "::test_emulebb_rust_server_connect_uses_configured_p2p_bind",),
+        evidence={"localClientLanBindScenarioPassed": True},
+        native=True,
     ),
 )
 
@@ -70,7 +83,7 @@ def selected_cases(case_ids: list[str] | None) -> tuple[PytestCase, ...]:
     """Returns the selected pytest proof cases."""
 
     if not case_ids:
-        return PYTEST_CASES
+        return tuple(case for case in PYTEST_CASES if not case.native)
     selected = set(case_ids)
     return tuple(case for case in PYTEST_CASES if case.case_id in selected)
 
@@ -90,13 +103,20 @@ def build_repo(workspace_root: Path) -> Path:
     return repo
 
 
-def run_pytest_case(case: PytestCase, build_repo_path: Path) -> dict[str, Any]:
+def run_pytest_case(case: PytestCase, build_repo_path: Path, artifacts_dir: Path) -> dict[str, Any]:
     """Runs one orchestrated pytest case and returns summary evidence."""
 
     command = [sys.executable, "-m", "emule_workspace", "test", "python"]
     for path in case.paths:
         command.extend(["--path", path])
     command.append("--quiet")
+    junit_path = artifacts_dir / "native-bind.xml"
+    if case.native:
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        # WHY: exit zero also permits skipped native cases. Require the exact
+        # scenario to execute before publishing any runtime scenario evidence.
+        junit_path.unlink(missing_ok=True)
+        command.extend(["-m", "native", "--junitxml", str(junit_path)])
     result = subprocess.run(
         command,
         cwd=build_repo_path,
@@ -104,14 +124,24 @@ def run_pytest_case(case: PytestCase, build_repo_path: Path) -> dict[str, Any]:
         capture_output=True,
         check=False,
     )
+    passed = result.returncode == 0
+    if case.native:
+        try:
+            nodes = ET.parse(junit_path).getroot().findall(".//testcase")
+            passed = passed and len(nodes) == 1 and (
+                nodes[0].get("name") == case.paths[0].split("::")[-1]
+                and not any(nodes[0].find(tag) is not None for tag in ("skipped", "failure", "error"))
+            )
+        except (OSError, ET.ParseError):
+            passed = False
     return {
         "id": case.case_id,
         "title": case.title,
-        "status": "passed" if result.returncode == 0 else "failed",
+        "status": "passed" if passed else "failed",
         "returnCode": result.returncode,
         "command": command,
         "paths": list(case.paths),
-        "evidence": {**case.evidence, "pytestPassed": result.returncode == 0},
+        "evidence": {key: value and passed for key, value in case.evidence.items()} | {"pytestPassed": passed},
         "stdoutTail": tail_lines(result.stdout),
         "stderrTail": tail_lines(result.stderr),
     }
@@ -129,13 +159,20 @@ def build_requirement_checks(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "caseCount": len(cases),
         "allCasesPassed": len(passed_ids) == len(cases),
-        "localClientPytestPassed": bool(
-            evidence_by_id.get("local-client", {}).get("localClientPytestPassed")
-            and evidence_by_id.get("local-client", {}).get("localClientUnicodeCoverageRequired")
-            and evidence_by_id.get("local-client", {}).get("localClientHashOnlyMetadataCoverageRequired")
-            and evidence_by_id.get("local-client", {}).get("localClientLanBindCoverageRequired")
+        "localClientUnitPytestPassed": bool(
+            evidence_by_id.get("local-client", {}).get("localClientUnitPytestPassed")
             and "local-client" in passed_ids
         ),
+        "localClientLanBindScenarioPassed": bool(
+            evidence_by_id.get("native-bind", {}).get("localClientLanBindScenarioPassed")
+            and "native-bind" in passed_ids
+        ),
+        # The default unit selection excludes native search/download and bind
+        # cases. Neither it nor the bind REST scenario proves the former full
+        # Unicode/hash-only/observed-LAN-bind overnight claim.
+        "localClientPytestPassed": False,
+        "nativeSearchDownloadEvidence": "not-run",
+        "stagedSourceProvenance": "unverified",
         "restContractPytestPassed": bool(
             evidence_by_id.get("rest-contract", {}).get("restContractPytestPassed")
             and evidence_by_id.get("rest-contract", {}).get("restContractRouteParityRequired")
@@ -179,13 +216,19 @@ def main(argv: list[str] | None = None) -> int:
         "buildRepo": str(build_repo_path),
         "cases": [],
         "checks": {},
+        "missingEvidence": [
+            "Native search/download Unicode and hash-only metadata proof is not run by this wrapper.",
+            "Configured-bind REST operations do not establish observed socket source IP.",
+            "Staged executable/source provenance is unverified.",
+        ],
     }
     try:
         for case in cases_to_run:
-            report["cases"].append(run_pytest_case(case, build_repo_path))
+            report["cases"].append(run_pytest_case(case, build_repo_path, run_dir / case.case_id))
         report["checks"]["rust_overnight_pytest_requirements"] = build_requirement_checks(report["cases"])
         report["status"] = (
-            "passed" if report["checks"]["rust_overnight_pytest_requirements"]["allCasesPassed"] else "failed"
+            "evidence-incomplete"
+            if report["checks"]["rust_overnight_pytest_requirements"]["allCasesPassed"] else "failed"
         )
         return 0 if report["status"] == "passed" else 1
     except Exception as exc:

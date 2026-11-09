@@ -50,6 +50,7 @@ def _run_rust_integration_test(repo: Path, test_target: str) -> None:
         )
 
 
+@pytest.mark.native
 @pytest.mark.parametrize("test_target", RUST_INTEGRATION_TESTS)
 def test_emulebb_rust_shared_dir_behavioral_target(test_target: str) -> None:
     if shutil.which("cargo") is None:

@@ -36,8 +36,7 @@ REST_ADDR = "127.0.0.1"
 def staged_executable(output_root: Path) -> Path:
     """Returns the orchestrator-staged regular daemon for this host OS."""
 
-    suffix = ".exe" if os.name == "nt" else ""
-    return output_root / "tools" / "emulebb-rust" / "bin" / f"emulebb-rust{suffix}"
+    return rust_client.staged_executable(output_root)
 
 
 def choose_loopback_port() -> int:

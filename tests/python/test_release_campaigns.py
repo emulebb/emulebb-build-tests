@@ -191,7 +191,7 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         for gate in campaign["releaseGates"]
         for scenario_id in gate["coveredBy"]
     }
-    rust_pytest_command = "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet"
+    rust_pytest_command = "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet -m native"
     rust_rest_contract_command = (
         "python -m emule_workspace test python "
         "--path tests/python/test_emulebb_rust_rest_contract.py --quiet"
@@ -259,6 +259,23 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     assert "Rust-persisted source userHash" in cross_client_description
     assert "Unicode filename" in cross_client_description
     assert "AICH hashset metadata" in cross_client_description
+
+
+def test_native_rust_campaign_entries_select_native_cases() -> None:
+    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-rust")
+    scenarios = {
+        scenario["id"]: scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+    for scenario_id in (
+        "emulebb.flow.rust.local-client.pytest.v1",
+        "emulebb.flow.rust.local-ed2k.search-download.v1",
+        "emulebb.flow.rust.shared-dir.long-path-monitor.v1",
+    ):
+        command = scenarios[scenario_id]["command"]
+        assert "-m native" in command
+        assert "--path tests/python/test_emulebb_rust_" in command
 
 
 def test_persisted_profile_commands_are_never_release_blocking() -> None:
