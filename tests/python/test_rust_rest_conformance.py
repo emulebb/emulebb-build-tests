@@ -10,6 +10,34 @@ import pytest
 from emule_test_harness import rust_rest_conformance
 
 
+def test_explicit_contract_load_does_not_override_operator_environment(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+    selected = tmp_path / "selected.yaml"
+    monkeypatch.setenv(rust_rest_conformance.OPENAPI_CONTRACT_ENV, "operator-value")
+    observed = {}
+    def loader(*args, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace()
+    monkeypatch.setattr(rust_rest_conformance, "load_script_module", loader)
+    rust_rest_conformance.load_rest_smoke_module(selected)
+    assert observed["initial_globals"]["SELECTED_OPENAPI_CONTRACT_PATH"] == selected
+    assert os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV] == "operator-value"
+
+
+def test_explicit_contract_reaches_response_and_sse_checks(tmp_path, monkeypatch):
+    selected = tmp_path / "selected.yaml"
+    observed = []
+    smoke = SimpleNamespace(exercise_rest_contract_completeness=lambda *args: {"ok": True})
+    monkeypatch.setattr(rust_rest_conformance, "load_rest_smoke_module", lambda path: observed.append(path) or smoke)
+    def sse(*args, **kwargs):
+        observed.append(kwargs["openapi_path"])
+        return {"ok": True}
+    monkeypatch.setattr(rust_rest_conformance, "run_event_stream_conformance", sse)
+    assert rust_rest_conformance.run_response_conformance("http://127.0.0.1:4711", "test-key", openapi_path=selected)["ok"]
+    assert observed == [selected, selected]
+
+
 class FakeEventStreamResponse:
     def __init__(
         self,
@@ -76,10 +104,8 @@ def test_load_rest_smoke_module_pins_rust_openapi_path(
     observed: dict[str, str | None] = {}
     monkeypatch.delenv(rust_rest_conformance.OPENAPI_CONTRACT_ENV, raising=False)
 
-    def load_script_module(_module_name: str, _filename: str) -> object:
-        observed["during_load"] = rust_rest_conformance.os.environ.get(
-            rust_rest_conformance.OPENAPI_CONTRACT_ENV
-        )
+    def load_script_module(_module_name: str, _filename: str, **kwargs) -> object:
+        observed["during_load"] = str(kwargs["initial_globals"]["SELECTED_OPENAPI_CONTRACT_PATH"])
         return SimpleNamespace()
 
     monkeypatch.setattr(rust_rest_conformance, "load_script_module", load_script_module)
@@ -103,10 +129,8 @@ def test_load_rest_smoke_module_restores_existing_openapi_path(
         rust_rest_conformance.OPENAPI_CONTRACT_ENV, "operator-contract.yaml"
     )
 
-    def load_script_module(_module_name: str, _filename: str) -> object:
-        observed["during_load"] = rust_rest_conformance.os.environ.get(
-            rust_rest_conformance.OPENAPI_CONTRACT_ENV
-        )
+    def load_script_module(_module_name: str, _filename: str, **kwargs) -> object:
+        observed["during_load"] = str(kwargs["initial_globals"]["SELECTED_OPENAPI_CONTRACT_PATH"])
         return SimpleNamespace()
 
     monkeypatch.setattr(rust_rest_conformance, "load_script_module", load_script_module)

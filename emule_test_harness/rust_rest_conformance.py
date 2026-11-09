@@ -53,16 +53,10 @@ class RestConformanceError(AssertionError):
         self.summary = summary
 
 
-def load_rest_smoke_module() -> Any:
-    previous = os.environ.get(OPENAPI_CONTRACT_ENV)
-    os.environ[OPENAPI_CONTRACT_ENV] = str(RUST_OPENAPI_CONTRACT_PATH)
-    try:
-        return load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py")
-    finally:
-        if previous is None:
-            os.environ.pop(OPENAPI_CONTRACT_ENV, None)
-        else:
-            os.environ[OPENAPI_CONTRACT_ENV] = previous
+def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
+    """Select a contract before script initialization without changing environment."""
+    return load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py",
+                              initial_globals={"SELECTED_OPENAPI_CONTRACT_PATH": openapi_path or RUST_OPENAPI_CONTRACT_PATH})
 
 
 def _event_stream_url(base_url: str) -> str:
@@ -200,16 +194,18 @@ def run_response_conformance(
     budget: str = "contract",
     rest_smoke_module: Any | None = None,
     event_stream_checker: Callable[[str, str], dict[str, object]] | None = None,
+    openapi_path: Path | None = None,
 ) -> dict[str, object]:
     """Runs live REST contract completeness and fails on OpenAPI response drift."""
 
     if budget not in REST_COVERAGE_BUDGETS:
         raise ValueError(f"REST conformance budget must be one of {REST_COVERAGE_BUDGETS!r}: {budget!r}")
     base_url = require_rest_base_url(base_url)
-    rest_smoke = rest_smoke_module or load_rest_smoke_module()
+    rest_smoke = rest_smoke_module or (load_rest_smoke_module(openapi_path) if openapi_path else load_rest_smoke_module())
     summary = rest_smoke.exercise_rest_contract_completeness(base_url, api_key, budget)
     checker = event_stream_checker or run_event_stream_conformance
-    event_stream_summary = checker(base_url, api_key)
+    event_stream_summary = (checker(base_url, api_key, openapi_path=openapi_path)
+                            if openapi_path and event_stream_checker is None else checker(base_url, api_key))
     summary["event_stream"] = event_stream_summary
     if not bool(event_stream_summary.get("ok")):
         summary["ok"] = False

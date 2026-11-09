@@ -51,3 +51,25 @@ def test_main_rejects_nonpositive_ready_timeout() -> None:
         assert "must be positive" in str(exc)
     else:
         raise AssertionError("expected nonpositive timeout rejection")
+
+
+def test_main_passes_explicit_sources(tmp_path, monkeypatch):
+    module = load_module()
+    rust, contract = tmp_path / "emulebb-rust", tmp_path / "REST-API-OPENAPI.yaml"
+    observed = {}
+    def campaign(**kwargs):
+        observed.update(kwargs)
+        return {"status": "passed", "teardown": "not-started"}, tmp_path / "report.json"
+    monkeypatch.setattr(module, "run_campaign", campaign)
+    assert module.main(["--rust-repo", str(rust), "--openapi-contract", str(contract)]) == 0
+    assert observed["rust_repo"] == rust
+    assert observed["openapi_contract"] == contract
+
+
+def test_explicit_source_outside_workspace_fails_before_launch(tmp_path, monkeypatch):
+    import pytest
+    module = load_module()
+    monkeypatch.setattr(module, "get_required_emule_workspace_root", lambda: tmp_path / "workspace")
+    monkeypatch.setattr(module, "get_workspace_output_root", lambda: tmp_path / "output")
+    with pytest.raises(RuntimeError, match="workspace source boundaries"):
+        module.run_campaign(rust_repo=tmp_path / "outside")
