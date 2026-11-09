@@ -77,10 +77,19 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
-def run_campaign(*, ready_timeout_seconds: float = 60.0) -> tuple[dict[str, Any], Path]:
+def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None = None,
+                 openapi_contract: Path | None = None) -> tuple[dict[str, Any], Path]:
     workspace_root = get_required_emule_workspace_root()
     output_root = get_workspace_output_root()
-    rust_repo = workspace_root / "repos" / "emulebb-rust"
+    rust_repo = (rust_repo or workspace_root / "repos" / "emulebb-rust").resolve()
+    if openapi_contract is not None:
+        openapi_contract = openapi_contract.resolve()
+        if not openapi_contract.is_file():
+            raise RuntimeError("Selected OpenAPI contract must be an existing file")
+    for selected in (rust_repo, openapi_contract):
+        if selected is not None and not any(selected.resolve().is_relative_to(workspace_root / boundary)
+                                             for boundary in ("repos", "workspaces")):
+            raise RuntimeError("Selected REST sources must remain inside workspace source boundaries")
     executable = staged_executable(output_root)
     if not rust_repo.is_dir():
         raise RuntimeError(f"emulebb-rust source is missing: {rust_repo}")
@@ -124,6 +133,8 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0) -> tuple[dict[str, Any]
         "networkMode": "local-disabled",
         "restLoopback": True,
         "sourceRevision": source_revision(rust_repo),
+        "sourcePath": str(rust_repo),
+        "openapiContract": str(openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH),
         "executableSha256": sha256_file(executable),
     }
     run_root.mkdir(parents=True, exist_ok=True)
@@ -148,6 +159,7 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0) -> tuple[dict[str, Any]
                 base_url,
                 API_KEY,
                 budget="contract",
+                **({"openapi_path": openapi_contract} if openapi_contract else {}),
             )
         finally:
             if previous_contract_shared_root is None:
@@ -188,10 +200,17 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0) -> tuple[dict[str, Any]
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--rust-repo", type=Path)
+    parser.add_argument("--openapi-contract", type=Path)
     args = parser.parse_args(argv)
     if args.ready_timeout_seconds <= 0:
         raise ValueError("--ready-timeout-seconds must be positive.")
-    report, report_path = run_campaign(ready_timeout_seconds=args.ready_timeout_seconds)
+    selected = {}
+    if args.rust_repo:
+        selected["rust_repo"] = args.rust_repo
+    if args.openapi_contract:
+        selected["openapi_contract"] = args.openapi_contract
+    report, report_path = run_campaign(ready_timeout_seconds=args.ready_timeout_seconds, **selected)
     print(json.dumps({"report": str(report_path), "status": report["status"], "teardown": report["teardown"]}))
     return 0 if report["status"] == "passed" else 1
 

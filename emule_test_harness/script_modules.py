@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 
-def load_script_module(module_name: str, filename: str, *, scripts_dir: Path | None = None):
+def load_script_module(module_name: str, filename: str, *, scripts_dir: Path | None = None,
+                       initial_globals: dict | None = None):
     """Loads one script from a hyphenated filename under the harness `scripts` directory."""
 
     root = Path(__file__).resolve().parent.parent
@@ -16,6 +17,8 @@ def load_script_module(module_name: str, filename: str, *, scripts_dir: Path | N
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
     module = importlib.util.module_from_spec(spec)
+    if initial_globals:
+        module.__dict__.update(initial_globals)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module

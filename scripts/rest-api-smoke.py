@@ -40,7 +40,7 @@ from emule_test_harness.live_seed_sources import (
 )
 
 RUST_CONTRACT_ONLY = "emulebb-rust" in Path(
-    os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH", "")
+    globals().get("SELECTED_OPENAPI_CONTRACT_PATH") or os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH", "")
 ).parts
 
 
@@ -334,7 +334,7 @@ REST_CONTRACT_SHARED_ROOT_ENV = "EMULEBB_REST_CONTRACT_SHARED_ROOT"
 REST_CONTRACT_IGNORE_RULE_KEY = "noise.desktop-ini"
 WORKSPACE_ROOT = get_required_emule_workspace_root()
 OPENAPI_CONTRACT_PATH = Path(
-    os.environ.get(
+    globals().get("SELECTED_OPENAPI_CONTRACT_PATH") or os.environ.get(
         "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
         str(WORKSPACE_ROOT / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
     )
