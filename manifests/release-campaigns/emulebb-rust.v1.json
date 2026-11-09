@@ -35,12 +35,12 @@
           "flowCategory": "python-harness",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet",
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet -m native",
           "evidence": [
             {
               "kind": "manual",
               "required": true,
-              "description": "Focused pytest coverage builds emulebb-rust through Cargo, launches local Rust ed2k-server, and writes configured LAN REST and P2P binds from X_LOCAL_IP into the generated Rust config."
+              "description": "Explicit native pytest selects the search/download integration (Cargo-backed) and REST server-operation scenario (requires an orchestrator-staged daemon, no build fallback). Profiles use X_LOCAL_IP for configured LAN REST and P2P binds. A passing REST scenario alone does not prove observed socket source IP or staged binary/source provenance."
             }
           ]
         },
@@ -51,7 +51,7 @@
           "flowCategory": "python-harness",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_shared_dir_long_path.py --quiet",
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_shared_dir_long_path.py --quiet -m native",
           "evidence": [
             {
               "kind": "manual",
@@ -89,7 +89,7 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet",
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet -m native",
           "evidence": [
             {
               "kind": "manual",

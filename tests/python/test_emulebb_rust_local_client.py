@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
+from emule_test_harness.paths import get_workspace_output_root
 from types import ModuleType
 
 import pytest
@@ -828,15 +830,27 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         terminate_process(process)
 
 
+@pytest.mark.native
 def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) -> None:
-    if shutil.which("cargo") is None:
-        pytest.skip("cargo is not available")
-    repo = workspace_root() / "repos" / "emulebb-rust"
-    if not repo.is_dir():
-        pytest.skip("emulebb-rust repo is not available")
+    # WHY: daemon compilation/launch must never escape the default non-native gate.
+    # Stage explicitly through the build orchestrator before selecting this case.
+    executable = rust_client.staged_executable(get_workspace_output_root())
+    if not executable.is_file():
+        pytest.fail("Native server-bind case requires the orchestrator-staged Rust executable; "
+                    "build/stage it explicitly before selecting this native test. No Cargo fallback.")
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
-        pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
+        pytest.fail("X_LOCAL_IP is required for the explicitly selected native server-bind case")
+
+    digest = hashlib.sha256()
+    with executable.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    (tmp_path / "native-input.json").write_text(json.dumps({
+        "executableSha256": digest.hexdigest(),
+        "sourceProvenance": "unverified",
+        "scope": "REST server operations with configured P2P bind; not observed socket-source-IP proof",
+    }, indent=2) + "\n", encoding="utf-8")
 
     profile_dir = tmp_path / "profile"
     output_path = tmp_path / "emulebb-rust.out"
@@ -852,7 +866,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         kad_listen_port=kad_port,
     )
 
-    process = rust_client.start_rust_client(repo, profile_dir, output_path)
+    process = rust_client.start_rust_client_executable(executable, profile_dir, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)

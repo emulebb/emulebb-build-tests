@@ -17,6 +17,13 @@ RUST_PROFILE_METADATA_FILE = rust_metadata.RUST_PROFILE_METADATA_FILE
 STOCK_SERVER_KEEPALIVE_MINUTES = 20
 
 
+def staged_executable(output_root: Path) -> Path:
+    """Return the explicitly prebuilt regular daemon for this host; never build it."""
+
+    suffix = ".exe" if os.name == "nt" else ""
+    return output_root / "tools" / "emulebb-rust" / "bin" / f"emulebb-rust{suffix}"
+
+
 def rust_network_settings_patch(
     *,
     auto_connect: bool,
