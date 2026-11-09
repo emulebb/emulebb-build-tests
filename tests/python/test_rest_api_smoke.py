@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 import re
 import ssl
 import subprocess
@@ -1278,7 +1279,7 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
 
 
 def test_native_rest_app_identity_uses_public_product_name() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source = (
         workspace_root
         / "workspaces"
@@ -2111,7 +2112,7 @@ def test_openapi_response_numeric_bounds_match_runtime_domains() -> None:
 def test_rest_vocabulary_source_and_openapi_stay_in_sync() -> None:
     module = load_rest_api_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     json_source = (app_source / "WebServerJson.cpp").read_text(encoding="utf-8")
     surface_source = (app_source / "WebApiSurfaceSeams.h").read_text(encoding="utf-8")
@@ -2161,7 +2162,7 @@ def test_rest_vocabulary_source_and_openapi_stay_in_sync() -> None:
 
 
 def test_native_transfer_operation_responses_use_stable_bulk_items() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
@@ -2261,7 +2262,7 @@ def test_arr_adapter_http_step_records_transport_failure(monkeypatch) -> None:
 
 
 def test_peer_add_friend_never_returns_ok_for_friend_response() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
@@ -2278,7 +2279,7 @@ def test_rest_smoke_uses_v1_upload_remove_operation_route() -> None:
 
 
 def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     rest_docs_dir = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     docs = "\n".join(
         (rest_docs_dir / name).read_text(encoding="utf-8")
@@ -2297,7 +2298,7 @@ def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
 
 def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_boundary() -> None:
     module = load_rest_api_smoke_module()
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     rest_docs_dir = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     adapter_doc = (rest_docs_dir / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
     contract_doc = (rest_docs_dir / "REST-API-CONTRACT.md").read_text(encoding="utf-8")
@@ -2589,7 +2590,7 @@ def _native_route_token_value(token: str, workspace_root: Path) -> str:
 
 
 def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     route_header = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJsonSeams.h"
     # Scope the scan to the GetApiRouteSpecs() table so unrelated brace-enclosed
     # string arrays elsewhere in the header (for example method-name lists) are
@@ -2881,7 +2882,7 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
 
 
 def test_completed_transfer_delete_preserves_shared_file_registration() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source = (
         workspace_root
         / "workspaces"
@@ -3072,7 +3073,7 @@ def test_openapi_custom_success_responses_reject_generic_ok_fallbacks() -> None:
 
 
 def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     openapi_text = (workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml").read_text(
         encoding="utf-8"
@@ -3143,7 +3144,7 @@ def test_openapi_response_dtos_require_core_implementation_fields() -> None:
 
 
 def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerQBitCompat.cpp"
     source = source_path.read_text(encoding="utf-8")
 
@@ -3153,7 +3154,7 @@ def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
 
 
 def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     tooling_docs = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     source = (app_source / "WebServerArrCompat.cpp").read_text(encoding="utf-8")
@@ -3199,7 +3200,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
 
 
 def test_native_search_resources_echo_selected_type() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
@@ -3216,7 +3217,7 @@ def test_native_search_resources_echo_selected_type() -> None:
 
 
 def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     source = (app_source / "WebServerQBitCompat.cpp").read_text(encoding="utf-8")
     seams = (app_source / "WebServerQBitCompatSeams.h").read_text(encoding="utf-8")
@@ -3237,7 +3238,7 @@ def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None
 
 
 def test_qbit_adapter_smoke_add_uses_native_ed2k_url() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     script_path = workspace_root / "repos" / "emulebb-build-tests" / "scripts" / "rest-api-smoke.py"
     source = script_path.read_text(encoding="utf-8")
     qbit_add_block = source[
@@ -3254,7 +3255,7 @@ def test_qbit_adapter_smoke_add_uses_native_ed2k_url() -> None:
 
 
 def test_native_transfer_add_reports_queue_rejection_as_failure() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
     transfer_add_block = source[source.index('if (strCommand == "transfers/add")') : source.index("auto handleTransferBulkMutation")]
@@ -3269,7 +3270,7 @@ def test_native_transfer_add_reports_queue_rejection_as_failure() -> None:
 
 
 def test_qbit_compat_documents_hash_mutation_cap() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     seams = (
         workspace_root
         / "workspaces"

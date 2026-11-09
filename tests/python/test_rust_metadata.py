@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 import pytest
 
@@ -9,7 +10,7 @@ from emule_test_harness import rust_metadata
 
 
 def rust_repo() -> Path:
-    return Path(__file__).resolve().parents[4] / "repos" / "emulebb-rust"
+    return _workspace_root_from_environment() / "repos" / "emulebb-rust"
 
 
 class _TrackedConnection:

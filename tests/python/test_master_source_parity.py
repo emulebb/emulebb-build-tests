@@ -13,6 +13,7 @@ from __future__ import annotations
 import re  # noqa: F401  (used by some consolidated checks)
 import xml.etree.ElementTree as ET  # noqa: F401  (used by some consolidated checks)
 from pathlib import Path  # noqa: F401  (used by some consolidated checks)
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 import pytest
 
@@ -266,7 +267,7 @@ def _check_bad_peer_diagnostics_source__bad_peer_diagnostics_tracks_upload_clog_
 
 
 def _h_bad_peer_repeat_policy_source__read_tooling_file(name: str) -> str:
-    return (Path(__file__).resolve().parents[4] / "repos" / "emulebb-tooling" / name).read_text(encoding="utf-8", errors="ignore")
+    return (_workspace_root_from_environment() / "repos" / "emulebb-tooling" / name).read_text(encoding="utf-8", errors="ignore")
 
 
 def _check_bad_peer_repeat_policy_source__repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> None:
@@ -465,7 +466,7 @@ def _check_buddy_button_source__add_buddy_button_rolls_back_half_installed_subcl
 
 def _h_check_updates_menu_source___app_source_dir() -> Path:
     return (
-        Path(__file__).resolve().parents[4]
+        _workspace_root_from_environment()
         / "workspaces"
         / "workspace"
         / "app"
@@ -1915,7 +1916,7 @@ def _check_mule_list_ctrl_source__view_preset_command_pairs_live_lists_with_expl
 
 
 def _h_oscope_ctrl_source___app_source_root() -> Path:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     return workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
 
@@ -4238,7 +4239,7 @@ def _check_upload_slot_diagnostics_source__upload_part_status_report_flag_tracks
 
 
 def _h_version_check_source___app_source_root() -> Path:
-    return Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
+    return _workspace_root_from_environment() / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
 
 def _check_version_check_source__version_check_worker_does_not_keep_raw_dialog_queue_pointer() -> None:

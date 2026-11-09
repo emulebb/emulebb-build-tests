@@ -10,12 +10,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root
 
-# The test repo lives at ``<workspace>/repos/emulebb-build-tests`` and this file
-# is ``<repo>/emule_test_harness/master_source.py``; parents[1] is the repo root,
-# parents[2] is ``repos/`` and parents[3] is the workspace root that owns
-# ``repos/`` and ``workspaces/``.
-_WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+# WHY: managed worktrees have a different directory depth; operator state owns
+# the canonical source root regardless of where this harness is checked out.
+_WORKSPACE_ROOT = get_required_emule_workspace_root()
 
 
 def workspace_root() -> Path:

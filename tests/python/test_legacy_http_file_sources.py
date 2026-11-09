@@ -1,8 +1,9 @@
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 
 def test_http_file_sources_are_removed_from_transfer_engine() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_root = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
     for removed_file in (

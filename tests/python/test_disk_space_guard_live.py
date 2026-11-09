@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 import pytest
 
@@ -54,7 +55,7 @@ def test_disk_space_guard_cases_cover_required_storage_matrix() -> None:
 
 
 def test_download_queue_temp_selection_reaches_placement_seam_before_rejecting() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "DownloadQueue.cpp"
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     block = source[source.index("CString CDownloadQueue::GetOptimalTempDir") : source.index("void CDownloadQueue::RefilterAllComments")]
@@ -64,7 +65,7 @@ def test_download_queue_temp_selection_reaches_placement_seam_before_rejecting()
 
 
 def test_download_queue_normal_diskspace_checks_honor_snapshot_freshness() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "DownloadQueue.cpp"
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     block = source[source.index("void CDownloadQueue::CheckDiskspace") : source.index("void CDownloadQueue::GetDownloadSourcesStats")]
@@ -74,7 +75,7 @@ def test_download_queue_normal_diskspace_checks_honor_snapshot_freshness() -> No
 
 
 def test_download_queue_required_space_uses_configured_root_cache_before_child_volume_probe() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "DownloadQueue.cpp"
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     block = source[source.index("ULONGLONG CDownloadQueue::GetRequiredFreeDiskSpaceForPath") : source.index("void CDownloadQueue::AddPartFilesToShare")]

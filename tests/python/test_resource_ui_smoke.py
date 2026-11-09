@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root
 from types import SimpleNamespace
 
 
@@ -43,7 +44,7 @@ def test_release_language_manifest_uses_historical_dll_stems(tmp_path: Path) -> 
 
 def test_language_id_table_covers_canonical_release_manifest() -> None:
     smoke = load_resource_ui_smoke()
-    workspace_root = Path(__file__).resolve().parents[3]
+    workspace_root = get_required_emule_workspace_root() / "repos"
     manifest = workspace_root / "emulebb-tooling" / "helpers" / "rc-release-languages.json"
 
     languages = smoke.load_release_languages(manifest)

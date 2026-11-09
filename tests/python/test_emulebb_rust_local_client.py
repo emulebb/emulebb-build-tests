@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 from types import ModuleType
 
 import pytest
@@ -35,10 +36,8 @@ dtt = load_script_module("deterministic_two_client_transfer_for_rust_tests", "de
 def load_rust_rest_smoke_module() -> ModuleType:
     """Loads the shared smoke runner against the forward Rust OpenAPI contract."""
 
-    contract_env = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
-    previous_contract = os.environ.get(contract_env)
     rust_contract = (
-        Path(__file__).resolve().parents[4]
+        _workspace_root_from_environment()
         / "repos"
         / "emulebb-tooling"
         / "docs"
@@ -47,14 +46,8 @@ def load_rust_rest_smoke_module() -> ModuleType:
         / "api"
         / "REST-API-OPENAPI.yaml"
     )
-    os.environ[contract_env] = str(rust_contract)
-    try:
-        return load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py")
-    finally:
-        if previous_contract is None:
-            os.environ.pop(contract_env, None)
-        else:
-            os.environ[contract_env] = previous_contract
+    return load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py",
+                              initial_globals={"SELECTED_OPENAPI_CONTRACT_PATH": rust_contract})
 
 
 rest_smoke = load_rust_rest_smoke_module()
@@ -75,7 +68,7 @@ def test_local_client_uses_forward_rust_openapi_contract() -> None:
 
 
 def workspace_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return _workspace_root_from_environment()
 
 
 def active_workspace_root() -> Path:

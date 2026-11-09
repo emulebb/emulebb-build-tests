@@ -1,8 +1,9 @@
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 
 def test_web_compat_responses_use_shared_http_writer() -> None:
-    workspace_root = Path(__file__).resolve().parents[4]
+    workspace_root = _workspace_root_from_environment()
     app_root = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     helper_text = (app_root / "WebServerHttpResponse.h").read_text(encoding="utf-8")
 

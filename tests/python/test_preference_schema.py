@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from pathlib import Path
+from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 
 from emule_test_harness.preference_schema import (
     REST_FIELD_TO_SCHEMA_ID,
@@ -22,7 +23,7 @@ RESOURCE_ONLY_DIRECT_CONTROLS = {
 
 
 def _workspace_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return _workspace_root_from_environment()
 
 
 def test_preference_schema_manifest_matches_source_generation() -> None:
