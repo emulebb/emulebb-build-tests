@@ -268,8 +268,13 @@ def start_wsl_managed_executable(
     *,
     distribution: str | None = None,
     rust_log: str | None = None,
+    stdin: int | None = None,
 ) -> RustWslProcess:
-    """Starts one Linux executable with the shared PID-backed WSL lifecycle."""
+    """Start a PID-backed WSL executable with optional caller-owned stdin.
+
+    The default inherits stdin as before. A caller selecting subprocess.PIPE
+    owns its lifetime input and can close it before PID readiness on cancellation.
+    """
 
     linux_exe = wsl_path(executable, distribution)
     linux_pid = wsl_path(pid_path, distribution)
@@ -283,6 +288,7 @@ def start_wsl_managed_executable(
                 "setsid", "--wait", "/bin/sh", linux_helper,
                 "--pid-file", linux_pid, "--", *child_command,
             ),
+            stdin=stdin,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
         )

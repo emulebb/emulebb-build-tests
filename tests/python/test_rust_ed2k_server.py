@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 import shutil
 import socket
+import subprocess
+import sys
 import uuid
 from types import SimpleNamespace
 from pathlib import Path
@@ -455,6 +457,36 @@ def test_start_server_uses_pid_backed_wsl_process(monkeypatch, tmp_path: Path) -
     assert "/mnt/c/wsl_managed_process.sh" in calls[0]["command"]
     assert "/mnt/c/server.pid" in calls[0]["command"]
     assert calls[0]["command"][-3:] == ["/mnt/c/ed2k-server", "--config", "/mnt/c/config.toml"]
+    assert calls[0]["stdin"] is None
+
+
+@pytest.mark.unit
+def test_wsl_managed_owned_stdin_exits_on_eof_and_preserves_other_processes(monkeypatch, tmp_path: Path) -> None:
+    """Exercise the pipe contract with real children without requiring WSL."""
+    monkeypatch.setattr(rust_ed2k, "wsl_path", lambda path, _distribution=None: path.as_posix())
+    monkeypatch.setattr(rust_ed2k, "_wsl_command", lambda _distribution, *args:
+                        [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"])
+    foreign = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    process = None
+    try:
+        process = rust_ed2k.start_wsl_managed_executable(
+            tmp_path / "synthetic-program", [], tmp_path / "owned.log", tmp_path / "owned.pid",
+            distribution="Ubuntu", stdin=subprocess.PIPE)
+        assert process.proxy.stdin is not None
+        assert not process.pid_path.exists()
+        process.proxy.stdin.close()
+        assert process.wait(timeout=5) == 0
+        assert foreign.poll() is None
+    finally:
+        if process is not None:
+            if process.proxy.stdin is not None and not process.proxy.stdin.closed:
+                process.proxy.stdin.close()
+            if process.poll() is None:
+                process.proxy.terminate()
+            process.wait(timeout=5)
+        foreign.terminate()
+        foreign.wait(timeout=5)
 
 
 @pytest.mark.unit
