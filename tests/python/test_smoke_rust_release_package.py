@@ -18,6 +18,27 @@ from emule_test_harness.script_modules import load_script_module
 smoke = load_script_module("smoke_rust_release_package", "smoke-rust-release-package.py")
 
 
+@pytest.mark.parametrize("field", [None, "version", "build", "platform", "channel", "sourceRevision"])
+def test_explicit_build_identity_rejects_mismatched_runtime_and_cli(monkeypatch, field):
+    expected = {"version": "0.1.0-beta.2", "build": "release", "platform": "x64",
+                "channel": "nightly", "sourceRevision": "a" * 40}
+    app = {"name": "eMuleBB", "apiVersion": "v1", "lifecycle": {"state": "running"}, **expected}
+    if field is not None:
+        app[field] = "wrong"
+        with pytest.raises(RuntimeError, match="Packaged REST"):
+            smoke._app_metadata(app, expected)
+    else:
+        assert smoke._app_metadata(app, expected)["appSourceRevision"] == "a" * 40
+    correct = "emulebb-rust 0.1.0-beta.2 (nightly; x64; " + "a" * 40 + ")"
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args, 0, correct if field is None else "emulebb-rust wrong"))
+    if field is None:
+        assert smoke._verify_cli_identity(Path("daemon"), expected) == correct
+    else:
+        with pytest.raises(RuntimeError, match="Packaged CLI"):
+            smoke._verify_cli_identity(Path("daemon"), expected)
+
+
 @pytest.mark.parametrize("name,kind", [("../outside", tarfile.REGTYPE),
                                       ("emulebb-rust/../../outside", tarfile.REGTYPE),
                                       ("emulebb-rust/link", tarfile.SYMTYPE)])
@@ -525,7 +546,8 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
 
 
 @pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke",
-                                  "dirty-harness-before", "dirty-harness-during", "harness-head-change"])
+                                  "dirty-harness-before", "dirty-harness-during", "harness-head-change",
+                                  "wrong-runtime-source", "wrong-runtime-channel"])
 def test_main_binds_every_native_package_before_launch_and_retains_exact_source_proof(monkeypatch, tmp_path, fault):
     version = "0.1.0-beta.2"
     asset = tmp_path / f"emulebb-rust-v{version}-windows-x64.zip"
@@ -545,13 +567,17 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
         manifest_path.rename(asset.with_suffix(".manifest.json"))
     launches = []
     def probe(*args, **kwargs):
+        assert kwargs["expected_identity"] == {"version": version, "build": "release", "platform": "x64",
+                                               "channel": "nightly", "sourceRevision": "a" * 40}
         launches.append(args)
         if fault == "changed-during-smoke":
             asset.write_bytes(b"new package from another operation")
             manifest["sha256"] = smoke.file_sha256(asset)
             manifest_path.write_text(json.dumps(manifest))
         return {"status": "passed", "appVersion": version, "appBuild": "release",
-                "appPlatform": "arm64" if fault == "wrong-cpu" else "x64"}
+                "appPlatform": "arm64" if fault == "wrong-cpu" else "x64",
+                "appChannel": "candidate" if fault == "wrong-runtime-channel" else "nightly",
+                "appSourceRevision": ("b" if fault == "wrong-runtime-source" else "a") * 40}
     @contextmanager
     def temporary():
         root = tmp_path / "run"
@@ -572,12 +598,14 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
     monkeypatch.setattr(smoke.sys, "argv", ["smoke-rust-release-package.py", "--release-dir", str(tmp_path),
                                            "--release-version", version, "--rust-repo", str(tmp_path),
                                            "--target-os", "windows", "--platform", "x64",
-                                           "--expected-source-sha", "a" * 40, "--report-path", str(report)])
+                                           "--expected-source-sha", "a" * 40, "--expected-channel", "nightly",
+                                           "--report-path", str(report)])
     if fault:
         with pytest.raises((RuntimeError, OSError)):
             smoke.main()
         assert not report.exists()
-        assert len(launches) == (1 if fault in {"wrong-cpu", "changed-during-smoke", "dirty-harness-during", "harness-head-change"} else 0)
+        assert len(launches) == (1 if fault in {"wrong-cpu", "changed-during-smoke", "dirty-harness-during", "harness-head-change",
+                                              "wrong-runtime-source", "wrong-runtime-channel"} else 0)
     else:
         assert smoke.main() == 0
         result = json.loads(report.read_text())

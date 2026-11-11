@@ -299,13 +299,29 @@ def _wait_for_verified_partial(base_url: str, transfer_hash: str, expected_size:
                     description="packaged verified partial transfer" + (" pause" if paused else ""))
 
 
-def _app_metadata(app: dict) -> dict:
+def _app_metadata(app: dict, expected_identity: dict[str, str] | None = None) -> dict:
     if (app.get("name") != "eMuleBB" or app.get("apiVersion") != "v1" or app.get("build") != "release"
             or not isinstance(app.get("version"), str) or not app["version"]
             or app.get("platform") not in {"x64", "arm64"}
             or not isinstance(app.get("lifecycle"), dict) or app["lifecycle"].get("state") != "running"):
         raise RuntimeError("Packaged REST must identify the running release app and CPU")
-    return {"appVersion": app["version"], "appBuild": app["build"], "appPlatform": app["platform"]}
+    result = {"appVersion": app["version"], "appBuild": app["build"], "appPlatform": app["platform"]}
+    if expected_identity is not None:
+        if any(app.get(key) != value for key, value in expected_identity.items()):
+            raise RuntimeError("Packaged REST build identity does not match the selected package")
+        result.update(appChannel=app["channel"], appSourceRevision=app["sourceRevision"])
+    return result
+
+
+def _verify_cli_identity(binary: Path, expected_identity: dict[str, str]) -> str:
+    """Require the existing CLI version to identify the same package as REST."""
+    result = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
+                            timeout=20, check=True)
+    expected = (f"emulebb-rust {expected_identity['version']} ({expected_identity['channel']}; "
+                f"{expected_identity['platform']}; {expected_identity['sourceRevision']})")
+    if result.stdout.strip() != expected:
+        raise RuntimeError("Packaged CLI build identity does not match the selected package")
+    return result.stdout.strip()
 
 
 def _wait_for_transfer_delivery(
@@ -458,6 +474,7 @@ def _smoke_binary(
     rust_repo: Path,
     render_webui: bool,
     verify_profile_ownership: bool = False,
+    expected_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if not binary.is_file() or not (webui / "index.html").is_file():
         raise RuntimeError("package is missing its daemon or embedded WebUI")
@@ -468,6 +485,8 @@ def _smoke_binary(
     required_options = ("--profile", "--p2p-bind-interface")
     if any(option not in help_result.stdout for option in required_options):
         raise RuntimeError("packaged daemon CLI is missing beta options")
+    if expected_identity is not None:
+        _verify_cli_identity(binary, expected_identity)
 
     reserved_ports: set[int] = set()
     p2p_ip = _local_p2p_ip()
@@ -514,8 +533,8 @@ def _smoke_binary(
         seeder_process, seeder_log = _start_daemon(binary, seeder_profile, seeder_log_path)
         leecher_process, leecher_log = _start_daemon(binary, leecher_profile, leecher_log_path)
         log_handles.extend((seeder_log, leecher_log))
-        app = _app_metadata(_wait_for_rest(seeder_base_url, seeder_process, seeder_log_path))
-        if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path)) != app:
+        app = _app_metadata(_wait_for_rest(seeder_base_url, seeder_process, seeder_log_path), expected_identity)
+        if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path), expected_identity) != app:
             raise RuntimeError("Packaged peers disagree about their release identity")
         contenders = None
         if verify_profile_ownership:
@@ -551,6 +570,7 @@ def _smoke_binary(
                 max_main_thread_busy_ratio=0.25,
                 navigation_only=True,
                 verify_stale_key_recovery=True,
+                expected_app_identity=expected_identity,
             )
             if rendered_webui.get("status") != "passed":
                 raise RuntimeError(f"packaged rendered WebUI proof failed: {rendered_webui!r}")
@@ -597,7 +617,7 @@ def _smoke_binary(
         leecher_log.close()
         leecher_process, leecher_log = _start_daemon(binary, leecher_profile, leecher_log_path)
         log_handles.append(leecher_log)
-        if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path)) != app:
+        if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path), expected_identity) != app:
             raise RuntimeError("Restarted packaged daemon has a different release identity")
         # Read durable progress before reconnecting or resuming; a new transfer
         # or newly downloaded parts must not conceal missing persisted state.
@@ -701,6 +721,7 @@ def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_
 def _smoke_windows(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
+    expected_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     with zipfile.ZipFile(asset) as archive:
         archive.extractall(temp_root / "unpacked")
@@ -712,6 +733,7 @@ def _smoke_windows(
         rust_repo=rust_repo,
         render_webui=render_webui,
         verify_profile_ownership=verify_profile_ownership,
+        expected_identity=expected_identity,
     )
 
 
@@ -748,7 +770,8 @@ def _verify_package_manifest(asset: Path, expected_source_sha: str, expected_ver
 
 
 def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
-                         render_webui: bool, verify_profile_ownership: bool = False) -> dict[str, object]:
+                         render_webui: bool, verify_profile_ownership: bool = False,
+                         expected_identity: dict[str, str] | None = None) -> dict[str, object]:
     with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(asset)],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
@@ -763,13 +786,14 @@ def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
     root = temp_root / "emulebb-rust"
     result = _smoke_binary(root / "emulebb-rust", root / "webui", temp_root,
                            rust_repo=rust_repo, render_webui=render_webui,
-                           verify_profile_ownership=verify_profile_ownership)
+                           verify_profile_ownership=verify_profile_ownership, expected_identity=expected_identity)
     return result
 
 
 def _smoke_linux_deb(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
+    expected_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     extracted = temp_root / "deb"
     subprocess.run(["dpkg-deb", "-x", str(asset), str(extracted)], check=True, timeout=30)
@@ -783,12 +807,14 @@ def _smoke_linux_deb(
         rust_repo=rust_repo,
         render_webui=render_webui,
         verify_profile_ownership=verify_profile_ownership,
+        expected_identity=expected_identity,
     )
 
 
 def _smoke_linux_appimage(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
+    expected_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     extracted = temp_root / "appimage"
     extracted.mkdir()
@@ -811,12 +837,14 @@ def _smoke_linux_appimage(
         rust_repo=rust_repo,
         render_webui=render_webui,
         verify_profile_ownership=verify_profile_ownership,
+        expected_identity=expected_identity,
     )
 
 
 def _smoke_macos(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
+    expected_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     mount = temp_root / "mounted"
     mount.mkdir()
@@ -833,6 +861,7 @@ def _smoke_macos(
             rust_repo=rust_repo,
             render_webui=render_webui,
             verify_profile_ownership=verify_profile_ownership,
+            expected_identity=expected_identity,
         )
     finally:
         subprocess.run(["hdiutil", "detach", str(mount)], check=True, timeout=60,
@@ -849,6 +878,8 @@ def main() -> int:
     parser.add_argument("--platform", required=True, choices=("x64", "ARM64"))
     parser.add_argument("--linux-libc", choices=("gnu", "musl"), help="Test the selected portable Linux archive.")
     parser.add_argument("--expected-source-sha", required=True, help="Full clean source revision required for every tested package.")
+    parser.add_argument("--expected-channel", choices=("development", "candidate", "beta", "nightly"),
+                        help="Require matching REST, CLI and rendered About build identity.")
     parser.add_argument(
         "--render-webui",
         action="store_true",
@@ -867,6 +898,10 @@ def main() -> int:
     harness_before = require_clean_git_source(REPO_ROOT, label="Package smoke harness")
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
+    expected_identity = None if args.expected_channel is None else {
+        "version": args.release_version, "build": "release", "platform": arch,
+        "channel": args.expected_channel, "sourceRevision": args.expected_source_sha,
+    }
     expected_target = None
     if args.verify_profile_ownership:
         from emule_test_harness.paths import get_workspace_output_root
@@ -905,10 +940,14 @@ def main() -> int:
             result = smoke(
                 asset, child, rust_repo=args.rust_repo.resolve(), render_webui=args.render_webui,
                 verify_profile_ownership=args.verify_profile_ownership,
+                **({"expected_identity": expected_identity} if expected_identity is not None else {}),
             )
             if (result.get("status") != "passed" or result.get("appVersion") != args.release_version or result.get("appBuild") != "release"
-                    or result.get("appPlatform") != ("x64" if arch == "x64" else "arm64")):
-                raise RuntimeError("Running package version/build/CPU does not match the selected release asset")
+                    or result.get("appPlatform") != ("x64" if arch == "x64" else "arm64")
+                    or (expected_identity is not None and
+                        (result.get("appChannel") != args.expected_channel or
+                         result.get("appSourceRevision") != args.expected_source_sha))):
+                raise RuntimeError("Running package build identity does not match the selected release asset")
             if _verify_package_manifest(asset, args.expected_source_sha, args.release_version, expected_target) != manifest:
                 raise RuntimeError("Package bytes or provenance changed during smoke validation")
             reports.append({"asset": name, "assetSha256": manifest["sha256"], "sourceSha": args.expected_source_sha,

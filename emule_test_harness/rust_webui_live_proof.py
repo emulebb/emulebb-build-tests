@@ -1259,6 +1259,24 @@ def assert_no_browser_diagnostics(diagnostics: dict[str, list[dict[str, Any]]]) 
         raise RuntimeError(f"Rust WebUI browser diagnostics were not clean: {failures!r}")
 
 
+def verify_about_build_identity(page, expected_identity: dict[str, str]) -> dict[str, str]:
+    """Compare the rendered About values with the verified package identity."""
+    details = page.get_by_label("About this build", exact=True)
+    details.locator("summary").click()
+    try:
+        observed = {}
+        for label, key in (("Version", "version"), ("Channel", "channel"), ("Architecture", "platform"),
+                           ("Build", "build"), ("Source commit", "sourceRevision")):
+            value = details.get_by_text(label, exact=True).locator("xpath=following-sibling::dd[1]")
+            value.wait_for(state="visible")
+            observed[key] = value.inner_text().strip()
+        if observed != expected_identity:
+            raise RuntimeError("Rendered About build identity does not match the selected package")
+        return observed
+    finally:
+        details.locator("summary").click()
+
+
 def run_webui_live_proof(
     *,
     base_url: str,
@@ -1273,6 +1291,7 @@ def run_webui_live_proof(
     consumer_workflow: ConsumerNetworkWorkflow | None = None,
     configure_best_effort_upnp: bool = False,
     shutdown_after_proof: bool = False,
+    expected_app_identity: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
 
@@ -1364,6 +1383,8 @@ def run_webui_live_proof(
                         entries.clear()
                 page.get_by_role("navigation", name="Primary views").wait_for(timeout=int(timeout_seconds * 1000))
                 page.wait_for_timeout(1000)
+                if expected_app_identity is not None:
+                    report["checks"]["buildIdentity"] = verify_about_build_identity(page, expected_app_identity)
 
                 recorder.reset_api()
                 cdp = page.context.new_cdp_session(page)
