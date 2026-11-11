@@ -876,7 +876,9 @@ def main() -> int:
             parser.error("--verify-profile-ownership requires an existing workspace output directory")
         if args.report_path and not args.report_path.resolve().is_relative_to(output):
             parser.error("--verify-profile-ownership report must stay under the workspace output root")
-        temporary = _temporary_root(directory=output)
+        scratch = output / "tmp" / "profile-ownership-package-smoke"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = _temporary_root(directory=scratch)
     else:
         temporary = _temporary_root()
     with temporary as temp_root:

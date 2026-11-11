@@ -66,6 +66,66 @@ def test_temporary_root_does_not_suppress_body_error() -> None:
             raise RuntimeError("body failed")
 
 
+@pytest.fixture
+def ownership_contenders(tmp_path, monkeypatch):
+    """Use real benign import inputs while controlling only CLI/REST outcomes."""
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    bootstrap = profile / "emulebb-rust-settings.toml"
+    bootstrap.write_text("[rest]\nbind_addr = '127.0.0.1:4711'\n", encoding="utf-8")
+    state = {"failure": None, "mutation": None, "calls": 0}
+
+    def offline(command, **kwargs):
+        state["calls"] += 1
+        if state["mutation"] == "bootstrap":
+            bootstrap.write_text("changed bootstrap", encoding="utf-8")
+        if state["failure"] == "unrelated":
+            return SimpleNamespace(returncode=1, stdout="", stderr="invalid import input")
+        return SimpleNamespace(
+            returncode=0 if state["failure"] == "success" else 1, stdout="",
+            stderr="profile is already in use: fixture; stop its daemon or offline command before retrying",
+        )
+
+    def rest(_base, _method, path, _key):
+        changed = state["calls"] > 0
+        if path == "/api/v1/app/settings":
+            return {"core": {"uploadLimitKiBps": 2 if changed and state["mutation"] == "settings" else 1}}
+        return {"roots": ["changed"] if changed and state["mutation"] == "roots" else []}
+
+    monkeypatch.setattr(smoke.subprocess, "run", offline)
+    monkeypatch.setattr(smoke, "request_json", rest)
+    return profile, bootstrap, state
+
+
+def test_busy_profile_contenders_require_specific_failure_and_preserve_fixture(ownership_contenders, tmp_path):
+    profile, bootstrap, state = ownership_contenders
+    before = bootstrap.read_bytes()
+    result = smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
+    assert len(result) == 3 and all(item["profileBusy"] for item in result)
+    assert state["calls"] == 3 and bootstrap.read_bytes() == before
+    # The portable input is real and closed, so a busy verdict is not masking an
+    # empty or malformed import archive prepared by this fixture.
+    from emule_test_harness.profile_exchange import read_exchange_header
+    assert read_exchange_header(tmp_path / "ownership-import/hashes.sqlite")["schema"] == "emulebb.profile-exchange.v2"
+
+
+@pytest.mark.parametrize("failure", ["unrelated", "success"])
+def test_offline_cli_error_or_success_cannot_count_as_profile_busy(ownership_contenders, tmp_path, failure):
+    profile, _, state = ownership_contenders
+    state["failure"] = failure
+    with pytest.raises(RuntimeError, match="did not reject the busy profile"):
+        smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
+    assert state["calls"] == 1
+
+
+@pytest.mark.parametrize("mutation", ["bootstrap", "settings", "roots"])
+def test_busy_profile_rejection_cannot_hide_profile_mutation(ownership_contenders, tmp_path, mutation):
+    profile, _, state = ownership_contenders
+    state["mutation"] = mutation
+    with pytest.raises(RuntimeError, match="denied offline commands changed"):
+        smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
+
+
 def test_api_key_meets_daemon_production_validation() -> None:
     assert len(smoke.API_KEY.encode("utf-8")) >= 32
     assert smoke.API_KEY.isascii()
