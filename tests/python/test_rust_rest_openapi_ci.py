@@ -73,3 +73,39 @@ def test_explicit_source_outside_workspace_fails_before_launch(tmp_path, monkeyp
     monkeypatch.setattr(module, "get_workspace_output_root", lambda: tmp_path / "output")
     with pytest.raises(RuntimeError, match="workspace source boundaries"):
         module.run_campaign(rust_repo=tmp_path / "outside")
+
+
+def test_registered_stage_failure_precedes_profile_creation_and_launch(tmp_path, monkeypatch):
+    import pytest
+    module = load_module()
+    workspace, output = tmp_path / "workspace", tmp_path / "output"
+    source = workspace / "workspaces/agents/sample/emulebb-rust"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(module, "get_required_emule_workspace_root", lambda: workspace)
+    monkeypatch.setattr(module, "get_workspace_output_root", lambda: output)
+
+    def reject(*args):
+        raise RuntimeError("runtime bundle bytes differ")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("profile or daemon creation preceded source admission")
+
+    monkeypatch.setattr(module.rust_client, "verified_runtime_stage", reject)
+    monkeypatch.setattr(module.rust_client, "write_rust_profile", forbidden)
+    monkeypatch.setattr(module.rust_client, "spawn_rust_daemon", forbidden)
+    with pytest.raises(RuntimeError, match="bundle bytes differ"):
+        module.run_campaign(rust_repo=source, registered_stage=True)
+    assert not output.exists()
+
+
+def test_main_forwards_registered_stage_selection(tmp_path, monkeypatch):
+    module = load_module()
+    observed = {}
+
+    def campaign(**kwargs):
+        observed.update(kwargs)
+        return {"status": "passed", "teardown": "not-started"}, tmp_path / "report.json"
+
+    monkeypatch.setattr(module, "run_campaign", campaign)
+    assert module.main(["--registered-stage", "--rust-repo", str(tmp_path)]) == 0
+    assert observed["registered_stage"] is True

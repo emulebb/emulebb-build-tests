@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,50 @@ import pytest
 from emule_test_harness import rust_client
 from emule_test_harness.kad_nodes import BootstrapContact
 from emule_test_harness.paths import get_required_emule_workspace_root
+
+
+def test_registered_stage_admission_uses_persisted_source_verifier(monkeypatch, tmp_path):
+    workspace, output = tmp_path / "workspace", tmp_path / "output"
+    source = workspace / "workspaces/agents/sample/emulebb-rust"
+    source.mkdir(parents=True)
+    root = output / "tools/workstreams/sample/emulebb-rust/x86_64-pc-windows-msvc"
+    name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
+    executable = root / "bin" / name
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"source-bound fixture")
+    identity = {"schema": "emulebb.rust-runtime-stage/1", "workstream": "sample",
+                "target": root.name, "source": {"path": str(source), "revision": "a" * 40},
+                "stageRoot": str(root), "executable": str(executable), "receipt": str(root / "stage.json")}
+    calls = []
+
+    def verify(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(identity), stderr="")
+
+    monkeypatch.setattr(rust_client, "get_required_emule_workspace_root", lambda: workspace)
+    monkeypatch.setattr(rust_client.subprocess, "run", verify)
+    assert rust_client.verified_runtime_stage(source, output) == identity
+    command, arguments = calls[0]
+    assert command[-2:] == [str(source / "tools/fresh_rust_build.py"), "--verify-stage"]
+    assert arguments["cwd"] == source
+    for field, value in (("workstream", "other"), ("executable", str(output / "arbitrary.exe")),
+                         ("target", "../../operator")):
+        original = identity[field]
+        identity[field] = value
+        with pytest.raises(RuntimeError, match="runtime"):
+            rust_client.verified_runtime_stage(source, output)
+        identity[field] = original
+
+
+def test_failed_registered_source_verification_is_an_admission_failure(monkeypatch, tmp_path):
+    workspace, output = tmp_path / "workspace", tmp_path / "output"
+    source = workspace / "workspaces/agents/sample/emulebb-rust"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(rust_client, "get_required_emule_workspace_root", lambda: workspace)
+    monkeypatch.setattr(rust_client.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 1, stdout="", stderr="source receipt differs"))
+    with pytest.raises(RuntimeError, match="source receipt differs"):
+        rust_client.verified_runtime_stage(source, output)
 
 
 def load_rust_live_wire_module():
