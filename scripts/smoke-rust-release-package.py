@@ -69,8 +69,8 @@ PANEL_ROUTES = {
 
 
 @contextmanager
-def _temporary_root():
-    path = Path(tempfile.mkdtemp(prefix="emulebb-rust-package-smoke-"))
+def _temporary_root(*, directory: Path | None = None):
+    path = Path(tempfile.mkdtemp(prefix="emulebb-rust-package-smoke-", dir=directory))
     try:
         yield path
     finally:
@@ -401,6 +401,55 @@ def request_json(base_url: str, method: str, path: str, api_key: str, body: dict
     return document["data"]
 
 
+def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
+                                    temp_root: Path) -> list[dict[str, object]]:
+    """Probe the live owner's CLI boundary with valid, disposable offline inputs."""
+    from emule_test_harness.emule_profile_export import ExportJob
+    from emule_test_harness.profile_exchange import write_exchange
+    from emule_test_harness.profile_import_audit import create_import_fixture
+
+    fixture = temp_root / "ownership-import"
+    create_import_fixture(fixture)
+    # Export only hashes from the stock fixture. Its share paths are a separate
+    # native directory-list input and need no stock Windows path mapping.
+    hashes = fixture / "hashes"
+    hashes.mkdir()
+    for name in ("known.met", "known2_64.met"):
+        shutil.copyfile(fixture / "stock" / "config" / name, hashes / name)
+    target_platform = {"Windows": "windows", "Linux": "unix", "Darwin": "macos"}[platform.system()]
+    archive = fixture / "hashes.sqlite"
+    write_exchange(ExportJob(fixture / "windows.toml", hashes, "stock", target_platform, archive, ()),
+                   hashes_only=True)
+    directory_list = fixture / "shared.txt"
+    directory_list.write_text(f"{fixture / 'shared'}\n", encoding="utf-8")
+
+    bootstrap = profile / "emulebb-rust-settings.toml"
+    before_bootstrap = file_sha256(bootstrap)
+    before_settings = request_json(base_url, "GET", "/api/v1/app/settings", API_KEY)
+    before_roots = request_json(base_url, "GET", "/api/v1/shared-directories", API_KEY)["roots"]
+    contenders = []
+    for command, arguments in (
+        ("import-emule-profile", ["--hashes-only", str(archive)]),
+        ("import-shared-directories", [str(directory_list)]),
+        ("reconcile-shared-files", []),
+    ):
+        result = subprocess.run(
+            [str(binary), "--profile", str(profile), command, *arguments],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=False,
+        )
+        if (result.returncode == 0 or result.stdout.strip()
+                or "profile is already in use:" not in result.stderr
+                or "stop its daemon or offline command before retrying" not in result.stderr):
+            raise RuntimeError(f"{command} did not reject the busy profile before offline work "
+                               f"(exit {result.returncode}): {result.stderr[-2000:]}")
+        contenders.append({"command": command, "exitCode": result.returncode, "profileBusy": True})
+    if (file_sha256(bootstrap) != before_bootstrap
+            or request_json(base_url, "GET", "/api/v1/app/settings", API_KEY) != before_settings
+            or request_json(base_url, "GET", "/api/v1/shared-directories", API_KEY)["roots"] != before_roots):
+        raise RuntimeError("denied offline commands changed the owned profile's bootstrap, settings or roots")
+    return contenders
+
+
 def _smoke_binary(
     binary: Path,
     webui: Path,
@@ -408,6 +457,7 @@ def _smoke_binary(
     *,
     rust_repo: Path,
     render_webui: bool,
+    verify_profile_ownership: bool = False,
 ) -> dict[str, object]:
     if not binary.is_file() or not (webui / "index.html").is_file():
         raise RuntimeError("package is missing its daemon or embedded WebUI")
@@ -467,6 +517,9 @@ def _smoke_binary(
         app = _app_metadata(_wait_for_rest(seeder_base_url, seeder_process, seeder_log_path))
         if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path)) != app:
             raise RuntimeError("Packaged peers disagree about their release identity")
+        contenders = None
+        if verify_profile_ownership:
+            contenders = _reject_offline_profile_writers(binary, leecher_profile, leecher_base_url, temp_root)
         request_json(seeder_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
         request_json(leecher_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
         html = _request(seeder_base_url + "/").decode("utf-8")
@@ -571,9 +624,20 @@ def _smoke_binary(
 
         _graceful_shutdown(leecher_base_url, leecher_process)
         _graceful_shutdown(seeder_base_url, seeder_process)
+        ownership = {}
+        if contenders is not None:
+            from emule_test_harness.profile_import_audit import run_json
+
+            run_json([str(binary), "--profile", str(leecher_profile), "reconcile-shared-files"], 20)
+            ownership["profileOwnership"] = {
+                "contenders": contenders,
+                "bootstrapSettingsAndRootsUnchanged": True,
+                "reconcileAfterShutdown": True,
+            }
         return {
             "status": "passed",
             **app,
+            **ownership,
             "webuiAssets": len(assets),
             "restStatus": True,
             "webuiPanelBackends": panel_routes,
@@ -635,7 +699,8 @@ def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_
 
 
 def _smoke_windows(
-    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool
+    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
+    verify_profile_ownership: bool = False,
 ) -> dict[str, object]:
     with zipfile.ZipFile(asset) as archive:
         archive.extractall(temp_root / "unpacked")
@@ -646,6 +711,7 @@ def _smoke_windows(
         temp_root,
         rust_repo=rust_repo,
         render_webui=render_webui,
+        verify_profile_ownership=verify_profile_ownership,
     )
 
 
@@ -682,7 +748,7 @@ def _verify_package_manifest(asset: Path, expected_source_sha: str, expected_ver
 
 
 def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
-                         render_webui: bool) -> dict[str, object]:
+                         render_webui: bool, verify_profile_ownership: bool = False) -> dict[str, object]:
     with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(asset)],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
@@ -696,12 +762,14 @@ def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
             raise RuntimeError(f"portable archive decompression failed: {errors.decode(errors='replace')[-2000:]}")
     root = temp_root / "emulebb-rust"
     result = _smoke_binary(root / "emulebb-rust", root / "webui", temp_root,
-                           rust_repo=rust_repo, render_webui=render_webui)
+                           rust_repo=rust_repo, render_webui=render_webui,
+                           verify_profile_ownership=verify_profile_ownership)
     return result
 
 
 def _smoke_linux_deb(
-    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool
+    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
+    verify_profile_ownership: bool = False,
 ) -> dict[str, object]:
     extracted = temp_root / "deb"
     subprocess.run(["dpkg-deb", "-x", str(asset), str(extracted)], check=True, timeout=30)
@@ -714,11 +782,13 @@ def _smoke_linux_deb(
         temp_root,
         rust_repo=rust_repo,
         render_webui=render_webui,
+        verify_profile_ownership=verify_profile_ownership,
     )
 
 
 def _smoke_linux_appimage(
-    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool
+    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
+    verify_profile_ownership: bool = False,
 ) -> dict[str, object]:
     extracted = temp_root / "appimage"
     extracted.mkdir()
@@ -740,11 +810,13 @@ def _smoke_linux_appimage(
         temp_root,
         rust_repo=rust_repo,
         render_webui=render_webui,
+        verify_profile_ownership=verify_profile_ownership,
     )
 
 
 def _smoke_macos(
-    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool
+    asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
+    verify_profile_ownership: bool = False,
 ) -> dict[str, object]:
     mount = temp_root / "mounted"
     mount.mkdir()
@@ -760,6 +832,7 @@ def _smoke_macos(
             temp_root,
             rust_repo=rust_repo,
             render_webui=render_webui,
+            verify_profile_ownership=verify_profile_ownership,
         )
     finally:
         subprocess.run(["hdiutil", "detach", str(mount)], check=True, timeout=60,
@@ -781,6 +854,11 @@ def main() -> int:
         action="store_true",
         help="Render the packaged WebUI in Chromium and prove stale-key recovery plus all primary views.",
     )
+    parser.add_argument(
+        "--verify-profile-ownership",
+        action="store_true",
+        help="Check that the running packaged daemon rejects offline writers to its disposable profile.",
+    )
     args = parser.parse_args()
     if args.linux_libc and args.target_os != "linux":
         parser.error("--linux-libc requires --target-os linux")
@@ -790,7 +868,18 @@ def main() -> int:
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
     expected_target = None
-    with _temporary_root() as temp_root:
+    if args.verify_profile_ownership:
+        from emule_test_harness.paths import get_workspace_output_root
+
+        output = get_workspace_output_root()
+        if not output.is_dir():
+            parser.error("--verify-profile-ownership requires an existing workspace output directory")
+        if args.report_path and not args.report_path.resolve().is_relative_to(output):
+            parser.error("--verify-profile-ownership report must stay under the workspace output root")
+        temporary = _temporary_root(directory=output)
+    else:
+        temporary = _temporary_root()
+    with temporary as temp_root:
         if args.target_os == "windows":
             assets = [(f"{stem}-windows-{arch}.zip", _smoke_windows)]
         elif args.target_os == "linux" and args.linux_libc:
@@ -813,6 +902,7 @@ def main() -> int:
             child.mkdir()
             result = smoke(
                 asset, child, rust_repo=args.rust_repo.resolve(), render_webui=args.render_webui,
+                verify_profile_ownership=args.verify_profile_ownership,
             )
             if (result.get("status") != "passed" or result.get("appVersion") != args.release_version or result.get("appBuild") != "release"
                     or result.get("appPlatform") != ("x64" if arch == "x64" else "arm64")):
