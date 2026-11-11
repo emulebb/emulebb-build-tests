@@ -5,7 +5,9 @@ import stat
 import io
 import tarfile
 import subprocess
+import tempfile
 from types import SimpleNamespace
+from pathlib import Path
 from contextlib import contextmanager
 
 import pytest
@@ -67,8 +69,16 @@ def test_temporary_root_does_not_suppress_body_error() -> None:
 
 
 @pytest.fixture
-def ownership_contenders(tmp_path, monkeypatch):
+def ownership_contenders(monkeypatch):
     """Use real benign import inputs while controlling only CLI/REST outcomes."""
+    from emule_test_harness.paths import get_workspace_output_root
+
+    # WHY: hosted pytest's default tmp_path can be outside OUTPUT. The real
+    # import-fixture owner requires managed scratch even when CLI calls are mocked.
+    scratch = get_workspace_output_root() / "tmp/profile-ownership-unit"
+    scratch.mkdir(parents=True, exist_ok=True)
+    temporary = tempfile.TemporaryDirectory(dir=scratch)
+    tmp_path = Path(temporary.name)
     profile = tmp_path / "profile"
     profile.mkdir()
     bootstrap = profile / "emulebb-rust-settings.toml"
@@ -94,11 +104,14 @@ def ownership_contenders(tmp_path, monkeypatch):
 
     monkeypatch.setattr(smoke.subprocess, "run", offline)
     monkeypatch.setattr(smoke, "request_json", rest)
-    return profile, bootstrap, state
+    try:
+        yield profile, bootstrap, state, tmp_path
+    finally:
+        temporary.cleanup()
 
 
-def test_busy_profile_contenders_require_specific_failure_and_preserve_fixture(ownership_contenders, tmp_path):
-    profile, bootstrap, state = ownership_contenders
+def test_busy_profile_contenders_require_specific_failure_and_preserve_fixture(ownership_contenders):
+    profile, bootstrap, state, tmp_path = ownership_contenders
     before = bootstrap.read_bytes()
     result = smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
     assert len(result) == 3 and all(item["profileBusy"] for item in result)
@@ -110,8 +123,8 @@ def test_busy_profile_contenders_require_specific_failure_and_preserve_fixture(o
 
 
 @pytest.mark.parametrize("failure", ["unrelated", "success"])
-def test_offline_cli_error_or_success_cannot_count_as_profile_busy(ownership_contenders, tmp_path, failure):
-    profile, _, state = ownership_contenders
+def test_offline_cli_error_or_success_cannot_count_as_profile_busy(ownership_contenders, failure):
+    profile, _, state, tmp_path = ownership_contenders
     state["failure"] = failure
     with pytest.raises(RuntimeError, match="did not reject the busy profile"):
         smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
@@ -119,8 +132,8 @@ def test_offline_cli_error_or_success_cannot_count_as_profile_busy(ownership_con
 
 
 @pytest.mark.parametrize("mutation", ["bootstrap", "settings", "roots"])
-def test_busy_profile_rejection_cannot_hide_profile_mutation(ownership_contenders, tmp_path, mutation):
-    profile, _, state = ownership_contenders
+def test_busy_profile_rejection_cannot_hide_profile_mutation(ownership_contenders, mutation):
+    profile, _, state, tmp_path = ownership_contenders
     state["mutation"] = mutation
     with pytest.raises(RuntimeError, match="denied offline commands changed"):
         smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
