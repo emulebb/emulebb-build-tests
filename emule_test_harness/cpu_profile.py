@@ -24,14 +24,10 @@ EMULE_SYMBOL_PREFIXES = (
     "emulebb-rust.exe!",
     "emulebb-rust-diagnostics!",
     "emulebb-rust-diagnostics.exe!",
-    "emulebb-rust-ui!",
-    "emulebb-rust-ui.exe!",
     "emulebb_rust!",
     "emulebb_rust.exe!",
     "emulebb_rust_diagnostics!",
     "emulebb_rust_diagnostics.exe!",
-    "emulebb_rust_ui!",
-    "emulebb_rust_ui.exe!",
     "emule!",
     "emule.exe!",
 )
@@ -46,10 +42,8 @@ _SYMBOL_RE = re.compile(
     r"\bemulebb(?:\.exe)?![^\s,;|]+|"
     r"\bemulebb-rust(?:\.exe)?![^\s,;|]+|"
     r"\bemulebb-rust-diagnostics(?:\.exe)?![^\s,;|]+|"
-    r"\bemulebb-rust-ui(?:\.exe)?![^\s,;|]+|"
     r"\bemulebb_rust(?:\.exe)?![^\s,;|]+|"
     r"\bemulebb_rust_diagnostics(?:\.exe)?![^\s,;|]+|"
-    r"\bemulebb_rust_ui(?:\.exe)?![^\s,;|]+|"
     r"\bemule(?:\.exe)?![^\s,;|]+",
     re.IGNORECASE,
 )
@@ -462,22 +456,16 @@ def normalize_emule_symbol(symbol: str) -> str:
         return f"emulebb-rust!{symbol[len('emulebb-rust.exe!'):]}"
     if symbol.casefold().startswith("emulebb-rust-diagnostics.exe!"):
         return f"emulebb-rust-diagnostics!{symbol[len('emulebb-rust-diagnostics.exe!'):]}"
-    if symbol.casefold().startswith("emulebb-rust-ui.exe!"):
-        return f"emulebb-rust-ui!{symbol[len('emulebb-rust-ui.exe!'):]}"
     if symbol.casefold().startswith("emulebb_rust.exe!"):
         return f"emulebb-rust!{symbol[len('emulebb_rust.exe!'):]}"
     if symbol.casefold().startswith("emulebb_rust_diagnostics.exe!"):
         return f"emulebb-rust-diagnostics!{symbol[len('emulebb_rust_diagnostics.exe!'):]}"
-    if symbol.casefold().startswith("emulebb_rust_ui.exe!"):
-        return f"emulebb-rust-ui!{symbol[len('emulebb_rust_ui.exe!'):]}"
     if symbol.casefold().startswith("emulebb-rust-diagnostics!"):
         return symbol
     if symbol.casefold().startswith("emulebb_rust!"):
         return f"emulebb-rust!{symbol[len('emulebb_rust!'):]}"
     if symbol.casefold().startswith("emulebb_rust_diagnostics!"):
         return f"emulebb-rust-diagnostics!{symbol[len('emulebb_rust_diagnostics!'):]}"
-    if symbol.casefold().startswith("emulebb_rust_ui!"):
-        return f"emulebb-rust-ui!{symbol[len('emulebb_rust_ui!'):]}"
     if symbol.casefold().startswith("emule.exe!"):
         return f"emulebb!{symbol[len('emule.exe!'):]}"
     if symbol.casefold().startswith("emule!"):

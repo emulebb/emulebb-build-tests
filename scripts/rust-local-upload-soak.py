@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a deterministic local Rust upload soak with diagnostics and native UI."""
+"""Run a deterministic local Rust upload soak with daemon diagnostics."""
 
 from __future__ import annotations
 
