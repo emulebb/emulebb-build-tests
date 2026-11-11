@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from emule_test_harness import cpu_profile
 
 
@@ -174,19 +176,44 @@ emulebb-rust-diagnostics.exe (5740),     120000,       1.90,            emulebb-
     ]
 
 
-def test_parse_xperf_profile_detail_extracts_rust_ui_symbols() -> None:
-    text = """
-emulebb-rust-ui.exe (5740),     260000,       4.20,            emulebb_rust_ui.exe!emulebb_rust_ui::worker::worker_loop
-emulebb-rust-ui.exe (5740),     120000,       1.90,            emulebb-rust-ui.exe!slint::platform::run_event_loop
-"""
+@pytest.mark.parametrize("module", (
+    "emulebb-rust-ui", "emulebb-rust-ui.exe", "emulebb_rust_ui", "emulebb_rust_ui.exe",
+))
+def test_parse_xperf_profile_detail_does_not_attribute_retired_ui(module: str) -> None:
+    symbol = f"{module}!slint::platform::run_event_loop"
+    text = f"emulebb-rust-ui.exe (5740),     120000,       1.90,            {symbol}\n"
 
-    summary = cpu_profile.parse_xperf_profile_detail(text, process_image="emulebb-rust-ui.exe")
+    summary = cpu_profile.parse_xperf_profile_detail(text, process_image="emulebb-rust.exe")
 
-    assert summary["available"] is True
-    assert summary["app_row_count"] == 2
-    assert [row["function"] for row in summary["top_app_functions"]] == [
-        "emulebb-rust-ui!emulebb_rust_ui::worker::worker_loop",
-        "emulebb-rust-ui!slint::platform::run_event_loop",
+    assert summary["row_count"] == 0
+    assert summary["available"] is False
+    assert summary["top_app_functions"] == []
+    # An explicitly selected old process may retain unresolved trace rows,
+    # but its retired module must not become a current application frame.
+    selected = cpu_profile.parse_xperf_profile_detail(text, process_image="emulebb-rust-ui.exe")
+    assert selected["row_count"] == selected["unresolved_row_count"] == 1
+    assert selected["app_row_count"] == 0
+    assert selected["top_app_functions"] == []
+    assert cpu_profile.normalize_emule_symbol(symbol) == symbol
+
+
+def test_parse_xperf_stack_report_excludes_retired_ui_but_preserves_current_apps() -> None:
+    modules = (
+        "emulebb-rust-ui", "emulebb-rust-ui.exe", "emulebb_rust_ui", "emulebb_rust_ui.exe",
+        "emulebb_rust.exe", "emulebb_rust_diagnostics.exe", "emule.exe",
+    )
+    text = "\n".join(
+        f"<tr><td>{module}!sample_frame</td><td>42</td><td>1.00%</td><td>0</td></tr>"
+        for module in modules
+    )
+
+    summary = cpu_profile.parse_xperf_stack_report(text)
+
+    assert summary["app_row_count"] == 3
+    assert [row["function"] for row in summary["top_app_inclusive_functions"]] == [
+        "emulebb-rust!sample_frame",
+        "emulebb-rust-diagnostics!sample_frame",
+        "emulebb!sample_frame",
     ]
 
 
