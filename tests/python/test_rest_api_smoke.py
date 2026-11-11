@@ -1534,7 +1534,7 @@ def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
 
 
 def test_openapi_error_envelope_documents_stable_error_codes() -> None:
-    openapi_path = Path(__file__).resolve().parents[3] / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+    openapi_path = _workspace_root_from_environment() / "repos/emulebb-tooling/docs/rest/REST-API-OPENAPI.yaml"
     text = openapi_path.read_text(encoding="utf-8")
     error_schema = text[text.index("    ErrorEnvelope:\n") : text.index("    AppEnvelope:\n")]
 
@@ -1556,7 +1556,7 @@ def test_openapi_error_envelope_documents_stable_error_codes() -> None:
 
 
 def test_openapi_metadata_tracks_beta_release_contract() -> None:
-    openapi_path = Path(__file__).resolve().parents[3] / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+    openapi_path = _workspace_root_from_environment() / "repos/emulebb-tooling/docs/rest/REST-API-OPENAPI.yaml"
     text = openapi_path.read_text(encoding="utf-8")
 
     assert "  version: 0.7.3\n" in text
