@@ -6,12 +6,16 @@ from emule_test_harness import rust_webui_live_proof
 
 
 @pytest.mark.parametrize("wrong_source", [False, True])
-def test_about_identity_requires_rendered_package_values_and_closes_details(wrong_source):
+@pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("visible_key", [False, True])
+def test_about_identity_requires_rendered_package_values_and_closes_details(tmp_path, wrong_source, capture, visible_key):
     expected = {"version": "0.1.0-beta.2", "channel": "nightly", "platform": "arm64",
                 "build": "release", "sourceRevision": "a" * 40}
     labels = {"Version": "version", "Channel": "channel", "Architecture": "platform",
               "Build": "build", "Source commit": "sourceRevision"}
     clicks = []
+    navigation = []
+    image = tmp_path / "public.png" if capture else None
 
     class Field:
         def __init__(self, label):
@@ -44,12 +48,54 @@ def test_about_identity_requires_rendered_package_values_and_closes_details(wron
             assert label == "About this build" and exact
             return Details()
 
-    if wrong_source:
+        def set_viewport_size(self, viewport):
+            assert viewport == {"width": 1280, "height": 720}
+
+        def get_by_role(self, role, *, name, exact):
+            assert exact and name == "Search" and role in {"link", "heading"}
+            class Navigation:
+                def count(self):
+                    return 1
+
+                def click(self, **kwargs):
+                    navigation.append(name)
+
+                def wait_for(self, **kwargs):
+                    assert kwargs == {"state": "visible"}
+            return Navigation()
+
+        def get_by_placeholder(self, placeholder):
+            assert placeholder == "X-API-Key"
+            class Key:
+                def is_visible(self):
+                    return visible_key
+            return Key()
+
+        def screenshot(self, **kwargs):
+            assert kwargs == {"path": str(image), "type": "png", "full_page": False,
+                              "animations": "disabled", "caret": "hide"}
+            image.write_bytes(b"synthetic screenshot bytes")
+
+    if capture and visible_key:
+        with pytest.raises(RuntimeError, match="authentication form"):
+            rust_webui_live_proof.verify_about_build_identity(Page(), expected, public_capture_path=image)
+    elif wrong_source:
         with pytest.raises(RuntimeError, match="Rendered About build identity"):
-            rust_webui_live_proof.verify_about_build_identity(Page(), expected)
+            rust_webui_live_proof.verify_about_build_identity(Page(), expected, public_capture_path=image)
     else:
-        assert rust_webui_live_proof.verify_about_build_identity(Page(), expected) == expected
-    assert clicks == ["toggle", "toggle"]
+        assert rust_webui_live_proof.verify_about_build_identity(Page(), expected, public_capture_path=image) == expected
+    assert clicks == ([] if capture and visible_key else ["toggle", "toggle"])
+    assert navigation == (["Search"] if capture else [])
+    assert (tmp_path / "public.png").exists() == (capture and not visible_key and not wrong_source)
+
+
+def test_generic_live_proof_cannot_enable_public_capture_without_package_identity(tmp_path):
+    with pytest.raises(ValueError, match="strict synthetic native-package proof"):
+        rust_webui_live_proof.run_webui_live_proof(
+            base_url="http://127.0.0.1:1234", api_key="synthetic", report_path=tmp_path / "report.json",
+            steady_seconds=1, tab_wait_seconds=0.1, timeout_seconds=1, max_main_thread_busy_ratio=1,
+            public_capture_path=tmp_path / "public.png")
+    assert not (tmp_path / "public.png").exists()
 
 
 def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:

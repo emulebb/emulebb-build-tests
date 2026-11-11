@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -1259,8 +1260,17 @@ def assert_no_browser_diagnostics(diagnostics: dict[str, list[dict[str, Any]]]) 
         raise RuntimeError(f"Rust WebUI browser diagnostics were not clean: {failures!r}")
 
 
-def verify_about_build_identity(page, expected_identity: dict[str, str]) -> dict[str, str]:
+def verify_about_build_identity(page, expected_identity: dict[str, str], *,
+                                public_capture_path: Path | None = None) -> dict[str, str]:
     """Compare the rendered About values with the verified package identity."""
+    if public_capture_path is not None:
+        # WHY: only the fresh synthetic package owner opts in. Never capture
+        # Overview's interface data or an authentication form in public images.
+        page.set_viewport_size({"width": 1280, "height": 720})
+        _click_primary_nav(page, "Search", timeout_ms=30_000)
+        page.get_by_role("heading", name="Search", exact=True).wait_for(state="visible")
+        if page.get_by_placeholder("X-API-Key").is_visible():
+            raise RuntimeError("Public WebUI capture must not include an authentication form")
     details = page.get_by_label("About this build", exact=True)
     details.locator("summary").click()
     try:
@@ -1272,6 +1282,10 @@ def verify_about_build_identity(page, expected_identity: dict[str, str]) -> dict
             observed[key] = value.inner_text().strip()
         if observed != expected_identity:
             raise RuntimeError("Rendered About build identity does not match the selected package")
+        if public_capture_path is not None:
+            public_capture_path.parent.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(public_capture_path), type="png", full_page=False,
+                            animations="disabled", caret="hide")
         return observed
     finally:
         details.locator("summary").click()
@@ -1292,8 +1306,13 @@ def run_webui_live_proof(
     configure_best_effort_upnp: bool = False,
     shutdown_after_proof: bool = False,
     expected_app_identity: dict[str, str] | None = None,
+    public_capture_path: Path | None = None,
 ) -> dict[str, Any]:
     """Exercises the packaged WebUI and writes a sanitized proof report."""
+
+    if public_capture_path is not None and (expected_app_identity is None or not navigation_only
+                                           or consumer_workflow is not None):
+        raise ValueError("Public capture requires the strict synthetic native-package proof")
 
     try:
         from playwright.sync_api import sync_playwright
@@ -1384,7 +1403,13 @@ def run_webui_live_proof(
                 page.get_by_role("navigation", name="Primary views").wait_for(timeout=int(timeout_seconds * 1000))
                 page.wait_for_timeout(1000)
                 if expected_app_identity is not None:
-                    report["checks"]["buildIdentity"] = verify_about_build_identity(page, expected_app_identity)
+                    report["checks"]["buildIdentity"] = verify_about_build_identity(
+                        page, expected_app_identity, public_capture_path=public_capture_path)
+                    if public_capture_path is not None:
+                        report["checks"]["publicCapture"] = {
+                            "file": public_capture_path.name, "width": 1280, "height": 720, "view": "Search",
+                            "sha256": hashlib.sha256(public_capture_path.read_bytes()).hexdigest(),
+                        }
 
                 recorder.reset_api()
                 cdp = page.context.new_cdp_session(page)

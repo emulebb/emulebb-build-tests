@@ -475,6 +475,7 @@ def _smoke_binary(
     render_webui: bool,
     verify_profile_ownership: bool = False,
     expected_identity: dict[str, str] | None = None,
+    public_capture_path: Path | None = None,
 ) -> dict[str, object]:
     if not binary.is_file() or not (webui / "index.html").is_file():
         raise RuntimeError("package is missing its daemon or embedded WebUI")
@@ -571,6 +572,7 @@ def _smoke_binary(
                 navigation_only=True,
                 verify_stale_key_recovery=True,
                 expected_app_identity=expected_identity,
+                public_capture_path=public_capture_path,
             )
             if rendered_webui.get("status") != "passed":
                 raise RuntimeError(f"packaged rendered WebUI proof failed: {rendered_webui!r}")
@@ -665,6 +667,8 @@ def _smoke_binary(
             "sharedRoots": 1,
             "profile": "fresh-local-only",
             "renderedWebui": bool(rendered_webui),
+            **({"publicWebuiCapture": rendered_webui["checks"]["publicCapture"]}
+               if public_capture_path is not None else {}),
             "localTransfer": {
                 "payload": {
                     "name": payload["name"],
@@ -722,6 +726,7 @@ def _smoke_windows(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
     expected_identity: dict[str, str] | None = None,
+    public_capture_path: Path | None = None,
 ) -> dict[str, object]:
     with zipfile.ZipFile(asset) as archive:
         archive.extractall(temp_root / "unpacked")
@@ -734,6 +739,7 @@ def _smoke_windows(
         render_webui=render_webui,
         verify_profile_ownership=verify_profile_ownership,
         expected_identity=expected_identity,
+        public_capture_path=public_capture_path,
     )
 
 
@@ -771,7 +777,8 @@ def _verify_package_manifest(asset: Path, expected_source_sha: str, expected_ver
 
 def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
                          render_webui: bool, verify_profile_ownership: bool = False,
-                         expected_identity: dict[str, str] | None = None) -> dict[str, object]:
+                         expected_identity: dict[str, str] | None = None,
+                         public_capture_path: Path | None = None) -> dict[str, object]:
     with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(asset)],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
@@ -786,7 +793,8 @@ def _smoke_linux_archive(asset: Path, temp_root: Path, *, rust_repo: Path,
     root = temp_root / "emulebb-rust"
     result = _smoke_binary(root / "emulebb-rust", root / "webui", temp_root,
                            rust_repo=rust_repo, render_webui=render_webui,
-                           verify_profile_ownership=verify_profile_ownership, expected_identity=expected_identity)
+                           verify_profile_ownership=verify_profile_ownership, expected_identity=expected_identity,
+                           public_capture_path=public_capture_path)
     return result
 
 
@@ -794,6 +802,7 @@ def _smoke_linux_deb(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
     expected_identity: dict[str, str] | None = None,
+    public_capture_path: Path | None = None,
 ) -> dict[str, object]:
     extracted = temp_root / "deb"
     subprocess.run(["dpkg-deb", "-x", str(asset), str(extracted)], check=True, timeout=30)
@@ -808,6 +817,7 @@ def _smoke_linux_deb(
         render_webui=render_webui,
         verify_profile_ownership=verify_profile_ownership,
         expected_identity=expected_identity,
+        public_capture_path=public_capture_path,
     )
 
 
@@ -815,6 +825,7 @@ def _smoke_linux_appimage(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
     expected_identity: dict[str, str] | None = None,
+    public_capture_path: Path | None = None,
 ) -> dict[str, object]:
     extracted = temp_root / "appimage"
     extracted.mkdir()
@@ -838,6 +849,7 @@ def _smoke_linux_appimage(
         render_webui=render_webui,
         verify_profile_ownership=verify_profile_ownership,
         expected_identity=expected_identity,
+        public_capture_path=public_capture_path,
     )
 
 
@@ -845,6 +857,7 @@ def _smoke_macos(
     asset: Path, temp_root: Path, *, rust_repo: Path, render_webui: bool,
     verify_profile_ownership: bool = False,
     expected_identity: dict[str, str] | None = None,
+    public_capture_path: Path | None = None,
 ) -> dict[str, object]:
     mount = temp_root / "mounted"
     mount.mkdir()
@@ -862,6 +875,7 @@ def _smoke_macos(
             render_webui=render_webui,
             verify_profile_ownership=verify_profile_ownership,
             expected_identity=expected_identity,
+            public_capture_path=public_capture_path,
         )
     finally:
         subprocess.run(["hdiutil", "detach", str(mount)], check=True, timeout=60,
@@ -880,6 +894,8 @@ def main() -> int:
     parser.add_argument("--expected-source-sha", required=True, help="Full clean source revision required for every tested package.")
     parser.add_argument("--expected-channel", choices=("development", "candidate", "beta", "nightly"),
                         help="Require matching REST, CLI and rendered About build identity.")
+    parser.add_argument("--capture-public-webui", action="store_true",
+                        help="Opt in to a neutral public screenshot from this fresh synthetic package proof.")
     parser.add_argument(
         "--render-webui",
         action="store_true",
@@ -895,6 +911,8 @@ def main() -> int:
         parser.error("--linux-libc requires --target-os linux")
     if re.fullmatch(r"[0-9a-f]{40}", args.expected_source_sha) is None:
         parser.error("--expected-source-sha must be a full lowercase commit SHA")
+    if args.capture_public_webui and not (args.render_webui and args.expected_channel and args.report_path):
+        parser.error("--capture-public-webui requires --render-webui, --expected-channel and --report-path")
     harness_before = require_clean_git_source(REPO_ROOT, label="Package smoke harness")
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
@@ -903,14 +921,16 @@ def main() -> int:
         "channel": args.expected_channel, "sourceRevision": args.expected_source_sha,
     }
     expected_target = None
-    if args.verify_profile_ownership:
+    if args.verify_profile_ownership or args.capture_public_webui:
         from emule_test_harness.paths import get_workspace_output_root
 
         output = get_workspace_output_root()
         if not output.is_dir():
-            parser.error("--verify-profile-ownership requires an existing workspace output directory")
+            parser.error("Profile/public-capture proof requires an existing workspace output directory")
         if args.report_path and not args.report_path.resolve().is_relative_to(output):
-            parser.error("--verify-profile-ownership report must stay under the workspace output root")
+            parser.error("Profile/public-capture report must stay under the workspace output root")
+        if args.capture_public_webui and args.report_path.is_symlink():
+            parser.error("Public capture report must be a regular workspace output path")
         scratch = output / "tmp" / "profile-ownership-package-smoke"
         scratch.mkdir(parents=True, exist_ok=True)
         temporary = _temporary_root(directory=scratch)
@@ -937,10 +957,14 @@ def main() -> int:
             manifest = _verify_package_manifest(asset, args.expected_source_sha, args.release_version, expected_target)
             child = temp_root / str(len(reports))
             child.mkdir()
+            capture = args.report_path.parent / f"{asset.stem}-public-webui.png" if args.capture_public_webui else None
+            if capture is not None and (capture.exists() or capture.is_symlink()):
+                raise RuntimeError("Public WebUI capture already exists; use a fresh report directory")
             result = smoke(
                 asset, child, rust_repo=args.rust_repo.resolve(), render_webui=args.render_webui,
                 verify_profile_ownership=args.verify_profile_ownership,
                 **({"expected_identity": expected_identity} if expected_identity is not None else {}),
+                **({"public_capture_path": capture} if capture is not None else {}),
             )
             if (result.get("status") != "passed" or result.get("appVersion") != args.release_version or result.get("appBuild") != "release"
                     or result.get("appPlatform") != ("x64" if arch == "x64" else "arm64")
@@ -950,6 +974,12 @@ def main() -> int:
                 raise RuntimeError("Running package build identity does not match the selected release asset")
             if _verify_package_manifest(asset, args.expected_source_sha, args.release_version, expected_target) != manifest:
                 raise RuntimeError("Package bytes or provenance changed during smoke validation")
+            if capture is not None:
+                captured = result.get("publicWebuiCapture", {})
+                if (not capture.is_file() or captured.get("file") != capture.name
+                        or captured.get("sha256") != file_sha256(capture)
+                        or (captured.get("width"), captured.get("height"), captured.get("view")) != (1280, 720, "Search")):
+                    raise RuntimeError("Public WebUI capture bytes do not match the package proof")
             reports.append({"asset": name, "assetSha256": manifest["sha256"], "sourceSha": args.expected_source_sha,
                             "packageManifestSha256": file_sha256(asset.with_name(asset.name + ".manifest.json")),
                             "sbomSha256": manifest["sbomSha256"], **result})

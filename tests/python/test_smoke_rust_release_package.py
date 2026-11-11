@@ -547,7 +547,8 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
 
 @pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke",
                                   "dirty-harness-before", "dirty-harness-during", "harness-head-change",
-                                  "wrong-runtime-source", "wrong-runtime-channel"])
+                                  "wrong-runtime-source", "wrong-runtime-channel", "capture-ok",
+                                  "capture-tampered", "capture-not-created"])
 def test_main_binds_every_native_package_before_launch_and_retains_exact_source_proof(monkeypatch, tmp_path, fault):
     version = "0.1.0-beta.2"
     asset = tmp_path / f"emulebb-rust-v{version}-windows-x64.zip"
@@ -566,6 +567,7 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
     elif fault == "stem-manifest":
         manifest_path.rename(asset.with_suffix(".manifest.json"))
     launches = []
+    capture = fault is not None and fault.startswith("capture-")
     def probe(*args, **kwargs):
         assert kwargs["expected_identity"] == {"version": version, "build": "release", "platform": "x64",
                                                "channel": "nightly", "sourceRevision": "a" * 40}
@@ -574,12 +576,22 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
             asset.write_bytes(b"new package from another operation")
             manifest["sha256"] = smoke.file_sha256(asset)
             manifest_path.write_text(json.dumps(manifest))
-        return {"status": "passed", "appVersion": version, "appBuild": "release",
+        result = {"status": "passed", "appVersion": version, "appBuild": "release",
                 "appPlatform": "arm64" if fault == "wrong-cpu" else "x64",
                 "appChannel": "candidate" if fault == "wrong-runtime-channel" else "nightly",
                 "appSourceRevision": ("b" if fault == "wrong-runtime-source" else "a") * 40}
+        if capture:
+            image = kwargs["public_capture_path"]
+            assert image.parent == report.parent
+            if fault != "capture-not-created":
+                image.write_bytes(b"synthetic screenshot bytes")
+                result["publicWebuiCapture"] = {"file": image.name, "width": 1280, "height": 720,
+                                                "view": "Search", "sha256": smoke.file_sha256(image)}
+                if fault == "capture-tampered":
+                    image.write_bytes(b"different screenshot bytes")
+        return result
     @contextmanager
-    def temporary():
+    def temporary(**kwargs):
         root = tmp_path / "run"
         root.mkdir()
         yield root
@@ -595,17 +607,22 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(smoke, "_temporary_root", temporary)
     monkeypatch.setattr(smoke, "_smoke_windows", probe)
+    if capture:
+        from emule_test_harness import paths
+        monkeypatch.setattr(paths, "get_workspace_output_root", lambda: tmp_path)
     monkeypatch.setattr(smoke.sys, "argv", ["smoke-rust-release-package.py", "--release-dir", str(tmp_path),
                                            "--release-version", version, "--rust-repo", str(tmp_path),
                                            "--target-os", "windows", "--platform", "x64",
                                            "--expected-source-sha", "a" * 40, "--expected-channel", "nightly",
-                                           "--report-path", str(report)])
-    if fault:
+                                           "--report-path", str(report),
+                                           *(["--capture-public-webui", "--render-webui"] if capture else [])])
+    if fault not in {None, "capture-ok"}:
         with pytest.raises((RuntimeError, OSError)):
             smoke.main()
         assert not report.exists()
         assert len(launches) == (1 if fault in {"wrong-cpu", "changed-during-smoke", "dirty-harness-during", "harness-head-change",
-                                              "wrong-runtime-source", "wrong-runtime-channel"} else 0)
+                                              "wrong-runtime-source", "wrong-runtime-channel", "capture-tampered",
+                                              "capture-not-created"} else 0)
     else:
         assert smoke.main() == 0
         result = json.loads(report.read_text())
@@ -615,3 +632,37 @@ def test_main_binds_every_native_package_before_launch_and_retains_exact_source_
         assert result["harnessSha"] == "c" * 40 and len(harness_checks) == 2
         assert result["results"][0]["assetSha256"] == smoke.file_sha256(asset)
         assert result["results"][0]["packageManifestSha256"] == smoke.file_sha256(manifest_path)
+        assert ("publicWebuiCapture" in result["results"][0]) == capture
+
+
+@pytest.mark.parametrize("missing", ["--render-webui", "--expected-channel", "--report-path"])
+def test_public_capture_requires_explicit_strict_owner_inputs_before_launch(monkeypatch, tmp_path, missing):
+    arguments = ["smoke-rust-release-package.py", "--release-dir", str(tmp_path), "--release-version", "0.1.0-beta.2",
+                 "--rust-repo", str(tmp_path), "--target-os", "windows", "--platform", "x64",
+                 "--expected-source-sha", "a" * 40, "--capture-public-webui"]
+    for option, values in (("--render-webui", []), ("--expected-channel", ["candidate"]),
+                           ("--report-path", [str(tmp_path / "report.json")])):
+        if option != missing:
+            arguments.extend([option, *values])
+    monkeypatch.setattr(smoke.sys, "argv", arguments)
+    monkeypatch.setattr(smoke, "require_clean_git_source", lambda *args, **kwargs: pytest.fail("owner validation too late"))
+    with pytest.raises(SystemExit) as error:
+        smoke.main()
+    assert error.value.code == 2
+
+
+def test_public_capture_refuses_a_report_outside_owned_output(monkeypatch, tmp_path):
+    from emule_test_harness import paths
+
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setattr(paths, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(smoke, "require_clean_git_source", lambda *args, **kwargs: SimpleNamespace(revision="c" * 40))
+    monkeypatch.setattr(smoke.sys, "argv", ["smoke-rust-release-package.py", "--release-dir", str(tmp_path),
+        "--release-version", "0.1.0-beta.2", "--rust-repo", str(tmp_path), "--target-os", "windows", "--platform", "x64",
+        "--expected-source-sha", "a" * 40, "--expected-channel", "candidate", "--render-webui", "--capture-public-webui",
+        "--report-path", str(tmp_path / "outside.json")])
+    with pytest.raises(SystemExit) as error:
+        smoke.main()
+    assert error.value.code == 2
+    assert not (tmp_path / "outside.json").exists()
