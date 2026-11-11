@@ -77,7 +77,8 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
 
 
 def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None = None,
-                 openapi_contract: Path | None = None) -> tuple[dict[str, Any], Path]:
+                 openapi_contract: Path | None = None,
+                 registered_stage: bool = False) -> tuple[dict[str, Any], Path]:
     workspace_root = get_required_emule_workspace_root()
     output_root = get_workspace_output_root()
     rust_repo = (rust_repo or workspace_root / "repos" / "emulebb-rust").resolve()
@@ -89,7 +90,8 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
         if selected is not None and not any(selected.resolve().is_relative_to(workspace_root / boundary)
                                              for boundary in ("repos", "workspaces")):
             raise RuntimeError("Selected REST sources must remain inside workspace source boundaries")
-    executable = staged_executable(output_root)
+    identity = rust_client.verified_runtime_stage(rust_repo, output_root) if registered_stage else None
+    executable = Path(identity["executable"]) if identity else staged_executable(output_root)
     if not rust_repo.is_dir():
         raise RuntimeError(f"emulebb-rust source is missing: {rust_repo}")
     if not executable.is_file():
@@ -136,6 +138,11 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
         "openapiContract": str(openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH),
         "executableSha256": sha256_file(executable),
     }
+    if identity:
+        report["sourceRevision"] = identity["source"]["revision"]
+        report["runtimeStageReceipt"] = identity["receipt"]
+        report["runtimeStageTarget"] = identity["target"]
+        report["workstream"] = identity["workstream"]
     run_root.mkdir(parents=True, exist_ok=True)
     handle = daemon_log.open("w", encoding="utf-8", newline="\n")
     process = None
@@ -201,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--rust-repo", type=Path)
     parser.add_argument("--openapi-contract", type=Path)
+    parser.add_argument("--registered-stage", action="store_true")
     args = parser.parse_args(argv)
     if args.ready_timeout_seconds <= 0:
         raise ValueError("--ready-timeout-seconds must be positive.")
@@ -209,6 +217,8 @@ def main(argv: list[str] | None = None) -> int:
         selected["rust_repo"] = args.rust_repo
     if args.openapi_contract:
         selected["openapi_contract"] = args.openapi_contract
+    if args.registered_stage:
+        selected["registered_stage"] = True
     report, report_path = run_campaign(ready_timeout_seconds=args.ready_timeout_seconds, **selected)
     print(json.dumps({"report": str(report_path), "status": report["status"], "teardown": report["teardown"]}))
     return 0 if report["status"] == "passed" else 1
