@@ -1,6 +1,55 @@
 from __future__ import annotations
 
+import pytest
+
 from emule_test_harness import rust_webui_live_proof
+
+
+@pytest.mark.parametrize("wrong_source", [False, True])
+def test_about_identity_requires_rendered_package_values_and_closes_details(wrong_source):
+    expected = {"version": "0.1.0-beta.2", "channel": "nightly", "platform": "arm64",
+                "build": "release", "sourceRevision": "a" * 40}
+    labels = {"Version": "version", "Channel": "channel", "Architecture": "platform",
+              "Build": "build", "Source commit": "sourceRevision"}
+    clicks = []
+
+    class Field:
+        def __init__(self, label):
+            self.key = labels[label]
+
+        def locator(self, selector):
+            assert selector == "xpath=following-sibling::dd[1]"
+            return self
+
+        def wait_for(self, *, state):
+            assert state == "visible"
+
+        def inner_text(self):
+            return "b" * 40 if wrong_source and self.key == "sourceRevision" else expected[self.key]
+
+    class Details:
+        def locator(self, selector):
+            assert selector == "summary"
+            return self
+
+        def click(self):
+            clicks.append("toggle")
+
+        def get_by_text(self, label, *, exact):
+            assert exact
+            return Field(label)
+
+    class Page:
+        def get_by_label(self, label, *, exact):
+            assert label == "About this build" and exact
+            return Details()
+
+    if wrong_source:
+        with pytest.raises(RuntimeError, match="Rendered About build identity"):
+            rust_webui_live_proof.verify_about_build_identity(Page(), expected)
+    else:
+        assert rust_webui_live_proof.verify_about_build_identity(Page(), expected) == expected
+    assert clicks == ["toggle", "toggle"]
 
 
 def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:
