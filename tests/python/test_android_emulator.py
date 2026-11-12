@@ -380,6 +380,7 @@ def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned
     def request(port, api_key=None):
         assert port == 32123
         if api_key is None: return (200 if outcome == "unauthorized-open" else 401), {}
+        assert identities.call_count == 1, "the owned PID birth must be bound before authenticated REST"
         assert api_key == "SyntheticAndroidKeyMaterial1234567890"
         return (401 if outcome == "auth-failure" else 200), {"data": app, "meta": {"apiVersion": "v1"}}
     monkeypatch.setattr(subject, "_rest_app", request)
@@ -390,7 +391,9 @@ def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned
         if "test" in arguments and arguments[-1].startswith("/owned/caller-cwd/") and outcome == "cwd-profile":
             raise RuntimeError("caller CWD contains a profile")
         if "stat" in arguments: return "644" if outcome == "permissions" else "600"
-        if "head" in arguments: return BOOTSTRAP.replace("SyntheticAndroidKeyMaterial1234567890", "short") if outcome == "short-key" else BOOTSTRAP
+        if "head" in arguments:
+            assert identities.call_count == 1, "the owned PID birth must precede bootstrap inspection"
+            return BOOTSTRAP.replace("SyntheticAndroidKeyMaterial1234567890", "short") if outcome == "short-key" else BOOTSTRAP
         if "cat" in arguments: return "42"
         return ""
     if outcome == "success":

@@ -237,6 +237,11 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
             if time.monotonic() >= deadline:
                 raise RuntimeError("Android fresh-profile REST did not become ready within its bound")
             time.sleep(0.25)
+        # Bind the process before reading its bootstrap or authenticating, then
+        # compare again before signalling: two adjacent post-proof reads would
+        # not establish that the same owned process served the whole proof.
+        pid = command(*prefix, "shell", "cat", executable_dir + "/owned-daemon.pid")
+        identity = _daemon_identity(command, pid, executable, sha256, cwd)
         command(*prefix, "shell", "test", "!", "-e", cwd + "/emulebb-rust-settings.toml")
         command(*prefix, "shell", "test", "!", "-L", settings)
         if command(*prefix, "shell", "stat", "-c", "%a", settings) != "600":
@@ -246,8 +251,6 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
         if status != 200:
             raise RuntimeError("Android authenticated REST must accept the generated API key")
         app = _app_identity(document, payload["buildIdentity"])
-        pid = command(*prefix, "shell", "cat", executable_dir + "/owned-daemon.pid")
-        identity = _daemon_identity(command, pid, executable, sha256, cwd)
         if _daemon_identity(command, pid, executable, sha256, cwd) != identity:
             raise RuntimeError("Android daemon PID was reused before graceful shutdown")
         command(*prefix, "shell", "kill", "-TERM", pid)
