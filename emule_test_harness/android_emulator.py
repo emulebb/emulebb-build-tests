@@ -215,20 +215,35 @@ def _start_production_daemon(adb: str, child: dict, executable: str, cwd: str,
     return process, capture
 
 
-def _startup_failure_context(path: Path) -> dict:
-    """Classify fixed fatal owner contexts; never return private native output."""
-    chunks = []
-    for candidate in (rotated_path(path, 1), path):
-        if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 65536:
-            continue
-        chunks.append(candidate.read_bytes())
-    text = b"\n".join(chunks).lower()
+def _classify_startup_error(text: bytes) -> dict:
+    """Translate only source-owned failure families into fixed public codes."""
+    text = text.lower()
     contexts = (
         (b"cannot link executable", "dynamic-linker"),
         (b"/system/bin/sh:", "shell-launch"),
         (b"env: exec", "shell-launch"),
         (b"expect rustls-platform-verifier to be initialized", "platform-verifier-uninitialized"),
         (b"failed to enumerate local interfaces", "interface-enumeration"),
+        (b"p2pbindip or p2pbindinterface is required because no default-route ipv4 interface was detected", "p2p-default-route-missing"),
+        (b"p2pbindip or p2pbindinterface is required because multiple default-route ipv4 interfaces were detected", "p2p-default-route-ambiguous"),
+        (b"p2pbindip or p2pbindinterface is required when vpn guard blocks public p2p", "p2p-vpn-binding-required"),
+        (b"failed to bind rest/webui tcp listener at", "rest-listener-bind"),
+        (b"kad.listenport is required", "kad-listener-required"),
+        (b"ed2k.listenport is required", "ed2k-listener-required"),
+        (b"failed to generate ed2k secure-ident rsa keypair", "secure-ident-generation"),
+        (b"invalid pkcs#8 ed2k secure-ident private key", "secure-ident-decode"),
+        (b"failed to encode ed2k secure-ident private key", "secure-ident-encode"),
+        (b"failed to encode ed2k secure-ident public key", "secure-ident-encode"),
+        (b"exceeds stock maxpubkeysize", "secure-ident-size"),
+        (b"failed to read ipfilter.dat at", "ip-filter-read"),
+        (b"failed to create ed2k transfer root", "transfer-root-create"),
+        (b"core settings snapshot is missing", "core-settings-missing"),
+        (b"settings snapshot is missing", "settings-snapshot-missing"),
+        (b"ed2k managed transfer path scan task panicked", "transfer-root-scan-task"),
+        (b"failed to inventory ed2k transfer root", "transfer-root-inventory"),
+        (b"ed2k managed transfer path recheck task panicked", "transfer-root-recheck-task"),
+        (b"rest.web_root_dir must be an existing directory", "web-root-invalid"),
+        (b"rest.web_root_dir must contain index.html", "web-root-invalid"),
         (b"failed to acquire exclusive ownership of profile", "profile-lock"),
         (b"profile is already in use", "profile-in-use"),
         (b"failed to open ownership lock for profile", "profile-lock-open"),
@@ -256,6 +271,16 @@ def _startup_failure_context(path: Path) -> dict:
         (b"stored ed2k secure-ident identity", "secure-ident-state"),
         (b"failed to create incoming dir", "incoming-directory"),
         (b"failed to create first-run discovery http client", "bootstrap-http-client"),
+        # Bare SQLite errors identify a backend family, never an invented
+        # recovery-function stage. Dynamic object names are not returned.
+        (b"no such module: fts5", "sqlite-fts-unavailable"),
+        (b"no such table:", "sqlite-schema-table"),
+        (b"no such column:", "sqlite-schema-column"),
+        (b"database is locked", "sqlite-busy"),
+        (b"database disk image is malformed", "sqlite-corrupt"),
+        (b"unable to open database file", "sqlite-open"),
+        (b"attempt to write a readonly database", "sqlite-read-only"),
+        (b"constraint failed", "sqlite-constraint"),
         (b"emulebb-rust-settings.toml", "bootstrap-file-error"),
         (b"daemon terminated with an error", "daemon-run-error"),
     )
@@ -272,11 +297,76 @@ def _startup_failure_context(path: Path) -> dict:
         (b"too many open files (os error 24)", "file-limit"),
         (b"invalid argument (os error 22)", "invalid-argument"),
         (b"resource temporarily unavailable (os error 11)", "temporarily-unavailable"),
+        (b"no such device (os error 19)", "missing-device"),
+        (b"network is unreachable (os error 101)", "network-unreachable"),
+        (b"cannot assign requested address (os error 99)", "address-unavailable"),
     )
     return {"context": next((code for marker, code in contexts if marker in text), "unknown"),
-            "systemCondition": next((code for marker, code in conditions if marker in text), "unknown"),
-            "privateOutputAvailable": any(chunks), "bootstrapCreated": b"created emulebb profile" in text,
-            "runtimeEntered": b"starting emulebb-rust" in text}
+            "systemCondition": next((code for marker, code in conditions if marker in text), "unknown")}
+
+
+def _startup_failure_context(path: Path) -> dict:
+    """Read only the existing bounded private console segments, never publish them."""
+    chunks = []
+    for candidate in (rotated_path(path, 1), path):
+        if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 65536:
+            continue
+        chunks.append(candidate.read_bytes())
+    text = b"\n".join(chunks).lower()
+    return {**_classify_startup_error(text), "errorSource": "private-console", "privateOutputAvailable": any(chunks),
+            "bootstrapCreated": b"created emulebb profile" in text,
+            "runtimeEntered": b"starting emulebb-rust" in text,
+            "daemonRunErrorReported": b"daemon terminated with an error" in text}
+
+
+def _retained_fatal_context(command, directory: str) -> dict:
+    """Read only one exact fatal record from the producer's private daily JSONL files."""
+    unknown = {"context": "unknown", "systemCondition": "unknown", "errorSource": "retained-jsonl"}
+    prefix = ("-s", "emulator-5554")
+    logs = directory + "/logs/"
+    try:
+        listing = command(*prefix, "shell", "ls", "-1", logs, check=False)
+        names = listing.splitlines()
+        if not names:
+            return {**unknown, "fatalRecordStatus": "missing"}
+        if len(names) > 2 or len(set(names)) != len(names) or any(
+                re.fullmatch(r"emulebb-rust\.[0-9]{4}-[0-9]{2}-[0-9]{2}\.jsonl", name) is None for name in names):
+            return {**unknown, "fatalRecordStatus": "unbounded"}
+        fatal = []
+        for name in sorted(names):
+            path = logs + name
+            command(*prefix, "shell", "test", "!", "-L", path)
+            size = command(*prefix, "shell", "stat", "-c", "%s", path)
+            if re.fullmatch(r"[0-9]+", size) is None or int(size) > 65536:
+                return {**unknown, "fatalRecordStatus": "unbounded"}
+            data = command(*prefix, "exec-out", "head", "-c", "65537", path, binary=True)
+            if isinstance(data, bytes) and len(data) > 65536:
+                return {**unknown, "fatalRecordStatus": "unbounded"}
+            if not isinstance(data, bytes) or len(data) != int(size):
+                return {**unknown, "fatalRecordStatus": "changed"}
+            lines = data.splitlines()
+            if len(lines) > 512 or any(len(line) > 32768 for line in lines):
+                return {**unknown, "fatalRecordStatus": "unbounded"}
+            for line in lines:
+                if not line.strip():
+                    continue
+                record = json.loads(line.decode("utf-8"))
+                if not isinstance(record, dict):
+                    return {**unknown, "fatalRecordStatus": "malformed"}
+                fields = record.get("fields")
+                if (record.get("level") == "ERROR" and record.get("target") == "emulebb_rust"
+                        and isinstance(fields, dict) and fields.get("message") == "daemon terminated with an error"):
+                    error = fields.get("error")
+                    if not isinstance(error, str) or not error or len(error.encode("utf-8")) > 32768:
+                        return {**unknown, "fatalRecordStatus": "malformed"}
+                    fatal.append(error)
+        if len(fatal) != 1:
+            return {**unknown, "fatalRecordStatus": "missing" if not fatal else "ambiguous"}
+        return {**_classify_startup_error(fatal[0].encode("utf-8")), "errorSource": "retained-jsonl", "fatalRecordStatus": "matched"}
+    except (ValueError, UnicodeError, RecursionError):
+        return {**unknown, "fatalRecordStatus": "malformed"}
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return {**unknown, "fatalRecordStatus": "unavailable"}
 
 
 def _startup_file_flags(command, directory: str) -> dict:
@@ -332,6 +422,12 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
                     **_startup_failure_context(report_dir / "daemon-startup.log"),
                     **_startup_file_flags(command, executable_dir),
                 }
+                fatal = _retained_fatal_context(command, executable_dir)
+                if (fatal["fatalRecordStatus"] == "matched" or progress["startupFailure"]["runtimeEntered"]
+                        or progress["startupFailure"]["daemonRunErrorReported"]):
+                    # Once normal runtime logging exists, only its exact fatal
+                    # error field may choose a cause. Warnings are not evidence.
+                    progress["startupFailure"].update(fatal)
                 raise RuntimeError("Android production daemon exited before fresh-profile REST readiness")
             try:
                 status, _document = _rest_app(port)

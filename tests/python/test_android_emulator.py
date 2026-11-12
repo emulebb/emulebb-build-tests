@@ -471,7 +471,8 @@ def test_private_startup_capture_returns_only_fixed_context_and_condition_codes(
     path.write_text("starting emulebb-rust\n" + message + "\nOperation not supported (os error 95)\n")
     result = subject._startup_failure_context(path)
     assert result == {"context": context, "systemCondition": "operation-not-supported",
-                      "privateOutputAvailable": True, "bootstrapCreated": True, "runtimeEntered": True}
+                      "errorSource": "private-console", "privateOutputAvailable": True,
+                      "bootstrapCreated": True, "runtimeEntered": True, "daemonRunErrorReported": False}
     assert "SyntheticPrivateValue" not in json.dumps(result) and "/private/" not in json.dumps(result)
 
 
@@ -480,7 +481,7 @@ def test_private_startup_capture_never_reads_oversized_or_missing_segments(tmp_p
     path.write_bytes(b"x" * 65537)
     result = subject._startup_failure_context(path)
     assert result == {"context": "unknown", "systemCondition": "unknown", "privateOutputAvailable": False,
-                      "bootstrapCreated": False, "runtimeEntered": False}
+                      "errorSource": "private-console", "bootstrapCreated": False, "runtimeEntered": False, "daemonRunErrorReported": False}
 
 
 def test_startup_file_probe_exposes_only_fixed_profile_presence_booleans():
@@ -493,3 +494,62 @@ def test_startup_file_probe_exposes_only_fixed_profile_presence_booleans():
     assert subject._startup_file_flags(command, "/owned/startup-exe") == {"bootstrapExists": True, "leaseExists": False}
     assert len(calls) == 3 and all(call[:5] == ("-s", "emulator-5554", "shell", "sh", "-c") for call in calls)
     assert all("--profile" not in str(call) and "api_key" not in str(call) for call in calls)
+
+
+@pytest.mark.parametrize("outcome", ["fatal", "warning-only", "wrong-target", "malformed", "multiple", "bad-error",
+                                    "oversize-file", "oversize-record", "oversize-return", "changed", "invalid-name", "utf8", "unavailable", "deep-json"])
+def test_retained_jsonl_classifies_only_one_exact_fatal_error_field(outcome):
+    directory = "/owned/startup-exe"
+    filename = "emulebb-rust.2026-11-13.jsonl"
+    error = ("p2pBindIp or p2pBindInterface is required because no default-route IPv4 interface was detected; "
+             "private path /private/profile and key SyntheticPrivateValue")
+    fatal = {"level": "ERROR", "target": "emulebb_rust",
+             "fields": {"message": "daemon terminated with an error", "error": error}}
+    warning = {"level": "WARN", "target": "emulebb_rust",
+               "fields": {"message": "unrelated warning", "error": "failed to enumerate local interfaces"}}
+    if outcome == "wrong-target": fatal["target"] = "unrelated"
+    if outcome == "bad-error": fatal["fields"]["error"] = {"private": "SyntheticPrivateValue"}
+    if outcome == "oversize-record": fatal["fields"]["error"] = "x" * 32769
+    records = [warning] if outcome == "warning-only" else [warning, fatal]
+    if outcome == "multiple": records.append(fatal)
+    data = ("\n".join(json.dumps(item) for item in records) + "\n").encode()
+    if outcome == "malformed": data = b"invalid private JSON\n"
+    if outcome == "utf8": data = b"\xff\n"
+    if outcome == "deep-json": data = b"[" * 2000 + b"0" + b"]" * 2000
+    calls = []
+    def command(*arguments, **kwargs):
+        calls.append(arguments)
+        if outcome == "unavailable": raise RuntimeError("private transport detail")
+        if "ls" in arguments: return "../private/path" if outcome == "invalid-name" else filename
+        if "stat" in arguments:
+            return "65537" if outcome == "oversize-file" else str(len(data) + (1 if outcome == "changed" else 0))
+        if "exec-out" in arguments:
+            assert kwargs["binary"] is True
+            assert arguments[3:6] == ("head", "-c", "65537")
+            return b"x" * 65537 if outcome == "oversize-return" else data
+        return ""
+    value = subject._retained_fatal_context(command, directory)
+    if outcome == "fatal":
+        assert value == {"context": "p2p-default-route-missing", "systemCondition": "unknown",
+                         "errorSource": "retained-jsonl", "fatalRecordStatus": "matched"}
+    else:
+        assert value["context"] == "unknown"
+        assert value["fatalRecordStatus"] == {"warning-only": "missing", "wrong-target": "missing", "malformed": "malformed",
+            "multiple": "ambiguous", "bad-error": "malformed", "oversize-file": "unbounded", "oversize-record": "unbounded",
+            "oversize-return": "unbounded", "changed": "changed", "invalid-name": "unbounded", "utf8": "malformed",
+            "unavailable": "unavailable", "deep-json": "malformed"}[outcome]
+    assert "SyntheticPrivateValue" not in json.dumps(value) and "/private/" not in json.dumps(value)
+    assert all(call[:2] == ("-s", "emulator-5554") for call in calls)
+
+
+@pytest.mark.parametrize("error,context", [
+    ("failed to generate ED2K secure-ident RSA keypair", "secure-ident-generation"),
+    ("failed to bind REST/WebUI TCP listener at /private/listener", "rest-listener-bind"),
+    ("p2pBindIp or p2pBindInterface is required because multiple default-route IPv4 interfaces were detected", "p2p-default-route-ambiguous"),
+    ("p2pBindIp or p2pBindInterface is required when VPN Guard blocks public P2P", "p2p-vpn-binding-required"),
+    ("failed to inventory ED2K transfer root /private/root", "transfer-root-inventory"),
+    ("core settings snapshot is missing", "core-settings-missing"),
+    ("no such table: private_table", "sqlite-schema-table"),
+])
+def test_fatal_context_codes_cover_real_post_entry_owner_and_backend_families(error, context):
+    assert subject._classify_startup_error(error.encode())["context"] == context
