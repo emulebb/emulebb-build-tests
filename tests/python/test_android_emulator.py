@@ -277,6 +277,7 @@ def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(
     payload = tls_manifest(tmp_path / "payload")
     calls = []
     directory = None
+    progress = {}
     startup = Mock(return_value={"status": "passed"})
     monkeypatch.setattr(subject, "_fresh_profile_startup", startup)
 
@@ -297,15 +298,17 @@ def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(
         return ""
 
     if outcome == "success":
-        value = subject._run_tls_payload(command, payload, adb="owned-adb", child={}, report_dir=tmp_path)
+        value = subject._run_tls_payload(command, payload, adb="owned-adb", child={}, report_dir=tmp_path, progress=progress)
         assert len(value["cases"]) == 6 and value["status"] == "passed"
         assert {item["name"] for item in value["cases"]} == {case for cases in subject.TLS_CASES.values() for case in cases}
         assert value["freshProfileRestReadiness"] == "passed" and value["startup"] == {"status": "passed"}
         startup.assert_called_once()
+        assert set(progress["completedCases"]) == {case for cases in subject.TLS_CASES.values() for case in cases}
     else:
         with pytest.raises((RuntimeError, subprocess.TimeoutExpired)):
-            subject._run_tls_payload(command, payload, adb="owned-adb", child={}, report_dir=tmp_path)
+            subject._run_tls_payload(command, payload, adb="owned-adb", child={}, report_dir=tmp_path, progress=progress)
         startup.assert_not_called()
+        assert progress["failureStage"] == ("payload-upload" if outcome == "guest-hash" else "tls-test")
     assert calls[-1] == ("-s", "emulator-5554", "shell", "rm", "-rf", directory)
     assert directory.startswith("/data/local/tmp/emulebb-tls-")
     assert all(call[:2] == ("-s", "emulator-5554") for call in calls)
@@ -358,6 +361,7 @@ def test_process_identity_binds_pid_birth_executable_bytes_and_default_invocatio
 def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned_shutdown(tmp_path, monkeypatch, outcome):
     payload = tls_manifest(tmp_path / "payload")
     calls = []
+    progress = {}
     process, capture = Mock(), Mock()
     process.poll.return_value = None
     def wait(timeout):
@@ -397,7 +401,7 @@ def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned
         if "cat" in arguments: return "42"
         return ""
     if outcome == "success":
-        result = subject._fresh_profile_startup(command, payload, "/owned", adb="private-adb", child={}, report_dir=tmp_path)
+        result = subject._fresh_profile_startup(command, payload, "/owned", adb="private-adb", child={}, report_dir=tmp_path, progress=progress)
         assert result["status"] == "passed" and result["profilePlacement"] == "executable-directory"
         assert result["unauthenticatedStatus"] == 401 and result["authenticatedStatus"] == 200
         assert result["shutdown"] == {"signal": "SIGTERM", "identityVerified": True, "exitCode": 0, "graceful": True, "forwardRemoved": True}
@@ -406,7 +410,10 @@ def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned
         assert not stopped.called
     else:
         with pytest.raises((RuntimeError, subprocess.TimeoutExpired)):
-            subject._fresh_profile_startup(command, payload, "/owned", adb="private-adb", child={}, report_dir=tmp_path)
+            subject._fresh_profile_startup(command, payload, "/owned", adb="private-adb", child={}, report_dir=tmp_path, progress=progress)
+        if outcome in {"source", "version", "pid-reused", "timeout"}:
+            assert progress["failureStage"] == {"source": "app-identity", "version": "app-identity",
+                                                "pid-reused": "shutdown-identity", "timeout": "shutdown-wait"}[outcome]
     assert calls[-1] == ("-s", "emulator-5554", "forward", "--remove", "tcp:32123")
     capture.close.assert_called_once()
     assert launcher.call_args.args[2:5] == ("/owned/startup-exe/emulebb-rust", "/owned/caller-cwd", "/owned")

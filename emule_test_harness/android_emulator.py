@@ -86,11 +86,12 @@ def _tls_case_result(text: str, case: str) -> dict:
     return {"name": case, "passed": 1, "failed": 0, "ignored": 0}
 
 
-def _run_tls_payload(command, payload: dict, *, adb: str, child: dict, report_dir: Path) -> dict:
+def _run_tls_payload(command, payload: dict, *, adb: str, child: dict, report_dir: Path, progress: dict) -> dict:
     """Run only the six owned TLS cases on the already-owned Android guest."""
     directory = "/data/local/tmp/emulebb-tls-" + uuid4().hex
     prefix = ("-s", "emulator-5554")
     results = []
+    progress.update(stage="payload-upload", completedCases=[])
     try:
         command(*prefix, "shell", "mkdir", "-m", "700", directory)
         for name, identity in payload["files"].items():
@@ -102,15 +103,22 @@ def _run_tls_payload(command, payload: dict, *, adb: str, child: dict, report_di
             command(*prefix, "shell", "chmod", "500", target)
         for role, cases in TLS_CASES.items():
             for case in cases:
+                progress.update(stage="tls-test", activeCase=case)
                 text = command(*prefix, "shell", "env", "LD_LIBRARY_PATH=" + directory,
                                directory + "/" + role + "-tests", "--exact", case,
                                "--test-threads=1", "--color", "never", timeout=30)
                 # Only synthetic test names/results enter the public receipt.
                 results.append(_tls_case_result(text + "\n", case))
-        startup = _fresh_profile_startup(command, payload, directory, adb=adb, child=child, report_dir=report_dir)
+                progress["completedCases"].append(case)
+        progress.pop("activeCase", None)
+        startup = _fresh_profile_startup(command, payload, directory, adb=adb, child=child, report_dir=report_dir, progress=progress)
         return {"schema": "emulebb.android.tls-execution/2", "status": "passed",
                 "source": payload["source"], "files": payload["files"], "cases": results,
                 "freshProfileRestReadiness": "passed", "startup": startup, "apkQualification": "not-run"}
+    except BaseException as error:
+        progress.setdefault("failureStage", progress["stage"])
+        progress.setdefault("failureMessage", str(error))
+        raise
     finally:
         # Fixed generated guest directory only; the fresh emulator is also
         # terminated by the existing outer owner after any failure or timeout.
@@ -170,11 +178,14 @@ def _daemon_identity(command, pid: str, executable: str, sha256: str, cwd: str) 
         raise RuntimeError("Android daemon PID is invalid")
     prefix = ("-s", "emulator-5554")
     proc = "/proc/" + pid
-    if (command(*prefix, "shell", "readlink", proc + "/exe") != executable
-            or command(*prefix, "shell", "readlink", proc + "/cwd") != cwd
-            or command(*prefix, "shell", "sha256sum", proc + "/exe").split() != [sha256, proc + "/exe"]
-            or command(*prefix, "exec-out", "cat", proc + "/cmdline", binary=True) != executable.encode() + b"\0"):
-        raise RuntimeError("Android daemon process identity changed; refusing to signal it")
+    if command(*prefix, "shell", "readlink", proc + "/exe") != executable:
+        raise RuntimeError("Android daemon executable path differs; refusing to signal it")
+    if command(*prefix, "shell", "readlink", proc + "/cwd") != cwd:
+        raise RuntimeError("Android daemon working directory differs; refusing to signal it")
+    if command(*prefix, "shell", "sha256sum", proc + "/exe").split() != [sha256, proc + "/exe"]:
+        raise RuntimeError("Android daemon executable hash differs; refusing to signal it")
+    if command(*prefix, "exec-out", "cat", proc + "/cmdline", binary=True) != executable.encode() + b"\0":
+        raise RuntimeError("Android daemon invocation differs; refusing to signal it")
     stat = command(*prefix, "shell", "cat", proc + "/stat")
     leader, separator, fields = stat.rpartition(") ")
     values = fields.split()
@@ -203,7 +214,7 @@ def _start_production_daemon(adb: str, child: dict, executable: str, cwd: str,
     return process, capture
 
 
-def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, child: dict, report_dir: Path) -> dict:
+def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, child: dict, report_dir: Path, progress: dict) -> dict:
     """Prove an EXE-relative fresh profile, authenticated REST and owned graceful shutdown."""
     prefix = ("-s", "emulator-5554")
     executable_dir, cwd = directory + "/startup-exe", directory + "/caller-cwd"
@@ -214,17 +225,23 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
     port = pid = identity = None
     result = None
     try:
+        progress["stage"] = "daemon-prepare"
         command(*prefix, "shell", "mkdir", "-m", "700", executable_dir, cwd)
         command(*prefix, "shell", "mv", directory + "/emulebb-rust", executable)
+        progress["stage"] = "daemon-launch"
         process, capture = _start_production_daemon(adb, child, executable, cwd, directory, report_dir)
+        progress["stage"] = "rest-forward"
         forward = command(*prefix, "forward", "--no-rebind", "tcp:0", "tcp:20017")
         if re.fullmatch(r"[1-9][0-9]*", forward) is None or int(forward) > 65535:
             raise RuntimeError("Android REST forward did not allocate a private loopback port")
         port = int(forward)
+        progress["stage"] = "rest-wait-unauthenticated"
         deadline = time.monotonic() + 90
         while True:
             capture.raise_if_failed()
-            if process.poll() is not None:
+            exit_code = process.poll()
+            if exit_code is not None:
+                progress["daemonExitCode"] = exit_code
                 raise RuntimeError("Android production daemon exited before fresh-profile REST readiness")
             try:
                 status, _document = _rest_app(port)
@@ -240,20 +257,27 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
         # Bind the process before reading its bootstrap or authenticating, then
         # compare again before signalling: two adjacent post-proof reads would
         # not establish that the same owned process served the whole proof.
+        progress["stage"] = "daemon-admission"
         pid = command(*prefix, "shell", "cat", executable_dir + "/owned-daemon.pid")
         identity = _daemon_identity(command, pid, executable, sha256, cwd)
+        progress["stage"] = "bootstrap-check"
         command(*prefix, "shell", "test", "!", "-e", cwd + "/emulebb-rust-settings.toml")
         command(*prefix, "shell", "test", "!", "-L", settings)
         if command(*prefix, "shell", "stat", "-c", "%a", settings) != "600":
             raise RuntimeError("Android generated bootstrap is not owner-only")
         key = _bootstrap_api_key(command(*prefix, "shell", "head", "-c", "65537", settings))
+        progress["stage"] = "rest-authenticated"
         status, document = _rest_app(port, key)
         if status != 200:
             raise RuntimeError("Android authenticated REST must accept the generated API key")
+        progress["stage"] = "app-identity"
         app = _app_identity(document, payload["buildIdentity"])
+        progress["stage"] = "shutdown-identity"
         if _daemon_identity(command, pid, executable, sha256, cwd) != identity:
             raise RuntimeError("Android daemon PID was reused before graceful shutdown")
+        progress["stage"] = "shutdown-term"
         command(*prefix, "shell", "kill", "-TERM", pid)
+        progress["stage"] = "shutdown-wait"
         if process.wait(timeout=30) != 0:
             raise RuntimeError("Android production daemon did not exit gracefully after SIGTERM")
         result = {"schema": "emulebb.android.first-launch/1", "status": "passed", "app": app,
@@ -262,6 +286,10 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
                   "unauthenticatedStatus": 401, "authenticatedStatus": 200,
                   "shutdown": {"signal": "SIGTERM", "identityVerified": True, "exitCode": 0, "graceful": True},
                   "webuiReadiness": "not-run", "apkQualification": "not-run", "physicalDeviceQualification": "not-run"}
+    except BaseException as error:
+        progress.setdefault("failureStage", progress["stage"])
+        progress.setdefault("failureMessage", str(error))
+        raise
     finally:
         try:
             if process is not None and process.poll() is None:
@@ -280,6 +308,7 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
                     capture.raise_if_failed()
             finally:
                 if port is not None:
+                    progress["stage"] = "cleanup-forward"
                     command(*prefix, "forward", "--remove", "tcp:" + str(port))
     result["shutdown"]["forwardRemoved"] = True
     return result
@@ -454,7 +483,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         value["guest"] = validate_guest(properties, api=api, page_size=page_size)
         if payload is not None:
             value["phase"] = "tls-execution"
-            value["tls"] = _run_tls_payload(command, payload, adb=adb, child=child, report_dir=report_dir)
+            value["tlsProgress"] = {}
+            value["tls"] = _run_tls_payload(command, payload, adb=adb, child=child, report_dir=report_dir, progress=value["tlsProgress"])
         value["status"] = "passed"
         value["phase"] = "complete"
     except BaseException as error:
