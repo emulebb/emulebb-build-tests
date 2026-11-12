@@ -51,23 +51,23 @@ def load_toml(path: Path) -> dict[str, Any]:
 def rest_base_url(config: dict[str, Any]) -> str:
     """Returns the profile REST API base URL from emulebb-rust settings."""
 
-    bind_addr = str(config.get("rest", {}).get("bindAddr", "")).strip()
+    bind_addr = str(config.get("rest", {}).get("bind_addr", "")).strip()
     if not bind_addr:
-        raise RuntimeError("rest.bindAddr is missing from emulebb-rust-settings.toml")
+        raise RuntimeError("rest.bind_addr is missing from emulebb-rust-settings.toml")
     host, sep, port = bind_addr.rpartition(":")
     if not sep or not host or not port:
-        raise RuntimeError(f"rest.bindAddr is not host:port: {bind_addr}")
+        raise RuntimeError(f"rest.bind_addr is not host:port: {bind_addr}")
     if host in {"0.0.0.0", "::"}:
         host = os.environ.get("X_LOCAL_IP", "").strip()
         if not host:
-            raise RuntimeError("rest.bindAddr is wildcard and X_LOCAL_IP is not set")
+            raise RuntimeError("rest.bind_addr is wildcard and X_LOCAL_IP is not set")
     return f"http://{host}:{port}/api/v1"
 
 
 def api_key(config: dict[str, Any]) -> str:
     """Returns the configured REST API key, if present."""
 
-    return str(config.get("rest", {}).get("apiKey", "")).strip()
+    return str(config.get("rest", {}).get("api_key", "")).strip()
 
 
 def api_request(

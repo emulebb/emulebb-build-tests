@@ -627,7 +627,7 @@ def main() -> int:
                 "--silent",
                 "--max-time",
                 "3",
-                "http://127.0.0.1:4711/",
+                "http://127.0.0.1:20017/",
                 check=False,
             )
             if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
@@ -641,7 +641,7 @@ def main() -> int:
             "cat",
             "/config/emulebb-rust/emulebb-rust-settings.toml",
         ).stdout
-        api_key = tomllib.loads(settings)["rest"]["apiKey"]
+        api_key = tomllib.loads(settings)["rest"]["api_key"]
         api = "http://127.0.0.1:14712/api/v1"
         settings_patch: dict[str, object] = {}
         if args.disable_protocol_obfuscation or args.nat_matrix:
@@ -680,7 +680,7 @@ def main() -> int:
                     "--silent",
                     "--max-time",
                     "3",
-                    "http://127.0.0.1:4711/",
+                    "http://127.0.0.1:20017/",
                     check=False,
                 )
                 if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
@@ -726,7 +726,7 @@ def main() -> int:
                         "--silent",
                         "--max-time",
                         "3",
-                        "http://127.0.0.1:4711/",
+                        "http://127.0.0.1:20017/",
                         check=False,
                     )
                     if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
@@ -964,7 +964,7 @@ def main() -> int:
         if url_is_reachable("http://127.0.0.1:14712/api/v1/status", api_key):
             raise RuntimeError("host-published REST remained reachable after OpenVPN shutdown")
         report["hostRestIsolatedAfterTunnelDown"] = True
-        namespace_api = "http://127.0.0.1:4711/api/v1"
+        namespace_api = "http://127.0.0.1:20017/api/v1"
         container_request_json(
             rust,
             namespace_api + "/servers/operations/disconnect",

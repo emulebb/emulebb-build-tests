@@ -79,7 +79,7 @@ def test_isolated_gluetun_compose_is_pinned_and_secret_safe() -> None:
 
     assert "qmcgaw/gluetun:v3.41.3" in compose
     assert "network_mode: service:gluetun" in compose
-    assert '"127.0.0.1:14711:4711/tcp"' in compose
+    assert '"127.0.0.1:20017:20017/tcp"' in compose
     assert "EMULEBB_TEST_VPN_PRIVATE_ROOT" in compose
     assert "openvpn_user" in compose and "openvpn_password" in compose
     assert "services:" in compose and compose.count("  emulebb-rust:") == 1

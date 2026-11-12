@@ -104,7 +104,7 @@ def image_runtime(monkeypatch):
     key = "synthetic-image-smoke-credential-123456"
     runtime = SimpleNamespace(
         calls=[], key=key, architecture="amd64", variant="ubuntu", os_architecture=None, owner="1234 1235", pid="42",
-        settings=f'[rest]\napiKey = "{key}"\n', http_status="200", auth_exit=0,
+        settings=f'[rest]\napi_key = "{key}"\n', http_status="200", auth_exit=0,
         app={"name": "eMuleBB", "version": "0.1.0-beta.2", "apiVersion": "v1",
              "build": "release", "platform": "x64", "lifecycle": {"state": "running"}},
         body=None,
@@ -217,11 +217,11 @@ def test_generated_credential_errors_are_sanitized_and_cleanup_runs(image_runtim
     if fault == "missing":
         image_runtime.settings = "[rest]\n"
     elif fault == "short":
-        image_runtime.settings = '[rest]\napiKey = "short"\n'
+        image_runtime.settings = '[rest]\napi_key = "short"\n'
     elif fault == "header-injection":
-        image_runtime.settings = '[rest]\napiKey = "' + image_runtime.key + '\\r\\nX-Other: injected"\n'
+        image_runtime.settings = '[rest]\napi_key = "' + image_runtime.key + '\\r\\nX-Other: injected"\n'
     else:
-        image_runtime.settings = '[rest]\napiKey = "' + image_runtime.key
+        image_runtime.settings = '[rest]\napi_key = "' + image_runtime.key
     with pytest.raises(RuntimeError, match="Cannot read a valid generated image REST credential") as caught:
         run_image_runtime(image_runtime)
     assert image_runtime.key not in str(caught.value)

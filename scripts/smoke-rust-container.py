@@ -29,7 +29,7 @@ def authenticated_app(container: str, architecture: str) -> dict[str, object]:
         if settings.returncode or len(settings.stdout) > 64 * 1024:
             raise ValueError("invalid settings")
         rest = tomllib.loads(settings.stdout).get("rest")
-        key = rest.get("apiKey") if isinstance(rest, dict) else None
+        key = rest.get("api_key") if isinstance(rest, dict) else None
         if not isinstance(key, str) or len(key) < 32 or not all(33 <= ord(char) <= 126 for char in key):
             raise ValueError("invalid key")
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -38,7 +38,7 @@ def authenticated_app(container: str, architecture: str) -> dict[str, object]:
         raise RuntimeError("Cannot read a valid generated image REST credential") from None
     try:
         response = docker("exec", "--interactive", container, "curl", "--fail", "--silent", "--max-time", "2",
-                          "--header", "@-", "--write-out", "\n%{http_code}", "http://127.0.0.1:4711/api/v1/app",
+                          "--header", "@-", "--write-out", "\n%{http_code}", "http://127.0.0.1:20017/api/v1/app",
                           check=False, input=f"X-API-Key: {key}\n")
         body, separator, status = response.stdout.rpartition("\n")
         if response.returncode or not separator or status != "200" or len(body) > 64 * 1024:
@@ -152,7 +152,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
                                    + logs.stdout[-3000:] + logs.stderr[-3000:])
             response = docker(
                 "exec", container, "curl", "--fail", "--silent", "--max-time", "2",
-                "http://127.0.0.1:4711/", check=False,
+                "http://127.0.0.1:20017/", check=False,
             )
             if response.returncode == 0 and "eMuleBB WebUI" in response.stdout:
                 break
@@ -183,7 +183,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             raise RuntimeError("Image smoke requires an explicit Ubuntu or Alpine variant label")
         docker("exec", container, "/usr/local/bin/emulebb-rust-healthcheck")
         auth_status = docker("exec", container, "curl", "--silent", "--max-time", "2", "--output", "/dev/null",
-                             "--write-out", "%{http_code}", "http://127.0.0.1:4711/api/v1/status").stdout.strip()
+                             "--write-out", "%{http_code}", "http://127.0.0.1:20017/api/v1/status").stdout.strip()
         if ((uid, gid) != ("1234", "1235") or owners != ["1234:1235", "1234:1235"]
                 or daemon_owner != ["1234", "1235"] or ports or actual_architecture != expected_architecture):
             raise RuntimeError(f"image PUID/PGID or volume contract failed: uid={uid}, gid={gid}, daemonOwner={daemon_owner}, owners={owners}")

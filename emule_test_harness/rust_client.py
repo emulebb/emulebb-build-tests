@@ -220,7 +220,7 @@ def write_rust_profile(
     if core_settings:
         rust_metadata.replace_settings_section(metadata_path, "core", core_settings)
 
-    lines = ["[rest]", f'bindAddr = "{rest_addr}:{rest_port}"', f'apiKey = "{api_key}"', ""]
+    lines = ["[rest]", f'bind_addr = "{rest_addr}:{rest_port}"', f'api_key = "{api_key}"', ""]
     write_private_text(settings_path, "\n".join(lines))
 
     daemon_settings: dict[str, object] = {}

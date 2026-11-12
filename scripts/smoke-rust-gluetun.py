@@ -313,7 +313,7 @@ def main() -> int:
         deadline = time.monotonic() + 120
         while True:
             page = docker("exec", rust, "curl", "--fail", "--silent", "--max-time", "3",
-                          "http://127.0.0.1:4711/", check=False)
+                          "http://127.0.0.1:20017/", check=False)
             if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
                 break
             if time.monotonic() >= deadline:
@@ -336,12 +336,12 @@ def main() -> int:
         igd_ip = nat_live_matrix.igd_ipv4(args.igd_url) if args.igd_url else None
         settings = docker("exec", rust, "cat",
                           "/config/emulebb-rust/emulebb-rust-settings.toml").stdout
-        api_key = tomllib.loads(settings)["rest"]["apiKey"]
-        status = request_json("http://127.0.0.1:14711/api/v1/status", api_key)
+        api_key = tomllib.loads(settings)["rest"]["api_key"]
+        status = request_json("http://127.0.0.1:20017/api/v1/status", api_key)
         report["tunnelHealthy"] = True
         report["p2pInterfacePinned"] = True
         report["webuiAndRest"] = True
-        api = "http://127.0.0.1:14711/api/v1"
+        api = "http://127.0.0.1:20017/api/v1"
         if args.nat_matrix:
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
                 return request_json(
@@ -364,7 +364,7 @@ def main() -> int:
                         "--silent",
                         "--max-time",
                         "3",
-                        "http://127.0.0.1:4711/",
+                        "http://127.0.0.1:20017/",
                         check=False,
                     )
                     if page.returncode == 0 and "eMuleBB WebUI" in page.stdout:
@@ -458,16 +458,16 @@ def main() -> int:
             raise RuntimeError(f"non-loopback interface remained after tunnel shutdown: {remaining_interfaces}")
         namespace_rest = docker(
             "exec", rust, "curl", "--fail", "--silent", "--max-time", "3",
-            "--header", f"X-API-Key: {api_key}", "http://127.0.0.1:4711/api/v1/status",
+            "--header", f"X-API-Key: {api_key}", "http://127.0.0.1:20017/api/v1/status",
             check=False,
         )
         if namespace_rest.returncode:
             raise RuntimeError("Rust loopback REST stopped responding after tunnel shutdown")
         report["restReachableAfterTunnelDownInNamespace"] = True
-        if url_is_reachable("http://127.0.0.1:14711/api/v1/status", api_key):
+        if url_is_reachable("http://127.0.0.1:20017/api/v1/status", api_key):
             raise RuntimeError("host-published REST remained reachable after Gluetun shutdown")
         report["hostRestIsolatedAfterTunnelDown"] = True
-        namespace_api = "http://127.0.0.1:4711/api/v1"
+        namespace_api = "http://127.0.0.1:20017/api/v1"
         container_request_json(
             rust,
             namespace_api + "/servers/operations/disconnect",
@@ -559,7 +559,7 @@ def main() -> int:
         recovery_deadline = time.monotonic() + 120
         while time.monotonic() < recovery_deadline:
             if url_is_reachable(
-                "http://127.0.0.1:14711/api/v1/status", api_key
+                "http://127.0.0.1:20017/api/v1/status", api_key
             ):
                 break
             time.sleep(2)

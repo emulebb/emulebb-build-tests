@@ -6,6 +6,7 @@ import os
 import sqlite3
 import stat
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -134,8 +135,9 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     )
 
     text = (profile_dir / rust_client.RUST_PROFILE_SETTINGS_FILE).read_text(encoding="utf-8")
-    assert 'bindAddr = "192.0.2.10:4711"' in text
-    assert 'apiKey = "key"' in text
+    assert 'bind_addr = "192.0.2.10:4711"' in text
+    assert 'api_key = "key"' in text
+    assert tomllib.loads(text) == {"rest": {"bind_addr": "192.0.2.10:4711", "api_key": "key"}}
     assert "[ed2k]" not in text
     assert "runtimeDir" not in text
     assert metadata_path(profile_dir).is_file()
@@ -235,10 +237,10 @@ def test_private_profile_settings_restrict_existing_file(tmp_path: Path) -> None
     settings_path.write_text("stale\n", encoding="utf-8")
     settings_path.chmod(0o644)
 
-    rust_client.write_private_text(settings_path, 'apiKey = "new-key"\n')
+    rust_client.write_private_text(settings_path, 'api_key = "new-key"\n')
 
     assert stat.S_IMODE(settings_path.stat().st_mode) == 0o600
-    assert settings_path.read_text(encoding="utf-8") == 'apiKey = "new-key"\n'
+    assert settings_path.read_text(encoding="utf-8") == 'api_key = "new-key"\n'
 
 
 def test_write_rust_profile_can_preserve_consumer_auto_connect_default(tmp_path: Path) -> None:

@@ -157,7 +157,7 @@ def profile_settings_api_key(settings_path: Path) -> str:
     import tomllib
 
     payload = tomllib.loads(settings_path.read_text(encoding="utf-8"))
-    api_key = payload.get("rest", {}).get("apiKey")
+    api_key = payload.get("rest", {}).get("api_key")
     if not isinstance(api_key, str) or not api_key.strip():
         raise RuntimeError(f"REST API key is missing from {settings_path}")
     return api_key.strip()
@@ -968,7 +968,7 @@ def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
         name = str(mapping.get("name") or "")
         if name:
             mapping_names.append(name)
-    required = {("tcp", 4662), ("udp", 4672)}
+    required = {("tcp", 20019), ("udp", 20020)}
     ready = (
         value.get("enabled") is True
         and value.get("gatewayDiscovered") is True
@@ -981,7 +981,7 @@ def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
         "enabled": bool(value.get("enabled")),
         "gatewayDiscovered": bool(value.get("gatewayDiscovered")),
         "mappingCount": len(mapping_rows),
-        "requiredMappings": ["tcp:4662", "udp:4672"],
+        "requiredMappings": ["tcp:20019", "udp:20020"],
         "mappingNames": sorted(mapping_names),
         "backendPresent": bool(value.get("backend")),
         "lastErrorPresent": bool(value.get("lastError")),
