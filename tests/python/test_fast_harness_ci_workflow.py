@@ -17,6 +17,12 @@ def test_fast_harness_ci_checks_out_rust_client_for_contract_tests() -> None:
 
     assert "repository: emulebb/emulebb-rust" in text
     assert "path: repos/emulebb-rust" in text
+    # The shared fixture writer requires the accepted schema-68 AICH authority
+    # columns. Pin the delivered canonical source, not an older schema snapshot.
+    workflow_data = yaml.safe_load(text)
+    checkout = next(step["with"] for step in workflow_data["jobs"]["python-harness"]["steps"]
+                    if step.get("with", {}).get("repository") == "emulebb/emulebb-rust")
+    assert checkout["ref"] == "080a5dea70186da31dab958757b5b8c0fd883f82"
 
 
 def test_fast_harness_ci_checks_out_app_main_for_source_parity() -> None:
