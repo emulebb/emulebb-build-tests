@@ -118,6 +118,7 @@ def _run_tls_payload(command, payload: dict, *, adb: str, child: dict, report_di
     except BaseException as error:
         progress.setdefault("failureStage", progress["stage"])
         progress.setdefault("failureMessage", str(error))
+        progress.setdefault("errorType", type(error).__name__)
         raise
     finally:
         # Fixed generated guest directory only; the fresh emulator is also
@@ -289,6 +290,7 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
     except BaseException as error:
         progress.setdefault("failureStage", progress["stage"])
         progress.setdefault("failureMessage", str(error))
+        progress.setdefault("errorType", type(error).__name__)
         raise
     finally:
         try:
