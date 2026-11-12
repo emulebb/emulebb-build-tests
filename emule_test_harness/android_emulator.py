@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import http.client
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import shutil
 import signal
@@ -12,7 +13,9 @@ import socket
 import subprocess
 import struct
 import re
+import shlex
 import time
+import tomllib
 from uuid import uuid4
 
 from .bounded_process_output import AsyncBinaryCapture
@@ -42,13 +45,20 @@ def _tls_payload(root: Path, *, source_sha: str, manifest_sha256: str) -> dict:
     if hashlib.sha256(raw).hexdigest() != manifest_sha256:
         raise RuntimeError("Android TLS payload manifest identity differs")
     value = json.loads(raw)
-    if (not isinstance(value, dict) or value.get("schema") != "emulebb.android.tls-payload/1"
+    if (not isinstance(value, dict) or value.get("schema") != "emulebb.android.tls-payload/2"
             or value.get("status") != "passed" or value.get("abi") != "x86_64"
             or value.get("sourceDirty") is not False
             or value.get("source", {}).get("emulebbRust", {}).get("commit") != source_sha
             or not isinstance(value.get("files"), dict)
-            or not {"core-tests", "daemon-tests"} <= set(value["files"])
-            or set(value["files"]) - {"core-tests", "daemon-tests", "libc++_shared.so"}):
+            or not {"core-tests", "daemon-tests", "emulebb-rust"} <= set(value["files"])
+            or set(value["files"]) - {"core-tests", "daemon-tests", "emulebb-rust", "libc++_shared.so"}
+            or not isinstance(value.get("buildIdentity"), dict)
+            or value["buildIdentity"].get("sourceRevision") != source_sha
+            or value["buildIdentity"].get("platform") != "x64"
+            or value["buildIdentity"].get("build") != "release"
+            or not isinstance(value["buildIdentity"].get("version"), str)
+            or not value["buildIdentity"]["version"]
+            or value["buildIdentity"].get("channel") not in {"development", "nightly"}):
         raise RuntimeError("Android TLS payload has inconsistent source, ABI or fixed files")
     for name, identity in value["files"].items():
         path = root / name
@@ -76,7 +86,7 @@ def _tls_case_result(text: str, case: str) -> dict:
     return {"name": case, "passed": 1, "failed": 0, "ignored": 0}
 
 
-def _run_tls_payload(command, payload: dict) -> dict:
+def _run_tls_payload(command, payload: dict, *, adb: str, child: dict, report_dir: Path) -> dict:
     """Run only the six owned TLS cases on the already-owned Android guest."""
     directory = "/data/local/tmp/emulebb-tls-" + uuid4().hex
     prefix = ("-s", "emulator-5554")
@@ -97,13 +107,179 @@ def _run_tls_payload(command, payload: dict) -> dict:
                                "--test-threads=1", "--color", "never", timeout=30)
                 # Only synthetic test names/results enter the public receipt.
                 results.append(_tls_case_result(text + "\n", case))
-        return {"schema": "emulebb.android.tls-execution/1", "status": "passed",
+        startup = _fresh_profile_startup(command, payload, directory, adb=adb, child=child, report_dir=report_dir)
+        return {"schema": "emulebb.android.tls-execution/2", "status": "passed",
                 "source": payload["source"], "files": payload["files"], "cases": results,
-                "freshProfileRestReadiness": "not-run", "apkQualification": "not-run"}
+                "freshProfileRestReadiness": "passed", "startup": startup, "apkQualification": "not-run"}
     finally:
         # Fixed generated guest directory only; the fresh emulator is also
         # terminated by the existing outer owner after any failure or timeout.
         command(*prefix, "shell", "rm", "-rf", directory)
+
+
+def _bootstrap_api_key(text: str) -> str:
+    """Validate the actual generated bootstrap without logging or returning it in proof."""
+    if len(text.encode("utf-8")) > 65536:
+        raise RuntimeError("Android generated bootstrap exceeds its bound")
+    try:
+        value = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        raise RuntimeError("Android generated bootstrap is not valid TOML") from None
+    rest = value.get("rest")
+    if (set(value) != {"rest"} or not isinstance(rest, dict)
+            or not {"bind_addr", "api_key"} <= set(rest)
+            or set(rest) - {"bind_addr", "api_key", "web_root_dir"}
+            or rest["bind_addr"] != "127.0.0.1:20017"):
+        raise RuntimeError("Android generated bootstrap must use the current loopback snake_case contract")
+    key = rest["api_key"]
+    if not isinstance(key, str) or len(key) < 32 or not all(33 <= ord(char) <= 126 for char in key):
+        raise RuntimeError("Android generated bootstrap must provide a valid private API key")
+    return key
+
+
+def _rest_app(port: int, api_key: str | None = None) -> tuple[int, dict]:
+    """Use only the owned loopback ADB forward, without inheriting HTTP proxies."""
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    try:
+        connection.request("GET", "/api/v1/app", headers={} if api_key is None else {"X-API-Key": api_key})
+        response = connection.getresponse()
+        body = response.read(65537)
+        if len(body) > 65536:
+            raise RuntimeError("Android REST app response exceeds its bound")
+        return response.status, json.loads(body) if response.status == 200 else {}
+    finally:
+        connection.close()
+
+
+def _app_identity(document: dict, expected: dict) -> dict:
+    """Require the current REST envelope and the actual running production build."""
+    if not isinstance(document, dict):
+        raise RuntimeError("Android REST app must return the current object envelope")
+    app = document.get("data")
+    if (not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"
+            or not isinstance(app, dict) or app.get("name") != "eMuleBB" or app.get("apiVersion") != "v1"
+            or not isinstance(app.get("lifecycle"), dict) or app["lifecycle"].get("state") != "running"
+            or any(app.get(key) != value for key, value in expected.items())):
+        raise RuntimeError("Android authenticated REST does not identify the requested running production daemon")
+    return {**expected, "name": "eMuleBB", "apiVersion": "v1", "lifecycleState": "running"}
+
+
+def _daemon_identity(command, pid: str, executable: str, sha256: str, cwd: str) -> tuple[str, str]:
+    """Bind a guest PID to its executable bytes, invocation and kernel start time."""
+    if re.fullmatch(r"[1-9][0-9]*", pid) is None:
+        raise RuntimeError("Android daemon PID is invalid")
+    prefix = ("-s", "emulator-5554")
+    proc = "/proc/" + pid
+    if (command(*prefix, "shell", "readlink", proc + "/exe") != executable
+            or command(*prefix, "shell", "readlink", proc + "/cwd") != cwd
+            or command(*prefix, "shell", "sha256sum", proc + "/exe").split() != [sha256, proc + "/exe"]
+            or command(*prefix, "exec-out", "cat", proc + "/cmdline", binary=True) != executable.encode() + b"\0"):
+        raise RuntimeError("Android daemon process identity changed; refusing to signal it")
+    stat = command(*prefix, "shell", "cat", proc + "/stat")
+    leader, separator, fields = stat.rpartition(") ")
+    values = fields.split()
+    if (not separator or not leader.startswith(pid + " (") or len(values) < 20
+            or re.fullmatch(r"[0-9]+", values[19]) is None):
+        raise RuntimeError("Android daemon has no verifiable kernel process identity")
+    return pid, values[19]
+
+
+def _start_production_daemon(adb: str, child: dict, executable: str, cwd: str,
+                             library_dir: str, report_dir: Path):
+    """Own one foreground ADB exec; neither its key nor its private log is published."""
+    pid_file = str(PurePosixPath(executable).parent / "owned-daemon.pid")
+    script = ("cd " + shlex.quote(cwd) + " && printf '%s\\n' \"$$\" > " + shlex.quote(pid_file)
+              + " && exec env LD_LIBRARY_PATH=" + shlex.quote(library_dir) + " " + shlex.quote(executable))
+    process = subprocess.Popen([adb, "-P", "5037", "-s", "emulator-5554", "shell", "sh", "-c", shlex.quote(script)],
+                               env=child, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, start_new_session=True)
+    capture = AsyncBinaryCapture(report_dir / "daemon-startup.log", max_segment_bytes=65536, retained_segments=2)
+    try:
+        capture.start(process.stdout, stop_process=lambda: _stop_group(process))
+    except BaseException:
+        _stop_group(process)
+        capture.close()
+        raise
+    return process, capture
+
+
+def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, child: dict, report_dir: Path) -> dict:
+    """Prove an EXE-relative fresh profile, authenticated REST and owned graceful shutdown."""
+    prefix = ("-s", "emulator-5554")
+    executable_dir, cwd = directory + "/startup-exe", directory + "/caller-cwd"
+    executable = executable_dir + "/emulebb-rust"
+    settings = executable_dir + "/emulebb-rust-settings.toml"
+    sha256 = payload["files"]["emulebb-rust"]["sha256"]
+    process = capture = None
+    port = pid = identity = None
+    result = None
+    try:
+        command(*prefix, "shell", "mkdir", "-m", "700", executable_dir, cwd)
+        command(*prefix, "shell", "mv", directory + "/emulebb-rust", executable)
+        process, capture = _start_production_daemon(adb, child, executable, cwd, directory, report_dir)
+        forward = command(*prefix, "forward", "--no-rebind", "tcp:0", "tcp:20017")
+        if re.fullmatch(r"[1-9][0-9]*", forward) is None or int(forward) > 65535:
+            raise RuntimeError("Android REST forward did not allocate a private loopback port")
+        port = int(forward)
+        deadline = time.monotonic() + 90
+        while True:
+            capture.raise_if_failed()
+            if process.poll() is not None:
+                raise RuntimeError("Android production daemon exited before fresh-profile REST readiness")
+            try:
+                status, _document = _rest_app(port)
+            except (OSError, TimeoutError, http.client.HTTPException):
+                status = None
+            if status == 401:
+                break
+            if status is not None:
+                raise RuntimeError("Android unauthenticated REST must reject access with HTTP 401")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Android fresh-profile REST did not become ready within its bound")
+            time.sleep(0.25)
+        command(*prefix, "shell", "test", "!", "-e", cwd + "/emulebb-rust-settings.toml")
+        command(*prefix, "shell", "test", "!", "-L", settings)
+        if command(*prefix, "shell", "stat", "-c", "%a", settings) != "600":
+            raise RuntimeError("Android generated bootstrap is not owner-only")
+        key = _bootstrap_api_key(command(*prefix, "shell", "head", "-c", "65537", settings))
+        status, document = _rest_app(port, key)
+        if status != 200:
+            raise RuntimeError("Android authenticated REST must accept the generated API key")
+        app = _app_identity(document, payload["buildIdentity"])
+        pid = command(*prefix, "shell", "cat", executable_dir + "/owned-daemon.pid")
+        identity = _daemon_identity(command, pid, executable, sha256, cwd)
+        if _daemon_identity(command, pid, executable, sha256, cwd) != identity:
+            raise RuntimeError("Android daemon PID was reused before graceful shutdown")
+        command(*prefix, "shell", "kill", "-TERM", pid)
+        if process.wait(timeout=30) != 0:
+            raise RuntimeError("Android production daemon did not exit gracefully after SIGTERM")
+        result = {"schema": "emulebb.android.first-launch/1", "status": "passed", "app": app,
+                  "profilePlacement": "executable-directory", "callerCwdDifferent": True,
+                  "bootstrapSnakeCase": True, "bootstrapOwnerOnly": True,
+                  "unauthenticatedStatus": 401, "authenticatedStatus": 200,
+                  "shutdown": {"signal": "SIGTERM", "identityVerified": True, "exitCode": 0, "graceful": True},
+                  "webuiReadiness": "not-run", "apkQualification": "not-run", "physicalDeviceQualification": "not-run"}
+    finally:
+        try:
+            if process is not None and process.poll() is None:
+                # On a failed proof, signal only an identity already admitted by
+                # this owner. Otherwise the outer owned emulator teardown is the
+                # fail-safe; never guess or kill a possibly reused guest PID.
+                try:
+                    if identity is not None and _daemon_identity(command, pid, executable, sha256, cwd) == identity:
+                        command(*prefix, "shell", "kill", "-KILL", pid)
+                finally:
+                    _stop_group(process)
+        finally:
+            try:
+                if capture is not None:
+                    capture.close()
+                    capture.raise_if_failed()
+            finally:
+                if port is not None:
+                    command(*prefix, "forward", "--remove", "tcp:" + str(port))
+    result["shutdown"]["forwardRemoved"] = True
+    return result
 
 
 def page_size_from_auxv(data: bytes) -> int:
@@ -275,7 +451,7 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         value["guest"] = validate_guest(properties, api=api, page_size=page_size)
         if payload is not None:
             value["phase"] = "tls-execution"
-            value["tls"] = _run_tls_payload(command, payload)
+            value["tls"] = _run_tls_payload(command, payload, adb=adb, child=child, report_dir=report_dir)
         value["status"] = "passed"
         value["phase"] = "complete"
     except BaseException as error:

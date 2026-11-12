@@ -215,17 +215,18 @@ def test_stop_escalates_only_owned_group(monkeypatch):
 def tls_manifest(root):
     root.mkdir()
     files = {}
-    for name in ("core-tests", "daemon-tests"):
+    for name in ("core-tests", "daemon-tests", "emulebb-rust"):
         data = ("synthetic " + name).encode()
         (root / name).write_bytes(data)
         files[name] = {"sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-    value = {"schema": "emulebb.android.tls-payload/1", "status": "passed", "abi": "x86_64",
-             "sourceDirty": False, "source": {"emulebbRust": {"commit": "1" * 40}}, "files": files}
+    value = {"schema": "emulebb.android.tls-payload/2", "status": "passed", "abi": "x86_64",
+             "sourceDirty": False, "source": {"emulebbRust": {"commit": "1" * 40}}, "files": files,
+             "buildIdentity": {"version": "0.1.0-beta.2", "channel": "development", "sourceRevision": "1" * 40, "platform": "x64", "build": "release"}}
     (root / "manifest.json").write_text(json.dumps(value))
     return value
 
 
-@pytest.mark.parametrize("bad", [None, "manifest-hash", "file-hash", "source", "dirty", "abi", "extra", "size", "missing"])
+@pytest.mark.parametrize("bad", [None, "manifest-hash", "file-hash", "source", "dirty", "abi", "extra", "size", "missing", "old-schema"])
 def test_tls_payload_binds_regular_fixed_files_and_source(tmp_path, bad):
     root = tmp_path / "payload"
     value = tls_manifest(root)
@@ -234,6 +235,7 @@ def test_tls_payload_binds_regular_fixed_files_and_source(tmp_path, bad):
     if bad == "abi": value["abi"] = "arm64-v8a"
     if bad == "extra": value["files"]["other-program"] = value["files"]["core-tests"]
     if bad == "size": value["files"]["core-tests"]["sizeBytes"] = 2**30 + 1
+    if bad == "old-schema": value["schema"] = "emulebb.android.tls-payload/1"
     manifest = root / "manifest.json"
     manifest.write_text(json.dumps(value))
     digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
@@ -271,10 +273,12 @@ def test_tls_result_requires_one_actual_named_test(bad):
 
 
 @pytest.mark.parametrize("outcome", ["success", "guest-hash", "test-failure", "timeout"])
-def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(tmp_path, outcome):
+def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(tmp_path, monkeypatch, outcome):
     payload = tls_manifest(tmp_path / "payload")
     calls = []
     directory = None
+    startup = Mock(return_value={"status": "passed"})
+    monkeypatch.setattr(subject, "_fresh_profile_startup", startup)
 
     def command(*arguments, **kwargs):
         nonlocal directory
@@ -293,13 +297,133 @@ def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(
         return ""
 
     if outcome == "success":
-        value = subject._run_tls_payload(command, payload)
+        value = subject._run_tls_payload(command, payload, adb="owned-adb", child={}, report_dir=tmp_path)
         assert len(value["cases"]) == 6 and value["status"] == "passed"
         assert {item["name"] for item in value["cases"]} == {case for cases in subject.TLS_CASES.values() for case in cases}
-        assert value["freshProfileRestReadiness"] == "not-run"
+        assert value["freshProfileRestReadiness"] == "passed" and value["startup"] == {"status": "passed"}
+        startup.assert_called_once()
     else:
         with pytest.raises((RuntimeError, subprocess.TimeoutExpired)):
-            subject._run_tls_payload(command, payload)
+            subject._run_tls_payload(command, payload, adb="owned-adb", child={}, report_dir=tmp_path)
+        startup.assert_not_called()
     assert calls[-1] == ("-s", "emulator-5554", "shell", "rm", "-rf", directory)
     assert directory.startswith("/data/local/tmp/emulebb-tls-")
     assert all(call[:2] == ("-s", "emulator-5554") for call in calls)
+
+
+BOOTSTRAP = '[rest]\nbind_addr = "127.0.0.1:20017"\napi_key = "SyntheticAndroidKeyMaterial1234567890"\n'
+
+
+@pytest.mark.parametrize("bad", [None, "camel", "short", "space", "listener", "malformed", "extra", "oversize"])
+def test_actual_bootstrap_contract_never_accepts_aliases_or_bad_keys(bad):
+    text = BOOTSTRAP
+    if bad == "camel": text = text.replace("bind_addr", "bindAddr")
+    if bad == "short": text = text.replace("SyntheticAndroidKeyMaterial1234567890", "short")
+    if bad == "space": text = text.replace("SyntheticAndroidKeyMaterial1234567890", " SyntheticAndroidKeyMaterial1234567890")
+    if bad == "listener": text = text.replace("127.0.0.1", "0.0.0.0")
+    if bad == "malformed": text += "invalid[[["
+    if bad == "extra": text += 'legacy_key = "unsupported"\n'
+    if bad == "oversize": text += "#" * 65537
+    if bad is None:
+        assert subject._bootstrap_api_key(text) == "SyntheticAndroidKeyMaterial1234567890"
+    else:
+        with pytest.raises(RuntimeError) as error:
+            subject._bootstrap_api_key(text)
+        assert "SyntheticAndroidKeyMaterial" not in str(error.value)
+
+
+@pytest.mark.parametrize("bad", [None, "exe", "hash", "cwd", "argv", "stat", "pid"])
+def test_process_identity_binds_pid_birth_executable_bytes_and_default_invocation(bad):
+    path, cwd, sha = "/owned/exe/emulebb-rust", "/owned/caller", "1" * 64
+    def command(*arguments, **kwargs):
+        target = arguments[-1]
+        if "readlink" in arguments:
+            value = cwd if target.endswith("/cwd") else path
+            return "/foreign" if bad == ("cwd" if target.endswith("/cwd") else "exe") else value
+        if "sha256sum" in arguments:
+            return ("2" * 64 if bad == "hash" else sha) + "  " + target
+        if target.endswith("/cmdline"):
+            assert kwargs["binary"] is True
+            return path.encode() + (b"\0--profile\0other\0" if bad == "argv" else b"\0")
+        return "bad stat" if bad == "stat" else "42 (emulebb-rust) S " + " ".join(["0"] * 18 + ["12345"])
+    if bad is None:
+        assert subject._daemon_identity(command, "42", path, sha, cwd) == ("42", "12345")
+    else:
+        with pytest.raises(RuntimeError):
+            subject._daemon_identity(command, "not-a-pid" if bad == "pid" else "42", path, sha, cwd)
+
+
+@pytest.mark.parametrize("outcome", ["success", "unauthorized-open", "auth-failure", "source", "version", "cwd-profile",
+                                    "permissions", "short-key", "pid-reused", "timeout", "exit", "forward-cleanup"])
+def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned_shutdown(tmp_path, monkeypatch, outcome):
+    payload = tls_manifest(tmp_path / "payload")
+    calls = []
+    process, capture = Mock(), Mock()
+    process.poll.return_value = None
+    def wait(timeout):
+        assert timeout == 30
+        if outcome == "timeout": raise subprocess.TimeoutExpired("owned-adb", 30)
+        process.poll.return_value = 1 if outcome == "exit" else 0
+        return process.poll.return_value
+    process.wait.side_effect = wait
+    launcher = Mock(return_value=(process, capture))
+    monkeypatch.setattr(subject, "_start_production_daemon", launcher)
+    stopped = Mock()
+    monkeypatch.setattr(subject, "_stop_group", stopped)
+    identities = Mock(return_value=("42", "100"))
+    if outcome == "pid-reused": identities.side_effect = [("42", "100"), ("42", "200"), ("42", "200")]
+    monkeypatch.setattr(subject, "_daemon_identity", identities)
+    expected = payload["buildIdentity"]
+    app = {**expected, "name": "eMuleBB", "apiVersion": "v1", "lifecycle": {"state": "running"}}
+    if outcome == "source": app["sourceRevision"] = "9" * 40
+    if outcome == "version": app["version"] = "wrong-version"
+    def request(port, api_key=None):
+        assert port == 32123
+        if api_key is None: return (200 if outcome == "unauthorized-open" else 401), {}
+        assert api_key == "SyntheticAndroidKeyMaterial1234567890"
+        return (401 if outcome == "auth-failure" else 200), {"data": app, "meta": {"apiVersion": "v1"}}
+    monkeypatch.setattr(subject, "_rest_app", request)
+    def command(*arguments, **kwargs):
+        calls.append(arguments)
+        if "--no-rebind" in arguments: return "32123"
+        if "--remove" in arguments and outcome == "forward-cleanup": raise RuntimeError("forward cleanup failed")
+        if "test" in arguments and arguments[-1].startswith("/owned/caller-cwd/") and outcome == "cwd-profile":
+            raise RuntimeError("caller CWD contains a profile")
+        if "stat" in arguments: return "644" if outcome == "permissions" else "600"
+        if "head" in arguments: return BOOTSTRAP.replace("SyntheticAndroidKeyMaterial1234567890", "short") if outcome == "short-key" else BOOTSTRAP
+        if "cat" in arguments: return "42"
+        return ""
+    if outcome == "success":
+        result = subject._fresh_profile_startup(command, payload, "/owned", adb="private-adb", child={}, report_dir=tmp_path)
+        assert result["status"] == "passed" and result["profilePlacement"] == "executable-directory"
+        assert result["unauthenticatedStatus"] == 401 and result["authenticatedStatus"] == 200
+        assert result["shutdown"] == {"signal": "SIGTERM", "identityVerified": True, "exitCode": 0, "graceful": True, "forwardRemoved": True}
+        assert result["app"]["sourceRevision"] == expected["sourceRevision"]
+        assert "SyntheticAndroidKeyMaterial" not in json.dumps(result)
+        assert not stopped.called
+    else:
+        with pytest.raises((RuntimeError, subprocess.TimeoutExpired)):
+            subject._fresh_profile_startup(command, payload, "/owned", adb="private-adb", child={}, report_dir=tmp_path)
+    assert calls[-1] == ("-s", "emulator-5554", "forward", "--remove", "tcp:32123")
+    capture.close.assert_called_once()
+    assert launcher.call_args.args[2:5] == ("/owned/startup-exe/emulebb-rust", "/owned/caller-cwd", "/owned")
+    signals = [call for call in calls if "kill" in call]
+    if outcome == "pid-reused":
+        assert not signals and stopped.called
+    if outcome in {"success", "exit", "forward-cleanup"}:
+        assert signals == [("-s", "emulator-5554", "shell", "kill", "-TERM", "42")]
+
+
+def test_fixed_daemon_launcher_has_no_profile_or_key_arguments_and_owns_bounded_private_log(tmp_path, monkeypatch):
+    process, capture = Mock(pid=42, stdout=Mock()), Mock()
+    spawn = Mock(return_value=process)
+    sink = Mock(return_value=capture)
+    monkeypatch.setattr(subject.subprocess, "Popen", spawn)
+    monkeypatch.setattr(subject, "AsyncBinaryCapture", sink)
+    subject._start_production_daemon("private-adb", {"PRESERVED": "value"}, "/owned/exe/emulebb-rust", "/owned/cwd", "/owned", tmp_path)
+    arguments = spawn.call_args.args[0]
+    assert arguments[:7] == ["private-adb", "-P", "5037", "-s", "emulator-5554", "shell", "sh"]
+    assert "--profile" not in str(arguments) and "api_key" not in str(arguments)
+    assert "exec env LD_LIBRARY_PATH=/owned /owned/exe/emulebb-rust" in arguments[-1]
+    assert spawn.call_args.kwargs["start_new_session"] is True
+    sink.assert_called_once_with(tmp_path / "daemon-startup.log", max_segment_bytes=65536, retained_segments=2)
