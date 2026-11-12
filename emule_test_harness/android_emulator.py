@@ -18,7 +18,7 @@ import time
 import tomllib
 from uuid import uuid4
 
-from .bounded_process_output import AsyncBinaryCapture
+from .bounded_process_output import AsyncBinaryCapture, rotated_path
 
 
 TLS_CASES = {
@@ -215,6 +215,85 @@ def _start_production_daemon(adb: str, child: dict, executable: str, cwd: str,
     return process, capture
 
 
+def _startup_failure_context(path: Path) -> dict:
+    """Classify fixed fatal owner contexts; never return private native output."""
+    chunks = []
+    for candidate in (rotated_path(path, 1), path):
+        if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 65536:
+            continue
+        chunks.append(candidate.read_bytes())
+    text = b"\n".join(chunks).lower()
+    contexts = (
+        (b"cannot link executable", "dynamic-linker"),
+        (b"/system/bin/sh:", "shell-launch"),
+        (b"env: exec", "shell-launch"),
+        (b"expect rustls-platform-verifier to be initialized", "platform-verifier-uninitialized"),
+        (b"failed to enumerate local interfaces", "interface-enumeration"),
+        (b"failed to acquire exclusive ownership of profile", "profile-lock"),
+        (b"profile is already in use", "profile-in-use"),
+        (b"failed to open ownership lock for profile", "profile-lock-open"),
+        (b"failed to resolve writable profile", "profile-resolution"),
+        (b"failed to create default profile", "profile-directory"),
+        (b"cannot locate the executable for its default profile", "executable-location"),
+        (b"failed to resolve current executable path", "executable-location"),
+        (b"failed to open metadata store under", "metadata-open"),
+        (b"failed to parse settings", "bootstrap-parse"),
+        (b"requires owner-only permissions", "bootstrap-permissions"),
+        (b"rest.api_key", "bootstrap-key-validation"),
+        (b"invalid canonical bootstrap template", "bootstrap-template"),
+        (b"canonical rest bind_addr is missing", "bootstrap-template"),
+        (b"failed to read settings", "bootstrap-read"),
+        (b"failed to inspect settings", "bootstrap-read"),
+        (b"failed to create log directory", "logging-initialization"),
+        (b"failed to open retained logs under", "logging-initialization"),
+        (b"failed to install the process logging subscriber", "logging-initialization"),
+        (b"invalid nat config in metadata store", "nat-settings"),
+        (b"failed to load daemon settings", "settings-load"),
+        (b"failed to load kad settings", "settings-load"),
+        (b"failed to load ed2k settings", "settings-load"),
+        (b"failed to load nat settings", "settings-load"),
+        (b"stored ed2k user hash identity", "secure-ident-state"),
+        (b"stored ed2k secure-ident identity", "secure-ident-state"),
+        (b"failed to create incoming dir", "incoming-directory"),
+        (b"failed to create first-run discovery http client", "bootstrap-http-client"),
+        (b"emulebb-rust-settings.toml", "bootstrap-file-error"),
+        (b"daemon terminated with an error", "daemon-run-error"),
+    )
+    conditions = (
+        (b"permission denied (os error 13)", "permission-denied"),
+        (b"operation not permitted (os error 1)", "operation-not-permitted"),
+        (b"operation not supported (os error 95)", "operation-not-supported"),
+        (b"function not implemented (os error 38)", "not-implemented"),
+        (b"read-only file system (os error 30)", "read-only-filesystem"),
+        (b"address already in use (os error 98)", "address-in-use"),
+        (b"no such file or directory (os error 2)", "missing-file"),
+        (b"out of memory (os error 12)", "out-of-memory"),
+        (b"no space left on device (os error 28)", "no-space"),
+        (b"too many open files (os error 24)", "file-limit"),
+        (b"invalid argument (os error 22)", "invalid-argument"),
+        (b"resource temporarily unavailable (os error 11)", "temporarily-unavailable"),
+    )
+    return {"context": next((code for marker, code in contexts if marker in text), "unknown"),
+            "systemCondition": next((code for marker, code in conditions if marker in text), "unknown"),
+            "privateOutputAvailable": any(chunks), "bootstrapCreated": b"created emulebb profile" in text,
+            "runtimeEntered": b"starting emulebb-rust" in text}
+
+
+def _startup_file_flags(command, directory: str) -> dict:
+    """Inspect only fixed fresh-profile file presence, without reading their data."""
+    result = {}
+    for key, name in (("bootstrapExists", "emulebb-rust-settings.toml"),
+                      ("leaseExists", ".emulebb-profile.lock"), ("metadataExists", "emulebb-rust-metadata.db")):
+        script = "if test -f " + shlex.quote(directory + "/" + name) + "; then printf present; else printf absent; fi"
+        try:
+            value = command("-s", "emulator-5554", "shell", "sh", "-c", shlex.quote(script))
+        except (RuntimeError, subprocess.TimeoutExpired):
+            continue
+        if value in {"present", "absent"}:
+            result[key] = value == "present"
+    return result
+
+
 def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, child: dict, report_dir: Path, progress: dict) -> dict:
     """Prove an EXE-relative fresh profile, authenticated REST and owned graceful shutdown."""
     prefix = ("-s", "emulator-5554")
@@ -223,6 +302,7 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
     settings = executable_dir + "/emulebb-rust-settings.toml"
     sha256 = payload["files"]["emulebb-rust"]["sha256"]
     process = capture = None
+    capture_closed = False
     port = pid = identity = None
     result = None
     try:
@@ -243,6 +323,15 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
             exit_code = process.poll()
             if exit_code is not None:
                 progress["daemonExitCode"] = exit_code
+                # The foreground process is known to have exited. Drain the
+                # existing bounded sink before classifying its final bytes.
+                capture.close()
+                capture_closed = True
+                capture.raise_if_failed()
+                progress["startupFailure"] = {
+                    **_startup_failure_context(report_dir / "daemon-startup.log"),
+                    **_startup_file_flags(command, executable_dir),
+                }
                 raise RuntimeError("Android production daemon exited before fresh-profile REST readiness")
             try:
                 status, _document = _rest_app(port)
@@ -306,7 +395,8 @@ def _fresh_profile_startup(command, payload: dict, directory: str, *, adb: str, 
         finally:
             try:
                 if capture is not None:
-                    capture.close()
+                    if not capture_closed:
+                        capture.close()
                     capture.raise_if_failed()
             finally:
                 if port is not None:

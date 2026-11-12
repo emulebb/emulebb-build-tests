@@ -357,13 +357,17 @@ def test_process_identity_binds_pid_birth_executable_bytes_and_default_invocatio
 
 
 @pytest.mark.parametrize("outcome", ["success", "unauthorized-open", "auth-failure", "source", "version", "cwd-profile",
-                                    "permissions", "short-key", "pid-reused", "timeout", "exit", "forward-cleanup"])
+                                    "permissions", "short-key", "pid-reused", "timeout", "exit", "forward-cleanup", "early-exit"])
 def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned_shutdown(tmp_path, monkeypatch, outcome):
     payload = tls_manifest(tmp_path / "payload")
     calls = []
     progress = {}
     process, capture = Mock(), Mock()
-    process.poll.return_value = None
+    process.poll.return_value = 1 if outcome == "early-exit" else None
+    if outcome == "early-exit":
+        (tmp_path / "daemon-startup.log").write_text(
+            "API key: SyntheticPrivateValue\nError: failed to enumerate local interfaces\n"
+            "Operation not permitted (os error 1)\n")
     def wait(timeout):
         assert timeout == 30
         if outcome == "timeout": raise subprocess.TimeoutExpired("owned-adb", 30)
@@ -422,6 +426,12 @@ def test_production_first_launch_proof_requires_auth_identity_and_graceful_owned
         assert not signals and stopped.called
     if outcome in {"success", "exit", "forward-cleanup"}:
         assert signals == [("-s", "emulator-5554", "shell", "kill", "-TERM", "42")]
+    if outcome == "early-exit":
+        assert progress["daemonExitCode"] == 1
+        assert progress["startupFailure"]["context"] == "interface-enumeration"
+        assert progress["startupFailure"]["systemCondition"] == "operation-not-permitted"
+        assert not signals and not stopped.called
+        assert "SyntheticPrivateValue" not in json.dumps(progress["startupFailure"])
 
 
 def test_fixed_daemon_launcher_has_no_profile_or_key_arguments_and_owns_bounded_private_log(tmp_path, monkeypatch):
@@ -437,3 +447,49 @@ def test_fixed_daemon_launcher_has_no_profile_or_key_arguments_and_owns_bounded_
     assert "exec env LD_LIBRARY_PATH=/owned /owned/exe/emulebb-rust" in arguments[-1]
     assert spawn.call_args.kwargs["start_new_session"] is True
     sink.assert_called_once_with(tmp_path / "daemon-startup.log", max_segment_bytes=65536, retained_segments=2)
+
+
+@pytest.mark.parametrize("message,context", [
+    ("CANNOT LINK EXECUTABLE /private/path", "dynamic-linker"),
+    ("/system/bin/sh: inaccessible or not found", "shell-launch"),
+    ("Expect rustls-platform-verifier to be initialized", "platform-verifier-uninitialized"),
+    ("failed to enumerate local interfaces", "interface-enumeration"),
+    ("failed to acquire exclusive ownership of profile /private/path", "profile-lock"),
+    ("failed to open metadata store under /private/path", "metadata-open"),
+    ("failed to create default profile /private/path", "profile-directory"),
+    ("failed to open retained logs under /private/path", "logging-initialization"),
+    ("invalid canonical bootstrap template", "bootstrap-template"),
+    ("profile settings /private/path requires owner-only permissions", "bootstrap-permissions"),
+    ("failed to load daemon settings", "settings-load"),
+    ("failed to parse settings /private/path", "bootstrap-parse"),
+    ("rest.api_key is a placeholder", "bootstrap-key-validation"),
+    ("unrecognized private diagnostic", "unknown"),
+])
+def test_private_startup_capture_returns_only_fixed_context_and_condition_codes(tmp_path, message, context):
+    path = tmp_path / "daemon-startup.log"
+    subject.rotated_path(path, 1).write_text("Created eMuleBB profile at /private/profile\nAPI key: SyntheticPrivateValue\n")
+    path.write_text("starting emulebb-rust\n" + message + "\nOperation not supported (os error 95)\n")
+    result = subject._startup_failure_context(path)
+    assert result == {"context": context, "systemCondition": "operation-not-supported",
+                      "privateOutputAvailable": True, "bootstrapCreated": True, "runtimeEntered": True}
+    assert "SyntheticPrivateValue" not in json.dumps(result) and "/private/" not in json.dumps(result)
+
+
+def test_private_startup_capture_never_reads_oversized_or_missing_segments(tmp_path):
+    path = tmp_path / "daemon-startup.log"
+    path.write_bytes(b"x" * 65537)
+    result = subject._startup_failure_context(path)
+    assert result == {"context": "unknown", "systemCondition": "unknown", "privateOutputAvailable": False,
+                      "bootstrapCreated": False, "runtimeEntered": False}
+
+
+def test_startup_file_probe_exposes_only_fixed_profile_presence_booleans():
+    calls = []
+    def command(*arguments):
+        calls.append(arguments)
+        if "emulebb-rust-settings.toml" in arguments[-1]: return "present"
+        if ".emulebb-profile.lock" in arguments[-1]: return "absent"
+        return "synthetic-private-output"
+    assert subject._startup_file_flags(command, "/owned/startup-exe") == {"bootstrapExists": True, "leaseExists": False}
+    assert len(calls) == 3 and all(call[:5] == ("-s", "emulator-5554", "shell", "sh", "-c") for call in calls)
+    assert all("--profile" not in str(call) and "api_key" not in str(call) for call in calls)
