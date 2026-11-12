@@ -212,17 +212,19 @@ def test_invalid_live_identity_or_authenticated_response_cannot_pass(image_runti
     assert image_runtime.calls[-1][0][:2] == ("network", "rm")
 
 
-@pytest.mark.parametrize("fault", ["missing", "short", "header-injection", "malformed"])
-def test_generated_credential_errors_are_sanitized_and_cleanup_runs(image_runtime, fault):
+@pytest.mark.parametrize("fault", ["missing", "retired-spelling", "short", "header-injection", "malformed"])
+def test_configured_credential_errors_are_sanitized_and_cleanup_runs(image_runtime, fault):
     if fault == "missing":
         image_runtime.settings = "[rest]\n"
+    elif fault == "retired-spelling":
+        image_runtime.settings = '[rest]\napiKey = "' + image_runtime.key + '"\n'
     elif fault == "short":
         image_runtime.settings = '[rest]\napi_key = "short"\n'
     elif fault == "header-injection":
         image_runtime.settings = '[rest]\napi_key = "' + image_runtime.key + '\\r\\nX-Other: injected"\n'
     else:
         image_runtime.settings = '[rest]\napi_key = "' + image_runtime.key
-    with pytest.raises(RuntimeError, match="Cannot read a valid generated image REST credential") as caught:
+    with pytest.raises(RuntimeError, match="Cannot read a valid configured image REST credential") as caught:
         run_image_runtime(image_runtime)
     assert image_runtime.key not in str(caught.value)
     assert not any("--header" in args for args, _ in image_runtime.calls)

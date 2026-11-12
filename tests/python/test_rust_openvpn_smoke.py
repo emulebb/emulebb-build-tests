@@ -66,6 +66,7 @@ def test_openvpn_compose_allows_an_explicit_empty_interface_binding() -> None:
     ).read_text(encoding="utf-8")
 
     assert "${EMULEBB_TEST_P2P_INTERFACE-tun0}" in compose
+    assert '"127.0.0.1:14712:20017/tcp"' in compose
     assert "${EMULEBB_TEST_RUST_LOG-info}" in compose
     assert "${EMULEBB_TEST_RUST_IMAGE-ghcr.io/emulebb/emulebb-rust:0.1.0-beta.1}" in compose
 

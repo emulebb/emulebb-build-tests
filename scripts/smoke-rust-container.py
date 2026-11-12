@@ -23,7 +23,7 @@ def docker(*arguments: str, check: bool = True, input: str | None = None) -> sub
 
 
 def authenticated_app(container: str, architecture: str) -> dict[str, object]:
-    """Prove the generated key works without placing it in argv or evidence."""
+    """Prove the configured key works without placing it in argv or evidence."""
     try:
         settings = docker("exec", container, "cat", "/config/emulebb-rust/emulebb-rust-settings.toml", check=False)
         if settings.returncode or len(settings.stdout) > 64 * 1024:
@@ -34,8 +34,8 @@ def authenticated_app(container: str, architecture: str) -> dict[str, object]:
             raise ValueError("invalid key")
     except (OSError, subprocess.SubprocessError, ValueError):
         # WHY: parser diagnostics can include the private TOML input. Keep the
-        # generated credential out of failure reports as well as successful ones.
-        raise RuntimeError("Cannot read a valid generated image REST credential") from None
+        # configured credential out of failure reports as well as successful ones.
+        raise RuntimeError("Cannot read a valid configured image REST credential") from None
     try:
         response = docker("exec", "--interactive", container, "curl", "--fail", "--silent", "--max-time", "2",
                           "--header", "@-", "--write-out", "\n%{http_code}", "http://127.0.0.1:20017/api/v1/app",
