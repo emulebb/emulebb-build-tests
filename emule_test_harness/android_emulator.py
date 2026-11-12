@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import platform
@@ -10,10 +11,99 @@ import signal
 import socket
 import subprocess
 import struct
+import re
 import time
 from uuid import uuid4
 
 from .bounded_process_output import AsyncBinaryCapture
+
+
+TLS_CASES = {
+    "core": (
+        "http_client::tests::packaged_android_roots_are_nonempty_and_build_without_platform_initialization",
+        "http_client::tests::missing_or_malformed_roots_fail_without_platform_fallback",
+        "http_client::tests::controlled_ca_accepts_valid_tls_but_rejects_wrong_hostname_and_expiry",
+        "http_client::tests::packaged_android_roots_do_not_trust_private_fixture_ca",
+        "ed2k_net_drivers::http_client_tests::url_import_builder_rejects_private_fixture_ca",
+    ),
+    "daemon": ("discovery_bootstrap::tests::discovery_https_uses_verified_client_and_rejects_private_ca",),
+}
+
+
+def _tls_payload(root: Path, *, source_sha: str, manifest_sha256: str) -> dict:
+    """Admit only the fixed source-bound Android TLS library test payloads."""
+    if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
+        raise ValueError("Android TLS proof requires immutable source and manifest identities")
+    manifest = root / "manifest.json"
+    if (root.is_symlink() or not root.is_dir() or manifest.is_symlink() or not manifest.is_file()
+            or manifest.stat().st_size > 65536):
+        raise RuntimeError("Android TLS proof requires its regular bounded payload manifest")
+    raw = manifest.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != manifest_sha256:
+        raise RuntimeError("Android TLS payload manifest identity differs")
+    value = json.loads(raw)
+    if (not isinstance(value, dict) or value.get("schema") != "emulebb.android.tls-payload/1"
+            or value.get("status") != "passed" or value.get("abi") != "x86_64"
+            or value.get("sourceDirty") is not False
+            or value.get("source", {}).get("emulebbRust", {}).get("commit") != source_sha
+            or not isinstance(value.get("files"), dict)
+            or not {"core-tests", "daemon-tests"} <= set(value["files"])
+            or set(value["files"]) - {"core-tests", "daemon-tests", "libc++_shared.so"}):
+        raise RuntimeError("Android TLS payload has inconsistent source, ABI or fixed files")
+    for name, identity in value["files"].items():
+        path = root / name
+        if (not isinstance(identity, dict) or type(identity.get("sizeBytes")) is not int
+                or not 0 < identity["sizeBytes"] <= 1024**3
+                or re.fullmatch(r"[0-9a-f]{64}", identity.get("sha256", "")) is None
+                or path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root.resolve())
+                or path.stat().st_size != identity["sizeBytes"]):
+            raise RuntimeError("Android TLS payload file is missing, redirected or unbounded")
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != identity["sha256"]:
+            raise RuntimeError("Android TLS payload file hash differs")
+    return value
+
+
+def _tls_case_result(text: str, case: str) -> dict:
+    """Reject ignored, empty, extra or failed libtest runs, even with exit status zero."""
+    summaries = re.findall(r"^test result: (.*)$", text, re.MULTILINE)
+    results = re.findall(r"^test (\S+) \.\.\. (\S+)\s*$", text, re.MULTILINE)
+    if (results != [(case, "ok")] or len(summaries) != 1
+            or re.fullmatch(r"ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9.]+s", summaries[0]) is None
+            or "running 1 test\n" not in text or "panicked at" in text):
+        raise RuntimeError("Android TLS proof did not execute exactly one successful required test")
+    return {"name": case, "passed": 1, "failed": 0, "ignored": 0}
+
+
+def _run_tls_payload(command, payload: dict) -> dict:
+    """Run only the six owned TLS cases on the already-owned Android guest."""
+    directory = "/data/local/tmp/emulebb-tls-" + uuid4().hex
+    prefix = ("-s", "emulator-5554")
+    results = []
+    try:
+        command(*prefix, "shell", "mkdir", "-m", "700", directory)
+        for name, identity in payload["files"].items():
+            target = directory + "/" + name
+            command(*prefix, "push", str(Path("/tls-payload") / name), target, timeout=120)
+            digest = command(*prefix, "shell", "sha256sum", target).split()
+            if digest != [identity["sha256"], target]:
+                raise RuntimeError("Android guest TLS payload hash differs from its source-bound bytes")
+            command(*prefix, "shell", "chmod", "500", target)
+        for role, cases in TLS_CASES.items():
+            for case in cases:
+                text = command(*prefix, "shell", "env", "LD_LIBRARY_PATH=" + directory,
+                               directory + "/" + role + "-tests", "--exact", case,
+                               "--test-threads=1", "--color", "never", timeout=30)
+                # Only synthetic test names/results enter the public receipt.
+                results.append(_tls_case_result(text + "\n", case))
+        return {"schema": "emulebb.android.tls-execution/1", "status": "passed",
+                "source": payload["source"], "files": payload["files"], "cases": results,
+                "freshProfileRestReadiness": "not-run", "apkQualification": "not-run"}
+    finally:
+        # Fixed generated guest directory only; the fresh emulator is also
+        # terminated by the existing outer owner after any failure or timeout.
+        command(*prefix, "shell", "rm", "-rf", directory)
 
 
 def page_size_from_auxv(data: bytes) -> int:
@@ -70,13 +160,18 @@ def _ini(path: Path, values: dict[str, str]) -> None:
 
 
 def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
-                output_root: Path, report_dir: Path, boot_timeout: float = 300) -> Path:
+                output_root: Path, report_dir: Path, boot_timeout: float = 300,
+                tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None) -> Path:
     """Boot one fresh guest in an isolated container and stop only owned resources."""
     if (platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0
             or not Path("/.dockerenv").is_file() or {name for _, name in socket.if_nameindex()} != {"lo"}):
         raise RuntimeError("Android boot probes require non-root native x86_64 Docker with network isolation")
     if api < 28 or page_size not in {4096, 16384} or not 0 < boot_timeout <= 600:
         raise ValueError("Select a supported Android API/page size and bounded boot timeout")
+    if (tls_source_sha is None) != (tls_manifest_sha256 is None):
+        raise ValueError("Android TLS proof requires both source and payload manifest identities")
+    payload = None if tls_source_sha is None else _tls_payload(
+        Path("/tls-payload"), source_sha=tls_source_sha, manifest_sha256=tls_manifest_sha256)
     output_root, sdk_root, image_dir = output_root.resolve(), sdk_root.resolve(), image_dir.resolve()
     if (report_dir.is_symlink() or report_dir.exists() or not report_dir.resolve().is_relative_to(output_root)
             or report_dir.resolve() == output_root or not image_dir.is_relative_to(sdk_root / "system-images")
@@ -123,9 +218,9 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             capture.close()
             capture.raise_if_failed()
 
-    def command(*arguments: str, check: bool = True, binary: bool = False) -> str | bytes:
+    def command(*arguments: str, check: bool = True, binary: bool = False, timeout: int = 10) -> str | bytes:
         result = subprocess.run([adb, "-P", "5037", *arguments], env=child, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=not binary, timeout=10, check=False)
+                                capture_output=True, text=not binary, timeout=timeout, check=False)
         if len(result.stdout) > 65536 or len(result.stderr) > 65536 or check and result.returncode:
             raise RuntimeError("Owned Android ADB command failed")
         if result.returncode:
@@ -178,6 +273,9 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             "-s", "emulator-5554", "exec-out", "cat", "/proc/self/auxv", binary=True)))
         value["phase"] = "guest-validation"
         value["guest"] = validate_guest(properties, api=api, page_size=page_size)
+        if payload is not None:
+            value["phase"] = "tls-execution"
+            value["tls"] = _run_tls_payload(command, payload)
         value["status"] = "passed"
         value["phase"] = "complete"
     except BaseException as error:

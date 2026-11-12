@@ -18,6 +18,8 @@ def main() -> None:
     parser.add_argument("--page-size", type=int, choices=(4096, 16384), required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument("--tls-source-sha")
+    parser.add_argument("--tls-manifest-sha256")
     arguments = parser.parse_args()
     print(probe_guest(**vars(arguments)))
 

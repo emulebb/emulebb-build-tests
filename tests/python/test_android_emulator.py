@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import signal
 import subprocess
@@ -109,9 +110,15 @@ def test_missing_kvm_never_falls_back(isolated, monkeypatch):
 
 
 @pytest.mark.parametrize("outcome", ["success", "guest-mismatch", "exit", "timeout", "capture", "adb-start",
-                                    "cleanup", "late-capture", "transient-adb"])
+                                    "cleanup", "late-capture", "transient-adb", "tls-success", "tls-failure"])
 def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, outcome):
     arguments, _ = isolated
+    if outcome.startswith("tls-"):
+        arguments.update(tls_source_sha="1" * 40, tls_manifest_sha256="2" * 64)
+        monkeypatch.setattr(subject, "_tls_payload", lambda *args, **kwargs: {"synthetic": True})
+        proof = Mock(return_value={"status": "passed"})
+        if outcome == "tls-failure": proof.side_effect = RuntimeError("TLS case failed")
+        monkeypatch.setattr(subject, "_run_tls_payload", proof)
     commands = []
     process = Mock(pid=42, stdout=Mock())
     process.poll.return_value = 1 if outcome == "exit" else None
@@ -150,7 +157,7 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
         return SimpleNamespace(returncode=0, stdout=text, stderr="")
 
     monkeypatch.setattr(subject.subprocess, "run", run)
-    passed = outcome in {"success", "transient-adb"}
+    passed = outcome in {"success", "transient-adb", "tls-success"}
     if passed:
         report = subject.probe_guest(**arguments)
         assert report == arguments["report_dir"] / "report.json"
@@ -162,13 +169,17 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
     assert result["scope"] == "guest-boot"
     assert result["applicationQualification"] == "not-run"
     expected_phase = {"adb-start": "adb-start", "exit": "guest-boot", "timeout": "guest-boot",
-                      "capture": "guest-boot", "guest-mismatch": "guest-validation"}.get(outcome, "complete")
+                      "capture": "guest-boot", "guest-mismatch": "guest-validation",
+                      "tls-failure": "tls-execution"}.get(outcome, "complete")
     assert result["phase"] == expected_phase
     if outcome == "guest-mismatch":
         assert result["observedGuest"]["pageSize"] == "4096"
     if outcome == "exit":
         assert result["emulatorExitCode"] == 1
     assert commands[-1][-1] == "kill-server"
+    if outcome.startswith("tls-"):
+        proof.assert_called_once()
+        assert result.get("tls") == ({"status": "passed"} if passed else None)
     stopped.assert_called_once_with(None if outcome == "adb-start" else process)
     if outcome != "adb-start":
         capture.close.assert_called_once()
@@ -199,3 +210,96 @@ def test_stop_escalates_only_owned_group(monkeypatch):
     subject._stop_group(process)
     assert kill.call_args_list[0].args == (42, signal.SIGTERM)
     assert kill.call_args_list[1].args == (42, signal.SIGKILL)
+
+
+def tls_manifest(root):
+    root.mkdir()
+    files = {}
+    for name in ("core-tests", "daemon-tests"):
+        data = ("synthetic " + name).encode()
+        (root / name).write_bytes(data)
+        files[name] = {"sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    value = {"schema": "emulebb.android.tls-payload/1", "status": "passed", "abi": "x86_64",
+             "sourceDirty": False, "source": {"emulebbRust": {"commit": "1" * 40}}, "files": files}
+    (root / "manifest.json").write_text(json.dumps(value))
+    return value
+
+
+@pytest.mark.parametrize("bad", [None, "manifest-hash", "file-hash", "source", "dirty", "abi", "extra", "size", "missing"])
+def test_tls_payload_binds_regular_fixed_files_and_source(tmp_path, bad):
+    root = tmp_path / "payload"
+    value = tls_manifest(root)
+    if bad == "source": value["source"]["emulebbRust"]["commit"] = "2" * 40
+    if bad == "dirty": value["sourceDirty"] = True
+    if bad == "abi": value["abi"] = "arm64-v8a"
+    if bad == "extra": value["files"]["other-program"] = value["files"]["core-tests"]
+    if bad == "size": value["files"]["core-tests"]["sizeBytes"] = 2**30 + 1
+    manifest = root / "manifest.json"
+    manifest.write_text(json.dumps(value))
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    if bad == "manifest-hash": digest = "0" * 64
+    if bad == "file-hash": (root / "core-tests").write_bytes(b"changed")
+    if bad == "missing": (root / "daemon-tests").unlink()
+    if bad is None:
+        assert subject._tls_payload(root, source_sha="1" * 40, manifest_sha256=digest) == value
+    else:
+        with pytest.raises(RuntimeError):
+            subject._tls_payload(root, source_sha="1" * 40, manifest_sha256=digest)
+
+
+def libtest_output(case):
+    return (f"running 1 test\ntest {case} ... ok\n\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s\n")
+
+
+@pytest.mark.parametrize("bad", [None, "zero", "ignored", "failed", "extra", "wrong-name", "summary", "panic"])
+def test_tls_result_requires_one_actual_named_test(bad):
+    case = subject.TLS_CASES["core"][0]
+    text = libtest_output(case)
+    if bad == "zero": text = text.replace("running 1 test", "running 0 tests").replace("1 passed", "0 passed")
+    if bad == "ignored": text = text.replace(" ... ok", " ... ignored").replace("0 ignored", "1 ignored")
+    if bad == "failed": text = text.replace("0 failed", "1 failed")
+    if bad == "extra": text += "test another_case ... ok\n"
+    if bad == "wrong-name": text = text.replace(case, "other_case")
+    if bad == "summary": text += text
+    if bad == "panic": text += "panicked at synthetic failure\n"
+    if bad is None:
+        assert subject._tls_case_result(text, case) == {"name": case, "passed": 1, "failed": 0, "ignored": 0}
+    else:
+        with pytest.raises(RuntimeError, match="exactly one"):
+            subject._tls_case_result(text, case)
+
+
+@pytest.mark.parametrize("outcome", ["success", "guest-hash", "test-failure", "timeout"])
+def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(tmp_path, outcome):
+    payload = tls_manifest(tmp_path / "payload")
+    calls = []
+    directory = None
+
+    def command(*arguments, **kwargs):
+        nonlocal directory
+        calls.append(arguments)
+        if "mkdir" in arguments:
+            directory = arguments[-1]
+        if "sha256sum" in arguments:
+            name = arguments[-1].split("/")[-1]
+            digest = "0" * 64 if outcome == "guest-hash" else payload["files"][name]["sha256"]
+            return digest + "  " + arguments[-1]
+        if "--exact" in arguments:
+            assert kwargs["timeout"] == 30
+            if outcome == "timeout": raise subprocess.TimeoutExpired("owned-adb", 30)
+            if outcome == "test-failure": return "running 0 tests\n"
+            return libtest_output(arguments[arguments.index("--exact") + 1])
+        return ""
+
+    if outcome == "success":
+        value = subject._run_tls_payload(command, payload)
+        assert len(value["cases"]) == 6 and value["status"] == "passed"
+        assert {item["name"] for item in value["cases"]} == {case for cases in subject.TLS_CASES.values() for case in cases}
+        assert value["freshProfileRestReadiness"] == "not-run"
+    else:
+        with pytest.raises((RuntimeError, subprocess.TimeoutExpired)):
+            subject._run_tls_payload(command, payload)
+    assert calls[-1] == ("-s", "emulator-5554", "shell", "rm", "-rf", directory)
+    assert directory.startswith("/data/local/tmp/emulebb-tls-")
+    assert all(call[:2] == ("-s", "emulator-5554") for call in calls)
