@@ -1241,6 +1241,7 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
         ],
         aich_hashset_acquired=True,
         aich_root="59ba286e4c4b8f0019c9fd89806d7212b37c82d6",
+        aich_root_origin="operator_link",
         aich_hashset=[
             "044c4a5f2af419cc2b6b06f69f5e3bd655ec6edb",
             "06fd075b8705ae9189470c69a70e2d5d5593ca09",
@@ -1307,6 +1308,7 @@ def test_rust_emulebb_manifest_metadata_accepts_empty_single_part_hashsets(tmp_p
         md4_hashset=[],
         aich_hashset_acquired=True,
         aich_root="59ba286e4c4b8f0019c9fd89806d7212b37c82d6",
+        aich_root_origin="operator_link",
         aich_hashset=[],
         sources=[{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "31719b50f40e503c1d533d9af3ef6fb8"}],
     )

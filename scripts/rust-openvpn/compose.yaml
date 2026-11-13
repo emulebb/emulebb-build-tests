@@ -13,7 +13,7 @@ services:
     tmpfs:
       - /run/openvpn:mode=0700
     ports:
-      - "127.0.0.1:14712:4711/tcp"
+      - "127.0.0.1:14712:20017/tcp"
     healthcheck:
       test: ["CMD-SHELL", "ip -4 -o addr show dev tun0 | grep -q ' inet '"]
       interval: 2s

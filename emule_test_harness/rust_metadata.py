@@ -397,6 +397,7 @@ def seed_transfer_manifest(
     md4_hashset: list[str] | None = None,
     aich_hashset_acquired: bool = False,
     aich_root: str | None = None,
+    aich_root_origin: str | None = None,
     aich_hashset: list[str] | None = None,
     sources: list[dict] | None = None,
     control_state: str | None = None,
@@ -409,16 +410,25 @@ def seed_transfer_manifest(
     comment: str = "",
     rating: int = 0,
 ) -> None:
-    """Seed a full ED2K transfer manifest (mirrors ``MetadataStore::upsert_transfer_manifest``).
+    """Seed an ED2K download fixture with explicit operator-link AICH authority.
 
     ``sources`` items are dicts with ``ip``, ``tcp_port`` and optional ``user_hash`` (hex).
     ``md4_hashset``/``aich_hashset`` are lists of lowercase hex part hashes.
+    A supplied root requires ``aich_root_origin="operator_link"``; it proves no
+    local payload or network consensus. Existing accepted identity is retained.
+    Replacing established transfer AICH authority requires the product writer,
+    not this fixture seed; no live trust-reconciliation algorithm is duplicated.
     """
 
     md4_hashset = md4_hashset or []
     aich_hashset = aich_hashset or []
     sources = sources or []
     hash_blob = bytes.fromhex(ed2k_hash)
+    if (aich_root is None) != (aich_root_origin is None) or aich_root_origin not in (None, "operator_link"):
+        raise ValueError("a supplied fixture AICH root requires explicit operator_link origin")
+    root_blob = bytes.fromhex(aich_root) if aich_root is not None else None
+    if root_blob is not None and len(root_blob) != 20:
+        raise ValueError("fixture AICH root must contain 20 bytes")
     piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
     if completed:
         visible_state = "completed"
@@ -429,18 +439,59 @@ def seed_transfer_manifest(
     now = _now_ms()
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
+        # WHY: seed admission and writes share the writer slot. A failed fixture
+        # must not partially replace identity, progress or acquired hashsets.
+        conn.execute("BEGIN IMMEDIATE")
+        history = conn.execute(
+            "SELECT size_bytes, aich_root FROM download_history WHERE ed2k_hash = ?",
+            (hash_blob,),
+        ).fetchone()
+        existing = conn.execute(
+            "SELECT id, size_bytes, aich_root, aich_root_origin FROM known_files WHERE ed2k_hash = ?",
+            (hash_blob,),
+        ).fetchone()
+        if existing is not None:
+            transfer = conn.execute(
+                "SELECT aich_root, aich_trust_generation FROM transfers WHERE known_file_id = ?",
+                (existing[0],),
+            ).fetchone()
+            if transfer is not None and (transfer[0] is not None or transfer[1] != 0):
+                raise ValueError("cannot reseed established transfer AICH authority")
+            local = conn.execute(
+                "SELECT aich_root FROM verified_local_content WHERE known_file_id = ?",
+                (existing[0],),
+            ).fetchone()
+            if local is not None and local[0] is not None and local[0] != existing[2]:
+                raise ValueError("fixture requires coherent accepted local AICH identity")
+            accepted = existing[3] is not None or local is not None or conn.execute(
+                "SELECT 1 FROM transfers WHERE known_file_id = ? AND completed = 1 AND final_rehash_pending = 0",
+                (existing[0],),
+            ).fetchone() is not None
+            if accepted and existing[1] != size_bytes:
+                raise ValueError("fixture conflicts with accepted file size")
+            if existing[2] is not None:
+                if root_blob is not None and root_blob != existing[2]:
+                    raise ValueError("fixture conflicts with accepted AICH root")
+                root_blob, aich_root_origin = existing[2], existing[3]
+        if history is not None and (history[0] != size_bytes or (
+                history[1] is not None and root_blob is not None and history[1] != root_blob)):
+            raise ValueError("fixture conflicts with accepted download history")
+        if aich_hashset_acquired and root_blob is None:
+            raise ValueError("acquired AICH part hashes require an accepted root")
+        generation = 1 if root_blob is not None else 0
         conn.execute(
             """
             INSERT INTO known_files(
-                ed2k_hash, size_bytes, display_name, aich_root, all_time_uploaded_bytes,
+                ed2k_hash, size_bytes, display_name, aich_root, aich_root_origin, all_time_uploaded_bytes,
                 all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_ms,
                 first_seen_at_ms, last_seen_at_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
                 size_bytes = excluded.size_bytes,
                 display_name = excluded.display_name,
                 aich_root = excluded.aich_root,
+                aich_root_origin = excluded.aich_root_origin,
                 all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
                 all_time_upload_requests = excluded.all_time_upload_requests,
                 all_time_upload_accepts = excluded.all_time_upload_accepts,
@@ -448,7 +499,7 @@ def seed_transfer_manifest(
                 last_seen_at_ms = excluded.last_seen_at_ms,
                 updated_at_ms = excluded.updated_at_ms
             """,
-            (hash_blob, size_bytes, name, bytes.fromhex(aich_root) if aich_root else None,
+            (hash_blob, size_bytes, name, root_blob, aich_root_origin,
              all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
              last_upload_request_ms, now, now, now),
         )
@@ -461,13 +512,17 @@ def seed_transfer_manifest(
                 known_file_id, completed, md4_hashset_acquired, aich_hashset_acquired,
                 visible_state, control_state, display_name, part_size_bytes, part_count,
                 upload_priority, auto_upload_priority, comment, rating,
-                delivery_state, delivery_ownership, created_at_ms, updated_at_ms, completed_at_ms
+                delivery_state, delivery_ownership, created_at_ms, updated_at_ms, completed_at_ms,
+                aich_root, aich_root_origin, aich_trust_generation
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'none', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'none', ?, ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id) DO UPDATE SET
                 completed = excluded.completed,
                 md4_hashset_acquired = excluded.md4_hashset_acquired,
                 aich_hashset_acquired = excluded.aich_hashset_acquired,
+                aich_root = excluded.aich_root,
+                aich_root_origin = excluded.aich_root_origin,
+                aich_trust_generation = excluded.aich_trust_generation,
                 visible_state = excluded.visible_state,
                 control_state = excluded.control_state,
                 display_name = excluded.display_name,
@@ -482,7 +537,8 @@ def seed_transfer_manifest(
             """,
             (known_file_id, int(completed), int(md4_hashset_acquired), int(aich_hashset_acquired),
              visible_state, control_state, name, piece_size, piece_count, upload_priority,
-             int(auto_upload_priority), comment, rating, now, now, now if completed else None),
+             int(auto_upload_priority), comment, rating, now, now, now if completed else None,
+             root_blob, aich_root_origin, generation),
         )
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
@@ -629,14 +685,15 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
                    coalesce(transfers.part_size_bytes, 0),
                    transfers.completed, transfers.md4_hashset_acquired,
                    transfers.aich_hashset_acquired,
-                   CASE WHEN known_files.aich_root IS NULL THEN NULL
-                        ELSE lower(hex(known_files.aich_root)) END,
+                   CASE WHEN transfers.aich_root IS NULL THEN NULL
+                        ELSE lower(hex(transfers.aich_root)) END,
                    transfers.upload_priority, transfers.comment, transfers.rating,
                    transfers.auto_upload_priority, known_files.all_time_uploaded_bytes,
                    known_files.all_time_upload_requests,
                    known_files.all_time_upload_accepts,
                    known_files.last_upload_requested_at_ms,
-                   transfers.source_fingerprint
+                   transfers.source_fingerprint, transfers.aich_root_origin,
+                   transfers.aich_trust_generation
             FROM known_files
             JOIN transfers ON transfers.known_file_id = known_files.id
             WHERE known_files.ed2k_hash = ?
@@ -688,6 +745,8 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         "md4_hashset_acquired": bool(row[7]),
         "aich_hashset_acquired": bool(row[8]),
         "aich_root": row[9],
+        "aich_root_origin": row[19],
+        "aich_trust_generation": row[20],
         "upload_priority": row[10],
         "comment": row[11],
         "rating": row[12],

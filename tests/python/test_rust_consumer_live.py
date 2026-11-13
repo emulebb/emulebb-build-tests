@@ -1,12 +1,57 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
 
 from emule_test_harness import rust_consumer_live
+
+
+def test_first_launch_uses_owned_executable_from_an_independent_cwd_without_home_redirection(tmp_path, monkeypatch):
+    executable = tmp_path / "package/emulebb-rust.exe"
+    launch_cwd = tmp_path / "shell-cwd"
+    launch_cwd.mkdir()
+    calls = []
+    process = object()
+    def popen(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return process
+    monkeypatch.setattr(rust_consumer_live.subprocess, "Popen", popen)
+
+    actual, handle = rust_consumer_live._start_daemon(executable, launch_cwd=launch_cwd, log_path=tmp_path / "logs/daemon.log")
+    handle.close()
+
+    assert actual is process
+    arguments, kwargs = calls[0]
+    assert arguments == [str(executable)]
+    assert kwargs["cwd"] == launch_cwd
+    assert kwargs["cwd"] != executable.parent
+    assert all(kwargs["env"].get(name) == os.environ.get(name) for name in (
+        "EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT", "CARGO_TARGET_DIR", "X_LOCAL_IP", "LOCALAPPDATA"))
+
+
+def test_restore_uses_the_original_explicit_profile_without_a_home_override(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    process = SimpleNamespace(pid=1234, poll=lambda: None)
+    def popen(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return process
+    monkeypatch.setattr(rust_consumer_live.subprocess, "Popen", popen)
+    monkeypatch.setattr(rust_consumer_live, "api_data", lambda *args: {})
+    suspended = rust_consumer_live.SuspendedDaemon(
+        executable=tmp_path / "installation/emulebb-rust.exe",
+        settings_path=tmp_path / "chosen-profile/emulebb-rust-settings.toml",
+        api_key="synthetic-private-key", graceful_shutdown=True)
+
+    assert rust_consumer_live._restore_existing_daemon(suspended) == 1234
+
+    arguments, kwargs = calls[0]
+    assert arguments == [str(suspended.executable), "--profile", str(suspended.settings_path.parent)]
+    assert kwargs["env"].get("LOCALAPPDATA") == os.environ.get("LOCALAPPDATA")
 
 
 def write_inputs(path: Path, rows: list[dict[str, object]]) -> None:

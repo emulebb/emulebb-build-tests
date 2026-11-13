@@ -140,7 +140,7 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     settings_path = rust_profile / "emulebb-rust-settings.toml"
     assert settings_path.is_file()
     settings_text = settings_path.read_text(encoding="utf-8")
-    assert 'bindAddr = "192.0.2.10:58381"' in settings_text
+    assert 'bind_addr = "192.0.2.10:58381"' in settings_text
     assert "127." not in settings_text
     with sqlite3.connect(db_path) as conn:
         roots = conn.execute("SELECT count(*) FROM shared_directory_roots WHERE enabled = 1").fetchone()[0]

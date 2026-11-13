@@ -34,9 +34,9 @@ DEFAULT_MAX_TRANSFER_BYTES = 5 * 1024 * 1024 - 1
 DEFAULT_MAX_COMPLETION_BYTES = DEFAULT_MAX_TRANSFER_BYTES
 DEFAULT_NETWORK_TIMEOUT_SECONDS = 240.0
 DEFAULT_TRANSFER_TIMEOUT_SECONDS = 120.0
-REST_PORT = 4711
-ED2K_PORT = 4662
-KAD_PORT = 4672
+REST_PORT = 20017
+ED2K_PORT = 20019
+KAD_PORT = 20020
 PACKAGE_ROOT = "emulebb-rust"
 RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 SHARED_FIXTURE_LAYOUT = (
@@ -341,15 +341,14 @@ def _wait_for_rest(base_url: str, api_key: str, process: subprocess.Popen[str], 
     raise RuntimeError(f"hosted package REST did not become ready: {last_error}")
 
 
-def _start_daemon(executable: Path, *, local_app_data: Path, log_path: Path) -> tuple[subprocess.Popen[str], Any]:
+def _start_daemon(executable: Path, *, launch_cwd: Path, log_path: Path) -> tuple[subprocess.Popen[str], Any]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     handle = log_path.open("a", encoding="utf-8", newline="\n")
     env = os.environ.copy()
-    env["LOCALAPPDATA"] = str(local_app_data)
     env["RUST_LOG"] = "info"
     process = subprocess.Popen(
         [str(executable)],
-        cwd=executable.parent,
+        cwd=launch_cwd,
         env=env,
         stdout=handle,
         stderr=subprocess.STDOUT,
@@ -447,15 +446,12 @@ def _restore_existing_daemon(suspended: SuspendedDaemon) -> int:
     """Restart the previously suspended operator daemon with its original profile."""
 
     profile_dir = suspended.settings_path.parent
-    if profile_dir.name.lower() != "emulebb-rust":
-        raise RuntimeError("operator settings must belong to an emulebb-rust profile directory")
     env = os.environ.copy()
-    env["LOCALAPPDATA"] = str(profile_dir.parent)
     creationflags = int(getattr(subprocess, "DETACHED_PROCESS", 0)) | int(
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     )
     process = subprocess.Popen(
-        [str(suspended.executable)],
+        [str(suspended.executable), "--profile", str(profile_dir)],
         cwd=suspended.executable.parent,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -565,13 +561,13 @@ def run_consumer_live(
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_root = get_workspace_output_root()
     report_dir, package_dir, profile_parent = _consumer_run_paths(output_root, run_id)
-    local_app_data = profile_parent / "localappdata"
-    profile_dir = local_app_data / "emulebb-rust"
+    profile_dir = package_dir / PACKAGE_ROOT
+    launch_cwd = profile_parent / "shell-cwd"
     fixture_root = profile_parent / "shared-fixtures"
     if profile_dir.exists():
         raise RuntimeError("consumer live proof profile must be fresh")
     report_dir.mkdir(parents=True, exist_ok=False)
-    local_app_data.mkdir(parents=True, exist_ok=False)
+    launch_cwd.mkdir(parents=True, exist_ok=False)
     shared_fixtures = create_shared_fixtures(fixture_root, run_id)
     safe_extract_zip(release_zip, package_dir)
     verified_file_count = verify_extracted_payload(package_dir, manifest)
@@ -634,7 +630,7 @@ def run_consumer_live(
     try:
         process, log_handle = _start_daemon(
             executable,
-            local_app_data=local_app_data,
+            launch_cwd=launch_cwd,
             log_path=log_path,
         )
         api_key = _wait_for_profile(settings_path, process, log_path)
@@ -756,7 +752,7 @@ def run_consumer_live(
 
         process, log_handle = _start_daemon(
             executable,
-            local_app_data=local_app_data,
+            launch_cwd=launch_cwd,
             log_path=log_path,
         )
         restarted_api_key = _wait_for_profile(settings_path, process, log_path)

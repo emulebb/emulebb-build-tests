@@ -7,11 +7,16 @@ import pytest
 from emule_test_harness import rust_profile_client_launcher
 
 
+def test_rest_base_url_rejects_retired_bootstrap_spelling() -> None:
+    with pytest.raises(RuntimeError, match="rest.bind_addr is missing"):
+        rust_profile_client_launcher.rest_base_url({"rest": {"bindAddr": "127.0.0.1:20017"}})
+
+
 def test_rest_base_url_uses_x_local_ip_for_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     assert (
-        rust_profile_client_launcher.rest_base_url({"rest": {"bindAddr": "0.0.0.0:4731"}})
+        rust_profile_client_launcher.rest_base_url({"rest": {"bind_addr": "0.0.0.0:4731"}})
         == "http://192.0.2.10:4731/api/v1"
     )
 
@@ -20,7 +25,7 @@ def test_rest_base_url_rejects_wildcard_without_x_local_ip(monkeypatch: pytest.M
     monkeypatch.delenv("X_LOCAL_IP", raising=False)
 
     with pytest.raises(RuntimeError, match="X_LOCAL_IP"):
-        rust_profile_client_launcher.rest_base_url({"rest": {"bindAddr": "0.0.0.0:4731"}})
+        rust_profile_client_launcher.rest_base_url({"rest": {"bind_addr": "0.0.0.0:4731"}})
 
 
 def test_wait_shared_files_ready_accepts_hashing_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,7 +57,7 @@ def test_run_dry_run_uses_regular_staged_exe(
     cargo_target.mkdir(parents=True)
     profile.mkdir(parents=True)
     (profile / "emulebb-rust-settings.toml").write_text(
-        '[rest]\nbindAddr = "192.0.2.10:4731"\napiKey = "key"\n',
+        '[rest]\nbind_addr = "192.0.2.10:4731"\napi_key = "key"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))

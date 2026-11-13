@@ -197,8 +197,8 @@ def test_consumer_nat_status_requires_both_default_mappings(monkeypatch) -> None
             "backend": "upnp",
             "lastError": None,
             "mappings": [
-                {"name": "ed2k_tcp", "protocol": "tcp", "localAddr": "192.0.2.1:4662"},
-                {"name": "kad_udp", "protocol": "udp", "localAddr": "192.0.2.1:4672"},
+                {"name": "ed2k_tcp", "protocol": "tcp", "localAddr": "192.0.2.1:20019"},
+                {"name": "kad_udp", "protocol": "udp", "localAddr": "192.0.2.1:20020"},
             ],
         },
     )
@@ -206,7 +206,7 @@ def test_consumer_nat_status_requires_both_default_mappings(monkeypatch) -> None
     status = rust_webui_live_proof._consumer_nat_status("http://127.0.0.1", "key")
 
     assert status["ready"] is True
-    assert status["requiredMappings"] == ["tcp:4662", "udp:4672"]
+    assert status["requiredMappings"] == ["tcp:20019", "udp:20020"]
     assert status["mappingNames"] == ["ed2k_tcp", "kad_udp"]
 
 
@@ -402,9 +402,16 @@ def test_parser_can_verify_stale_key_recovery() -> None:
 
 def test_profile_settings_api_key_reads_generated_secret(tmp_path) -> None:
     settings = tmp_path / "emulebb-rust-settings.toml"
-    settings.write_text('[rest]\napiKey = "generated-key"\n', encoding="utf-8")
+    settings.write_text('[rest]\napi_key = "generated-key"\n', encoding="utf-8")
 
     assert rust_webui_live_proof.profile_settings_api_key(settings) == "generated-key"
+
+
+def test_profile_settings_api_key_rejects_retired_bootstrap_spelling(tmp_path) -> None:
+    settings = tmp_path / "emulebb-rust-settings.toml"
+    settings.write_text('[rest]\napiKey = "synthetic-retired-key"\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="REST API key is missing"):
+        rust_webui_live_proof.profile_settings_api_key(settings)
 
 
 def test_sanitize_report_text_applies_runtime_redactions() -> None:

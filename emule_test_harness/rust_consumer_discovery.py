@@ -173,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile-settings", type=Path, required=True)
     parser.add_argument("--output-inputs", type=Path, required=True)
-    parser.add_argument("--base-url", default="http://127.0.0.1:4711")
+    parser.add_argument("--base-url", default="http://127.0.0.1:20017")
     parser.add_argument("--search-term", required=True)
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_TRANSFER_BYTES)
     parser.add_argument("--timeout-seconds", type=float, default=240.0)
