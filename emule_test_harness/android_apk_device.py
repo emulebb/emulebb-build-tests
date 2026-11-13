@@ -18,6 +18,7 @@ import sys
 import time
 
 from .android_apk_lifecycle import APPLICATION_ID, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
+from .android_apk_profile import OwnedUpdateApproval, admit_owned_update, admit_storage_configuration, read_hashed_receipt
 
 
 def _safe_service_phase(text: str | None) -> str:
@@ -277,7 +278,7 @@ class AdbDevice:
         if result.returncode or match is None or int(match[1]) != self.version:
             raise RuntimeError("Selected ADB tool differs from the operator server; refusing to restart it")
 
-    def command(self, *arguments, check=True, timeout=10):
+    def command(self, *arguments, check=True, timeout=10, owned_update: OwnedUpdateApproval | None = None):
         if arguments[:2] != ("-s", self.serial):
             raise RuntimeError("Physical ADB operations require the exact admitted device serial")
         if len(arguments) < 3 or arguments[2] in {
@@ -285,8 +286,15 @@ class AdbDevice:
             "reboot", "remount", "uninstall", "reverse",
         }:
             raise RuntimeError("Physical owner cannot manage ADB transports or destructive device lifecycle")
-        if arguments[2] == "install" and any(flag in arguments[3:] for flag in {"-r", "-d", "--enable-rollback"}):
-            raise RuntimeError("Physical owner cannot replace or downgrade an installed phone package")
+        if arguments[2] == "install":
+            if any(flag in arguments[3:] for flag in {"-d", "--enable-rollback"}):
+                raise RuntimeError("Physical owner cannot downgrade an installed phone package")
+            if "-r" in arguments[3:]:
+                if not isinstance(owned_update, OwnedUpdateApproval) or arguments[-1] != owned_update.target_path:
+                    raise RuntimeError("Physical owner cannot replace a package without verified owned-update admission")
+                with Path(owned_update.target_path).open("rb") as stream:
+                    if hashlib.file_digest(stream, "sha256").hexdigest() != owned_update.target_sha256:
+                        raise RuntimeError("Admitted phone update APK bytes changed before installation")
         if arguments[2] == "shell":
             action = arguments[3:]
             if (action[:2] in {("pm", "clear"), ("pm", "uninstall"), ("pm", "grant"), ("pm", "revoke"),
@@ -328,7 +336,10 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                           expected_cert_sha256: str,
                           execute: bool = False, installation_receipt: Path | None = None,
                           installation_receipt_sha256: str | None = None, dwell_seconds: int = 30,
-                          render_webui: bool = False, configure_storage: bool = False) -> Path:
+                          render_webui: bool = False, configure_storage: bool = False,
+                          allow_owned_compatible_update: bool = False,
+                          configuration_receipt: Path | None = None, configuration_receipt_sha256: str | None = None,
+                          compatibility_receipt: Path | None = None, compatibility_receipt_sha256: str | None = None) -> Path:
     """Admit/install or run a bounded owned-phone smoke without resetting user state.
 
     Runtime is limited to a package installed here while previously absent, or a
@@ -338,17 +349,29 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     admit_production_certificate(payload, expected_cert_sha256=expected_cert_sha256)
     if configure_storage and not execute:
         raise ValueError("Approved phone storage configuration requires explicit runtime execution")
+    if not allow_owned_compatible_update and (compatibility_receipt is not None or compatibility_receipt_sha256 is not None):
+        raise ValueError("Compatible phone update evidence requires explicit update opt-in")
     if type(dwell_seconds) is not int or not 15 <= dwell_seconds <= 300:
         raise ValueError("Physical foreground observation must be between 15 and 300 seconds")
     if type(payload.get("versionCode")) is not int or not 1 <= payload["versionCode"] <= 2_100_000_000:
         raise ValueError("Physical admission requires the producer's exact APK versionCode")
+    device_hash = hashlib.sha256(serial.encode()).hexdigest()
+    configured_storage = None
+    update_approval = None
+    if allow_owned_compatible_update:
+        update_approval = admit_owned_update(payload, device_hash=device_hash, expected_cert_sha256=expected_cert_sha256,
+            installation=read_hashed_receipt(installation_receipt, installation_receipt_sha256),
+            configuration=read_hashed_receipt(configuration_receipt, configuration_receipt_sha256),
+            compatibility=read_hashed_receipt(compatibility_receipt, compatibility_receipt_sha256))
+        configured_storage = read_hashed_receipt(configuration_receipt, configuration_receipt_sha256)
+    elif configuration_receipt is not None or configuration_receipt_sha256 is not None:
+        configured_storage = read_hashed_receipt(configuration_receipt, configuration_receipt_sha256)
     output_root = output_root.resolve()
     if (not output_root.is_dir() or report_dir.exists() or report_dir.is_symlink()
             or not report_dir.resolve().is_relative_to(output_root) or report_dir.resolve() == output_root):
         raise RuntimeError("Physical evidence requires a fresh directory below the configured output root")
     report_dir.mkdir(parents=True, mode=0o700)
     report = report_dir / "physical-device.json"
-    device_hash = hashlib.sha256(serial.encode()).hexdigest()
     value = {"schema": "emulebb.android.physical-device/1", "status": "failed", "phase": "device-admission",
              "scope": "physical-foreground-smoke" if execute else "physical-admission",
              "deviceSerialSha256": device_hash, "apkSha256": payload["apk"]["sha256"],
@@ -362,6 +385,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     remote_port = None
     attempted_start = False
     key = None
+    previous_bootstrap = None
 
     def shell(*args, **kwargs):
         return command(*prefix, "shell", *args, **kwargs)
@@ -393,6 +417,21 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                 raise RuntimeError("Physical APK Stop left its REST listener active")
             time.sleep(1)
 
+    def restart_for_storage():
+        nonlocal attempted_start
+        value["phase"] = "restart-approved-storage-stop"
+        shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+        ui.click("stop_service")
+        ui.wait_state("Stopped", timeout=30)
+        assert_stopped()
+        _stopped_service_flags(ui)
+        attempted_start = False
+        value["phase"] = "restart-approved-storage-start"
+        attempted_start = True
+        ui.click("start_service")
+        ui.wait_state("Running")
+        app()
+
     try:
         if command(*prefix, "get-state") != "device":
             raise RuntimeError("Selected Wi-Fi device is not connected and authorized")
@@ -410,6 +449,8 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         passed("physical-api-page-size-abi")
         package = shell("pm", "path", "--user", "0", APPLICATION_ID, check=False)
         if not package:
+            if update_approval is not None:
+                raise RuntimeError("Compatible update expected its owned installed package to remain present")
             known = shell("dumpsys", "package", APPLICATION_ID)
             if "Package [" + APPLICATION_ID + "]" in known:
                 raise RuntimeError("Existing or retained package data prevents a fresh physical installation")
@@ -424,8 +465,57 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         if len(paths) != 1 or not paths[0].startswith("package:/data/app/"):
             raise RuntimeError("Physical APK must be one installed base package")
         result = shell("sha256sum", shlex.quote(paths[0][8:])).split()
-        if not result or result[0] != payload["apk"]["sha256"]:
-            raise RuntimeError("Existing physical APK differs; refusing to update or reset its profile")
+        installed_sha = result[0] if result else None
+        if installed_sha != payload["apk"]["sha256"]:
+            if update_approval is None or installed_sha != update_approval.installed["apkSha256"]:
+                raise RuntimeError("Existing physical APK differs; refusing to update or reset its profile")
+            details = shell("dumpsys", "package", APPLICATION_ID)
+            version = re.search(r"\bversionCode=(\d+)\b", details)
+            name = re.search(r"(?m)^\s*versionName=(\S+)", details)
+            if (version is None or int(version[1]) != update_approval.installed["versionCode"]
+                    or name is None or name[1] != update_approval.installed["versionName"]
+                    or any(int(user) != 0 for user in re.findall(r"\bUser (\d+):[^\n]*\binstalled=true\b", details))):
+                raise RuntimeError("Compatible update installed version or user ownership differs")
+            value["phase"] = "stop-owned-service-before-compatible-update"
+            ui = ProductionUi(command, prefix=prefix)
+            shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+            state = _safe_service_phase(ui.find("service_status").get("text"))
+            if state in {"Starting", "Running"}:
+                ui.click("stop_service")
+                ui.wait_state("Stopped", timeout=30)
+            elif state not in {"Stopped", "Failed"}:
+                raise RuntimeError("Owned compatible update requires a stable quiescent service")
+            bind = ui.find("bind_addr", enabled=True).get("text", "")
+            match = re.fullmatch(r"(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|\[::1\]):([1-9][0-9]*)", bind)
+            if match is None or int(match[1]) > 65535:
+                raise RuntimeError("Owned update cannot verify the previous REST listener")
+            remote_port = int(match[1])
+            previous_bootstrap = {"bind": bind, "key": ui.find("api_key", enabled=True).get("text", ""),
+                                  "boot": ui.find("resume_on_boot").get("checked")}
+            if len(previous_bootstrap["key"]) < 32 or previous_bootstrap["boot"] not in {"true", "false"}:
+                raise RuntimeError("Owned update cannot inspect its existing bootstrap preferences")
+            forwarded = command(*prefix, "forward", "--no-rebind", "tcp:0", f"tcp:{remote_port}")
+            if re.fullmatch(r"[1-9][0-9]*", forwarded) is None or int(forwarded) > 65535:
+                raise RuntimeError("Owned update cannot allocate its previous-listener probe")
+            port = int(forwarded)
+            assert_stopped()
+            _stopped_service_flags(ui)
+            value["phase"] = "install-owned-compatible-update"
+            command(*prefix, "install", "-r", "--no-streaming", "--user", "0", payload["payloadPath"],
+                    timeout=120, owned_update=update_approval)
+            package = shell("pm", "path", "--user", "0", APPLICATION_ID)
+            paths = package.splitlines()
+            if len(paths) != 1 or not paths[0].startswith("package:/data/app/"):
+                raise RuntimeError("Compatible update did not produce one base package")
+            result = shell("sha256sum", shlex.quote(paths[0][8:])).split()
+            if not result or result[0] != payload["apk"]["sha256"]:
+                raise RuntimeError("Compatible update installed bytes differ from the admitted APK")
+        if update_approval is not None:
+            value["ownedInstallation"] = True
+            value["ownedCompatibleUpdate"] = {"fromSourceRevision": update_approval.installed["sourceRevision"],
+                "fromApkSha256": update_approval.installed["apkSha256"], "metadataSchemaSha256": update_approval.schema_sha256,
+                "configurationReceiptSha256": configuration_receipt_sha256,
+                "installationPerformed": installed_sha != payload["apk"]["sha256"], "resetOrMigration": False}
         details = shell("dumpsys", "package", APPLICATION_ID)
         version = re.search(r"\bversionCode=(\d+)\b", details)
         name = re.search(r"(?m)^\s*versionName=(\S+)", details)
@@ -435,6 +525,19 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["versionName"] = name[1]
         value["certificateAdmission"] = "exact-producer-admitted-apk-bytes"
         passed("installed-apk-version-bytes-certificate")
+        if previous_bootstrap is not None:
+            value["phase"] = "verify-owned-update-bootstrap-preservation"
+            shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+            if (ui.find("bind_addr", enabled=True).get("text") != previous_bootstrap["bind"]
+                    or ui.find("api_key", enabled=True).get("text") != previous_bootstrap["key"]
+                    or ui.find("resume_on_boot").get("checked") != previous_bootstrap["boot"]):
+                raise RuntimeError("Owned compatible update changed bootstrap or reboot preferences")
+            value["ownedCompatibleUpdate"]["bootstrapPreferencesPreserved"] = True
+        if configured_storage is not None:
+            if update_approval is None:
+                admit_storage_configuration(configured_storage, installation=value)
+            value["admittedStorageConfiguration"] = {"incomingDir": configured_storage["incomingDir"],
+                "sharedRoot": configured_storage["sharedRoot"], "receiptSha256": configuration_receipt_sha256}
         if not execute:
             value["status"] = "passed"
             return report
@@ -444,7 +547,8 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             from .rust_webui_live_proof import require_file_link_browser
             require_file_link_browser()
         value["phase"] = "normal-app-launch"
-        ui = ProductionUi(command, prefix=prefix)
+        if ui is None:
+            ui = ProductionUi(command, prefix=prefix)
         shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
         value["phase"] = "inspect-initial-service-phase"
         state = _safe_service_phase(ui.find("service_status").get("text"))
@@ -469,29 +573,33 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             return report
         # A fresh Incoming folder is implicitly shared. Never enumerate or
         # publish pre-existing phone files before REST can select a test root.
-        value["phase"] = "inspect-empty-default-incoming"
-        incoming = shell("sh", "-c", shlex.quote(
-            "if test -L /sdcard/Download/eMuleBB; then echo redirected; "
-            "elif test -d /sdcard/Download/eMuleBB; then ls -A /sdcard/Download/eMuleBB; "
-            "elif test -e /sdcard/Download/eMuleBB; then echo non-directory; else echo absent; fi"))
-        if incoming not in {"", "absent"}:
-            raise RuntimeError("Default incoming is not empty; refusing first-start implicit sharing of phone files")
-        passed("empty-default-incoming-before-first-start")
+        if configured_storage is None:
+            value["phase"] = "inspect-empty-default-incoming"
+            incoming = shell("sh", "-c", shlex.quote(
+                "if test -L /sdcard/Download/eMuleBB; then echo redirected; "
+                "elif test -d /sdcard/Download/eMuleBB; then ls -A /sdcard/Download/eMuleBB; "
+                "elif test -e /sdcard/Download/eMuleBB; then echo non-directory; else echo absent; fi"))
+            if incoming not in {"", "absent"}:
+                raise RuntimeError("Default incoming is not empty; refusing first-start implicit sharing of phone files")
+            passed("empty-default-incoming-before-first-start")
         value["phase"] = "read-bootstrap-bind-address"
         bind = ui.find("bind_addr", enabled=True).get("text", "")
         match = re.fullmatch(r"(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|\[::1\]):([1-9][0-9]*)", bind)
         if match is None or int(match[1]) > 65535:
             raise RuntimeError("Physical smoke requires wildcard or loopback REST reachable through its owned forward")
+        if remote_port is not None and int(match[1]) != remote_port:
+            raise RuntimeError("Owned compatible update changed its persisted REST port unexpectedly")
         remote_port = int(match[1])
         value["phase"] = "read-bootstrap-api-key"
         key = ui.find("api_key", enabled=True).get("text", "")
         if not 32 <= len(key) <= 512 or any(ord(char) < 33 or ord(char) > 126 for char in key):
             raise RuntimeError("Physical app UI did not expose a valid generated API key")
-        value["phase"] = "allocate-owned-rest-forward"
-        forwarded = command(*prefix, "forward", "--no-rebind", "tcp:0", f"tcp:{remote_port}")
-        if re.fullmatch(r"[1-9][0-9]*", forwarded) is None or int(forwarded) > 65535:
-            raise RuntimeError("Physical smoke could not allocate its private REST forward")
-        port = int(forwarded)
+        if port is None:
+            value["phase"] = "allocate-owned-rest-forward"
+            forwarded = command(*prefix, "forward", "--no-rebind", "tcp:0", f"tcp:{remote_port}")
+            if re.fullmatch(r"[1-9][0-9]*", forwarded) is None or int(forwarded) > 65535:
+                raise RuntimeError("Physical smoke could not allocate its private REST forward")
+            port = int(forwarded)
         value.update(phase="ordinary-default-first-start", networkIsolation="not-claimed",
                      startupNetworkBehavior="production-public-discovery-and-auto-connect-defaults")
         attempted_start = True
@@ -502,12 +610,24 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         app()
         value["runtimeExecution"] = "executed"
         passed("authenticated-source-bound-physical-readiness")
+        if configured_storage is not None:
+            from .rust_local_ed2k import request_json
+            value["phase"] = "verify-prepared-storage-after-start"
+            try:
+                settings = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/app/settings", key)
+                roots = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/shared-directories", key).get("roots", [])
+                if (settings.get("daemon", {}).get("incomingDir") != configured_storage["incomingDir"]
+                        or configured_storage["sharedRoot"] not in {root.get("path") for root in roots}):
+                    raise RuntimeError("Prepared phone storage settings differ")
+            except Exception:
+                raise RuntimeError("Phone storage configuration did not survive startup/update") from None
+            passed("prepared-storage-configuration-survives-startup")
         if configure_storage:
             from .android_apk_profile import configure_storage as prepare_storage
             value["phase"] = "persist-approved-storage-configuration"
             value["storageConfiguration"] = prepare_storage(command, prefix=prefix,
                 base_url=f"http://127.0.0.1:{port}", api_key=key, payload=payload, device_hash=device_hash,
-                report_path=report_dir / "storage-configuration.json")
+                report_path=report_dir / "storage-configuration.json", restart_service=restart_for_storage)
             passed("approved-storage-configuration-persisted")
         status, body = _request(port, "/")
         if status != 200 or b"<html" not in body.lower():

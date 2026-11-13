@@ -29,6 +29,11 @@ def main():
     parser.add_argument("--dwell-seconds", type=int, default=30)
     parser.add_argument("--render-webui", action="store_true")
     parser.add_argument("--configure-storage", action="store_true")
+    parser.add_argument("--allow-owned-compatible-update", action="store_true")
+    parser.add_argument("--configuration-receipt", type=Path)
+    parser.add_argument("--configuration-receipt-sha256")
+    parser.add_argument("--compatibility-receipt", type=Path)
+    parser.add_argument("--compatibility-receipt-sha256")
     args = parser.parse_args()
     payload = admit_payload(args.apk_payload, args.apk_manifest_name,
                             source_sha=args.apk_source_sha, manifest_sha256=args.apk_manifest_sha256,
@@ -38,7 +43,10 @@ def main():
         expected_cert_sha256=args.expected_cert_sha256,
         output_root=get_workspace_output_root(), report_dir=args.report_dir, execute=args.execute,
         installation_receipt=args.installation_receipt, installation_receipt_sha256=args.installation_receipt_sha256,
-        dwell_seconds=args.dwell_seconds, render_webui=args.render_webui, configure_storage=args.configure_storage))
+        dwell_seconds=args.dwell_seconds, render_webui=args.render_webui, configure_storage=args.configure_storage,
+        allow_owned_compatible_update=args.allow_owned_compatible_update,
+        configuration_receipt=args.configuration_receipt, configuration_receipt_sha256=args.configuration_receipt_sha256,
+        compatibility_receipt=args.compatibility_receipt, compatibility_receipt_sha256=args.compatibility_receipt_sha256))
 
 
 if __name__ == "__main__":

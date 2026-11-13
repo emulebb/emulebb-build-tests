@@ -30,14 +30,14 @@ def read_hashed_receipt(path: Path | None, digest: str | None) -> dict:
 
 
 def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, payload: dict,
-                      device_hash: str, report_path: Path) -> dict:
+                      device_hash: str, report_path: Path, restart_service) -> dict:
     """Persist only the operator-approved paths; preserve other roots and root entries."""
     from .rust_local_ed2k import request_json
     receipt = {"schema": "emulebb.android.storage-configuration/1", "status": "failed",
                "deviceSerialSha256": device_hash, "apkSha256": payload["apk"]["sha256"],
                "sourceRevision": payload["buildIdentity"]["sourceRevision"], "signerSha256": payload["signerSha256"],
                "versionCode": payload["versionCode"], "incomingDir": INCOMING, "sharedRoot": SHARED,
-               "application": "persisted-requires-service-restart", "filesMovedOrDeleted": 0}
+               "application": "not-applied", "filesMovedOrDeleted": 0}
 
     def shell(*args):
         return command(*prefix, "shell", *args)
@@ -62,6 +62,15 @@ def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, pa
             if shell("readlink", "-f", alias) != expected:
                 raise RuntimeError("Approved phone storage path is redirected")
         request_json(base_url, "PATCH", "/api/v1/app/settings", api_key, {"daemon": {"incomingDir": INCOMING}})
+        if request_json(base_url, "GET", "/api/v1/app/settings", api_key).get("daemon", {}).get("incomingDir") != INCOMING:
+            raise RuntimeError("Approved incoming setting was not persisted")
+        receipt["incomingPersisted"] = True
+        # The live core incoming path is immutable. Its old implicit parent
+        # would otherwise cause add_shared_directory_root to ignore Shared.
+        restart_service()
+        restarted = request_json(base_url, "GET", "/api/v1/app", api_key)
+        if any(restarted.get(name) != value for name, value in payload["buildIdentity"].items()):
+            raise RuntimeError("Restarted configuration source identity differs")
         if SHARED not in before_roots:
             request_json(base_url, "POST", "/api/v1/shared-directories/roots", api_key, {"path": SHARED})
         settings = request_json(base_url, "GET", "/api/v1/app/settings", api_key)
@@ -71,6 +80,7 @@ def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, pa
                 or not before_roots <= after_roots or not before_entries <= after_entries):
             raise RuntimeError("Approved storage configuration was not preserved or persisted")
         receipt.update(status="passed", priorRootsPreserved=True, rootEntriesPreserved=True,
+                       application="service-restarted-before-sharing", restartVerified=True,
                        priorRootCount=len(before_roots), rootEntryCountBefore=len(before_entries), rootEntryCountAfter=len(after_entries))
         return receipt
     except Exception as error:
@@ -90,6 +100,19 @@ class OwnedUpdateApproval:
     schema_sha256: str
 
 
+def admit_storage_configuration(configuration: dict, *, installation: dict) -> None:
+    """Bind the explicit configured paths to the exact admitted installation."""
+    if (configuration.get("schema") != "emulebb.android.storage-configuration/1"
+            or configuration.get("status") != "passed"
+            or any(configuration.get(name) != installation.get(name) for name in (
+                "deviceSerialSha256", "apkSha256", "sourceRevision", "signerSha256", "versionCode"))
+            or configuration.get("incomingDir") != INCOMING or configuration.get("sharedRoot") != SHARED
+            or configuration.get("restartVerified") is not True
+            or configuration.get("priorRootsPreserved") is not True or configuration.get("rootEntriesPreserved") is not True
+            or type(configuration.get("filesMovedOrDeleted")) is not int or configuration["filesMovedOrDeleted"] != 0):
+        raise RuntimeError("Phone operation requires verified explicit storage configuration")
+
+
 def admit_owned_update(payload: dict, *, device_hash: str, expected_cert_sha256: str,
                        installation: dict, configuration: dict, compatibility: dict) -> OwnedUpdateApproval:
     """Require exact owned origin, persisted configuration and strict source-schema equality."""
@@ -103,14 +126,7 @@ def admit_owned_update(payload: dict, *, device_hash: str, expected_cert_sha256:
             or type(old.get("versionCode")) is not int or old["versionCode"] >= payload["versionCode"]
             or not isinstance(old.get("versionName"), str) or not old["versionName"]):
         raise RuntimeError("Compatible update requires the exact owned production installation and a higher versionCode")
-    if (configuration.get("schema") != "emulebb.android.storage-configuration/1"
-            or configuration.get("status") != "passed"
-            or any(configuration.get(name) != old.get(name) for name in (
-                "deviceSerialSha256", "apkSha256", "sourceRevision", "signerSha256", "versionCode"))
-            or configuration.get("incomingDir") != INCOMING or configuration.get("sharedRoot") != SHARED
-            or configuration.get("priorRootsPreserved") is not True or configuration.get("rootEntriesPreserved") is not True
-            or type(configuration.get("filesMovedOrDeleted")) is not int or configuration["filesMovedOrDeleted"] != 0):
-        raise RuntimeError("Compatible update requires verified explicit phone storage configuration")
+    admit_storage_configuration(configuration, installation=old)
     materials = compatibility.get("materials")
     if (compatibility.get("schema") != "emulebb.android.profile-compatibility/1" or compatibility.get("status") != "passed"
             or compatibility.get("fromSourceRevision") != old["sourceRevision"]

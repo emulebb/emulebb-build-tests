@@ -38,6 +38,12 @@ class Phone:
         self.start_fails = False
         self.phase = "Stopped"
         self.api = 36
+        self.version_code = 42
+        self.version_name = "0.1.0-test"
+        self.build_identity = payload()["buildIdentity"]
+        self.update_identity = None
+        self.api_key = KEY
+        self.reset_key_on_update = False
         self.page_size = 16384
         self.unauthenticated = 401
         self.foreground_lingers = False
@@ -59,7 +65,7 @@ class Phone:
             return "package:/data/app/synthetic/base.apk" if self.installed else ""
         if args[:3] == ("shell", "dumpsys", "package"):
             return ("  Package [org.emulebb.android] (synthetic):\n"
-                    "    versionCode=42\n    versionName=0.1.0-test\n"
+                    "    versionCode=" + str(self.version_code) + "\n    versionName=" + self.version_name + "\n"
                     "    User 0: installed=true hidden=false stopped=false\n"
                     "      runtime permissions:\n"
                     "        android.permission.POST_NOTIFICATIONS: granted=" + str(self.notifications).lower() + ", flags=[ USER_SET ]\n"
@@ -68,7 +74,18 @@ class Phone:
         if args[:2] == ("shell", "sha256sum"):
             return self.checksum + " " + args[2]
         if args[:1] == ("install",):
-            assert not self.installed and "-r" not in args
+            if "-r" in args:
+                from emule_test_harness.android_apk_profile import OwnedUpdateApproval
+                approval = kwargs.get("owned_update")
+                assert self.installed and isinstance(approval, OwnedUpdateApproval)
+                self.checksum = approval.target_sha256
+                self.version_code += 1
+                self.version_name = self.update_identity["version"]
+                self.build_identity = self.update_identity
+                if self.reset_key_on_update:
+                    self.api_key = "substituted-private-bootstrap-key-0000000"
+            else:
+                assert not self.installed
             self.installed = True
         if args[:3] == ("shell", "appops", "get"):
             return "MANAGE_EXTERNAL_STORAGE: " + ("allow" if self.permission else "default")
@@ -96,8 +113,9 @@ class Phone:
                         '<node package="com.google.android.permissioncontroller" clickable="true" enabled="true" '
                         'resource-id="com.google.android.permissioncontroller:id/permission_allow_button" bounds="[0,0][100,100]"/></hierarchy>')
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + self.phase + '"/>'
-                    '<node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + KEY + '"/>'
+                    '<node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.api_key + '"/>'
                     '<node resource-id="org.emulebb.android:id/bind_addr" enabled="true" text="127.0.0.1:20017"/>'
+                    '<node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" checked="false"/>'
                     '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,500][100,600]"/>'
                     '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,500][300,600]"/>'
                     '<node resource-id="org.emulebb.android:id/grant_all_files_access" enabled="true" bounds="[400,500][500,600]"/>'
@@ -142,9 +160,9 @@ class Phone:
                 "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500}, "privateOtherData": KEY}}).encode()
         if key is None:
             return self.unauthenticated, b"{}"
-        assert key == KEY
+        assert key == self.api_key
         return 200, json.dumps({"meta": {"apiVersion": "v1"}, "data": {
-            **payload()["buildIdentity"], "name": "eMuleBB", "apiVersion": "v1", "lifecycle": {"state": "running"}}}).encode()
+            **self.build_identity, "name": "eMuleBB", "apiVersion": "v1", "lifecycle": {"state": "running"}}}).encode()
 
 
 def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=False):
@@ -337,14 +355,109 @@ def test_storage_configuration_requires_owned_execution_and_uses_authenticated_c
     def configure(command, **kwargs):
         assert phone.running and kwargs["api_key"] == KEY and kwargs["payload"] == payload()
         calls.append(kwargs)
-        return {"status": "passed", "application": "persisted-requires-service-restart"}
+        kwargs["restart_service"]()
+        assert phone.running
+        return {"status": "passed", "application": "service-restarted-before-sharing", "restartVerified": True}
 
     monkeypatch.setattr(android_apk_profile, "configure_storage", configure)
     report = run(tmp_path, monkeypatch, phone, execute=True, configure=True)
     value = json.loads(report.read_text())
     assert value["status"] == "passed" and len(calls) == 1
-    assert value["storageConfiguration"]["application"] == "persisted-requires-service-restart"
+    assert value["storageConfiguration"]["application"] == "service-restarted-before-sharing"
     assert KEY not in report.read_text()
+
+
+@pytest.mark.parametrize("fault", [None, "execute", "wrong-installed-bytes", "absent", "other-user", "disconnected", "config", "schema", "no-opt-in", "already-present", "key-reset"])
+def test_owned_compatible_update_requires_bound_receipts_and_preserves_phone_state(tmp_path, monkeypatch, fault):
+    from emule_test_harness import android_apk_profile
+    phone = Phone()
+    installation = run(tmp_path, monkeypatch, phone)
+    old = json.loads(installation.read_text())
+    target = {**payload(), "apk": {"sha256": "e" * 64}, "versionCode": 43,
+              "buildIdentity": {**payload()["buildIdentity"], "sourceRevision": "e" * 40, "version": "0.1.1-test"}}
+    phone.update_identity = target["buildIdentity"]
+    phone.reset_key_on_update = fault == "key-reset"
+    configuration = {**old, "schema": "emulebb.android.storage-configuration/1", "incomingDir": android_apk_profile.INCOMING,
+        "sharedRoot": android_apk_profile.SHARED, "priorRootsPreserved": fault != "config", "rootEntriesPreserved": True,
+        "restartVerified": True, "filesMovedOrDeleted": 0}
+    materials = {path: "f" * 64 for path in android_apk_profile.SCHEMA_MATERIALS}
+    compatibility = {"schema": "emulebb.android.profile-compatibility/1", "status": "passed",
+        "fromSourceRevision": old["sourceRevision"], "toSourceRevision": target["buildIdentity"]["sourceRevision"],
+        "materials": materials, "metadataSchemaSha256": "0" * 64 if fault == "schema" else
+        hashlib.sha256(json.dumps(materials, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+
+    def receipt(name, value):
+        path = tmp_path / name
+        path.write_text(json.dumps(value))
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    config_path, config_sha = receipt("configuration.json", configuration)
+    compat_path, compat_sha = receipt("compatibility.json", compatibility)
+    if fault == "wrong-installed-bytes": phone.checksum = "0" * 64
+    if fault == "absent": phone.installed = False
+    if fault == "disconnected": phone.phase = "Service connection interrupted"
+    if fault == "already-present":
+        phone.checksum, phone.version_code, phone.version_name = "e" * 64, 43, "0.1.1-test"
+    if fault == "other-user":
+        command = phone.command
+
+        def other_user(*args, **kwargs):
+            result = command(*args, **kwargs)
+            if args[2:5] == ("shell", "dumpsys", "package"):
+                return result + "\n    User 10: installed=true\n"
+            return result
+
+        phone.command = other_user
+    phone.calls.clear()
+    if fault == "execute":
+        from emule_test_harness import rust_local_ed2k
+        monkeypatch.setattr(rust_local_ed2k, "request_json", lambda base, method, route, key: {
+            "daemon": {"incomingDir": android_apk_profile.INCOMING}} if route == "/api/v1/app/settings" else {
+            "roots": [{"path": android_apk_profile.SHARED}]})
+    kwargs = dict(serial=SERIAL, output_root=tmp_path, report_dir=tmp_path / "updated", expected_cert_sha256="b" * 64,
+        execute=fault == "execute", dwell_seconds=15,
+        installation_receipt=installation, installation_receipt_sha256=hashlib.sha256(installation.read_bytes()).hexdigest(),
+        allow_owned_compatible_update=fault != "no-opt-in", configuration_receipt=config_path,
+        configuration_receipt_sha256=config_sha, compatibility_receipt=compat_path, compatibility_receipt_sha256=compat_sha)
+    if fault not in {None, "execute", "already-present"}:
+        with pytest.raises((RuntimeError, ValueError)):
+            subject.probe_physical_device(phone.command, target, **kwargs)
+        assert len([call for call in phone.calls if call[:1] == ("install",)]) == (1 if fault == "key-reset" else 0)
+    else:
+        report = subject.probe_physical_device(phone.command, target, **kwargs)
+        value = json.loads(report.read_text())
+        assert value["status"] == "passed" and value["ownedInstallation"] is True
+        assert value["ownedCompatibleUpdate"]["resetOrMigration"] is False
+        assert value["ownedCompatibleUpdate"]["installationPerformed"] is (fault != "already-present")
+        assert phone.checksum == "e" * 64 and phone.version_code == 43
+        if fault != "already-present":
+            assert value["ownedCompatibleUpdate"]["bootstrapPreferencesPreserved"] is True
+        if fault == "execute":
+            assert value["runtimeExecution"] == "executed" and not phone.running
+            dumps = {call[3] for call in phone.calls if call[:3] == ("shell", "uiautomator", "dump")}
+            removed = {call[3] for call in phone.calls if call[:3] == ("shell", "rm", "-f")}
+            assert len(dumps) == 1 and dumps == removed
+        assert len([call for call in phone.calls if call[:2] == ("install", "-r")]) == (0 if fault == "already-present" else 1)
+        assert not any(call[:3] in {("shell", "pm", "clear"), ("shell", "am", "force-stop")} for call in phone.calls)
+
+
+def test_update_cli_guard_requires_typed_admission_and_rechecks_target_bytes(tmp_path, monkeypatch):
+    from emule_test_harness.android_apk_profile import OwnedUpdateApproval
+    executable = tmp_path / "adb.exe"
+    executable.write_bytes(b"synthetic tool")
+    target = tmp_path / "target.apk"
+    target.write_bytes(b"source-bound synthetic APK")
+    calls = []
+    monkeypatch.setattr(subject, "existing_adb_server_version", lambda port: 41)
+    monkeypatch.setattr(subject.subprocess, "run", lambda args, **kwargs: calls.append(args)
+        or SimpleNamespace(returncode=0, stdout="Android Debug Bridge version 1.0.41", stderr=""))
+    device = subject.AdbDevice(executable, SERIAL)
+    approval = OwnedUpdateApproval({}, str(target), hashlib.sha256(target.read_bytes()).hexdigest(), "f" * 64)
+    device.command("-s", SERIAL, "install", "-r", str(target), owned_update=approval)
+    target.write_bytes(b"substituted bytes")
+    with pytest.raises(RuntimeError, match="bytes changed"):
+        device.command("-s", SERIAL, "install", "-r", str(target), owned_update=approval)
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("phase", ["Starting", "Running"])

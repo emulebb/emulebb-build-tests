@@ -12,7 +12,8 @@ def evidence():
            "debugBuild": False, "deviceSerialSha256": "d" * 64, "apkSha256": "a" * 64,
            "sourceRevision": "1" * 40, "signerSha256": "b" * 64, "versionCode": 1, "versionName": "0.1.0-old"}
     config = {**old, "schema": "emulebb.android.storage-configuration/1", "incomingDir": subject.INCOMING,
-              "sharedRoot": subject.SHARED, "priorRootsPreserved": True, "rootEntriesPreserved": True, "filesMovedOrDeleted": 0}
+              "sharedRoot": subject.SHARED, "priorRootsPreserved": True, "rootEntriesPreserved": True,
+              "restartVerified": True, "filesMovedOrDeleted": 0}
     materials = {path: "c" * 64 for path in subject.SCHEMA_MATERIALS}
     compat = {"schema": "emulebb.android.profile-compatibility/1", "status": "passed",
               "fromSourceRevision": "1" * 40, "toSourceRevision": "2" * 40, "materials": materials,
@@ -45,7 +46,7 @@ def test_compatible_update_requires_exact_owned_origin_configuration_and_schema(
         assert approval.installed == old and approval.target_sha256 == "e" * 64
 
 
-@pytest.mark.parametrize("fault", [None, "lost-roots", "lost-files", "redirected"])
+@pytest.mark.parametrize("fault", [None, "lost-roots", "lost-files", "redirected", "no-restart"])
 def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tmp_path, monkeypatch, fault):
     from emule_test_harness import rust_local_ed2k
     old, _, _, payload = evidence()
@@ -55,6 +56,7 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
     settings = {"daemon": {"incomingDir": None}}
     calls = []
     changed = [False]
+    live_incoming = ["/storage/emulated/0/Download/eMuleBB"]
 
     def request(base, method, route, key, body=None):
         calls.append((method, route, body))
@@ -65,7 +67,10 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
             return settings
         if route == "/api/v1/shared-directories/roots":
             assert method == "POST" and body == {"path": subject.SHARED}
-            roots.add(subject.SHARED)
+            # Canonical Rust behavior: children covered by the live Incoming
+            # folder are ignored, even after a persisted-only incoming PATCH.
+            if not subject.SHARED.startswith(live_incoming[0] + "/"):
+                roots.add(subject.SHARED)
             if fault == "lost-roots": roots.remove("/storage/emulated/0/Download/Existing Shared")
         return {}
 
@@ -86,14 +91,16 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
     monkeypatch.setattr(rust_local_ed2k, "request_json", request)
     report = tmp_path / "config.json"
     kwargs = dict(prefix=("-s", "synthetic-device"), base_url="http://127.0.0.1:1234", api_key="synthetic-private-key",
-                  payload=payload, device_hash="d" * 64, report_path=report)
+                  payload=payload, device_hash="d" * 64, report_path=report,
+                  restart_service=lambda: live_incoming.__setitem__(0, settings["daemon"]["incomingDir"])
+                  if fault != "no-restart" else None)
     if fault:
         with pytest.raises(RuntimeError, match="storage configuration failed"):
             subject.configure_storage(command, **kwargs)
         assert json.loads(report.read_text())["status"] == "failed"
     else:
         result = subject.configure_storage(command, **kwargs)
-        assert result["status"] == "passed" and result["application"] == "persisted-requires-service-restart"
+        assert result["status"] == "passed" and result["application"] == "service-restarted-before-sharing"
         assert result["priorRootsPreserved"] and result["rootEntriesPreserved"] and result["filesMovedOrDeleted"] == 0
     assert not any(method == "DELETE" or route == "/api/v1/shared-directories" and method == "PATCH" for method, route, body in calls)
     assert "Existing User File.bin" not in report.read_text() and "synthetic-private-key" not in report.read_text()
