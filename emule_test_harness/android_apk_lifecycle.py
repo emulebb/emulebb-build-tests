@@ -18,6 +18,37 @@ from uuid import uuid4
 
 APPLICATION_ID = "org.emulebb.android"
 PREFIX = ("-s", "emulator-5554")
+SUPPORTED_ANDROID_APIS = frozenset({34, 35, 36, 37})
+APK_FILE_LINK_CASES = frozenset({
+    "os-file-link-resolution", "cold-file-link-without-autostart",
+    "pending-and-repeated-intents-without-autostart", "malformed-and-nonfile-intents-rejected",
+    "start-and-repeated-intents-without-enqueue", "native-browser-dispatch-without-enqueue",
+    "bundled-webui-confirmation",
+})
+FILE_LINK_BROWSER_REQUIRED_CHECKS = frozenset({
+    "signInPreserved", "cancelWithoutEnqueue", "explicitConfirmation", "repeatedNavigationWithoutEnqueue",
+})
+_APK_BASE_CASES = frozenset({
+    "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness", "bundled-webui",
+    "graceful-stop", "notification-denied-service-start", "all-files-denial-and-runtime-revocation",
+    "enabled-boot-resume", "explicit-stop-prevents-boot-resume", "task-manager-stop-prevents-boot-resume",
+    "force-stop-prevents-boot-resume", "restart", "local-transfer-and-delivery-collision",
+    "completed-delivery-survives-restart", "file-link-intents-and-webui-confirmation", "screen-off-doze-observation",
+})
+
+
+def required_apk_cases(api: int) -> set[str]:
+    """Return the exact full qualification contract for one supported guest API.
+
+    Candidate admission imports this stdlib-only owner from a verified harness
+    revision. A report cannot select its own required cases or extend this range.
+    """
+    if type(api) is not int or api not in SUPPORTED_ANDROID_APIS:
+        raise ValueError("APK qualification supports only Android APIs 34, 35, 36 and 37")
+    cases = set(_APK_BASE_CASES)
+    if api == 37:
+        cases.add("android17-local-network-denial-and-revocation")
+    return cases
 
 
 def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_sha256: str) -> dict:
@@ -509,6 +540,10 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 break
             time.sleep(min(30, dwell - elapsed))
         passed("screen-off-doze-observation")
+        if peer_payload is not None and qualify_file_links:
+            required = required_apk_cases(api)
+            if len(cases) != len(required) or {case["name"] for case in cases} != required:
+                raise RuntimeError("APK qualification case coverage differs from its trusted source contract")
         result["status"] = "passed"
         return result
     finally:

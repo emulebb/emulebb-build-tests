@@ -219,6 +219,10 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
     else:
         result = rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
         assert result["status"] == "passed" and result["transferHash"] == file_hash and result["sizeBytes"] == 1
+        from emule_test_harness.android_apk_lifecycle import FILE_LINK_BROWSER_REQUIRED_CHECKS
+        assert FILE_LINK_BROWSER_REQUIRED_CHECKS == frozenset({
+            "signInPreserved", "cancelWithoutEnqueue", "explicitConfirmation", "repeatedNavigationWithoutEnqueue"})
+        assert all(result[name] is True for name in FILE_LINK_BROWSER_REQUIRED_CHECKS)
         assert calls == ["Connect", "Cancel links", "Add links", "Cancel links"]
     assert cleanup["status"] == ("failed" if failure in {"cleanup", "body-cleanup", "hash"} else "passed")
     if failure not in {"cleanup", "body-cleanup", "hash"}:

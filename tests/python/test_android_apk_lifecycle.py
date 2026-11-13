@@ -9,6 +9,23 @@ from emule_test_harness import android_apk_lifecycle as subject
 SOURCE = "a" * 40
 
 
+@pytest.mark.parametrize("api", [34, 35, 36, 37])
+def test_trusted_case_contract_has_an_explicit_per_api_permission_matrix(api):
+    cases = subject.required_apk_cases(api)
+    assert {"local-transfer-and-delivery-collision", "completed-delivery-survives-restart",
+            "file-link-intents-and-webui-confirmation", "screen-off-doze-observation"} <= cases
+    assert ("android17-local-network-denial-and-revocation" in cases) == (api == 37)
+    cases.clear()
+    assert subject.required_apk_cases(api)
+    assert subject.SUPPORTED_ANDROID_APIS == frozenset({34, 35, 36, 37})
+
+
+@pytest.mark.parametrize("api", [False, True, None, "37", 37.0, 28, 33, 38, 100])
+def test_trusted_case_contract_rejects_implicit_or_future_api_coverage(api):
+    with pytest.raises(ValueError, match="only Android APIs 34, 35, 36 and 37"):
+        subject.required_apk_cases(api)
+
+
 def payload(tmp_path, mutate=lambda value: None):
     apk = tmp_path / "application.apk"
     apk.write_bytes(b"synthetic signed APK")
@@ -208,6 +225,9 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
                      "task-manager-stop-prevents-boot-resume", "force-stop-prevents-boot-resume",
                      "restart", "screen-off-doze-observation"])
     assert [case["name"] for case in result["cases"]] == expected
+    assert set(expected) == subject.required_apk_cases(api) - {
+        "local-transfer-and-delivery-collision", "completed-delivery-survives-restart",
+        "file-link-intents-and-webui-confirmation"}
     assert result["localTransfer"] == "not-run"
     assert result["physicalDevice"] == "not-run"
     assert result["endurance"]["samples"] == 3
@@ -314,7 +334,26 @@ def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmat
             "os-file-link-resolution", "cold-file-link-without-autostart", "pending-and-repeated-intents-without-autostart",
             "malformed-and-nonfile-intents-rejected", "start-and-repeated-intents-without-enqueue",
             "native-browser-dispatch-without-enqueue", "bundled-webui-confirmation"]
+        assert {case["name"] for case in result["fileLinks"]["cases"]} == subject.APK_FILE_LINK_CASES
     assert peer.key not in (tmp_path / "apk-lifecycle.json").read_text()
+
+
+@pytest.mark.parametrize("api", [34, 35, 36, 37])
+def test_full_official_path_matches_source_owned_case_contract(tmp_path, monkeypatch, api):
+    from emule_test_harness import android_apk_peer, rust_local_ed2k, rust_webui_live_proof
+    peer, admitted = guest(tmp_path, monkeypatch)
+    peer.api = api
+    digest = "d" * 64
+    monkeypatch.setattr(android_apk_peer, "transfer_proof", lambda *args, **kwargs: {
+        "status": "passed", "sha256": digest, "deliveredPath": "/owned/Android Sample.bin"})
+    monkeypatch.setattr(android_apk_peer, "guest_sha256", lambda *args: digest)
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *args, **kwargs: {"items": []})
+    monkeypatch.setattr(rust_webui_live_proof, "run_file_link_browser_proof", lambda **kwargs: {"status": "passed"})
+    result = subject.exercise(peer.command, admitted, report_dir=tmp_path, peer_payload={},
+                              rust_source=tmp_path, adb="adb", child={}, qualify_file_links=True)
+    assert result["status"] == "passed"
+    assert {case["name"] for case in result["cases"]} == subject.required_apk_cases(api)
+    assert len(result["cases"]) == len(subject.required_apk_cases(api))
 
 
 def test_scrollable_production_ui_does_not_require_controls_in_one_viewport(tmp_path, monkeypatch):
