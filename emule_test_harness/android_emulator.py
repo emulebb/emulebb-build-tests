@@ -557,7 +557,9 @@ def _ini(path: Path, values: dict[str, str]) -> None:
 
 def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
                 output_root: Path, report_dir: Path, boot_timeout: float = 300,
-                tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None) -> Path:
+                tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None,
+                apk_source_sha: str | None = None, apk_manifest_sha256: str | None = None,
+                apk_manifest_name: str | None = None, apk_soak_seconds: int = 0) -> Path:
     """Boot one fresh guest in an isolated container and stop only owned resources."""
     if (platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0
             or not Path("/.dockerenv").is_file() or {name for _, name in socket.if_nameindex()} != {"lo"}):
@@ -568,6 +570,20 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         raise ValueError("Android TLS proof requires both source and payload manifest identities")
     payload = None if tls_source_sha is None else _tls_payload(
         Path("/tls-payload"), source_sha=tls_source_sha, manifest_sha256=tls_manifest_sha256)
+    apk_values = (apk_source_sha, apk_manifest_sha256, apk_manifest_name)
+    if any(value is not None for value in apk_values) and not all(value is not None for value in apk_values):
+        raise ValueError("APK proof requires source, manifest hash and manifest filename")
+    if apk_source_sha is not None and (payload is not None or api < 34):
+        raise ValueError("APK proof requires its own Android 14+ guest")
+    if type(apk_soak_seconds) is not int or not 0 <= apk_soak_seconds <= 7 * 86400:
+        raise ValueError("APK observation must be bounded to at most seven days")
+    if apk_soak_seconds and apk_source_sha is None:
+        raise ValueError("APK observation requires an admitted APK")
+    apk_payload = None
+    if apk_source_sha is not None:
+        from .android_apk_lifecycle import admit_payload
+        apk_payload = admit_payload(Path("/apk-payload"), apk_manifest_name,
+                                    source_sha=apk_source_sha, manifest_sha256=apk_manifest_sha256)
     output_root, sdk_root, image_dir = output_root.resolve(), sdk_root.resolve(), image_dir.resolve()
     if (report_dir.is_symlink() or report_dir.exists() or not report_dir.resolve().is_relative_to(output_root)
             or report_dir.resolve() == output_root or not image_dir.is_relative_to(sdk_root / "system-images")
@@ -673,6 +689,11 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             value["phase"] = "tls-execution"
             value["tlsProgress"] = {}
             value["tls"] = _run_tls_payload(command, payload, adb=adb, child=child, report_dir=report_dir, progress=value["tlsProgress"])
+        if apk_payload is not None:
+            from .android_apk_lifecycle import exercise
+            value.update(phase="apk-lifecycle", scope="apk-lifecycle")
+            value["apk"] = exercise(command, apk_payload, report_dir=report_dir, soak_seconds=apk_soak_seconds)
+            value["applicationQualification"] = "apk-lifecycle"
         value["status"] = "passed"
         value["phase"] = "complete"
     except BaseException as error:
