@@ -233,6 +233,47 @@ def guest(tmp_path, monkeypatch):
     return peer, admitted
 
 
+@pytest.mark.parametrize("secure", [False, True])
+def test_initial_owned_guest_wakes_and_dismisses_only_insecure_keyguard_before_ui_read(tmp_path, monkeypatch, secure):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    display = {"awake": False, "locked": True, "firstUiRead": None}
+
+    def command(*arguments, **kwargs):
+        args = arguments[2:]
+        result = peer.command(*arguments, **kwargs)
+        if args == ("reboot",):
+            display.update(awake=False, locked=True)
+        if args == ("shell", "input", "keyevent", "KEYCODE_WAKEUP"):
+            display["awake"] = True
+        if args == ("shell", "wm", "dismiss-keyguard"):
+            assert display["awake"], "normal wake must precede keyguard dismissal"
+            display["locked"] = secure
+        if args[:3] == ("shell", "am", "start"):
+            assert display["awake"], "am start alone cannot establish display readiness"
+        if args[:2] == ("shell", "cat") and "/emulebb-apk-ui-" in args[-1]:
+            if display["firstUiRead"] is None:
+                display["firstUiRead"] = (display["awake"], display["locked"])
+            if display["locked"]:
+                return '<hierarchy><node resource-id="com.android.systemui:id/keyguard_root_view"/></hierarchy>'
+        return result
+
+    if secure:
+        with pytest.raises(subject.DeviceUiUnavailable, match="locked"):
+            subject.exercise(command, admitted, report_dir=tmp_path)
+        result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+        assert result["runtimeExecution"] == "not-run"
+        assert display["firstUiRead"] == (True, True)
+        assert not any(call[2:5] == ("shell", "input", "tap") or call[2:5] == ("shell", "input", "swipe") for call in peer.calls)
+    else:
+        result = subject.exercise(command, admitted, report_dir=tmp_path)
+        assert result["status"] == "passed" and display["firstUiRead"] == (True, False)
+    initial_launch = next(index for index, call in enumerate(peer.calls) if call[2:5] == ("shell", "am", "start"))
+    assert peer.calls[initial_launch - 2:initial_launch] == [
+        (*subject.PREFIX, "shell", "input", "keyevent", "KEYCODE_WAKEUP"),
+        (*subject.PREFIX, "shell", "wm", "dismiss-keyguard")]
+    assert not any(call[2:5] == ("shell", "input", "text") for call in peer.calls)
+
+
 @pytest.mark.parametrize("api", [34, 35, 36, 37])
 def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path, monkeypatch, api):
     peer, admitted = guest(tmp_path, monkeypatch)

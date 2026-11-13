@@ -304,6 +304,13 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     def reopen():
         shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
 
+    def prepare_fresh_guest_ui():
+        # WHY: sys.boot_completed does not imply a visible unlocked display.
+        # This owned fresh guest uses normal wake/insecure-keyguard dismissal;
+        # secure credential challenges still fail the existing UI admission.
+        shell("input", "keyevent", "KEYCODE_WAKEUP")
+        shell("wm", "dismiss-keyguard")
+
     def reboot():
         previous = shell("cat", "/proc/sys/kernel/random/boot_id")
         command(*PREFIX, "reboot")
@@ -312,8 +319,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             booted = command(*PREFIX, "shell", "getprop", "sys.boot_completed", check=False)
             boot_id = command(*PREFIX, "shell", "cat", "/proc/sys/kernel/random/boot_id", check=False)
             if booted == "1" and boot_id and boot_id != previous:
-                shell("input", "keyevent", "KEYCODE_WAKEUP")
-                shell("wm", "dismiss-keyguard")
+                prepare_fresh_guest_ui()
                 # ADB forwards are transport-owned and can disappear on reboot.
                 # This private server owns this exact port; never adopt a new one.
                 command(*PREFIX, "forward", "--remove", "tcp:" + str(port), check=False)
@@ -453,7 +459,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         if api >= 37:
             shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
         shell("dumpsys", "deviceidle", "whitelist", "+" + APPLICATION_ID)
-        shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
+        prepare_fresh_guest_ui()
+        reopen()
         wait_state("Stopped")
         key = find("api_key", enabled=True).get("text", "")
         if len(key) < 32 or not all(33 <= ord(c) <= 126 for c in key):
