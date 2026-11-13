@@ -91,29 +91,27 @@ def local_listener(base: str, key: str, *, role="app", campaign=None):
             campaign.mark(role + "-listener-" + name)
     stage("server-inventory")
     before = _server_configuration(base, key)
-    existing = [row for row in before if row["address"] == "127.0.0.1" and row["port"] == 20031]
-    if len(existing) > 1:
-        stage("duplicate-loopback-endpoint-precondition")
-        raise RuntimeError("Qualification loopback endpoint is duplicated")
-    if existing:
-        row = existing[0]
-        if (not isinstance(row["name"], str) or not isinstance(row["priority"], str)
-                or row["priority"] not in {"low", "normal", "high"}
-                or type(row["static"]) is not bool or type(row["enabled"]) is not bool):
-            stage("malformed-loopback-endpoint-precondition")
-            raise RuntimeError("Qualification loopback endpoint has invalid configuration")
-        if not row["enabled"]:
-            stage("disabled-loopback-endpoint-precondition")
-            raise RuntimeError("Qualification cannot connect a disabled loopback endpoint")
-    name = "Owned APK qualification " + uuid4().hex
-    route = "/api/v1/servers/" + quote("127.0.0.1:20031", safe="")
+    stage("allocate-owned-loopback-endpoint")
+    for _attempt in range(32):
+        nonce = uuid4().hex
+        host = 1 + int(nonce[:6], 16) % (2**24 - 2)
+        address = str(ipaddress.IPv4Address(int(ipaddress.IPv4Address("127.0.0.0")) + host))
+        if not any(row["address"] == address and row["port"] == 20031 for row in before):
+            break
+    else:
+        raise RuntimeError("Cannot allocate an absent owned loopback endpoint")
+    name = "Owned APK qualification " + nonce
+    route = "/api/v1/servers/" + quote(address + ":20031", safe="")
+    if campaign is not None:
+        ownership = dict(campaign.value.get("listenerOwnership", {}))
+        ownership[role] = {"nonce": nonce, "port": 20031}
+        campaign.record(listenerOwnership=ownership)
     created = False
     try:
-        if not existing:
-            stage("server-create")
-            request_json(base, "POST", "/api/v1/servers", key,
-                         {"address": "127.0.0.1", "port": 20031, "name": name, "connect": False})
-            created = True
+        stage("server-create")
+        request_json(base, "POST", "/api/v1/servers", key,
+                     {"address": address, "port": 20031, "name": name, "connect": False})
+        created = True
         # Directed mode excludes fallback to the preserved public server rows.
         # A real byte transfer below, not this acknowledgement, proves P2P.
         stage("directed-connect")
@@ -132,7 +130,7 @@ def local_listener(base: str, key: str, *, role="app", campaign=None):
             if campaign is not None:
                 stage("owned-server-removal-precondition")
             current = _server_configuration(base, key)
-            owned = [row for row in current if row["address"] == "127.0.0.1" and row["port"] == 20031]
+            owned = [row for row in current if row["address"] == address and row["port"] == 20031]
             if len(owned) != 1 or owned[0]["name"] != name:
                 raise RuntimeError("Qualification server ownership changed; refusing removal")
             stage("owned-server-remove")

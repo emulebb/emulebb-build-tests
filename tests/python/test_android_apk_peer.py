@@ -1,7 +1,9 @@
 """The APK transfer fixture admits exact peer bytes and verifies delivered content."""
 from contextlib import contextmanager
 import hashlib
+import ipaddress
 import json
+from urllib.parse import unquote
 
 import pytest
 
@@ -221,15 +223,17 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         if route == "/api/v1/servers":
             rows = servers.setdefault(base, [deepcopy(public_server)])
             if method == "POST":
-                assert body["address"] == "127.0.0.1" and body["port"] == 20031 and body["connect"] is False
+                assert ipaddress.ip_address(body["address"]).is_loopback and body["address"] != "127.0.0.1"
+                assert body["port"] == 20031 and body["connect"] is False
                 rows.append(deepcopy(body))
             return {"items": deepcopy(rows)}
         if route.startswith("/api/v1/servers/") and method == "DELETE":
-            assert route == "/api/v1/servers/127.0.0.1%3A20031"
+            address, port = unquote(route.rsplit("/", 1)[1]).rsplit(":", 1)
+            assert ipaddress.ip_address(address).is_loopback and port == "20031"
             deleted_servers.append(route)
-            servers[base] = [row for row in servers[base] if row["address"] != "127.0.0.1"]
+            servers[base] = [row for row in servers[base] if row["address"] != address]
         if route.endswith("/operations/connect"):
-            assert route == "/api/v1/servers/127.0.0.1%3A20031/operations/connect"
+            assert "%3A20031/operations/connect" in route and "/127." in route
             return {"connected": False, "connecting": True, "operationQueued": failure != "listener"}
         if route == "/api/v1/transfers":
             if method == "GET":
@@ -327,7 +331,7 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
                app_base: [{"address": "192.0.2.100", "port": 4661, "name": "Operator"}]}
     if failure == "existing-app":
         servers[app_base].append({"address": "127.0.0.1", "port": 20031, "name": "Operator loopback",
-                                  "priority": "high", "static": True, "enabled": True})
+                                  "priority": "high", "static": True, "enabled": False})
     before = deepcopy(servers)
 
     @contextmanager
@@ -358,8 +362,9 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         if route.endswith("/operations/connect"):
             return {"operationQueued": True}
         if method == "DELETE":
-            assert route == "/api/v1/servers/127.0.0.1%3A20031" and base == app_base
-            servers[base] = [row for row in servers[base] if row["address"] != "127.0.0.1"]
+            address, port = unquote(route.rsplit("/", 1)[1]).rsplit(":", 1)
+            assert address != "127.0.0.1" and ipaddress.ip_address(address).is_loopback and port == "20031"
+            servers[base] = [row for row in servers[base] if row["address"] != address]
         return {}
 
     monkeypatch.setattr(subject, "production_peer", peer)
@@ -380,30 +385,17 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         assert result == {"status": "passed", "scope": "listener-control-only", "transfer": "not-run"}
     assert len(restarts) == (0 if failure == "peer-connect" else 1)
     assert servers == before
-    if failure == "existing-app":
-        assert not any(base == app_base and method in {"POST", "DELETE"} and not route.endswith("/operations/connect")
-                       for base, method, route in calls)
     raw = (tmp_path / "listener-probe.json").read_text()
     assert "operator-secret" not in raw and "/private/key" not in raw and "192.0.2.20" not in raw
 
 
-@pytest.mark.parametrize("change,expected", [
-    ({"enabled": False}, "disabled-loopback-endpoint-precondition"),
-    ({"enabled": "true"}, "malformed-loopback-endpoint-precondition"),
-    ({"static": "true"}, "malformed-loopback-endpoint-precondition"),
-    ({"priority": []}, "malformed-loopback-endpoint-precondition"),
-    ({"priority": "unsupported"}, "malformed-loopback-endpoint-precondition"),
-    ({"name": None}, "malformed-loopback-endpoint-precondition"),
-    ({"port": "20031"}, "server-inventory"),
-    ({"duplicate": True}, "duplicate-loopback-endpoint-precondition"),
-])
-def test_existing_loopback_endpoint_must_be_one_well_formed_enabled_configuration(tmp_path, change, expected, monkeypatch):
+@pytest.mark.parametrize("collision", [False, True])
+def test_nonce_loopback_endpoint_must_be_absent_from_full_catalog(tmp_path, collision, monkeypatch):
     from copy import deepcopy
-    row = {"address": "127.0.0.1", "port": 20031, "name": "Operator private name",
-           "priority": "high", "static": True, "enabled": True}
-    duplicate = change.get("duplicate", False)
-    row.update({key: value for key, value in change.items() if key != "duplicate"})
-    rows = [row, deepcopy(row)] if duplicate else [row]
+    from types import SimpleNamespace
+    monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
+    rows = [{"address": "127.170.170.171", "port": 20031, "name": "Operator private name",
+             "priority": "high", "static": True, "enabled": False}] if collision else [{"address": "127.0.0.1", "port": "20031"}]
     calls = []
 
     def request(base, method, route, key, body=None):
@@ -416,6 +408,6 @@ def test_existing_loopback_endpoint_must_be_one_well_formed_enabled_configuratio
     with pytest.raises(RuntimeError):
         with subject.local_listener("http://127.0.0.1:12345", "synthetic", campaign=campaign):
             pytest.fail("unusable existing endpoint must not connect")
-    assert campaign.value["phase"] == "app-listener-" + expected
+    assert campaign.value["phase"] == "app-listener-" + ("allocate-owned-loopback-endpoint" if collision else "server-inventory")
     assert calls == [("GET", "/api/v1/servers")]
     assert "Operator private name" not in (tmp_path / "listener-probe.json").read_text()
