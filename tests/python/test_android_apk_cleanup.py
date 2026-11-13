@@ -57,6 +57,10 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
         operation = args[2:]
         operations.append(operation)
         if operation[:2] == ("exec-out", "sh"):
+            # Actual phone transport shape: quoted exec-out script was treated
+            # as a command name, merging a newline error instead of NUL paths.
+            return b"/system/bin/sh: find script: inaccessible or not found\n"
+        if operation[:2] == ("shell", "sh"):
             assert kwargs["binary"] is True and "-print0" in operation[-1] and "head -c 8192" in operation[-1]
             names = candidates if "-name" in operation[-1] else list(entries)
             if "-name" not in operation[-1] and fault == "unknown-file":

@@ -272,6 +272,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     def command(*args, **kwargs):
         operation = args[2:]
         if operation[:2] == ("exec-out", "sh"):
+            return b"/system/bin/sh: find script: inaccessible or not found\n"
+        if operation[:2] == ("shell", "sh"):
             import shlex
             root = shlex.split(operation[-1])[0].split()[1]
             entries = [path for path in guest_files if path.rsplit("/", 1)[0] == root]

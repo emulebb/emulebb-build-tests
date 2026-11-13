@@ -55,7 +55,7 @@ def remove_owned_fixture(command, *, prefix, nonce: str, protected_roots: set[st
         raise OwnedFixtureFailure("unsafe-directory-type") from None
     if shell("readlink", "-f", incoming) != incoming:
         raise OwnedFixtureFailure("directory-redirected")
-    entries = _nul_paths(command(*prefix, "exec-out", "sh", "-c", shlex.quote(
+    entries = _nul_paths(command(*prefix, "shell", "sh", "-c", shlex.quote(
         "find " + incoming + " -mindepth 1 -maxdepth 1 -print0 | head -c 8192"), binary=True), maximum=2)
     admitted, payloads = [], 0
     for entry in entries:
@@ -136,7 +136,7 @@ def cleanup_report_fixture(command, *, prefix, retained_report: Path, report_sha
             raise RuntimeError("Current incoming destination is not explicit")
         protected.add(incoming)
         stage("match-owned-nonce")
-        listing = _nul_paths(command(*prefix, "exec-out", "sh", "-c", shlex.quote(
+        listing = _nul_paths(command(*prefix, "shell", "sh", "-c", shlex.quote(
             "find /sdcard/Download -mindepth 1 -maxdepth 1 -name 'emulebb-apk-proof-*' -print0 | head -c 8192"), binary=True), maximum=16)
         matches = []
         for candidate in listing:

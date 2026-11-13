@@ -122,7 +122,7 @@ def test_apk_qualification_needs_independent_certificate_before_guest_execution(
 
 
 @pytest.mark.parametrize("outcome", ["success", "guest-mismatch", "exit", "timeout", "capture", "adb-start",
-                                    "cleanup", "late-capture", "transient-adb", "tls-success", "tls-failure"])
+                                    "cleanup", "late-capture", "transient-adb", "tls-success", "tls-failure", "tls-shell-binary"])
 def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, outcome):
     arguments, _ = isolated
     if outcome.startswith("tls-"):
@@ -130,6 +130,12 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
         monkeypatch.setattr(subject, "_tls_payload", lambda *args, **kwargs: {"synthetic": True})
         proof = Mock(return_value={"status": "passed"})
         if outcome == "tls-failure": proof.side_effect = RuntimeError("TLS case failed")
+        if outcome == "tls-shell-binary":
+            def binary_shell(command, *args, **kwargs):
+                data = command("-s", "emulator-5554", "shell", "sh", "-c", "'find /owned -print0'", binary=True)
+                assert data == b"/owned/Android Sample (1).bin\0"
+                return {"status": "passed"}
+            proof.side_effect = binary_shell
         monkeypatch.setattr(subject, "_run_tls_payload", proof)
     commands = []
     process = Mock(pid=42, stdout=Mock())
@@ -166,10 +172,13 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
         if last == "/proc/self/auxv":
             assert kwargs["text"] is False
             text = struct.pack("<QQQQ", 6, 4096 if outcome == "guest-mismatch" else 16384, 0, 0)
+        if "find /owned -print0" in last:
+            assert command[5:8] == ["shell", "sh", "-c"] and kwargs["text"] is False
+            text = b"/owned/Android Sample (1).bin\0"
         return SimpleNamespace(returncode=0, stdout=text, stderr="")
 
     monkeypatch.setattr(subject.subprocess, "run", run)
-    passed = outcome in {"success", "transient-adb", "tls-success"}
+    passed = outcome in {"success", "transient-adb", "tls-success", "tls-shell-binary"}
     if passed:
         report = subject.probe_guest(**arguments)
         assert report == arguments["report_dir"] / "report.json"
