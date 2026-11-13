@@ -30,6 +30,12 @@ class CampaignFailure(RuntimeError):
         super().__init__("APK transfer campaign failed: " + failure["code"])
 
 
+class ListenerCleanupFailure(RuntimeError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__("Owned listener cleanup failed: " + code)
+
+
 class _Campaign:
     def __init__(self, path, peer, prefix):
         self.path = path
@@ -57,7 +63,8 @@ class _Campaign:
             "code": self.value["phase"] + "-failed", "errorType": type(error).__name__,
             **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {}),
             **({"rest": error.safe_failure} if isinstance(error, RustRestFailure) else {}),
-            **({"ownedFixture": {"code": error.code, "filesRemoved": error.files_removed}} if isinstance(error, OwnedFixtureFailure) else {})})
+            **({"ownedFixture": {"code": error.code, "filesRemoved": error.files_removed}} if isinstance(error, OwnedFixtureFailure) else {}),
+            **({"listenerCleanup": {"code": error.code}} if isinstance(error, ListenerCleanupFailure) else {})})
         self.save()
 
     def record(self, **values):
@@ -72,8 +79,21 @@ class _Campaign:
         self.save()
 
 
+def _complete_items(document, *, kind):
+    rows = document.get("items")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise RuntimeError("Qualification collection is invalid")
+    if kind in {"transfers", "shared-files"}:
+        if (type(document.get("total")) is not int or document["total"] != len(rows)
+                or type(document.get("limit")) is not int or document["limit"] < max(1, len(rows))
+                or document.get("nextCursor") is not None
+                or kind == "transfers" and (type(document.get("offset")) is not int or document["offset"] != 0)):
+            raise RuntimeError("Qualification requires a complete bounded collection")
+    return rows
+
+
 def _server_configuration(base, key):
-    rows = request_json(base, "GET", "/api/v1/servers", key).get("items")
+    rows = _complete_items(request_json(base, "GET", "/api/v1/servers", key), kind="servers")
     if (not isinstance(rows, list) or any(not isinstance(row, dict)
             or not isinstance(row.get("address"), str) or not row["address"]
             or type(row.get("port")) is not int or not 0 < row["port"] <= 65535 for row in rows)):
@@ -110,11 +130,19 @@ def local_listener(base: str, key: str, *, role="app", campaign=None):
         ownership[role] = {"nonce": nonce, "port": 20031}
         campaign.record(listenerOwnership=ownership)
     created = False
+    created_configuration = None
     try:
         stage("server-create")
         request_json(base, "POST", "/api/v1/servers", key,
                      {"address": address, "port": 20031, "name": name, "connect": False})
         created = True
+        stage("created-configuration-admission")
+        rows = [row for row in _server_configuration(base, key) if row["address"] == address and row["port"] == 20031]
+        if (len(rows) != 1 or rows[0]["name"] != name or rows[0]["enabled"] is not True
+                or not isinstance(rows[0]["priority"], str) or rows[0]["priority"] not in {"normal", "low", "high"}
+                or type(rows[0]["static"]) is not bool):
+            raise ListenerCleanupFailure("created-configuration-invalid")
+        created_configuration = rows[0]
         # Directed mode excludes fallback to the preserved public server rows.
         # A real byte transfer below, not this acknowledgement, proves P2P.
         stage("directed-connect")
@@ -129,18 +157,42 @@ def local_listener(base: str, key: str, *, role="app", campaign=None):
             campaign.fail(error)
         raise
     finally:
-        if created:
+        try:
+            if created:
+                stage("owned-server-disable-precondition")
+                current = _server_configuration(base, key)
+                owned = [row for row in current if row["address"] == address and row["port"] == 20031]
+                if (created_configuration is None or len(owned) != 1 or type(owned[0]["enabled"]) is not bool
+                        or {**owned[0], "enabled": True} != created_configuration):
+                    raise ListenerCleanupFailure("owned-configuration-mutated-or-missing")
+                stage("owned-server-disable")
+                # WHY: canonical DELETE retains a disabled catalog tombstone.
+                # Admit only our exact created configuration with that one bit
+                # cleared; every pre-existing row must remain unchanged.
+                request_json(base, "DELETE", route, key)
+                stage("owned-disabled-row-verification")
+                after = _server_configuration(base, key)
+                retained = [row for row in after if row["address"] == address and row["port"] == 20031]
+                if retained != [{**created_configuration, "enabled": False}]:
+                    raise ListenerCleanupFailure("owned-disabled-row-missing-or-mutated")
+                prior = [row for row in after if not (row["address"] == address and row["port"] == 20031)]
+            else:
+                prior = _server_configuration(base, key)
+            stage("preexisting-server-configuration-preservation")
+            if prior != before:
+                raise ListenerCleanupFailure("preexisting-configuration-changed")
+            if campaign is not None and created:
+                dispositions = dict(campaign.value.get("listenerCleanup", {}))
+                dispositions[role] = {"status": "passed", "disposition": "owned-endpoint-disabled",
+                    "ownedRowRetained": True, "preExistingConfigurationPreserved": True}
+                campaign.record(listenerCleanup=dispositions)
+        except Exception as error:
             if campaign is not None:
-                stage("owned-server-removal-precondition")
-            current = _server_configuration(base, key)
-            owned = [row for row in current if row["address"] == address and row["port"] == 20031]
-            if len(owned) != 1 or owned[0]["name"] != name:
-                raise RuntimeError("Qualification server ownership changed; refusing removal")
-            stage("owned-server-remove")
-            request_json(base, "DELETE", route, key)
-        stage("server-configuration-restoration")
-        if _server_configuration(base, key) != before:
-            raise RuntimeError("Qualification altered preexisting server configuration")
+                dispositions = dict(campaign.value.get("listenerCleanup", {}))
+                dispositions[role] = {"status": "failed", "code": error.code if isinstance(error, ListenerCleanupFailure) else "cleanup-rpc-failed"}
+                campaign.record(listenerCleanup=dispositions)
+                campaign.fail(error)
+            raise
 
 
 def guest_sha256(command, path: str, *, prefix=PREFIX) -> str:
@@ -369,7 +421,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
         original = request("GET", "/api/v1/app/settings")
         roots = {row["path"] for row in request("GET", "/api/v1/shared-directories")["roots"]}
         campaign.mark("admit-prior-downloads")
-        if any(row.get("state") != "completed" for row in request("GET", "/api/v1/transfers")["items"]):
+        if any(row.get("state") != "completed" for row in _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")):
             raise RuntimeError("Listener probe refuses to interrupt unfinished downloads")
         campaign.mark("admit-network-binding")
         binding = request("GET", "/api/v1/network")["binding"]
@@ -439,13 +491,11 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         raise RuntimeError("APK transfer requires its explicit prepared incoming configuration")
     campaign.mark("admit-prior-downloads-and-roots")
     original_roots = shared_roots()
-    rows = request("GET", "/api/v1/transfers").get("items")
-    if not isinstance(rows, list) or any(row.get("state") != "completed" for row in rows):
+    rows = _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")
+    if any(row.get("state") != "completed" for row in rows):
         raise RuntimeError("APK transfer refuses to interrupt preexisting unfinished downloads")
     prior_hashes = {row.get("hash", "").lower() for row in rows}
-    shared = request("GET", "/api/v1/shared-files").get("items")
-    if not isinstance(shared, list):
-        raise RuntimeError("APK transfer returned invalid preexisting shared files")
+    shared = _complete_items(request("GET", "/api/v1/shared-files"), kind="shared-files")
     prior_hashes.update(row.get("hash", "").lower() for row in shared)
     campaign.mark("admit-network-binding")
     network = request_json(base, "GET", "/api/v1/network", api_key)
@@ -515,9 +565,15 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                 deadline = time.monotonic() + 120
                 campaign.mark("await-completed-delivery")
                 while True:
-                    files = request("GET", "/api/v1/shared-files").get("items", [])
-                    result = next((row for row in files if row.get("hash", "").lower() == file_hash
-                                   and row.get("complete") is True and row.get("partFile") is False), None)
+                    try:
+                        result = request("GET", "/api/v1/shared-files/" + file_hash)
+                    except RustRestFailure as error:
+                        if error.safe_failure["httpStatus"] != 404:
+                            raise
+                        result = None
+                    if result is not None and (result.get("hash", "").lower() != file_hash
+                            or result.get("complete") is not True or result.get("partFile") is not False):
+                        result = None
                     if result is not None:
                         path = PurePosixPath(result.get("path", ""))
                         campaign.mark("verify-delivered-path-and-size")
@@ -536,17 +592,45 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         campaign.mark("restart-completed-delivery")
         restart_service()
         campaign.mark("verify-completed-delivery-metadata")
-        completed = request("GET", "/api/v1/transfers").get("items", [])
-        if not any(row.get("hash", "").lower() == file_hash and row.get("state") == "completed"
-                   and row.get("deliveredPath") == str(path) for row in completed):
+        # WHY: delivery promotes content to the shared catalog and retires the
+        # transfer/manifest. Persistence is local content + completion history,
+        # not a completed row in the active transfer collection.
+        shared_file = request("GET", "/api/v1/shared-files/" + file_hash)
+        if (shared_file.get("hash", "").lower() != file_hash or shared_file.get("path") != str(path)
+                or shared_file.get("sizeBytes") != len(content) or shared_file.get("complete") is not True
+                or shared_file.get("partFile") is not False):
             raise RuntimeError("APK completed delivery metadata did not survive restart")
+        if any(row.get("hash", "").lower() == file_hash for row in _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")):
+            raise RuntimeError("APK delivered content still has an active transfer")
+        campaign.mark("verify-completed-download-evidence")
+        try:
+            request("POST", "/api/v1/transfers", {"link": source_link, "paused": True, "knownFilePolicy": "reject"})
+        except RustRestFailure as error:
+            conflicts = error.response_error.get("details", {}).get("conflicts", [])
+            if (error.safe_failure["httpStatus"] != 409 or error.safe_failure["apiCode"] != "DOWNLOAD_CONFLICT"
+                    or not isinstance(conflicts, list)):
+                raise
+            local = [row for row in conflicts if row.get("hash", "").lower() == file_hash and row.get("kind") == "presentLocalFile"]
+            history = [row for row in conflicts if row.get("hash", "").lower() == file_hash and row.get("kind") == "previouslyCompleted"]
+            if (len(local) != 1 or local[0].get("currentPaths") != [str(path)]
+                    or local[0].get("requestedSizeBytes") != len(content) or local[0].get("recordedSizeBytes") != len(content)
+                    or len(history) != 1 or type(history[0].get("firstCompletedAtMs")) is not int
+                    or type(history[0].get("lastCompletedAtMs")) is not int
+                    or not 0 < history[0]["firstCompletedAtMs"] <= history[0]["lastCompletedAtMs"]):
+                raise RuntimeError("APK download conflict did not retain completed local evidence") from None
+        else:
+            raise RuntimeError("APK completed download duplicate was not rejected")
+        if any(row.get("hash", "").lower() == file_hash for row in _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")):
+            raise RuntimeError("APK duplicate preflight enqueued an active transfer")
         campaign.mark("verify-completed-delivery-bytes")
         if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
             raise RuntimeError("APK delivered bytes changed across service restart")
         return {"status": "passed", "sizeBytes": len(content), "sha256": expected_sha,
                 "collisionPreserved": True, "completedDeliverySurvivesRestart": True,
                 "deliveredInSharedStorage": True, "peerSourceRevision": peer["sourceRevision"],
-                "transport": "same-device-p2p", "wifiDataPlane": "not-claimed"}
+                "transport": "same-device-p2p", "wifiDataPlane": "not-claimed",
+                "listenerCleanup": campaign.value["listenerCleanup"],
+                "restartEvidence": {"sharedCatalog": True, "completionHistory": True, "duplicateRejected": True, "activeTransferAbsent": True}}
     except Exception as error:
         campaign.fail(error)
         raise

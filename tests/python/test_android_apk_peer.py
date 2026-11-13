@@ -184,9 +184,9 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
         assert json.loads((tmp_path / "peer-cleanup.json").read_text())["status"] == "failed"
 
 
-@pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore"])
-@pytest.mark.parametrize("keep_published", [False, True])
-def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure, keep_published):
+@pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
+    "history", "duplicate-accepted", "active-row", "preflight-enqueue", "incomplete-inventory"])
+def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
     from copy import deepcopy
     monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
@@ -198,7 +198,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     state = {"settings": deepcopy(original), "incoming": original["daemon"]["incomingDir"],
              "created": False, "restarts": 0, "deleted": False}
     servers = {}
-    deleted_servers = []
+    disabled_servers = []
     public_server = {"address": "192.0.2.100", "port": 4661, "name": "Operator server", "enabled": True}
 
     @contextmanager
@@ -209,6 +209,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     monkeypatch.setattr(subject, "publish_shared_tree", lambda *args, **kwargs: {
         "sharedFiles": {"matched": {"hash": "b" * 32,
                                     "ed2kLink": "ed2k://|file|Android Sample.bin|262144|" + "b" * 32 + "|/"}}})
+    def page(items, *, shared=False):
+        return {"items": items, "total": len(items), "limit": 100, **({"nextCursor": None} if shared else {"offset": 0})}
 
     def request(base, method, route, key, body=None):
         if route == "/api/v1/network":
@@ -226,24 +228,37 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             if method == "POST":
                 assert ipaddress.ip_address(body["address"]).is_loopback and body["address"] != "127.0.0.1"
                 assert body["port"] == 20031 and body["connect"] is False
-                rows.append(deepcopy(body))
+                rows.append({**deepcopy(body), "priority": "normal", "static": False, "enabled": True})
             return {"items": deepcopy(rows)}
         if route.startswith("/api/v1/servers/") and method == "DELETE":
             address, port = unquote(route.rsplit("/", 1)[1]).rsplit(":", 1)
             assert ipaddress.ip_address(address).is_loopback and port == "20031"
-            deleted_servers.append(route)
-            servers[base] = [row for row in servers[base] if row["address"] != address]
+            disabled_servers.append(route)
+            next(row for row in servers[base] if row["address"] == address)["enabled"] = False
         if route.endswith("/operations/connect"):
             assert "%3A20031/operations/connect" in route and "/127." in route
             return {"connected": False, "connecting": True, "operationQueued": failure != "listener"}
         if route == "/api/v1/transfers":
             if method == "GET":
                 if failure == "unfinished":
-                    return {"items": [{"hash": "c" * 32, "state": "paused"}]}
-                if not state["created"] or state["deleted"]:
-                    return {"items": []}
-                return {"items": [{"hash": "b" * 32, "state": "paused" if failure == "restart" else "completed",
-                                   "deliveredPath": state["incoming"] + "/Android Sample (1).bin"}]}
+                    return page([{"hash": "c" * 32, "state": "paused"}])
+                if failure == "incomplete-inventory":
+                    return {**page([]), "total": 1}
+                if state.get("promoted") and failure == "active-row" or state.get("duplicateQueued"):
+                    return page([{"hash": "b" * 32, "state": "paused"}])
+                # Actual successful delivery retires the transfer/manifest.
+                return page([])
+            if body.get("knownFilePolicy") == "reject":
+                assert body["paused"] is True and set(body) == {"link", "paused", "knownFilePolicy"}
+                if failure == "duplicate-accepted":
+                    return {"ok": True}
+                state["duplicateQueued"] = failure == "preflight-enqueue"
+                conflicts = [{"hash": "b" * 32, "kind": "presentLocalFile", "requestedSizeBytes": len(content),
+                    "recordedSizeBytes": len(content), "currentPaths": [state["incoming"] + "/Android Sample (1).bin"]},
+                    {"hash": "b" * 32, "kind": "previouslyCompleted", "firstCompletedAtMs": 1,
+                     "lastCompletedAtMs": 0 if failure == "history" else 2}]
+                raise subject.RustRestFailure("private conflict details", status=409,
+                    detail=json.dumps({"error": {"code": "DOWNLOAD_CONFLICT", "details": {"conflicts": conflicts}}}))
             state["created"] = True
             # TransferCreate in the actual Rust REST model accepts singular link
             # and paused; this is the existing release-smoke owner's exact body.
@@ -259,14 +274,16 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         if route.endswith("/files?confirm=true"):
             assert method == "DELETE" and route == "/api/v1/transfers/" + "b" * 32 + "/files?confirm=true"
             state["deleted"] = True
-            if not keep_published:
-                guest_files.pop(state["incoming"] + "/Android Sample (1).bin", None)
+            # DELETE is a no-op after promotion: local shared content survives.
         if route == "/api/v1/shared-files":
             if not state["created"]:
-                return {"items": [{"hash": "b" * 32}] if failure == "known-hash" else []}
-            return {"items": [{"hash": "b" * 32, "complete": True, "partFile": False,
+                return page([{"hash": "b" * 32}] if failure == "known-hash" else [], shared=True)
+            pytest.fail("known delivered hash must use its exact endpoint, not a first page")
+        if route == "/api/v1/shared-files/" + "b" * 32:
+            state["promoted"] = True
+            return {"hash": "b" * 32, "complete": True, "partFile": False,
                               "sizeBytes": len(content),
-                              "path": ("/unexpected" if failure == "path" else state["incoming"]) + "/Android Sample (1).bin"}]}
+                              "path": ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2 else state["incoming"]) + "/Android Sample (1).bin"}
         return {}
 
     def command(*args, **kwargs):
@@ -307,8 +324,10 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
                           "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
-                          "known-hash": "peer-shared-file-hash", "server-owner": "app-listener-owned-server-removal-precondition",
-                          "restore": "cleanup-restore-original-settings"}[failure]
+                          "known-hash": "peer-shared-file-hash", "server-owner": "app-listener-owned-server-disable-precondition",
+                          "restore": "cleanup-restore-original-settings", "history": "verify-completed-download-evidence",
+                          "duplicate-accepted": "verify-completed-download-evidence", "active-row": "verify-completed-delivery-metadata",
+                          "preflight-enqueue": "verify-completed-download-evidence", "incomplete-inventory": "admit-prior-downloads-and-roots"}[failure]
         with pytest.raises(subject.CampaignFailure) as failed:
             subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert failed.value.failure["phase"] == expected_phase
@@ -323,9 +342,13 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         assert state["settings"] == original and state["incoming"] == original["daemon"]["incomingDir"]
         assert state["restarts"] == 3 and state["deleted"]
         assert not any(path.startswith("/storage/") for path in guest_files)
-        assert len(deleted_servers) == 2 and all(rows == [public_server] for rows in servers.values())
+        assert len(disabled_servers) == 2
+        for rows in servers.values():
+            assert rows[0] == public_server and len(rows) == 2 and rows[1]["enabled"] is False
+        assert all(item["disposition"] == "owned-endpoint-disabled" for item in result["listenerCleanup"].values())
+        assert result["restartEvidence"] == {"sharedCatalog": True, "completionHistory": True, "duplicateRejected": True, "activeTransferAbsent": True}
         assert json.loads((tmp_path / "transfer-campaign.json").read_text())["fixtureCleanup"] == {
-            "filesRemoved": 2 if keep_published else 1, "directoriesRemoved": 1}
+            "filesRemoved": 2, "directoriesRemoved": 1}
     if failure not in {"unfinished", "restore"}:
         assert state["settings"] == original
     if failure == "restore":
@@ -360,7 +383,7 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         if route == "/api/v1/shared-directories":
             return {"roots": [{"path": "/operator/Shared"}]}
         if route == "/api/v1/transfers":
-            return {"items": []}
+            return {"items": [], "total": 0, "limit": 100, "offset": 0}
         if route == "/api/v1/network":
             return {"binding": {"activeConfiguredAddress": "192.0.2.20"}}
         if ((failure == "app-create" and base == app_base and route == "/api/v1/servers" and method == "POST")
@@ -370,14 +393,14 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
                 detail=json.dumps({"error": {"code": "BAD_REQUEST", "message": "ED2K network is not configured /private/key"}}))
         if route == "/api/v1/servers":
             if method == "POST":
-                servers[base].append(deepcopy(body))
+                servers[base].append({**deepcopy(body), "priority": "normal", "static": False, "enabled": True})
             return {"items": deepcopy(servers[base])}
         if route.endswith("/operations/connect"):
             return {"operationQueued": True}
         if method == "DELETE":
             address, port = unquote(route.rsplit("/", 1)[1]).rsplit(":", 1)
             assert address != "127.0.0.1" and ipaddress.ip_address(address).is_loopback and port == "20031"
-            servers[base] = [row for row in servers[base] if row["address"] != address]
+            next(row for row in servers[base] if row["address"] == address)["enabled"] = False
         return {}
 
     monkeypatch.setattr(subject, "production_peer", peer)
@@ -397,7 +420,10 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
                                               {"sourceRevision": IDENTITY["sourceRevision"]}, **args)
         assert result == {"status": "passed", "scope": "listener-control-only", "transfer": "not-run"}
     assert len(restarts) == (0 if failure == "peer-connect" else 1)
-    assert servers == before
+    for base, rows in servers.items():
+        assert rows[:len(before[base])] == before[base]
+        added = rows[len(before[base]):]
+        assert len(added) <= 1 and all(row["enabled"] is False for row in added)
     raw = (tmp_path / "listener-probe.json").read_text()
     assert "operator-secret" not in raw and "/private/key" not in raw and "192.0.2.20" not in raw
 
@@ -424,3 +450,65 @@ def test_nonce_loopback_endpoint_must_be_absent_from_full_catalog(tmp_path, coll
     assert campaign.value["phase"] == "app-listener-" + ("allocate-owned-loopback-endpoint" if collision else "server-inventory")
     assert calls == [("GET", "/api/v1/servers")]
     assert "Operator private name" not in (tmp_path / "listener-probe.json").read_text()
+
+
+@pytest.mark.parametrize("fault,code", [(None, None), ("enabled", "owned-disabled-row-missing-or-mutated"),
+    ("name", "owned-disabled-row-missing-or-mutated"), ("priority", "owned-disabled-row-missing-or-mutated"),
+    ("static", "owned-disabled-row-missing-or-mutated"), ("missing", "owned-disabled-row-missing-or-mutated"),
+    ("ambiguous", "owned-disabled-row-missing-or-mutated"), ("foreign", "preexisting-configuration-changed"),
+    ("added", "preexisting-configuration-changed"), ("before-disable", "owned-configuration-mutated-or-missing")])
+def test_listener_delete_is_exact_owned_disabled_tombstone_and_preserves_every_prior_configuration(tmp_path, monkeypatch, fault, code):
+    from copy import deepcopy
+    foreign = {"address": "127.0.0.1", "port": 20031, "name": "Operator private configuration",
+               "priority": "high", "static": True, "enabled": False}
+    rows, calls = [deepcopy(foreign)], []
+
+    def request(base, method, route, key, body=None):
+        calls.append((method, route))
+        if method == "POST" and route == "/api/v1/servers":
+            rows.append({**body, "priority": "normal", "static": False, "enabled": True})
+        if method == "POST" and route.endswith("/operations/connect"):
+            if fault == "before-disable":
+                rows[1]["name"] = "Operator changed ownership"
+            return {"operationQueued": True}
+        if method == "DELETE":
+            assert "127.0.0.1%3A" not in route
+            rows[1]["enabled"] = fault == "enabled"
+            if fault in {"name", "priority", "static"}:
+                rows[1][fault] = {"name": "changed", "priority": "high", "static": True}[fault]
+            if fault == "missing": rows.pop()
+            if fault == "ambiguous": rows.append(deepcopy(rows[1]))
+            if fault == "foreign": rows[0]["priority"] = "low"
+            if fault == "added": rows.append({**foreign, "address": "192.0.2.200"})
+        return {"items": deepcopy(rows)}
+
+    monkeypatch.setattr(subject, "request_json", request)
+    campaign = subject._Campaign(tmp_path / "campaign.json", {"sourceRevision": IDENTITY["sourceRevision"]}, subject.PREFIX)
+    if fault:
+        with pytest.raises(subject.ListenerCleanupFailure) as error:
+            with subject.local_listener("http://127.0.0.1:12345", "secret", campaign=campaign):
+                pass
+        assert error.value.code == code and campaign.value["listenerCleanup"]["app"] == {"status": "failed", "code": code}
+    else:
+        with subject.local_listener("http://127.0.0.1:12345", "secret", campaign=campaign):
+            pass
+        assert rows[0] == foreign and len(rows) == 2 and rows[1]["enabled"] is False
+        assert campaign.value["listenerCleanup"]["app"] == {"status": "passed", "disposition": "owned-endpoint-disabled",
+            "ownedRowRetained": True, "preExistingConfigurationPreserved": True}
+    if fault == "before-disable":
+        assert not any(method == "DELETE" for method, route in calls)
+    assert "Operator private configuration" not in (tmp_path / "campaign.json").read_text()
+
+
+@pytest.mark.parametrize("kind,document", [
+    ("transfers", {"items": [], "total": 1, "limit": 100, "offset": 0}),
+    ("transfers", {"items": [], "total": 0, "limit": 100, "offset": 100}),
+    ("transfers", {"items": [], "total": 0, "limit": 100, "offset": False}),
+    ("transfers", {"items": []}),
+    ("shared-files", {"items": [], "total": 1, "limit": 100, "nextCursor": "private cursor"}),
+    ("shared-files", {"items": [], "total": 0, "limit": False, "nextCursor": None}),
+])
+def test_initial_inventory_never_treats_a_truncated_or_unknown_page_as_exhaustive(kind, document):
+    with pytest.raises(RuntimeError, match="complete bounded collection"):
+        subject._complete_items(document, kind=kind)
+    assert subject._complete_items({"items": []}, kind="servers") == []

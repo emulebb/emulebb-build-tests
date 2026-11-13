@@ -29,8 +29,11 @@ class RustRestFailure(RuntimeError):
             value = json.loads(detail).get("error", {})
         except (ValueError, AttributeError):
             value = {}
+        # Structured response stays in memory for callers that verify canonical
+        # conflict evidence. Public receipts must use only safe_failure.
+        self.response_error = value if isinstance(value, dict) else {}
         code = value.get("code") if isinstance(value, dict) else None
-        allowed = {"BAD_REQUEST", "INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN"}
+        allowed = {"BAD_REQUEST", "INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN", "DOWNLOAD_CONFLICT"}
         text = str(value.get("message", "")).lower() if isinstance(value, dict) else ""
         contexts = (("ed2k network is not configured", "ed2k-not-configured"),
             ("ed2k network is disabled in settings.core", "ed2k-disabled"),
