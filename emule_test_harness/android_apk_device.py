@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -17,6 +18,115 @@ import sys
 import time
 
 from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, _request, admit_production_certificate, required_apk_cases
+
+
+def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> dict:
+    """Grant only this owned install through app buttons and unambiguous stock UI."""
+    def granted(permission):
+        if permission == "MANAGE_EXTERNAL_STORAGE":
+            return bool(re.search(r"MANAGE_EXTERNAL_STORAGE:\s*allow\b", ui.shell(
+                "appops", "get", "--user", "0", APPLICATION_ID, permission)))
+        return ui.shell("cmd", "package", "check-permission", "android.permission." + permission,
+                        APPLICATION_ID, "0") == "granted"
+
+    def foreground(package):
+        return bool(re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\b" + re.escape(package) + r"/",
+                              ui.shell("dumpsys", "activity", "activities")))
+
+    def tap(node):
+        match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+        if match is None:
+            return False
+        x1, y1, x2, y2 = map(int, match.groups())
+        if x2 <= x1 or y2 <= y1:
+            return False
+        ui.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+        return True
+
+    def allow(permission, button, *, settings=False):
+        if granted(permission):
+            return True
+        ui.click(button)
+        try:
+            deadline = time.monotonic() + 10
+            candidates = []
+            while True:
+                elements = ui.elements()
+                packages = {"com.android.settings"} if settings else {
+                    "com.android.permissioncontroller", "com.google.android.permissioncontroller"}
+                active = next((package for package in packages if foreground(package)), None)
+                app_visible = active is not None and any(node.get("package") == active and
+                    (node.get("text", "").strip() == "eMuleBB" if settings else "eMuleBB" in node.get("text", ""))
+                    for node in elements)
+                if active is not None and app_visible:
+                    if settings:
+                        candidates = [node for node in elements if node.get("package") == active
+                                      and node.get("enabled") == "true" and node.get("checkable") == "true"]
+                    else:
+                        candidates = [node for node in elements if node.get("package") == active
+                                      and node.get("enabled") == "true" and node.get("clickable") == "true"
+                                      and node.get("resource-id") in {package + ":id/permission_allow_button" for package in packages}]
+                    break
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.5)
+            # Never guess between Samsung/stock controls or turn an existing
+            # grant off. Ambiguous UI remains an explicit manual setup step.
+            if len(candidates) != 1 or settings and candidates[0].get("checked") != "false":
+                return False
+            if not tap(candidates[0]):
+                return False
+            change = {"permission": permission, "method": "normal-settings-ui" if settings else "normal-permission-dialog",
+                      "before": "denied", "after": "unconfirmed"}
+            changes.append(change)
+            deadline = time.monotonic() + 10
+            while not granted(permission):
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.5)
+            change["after"] = "granted"
+            return True
+        finally:
+            ui.shell("input", "keyevent", "KEYCODE_BACK")
+            ui.shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+            ui.wait_state("Stopped")
+
+    complete = allow("MANAGE_EXTERNAL_STORAGE", "grant_all_files_access", settings=True)
+    if complete:
+        complete = allow("POST_NOTIFICATIONS", "allow_notifications")
+    if complete and api >= 37:
+        complete = allow("ACCESS_LOCAL_NETWORK", "allow_local_network")
+    return {"complete": complete, "allFiles": granted("MANAGE_EXTERNAL_STORAGE"),
+            "localNetworkRequired": api >= 37,
+            "localNetwork": granted("ACCESS_LOCAL_NETWORK") if api >= 37 else "not-required",
+            "notifications": granted("POST_NOTIFICATIONS"), "batteryExemption": "not-inspected"}
+
+
+def _physical_process_resources(port: int, key: str) -> dict:
+    """Require real Android RSS and a settled CPU interval, retaining numeric fields only."""
+    deadline = time.monotonic() + 15
+    while True:
+        status, raw = _request(port, "/api/v1/diagnostics", key)
+        document = json.loads(raw)
+        resources = document.get("data", {}).get("processResources") if isinstance(document, dict) else None
+        if status != 200 or not isinstance(resources, dict):
+            raise RuntimeError("Physical diagnostics did not expose process resource counters")
+        sampled = resources.get("sampledAtMs")
+        memory = resources.get("residentMemoryBytes")
+        cpu = resources.get("cpuUsagePercent")
+        interval = resources.get("cpuSampleIntervalMs")
+        if type(sampled) is not int or sampled <= 0 or type(memory) is not int or memory <= 0:
+            raise RuntimeError("Physical process memory sample is missing or invalid")
+        if cpu is not None and (type(cpu) not in {int, float} or not math.isfinite(cpu) or cpu < 0):
+            raise RuntimeError("Physical process CPU sample is invalid")
+        if interval is not None and (type(interval) is not int or interval < 0):
+            raise RuntimeError("Physical process CPU sample interval is invalid")
+        if cpu is not None and interval is not None and interval > 0:
+            return {"sampledAtMs": sampled, "residentMemoryBytes": memory,
+                    "cpuUsagePercent": cpu, "cpuSampleIntervalMs": interval}
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Physical process CPU sample did not settle within its bound")
+        time.sleep(0.5)
 
 
 def existing_adb_server_version(port: int) -> int:
@@ -237,17 +347,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         state = ui.find("service_status").get("text")
         if state != "Stopped":
             raise RuntimeError("Physical app must be stopped before the bounded owned smoke")
-        all_files = bool(re.search(r"MANAGE_EXTERNAL_STORAGE:\s*allow\b",
-                                  shell("appops", "get", "--user", "0", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")))
-        lan = api < 37 or shell("cmd", "package", "check-permission", "android.permission.ACCESS_LOCAL_NETWORK",
-                               APPLICATION_ID, "0") == "granted"
-        notifications = shell("cmd", "package", "check-permission", "android.permission.POST_NOTIFICATIONS",
-                              APPLICATION_ID, "0") == "granted"
-        value["permissions"] = {"allFiles": all_files, "localNetworkRequired": api >= 37,
-                                "localNetwork": lan if api >= 37 else "not-required",
-                                "notifications": notifications, "batteryExemption": "not-inspected"}
-        if not all_files or not lan:
-            value.update(status="setup-required", phase="grant-required-permissions-in-normal-app-ui")
+        value["permissions"] = _normal_permission_setup(ui, api=api, changes=value["permissionChanges"])
+        if not value["permissions"]["complete"]:
+            value.update(status="setup-required", phase="complete-permissions-in-normal-app-ui")
             return report
         # A fresh Incoming folder is implicitly shared. Never enumerate or
         # publish pre-existing phone files before REST can select a test root.
@@ -285,6 +387,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             raise RuntimeError("Physical APK did not serve its bundled WebUI")
         value["webui"] = {"served": True, "rendered": "not-run"}
         passed("physical-bundled-webui-served")
+        value["phase"] = "physical-process-resources"
+        value["processResources"] = _physical_process_resources(port, key)
+        passed("physical-process-resources")
         if render_webui:
             from .rust_webui_live_proof import run_webui_live_proof
             browser = run_webui_live_proof(base_url=f"http://127.0.0.1:{port}", api_key=key,
@@ -294,6 +399,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                 raise RuntimeError("Physical bundled WebUI browser proof failed")
             value["webui"]["rendered"] = "passed"
             passed("physical-bundled-webui-rendered")
+        value["phase"] = "bounded-foreground-observation"
         started = time.monotonic()
         samples = 0
         while True:

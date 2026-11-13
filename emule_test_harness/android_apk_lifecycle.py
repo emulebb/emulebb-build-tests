@@ -101,22 +101,27 @@ def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_s
     return {**value, "payloadPath": str(path)}
 
 
-def ui_nodes(xml: str) -> dict[str, dict[str, str]]:
-    """Read resource IDs from a bounded production UI dump without retaining it."""
+def ui_elements(xml: str) -> list[dict[str, str]]:
+    """Parse a bounded transient hierarchy; callers must not retain its values."""
     if len(xml.encode("utf-8")) > 65536:
         raise RuntimeError("APK UI exceeds its inspection bound")
     try:
         tree = ET.fromstring(xml)
     except ET.ParseError:
         raise RuntimeError("APK UI dump is malformed") from None
+    return [dict(node.attrib) for node in tree.iter("node")]
+
+
+def ui_nodes(xml: str) -> dict[str, dict[str, str]]:
+    """Read resource IDs from a bounded production UI dump without retaining it."""
     result = {}
-    for node in tree.iter("node"):
+    for node in ui_elements(xml):
         resource = node.get("resource-id", "")
         if resource.startswith(APPLICATION_ID + ":id/"):
             name = resource.split("/", 1)[1]
             if name in result:
                 raise RuntimeError("APK UI has ambiguous resource controls")
-            result[name] = dict(node.attrib)
+            result[name] = node
     return result
 
 
@@ -131,11 +136,18 @@ class ProductionUi:
     def shell(self, *args):
         return self.command(*self.prefix, "shell", *args)
 
-    def inspect(self):
+    def _hierarchy(self):
         self.shell("uiautomator", "dump", self.path)
         # This transient hierarchy contains the visible credential. Never copy
         # it to the host or retain it as a diagnostic artifact.
-        return ui_nodes(self.shell("cat", self.path))
+        return self.shell("cat", self.path)
+
+    def inspect(self):
+        return ui_nodes(self._hierarchy())
+
+    def elements(self):
+        """Inspect stock permission UI only in memory, with the same size bound."""
+        return ui_elements(self._hierarchy())
 
     def find(self, name, *, enabled=False):
         size = re.findall(r"(\d+)x(\d+)", self.shell("wm", "size"))

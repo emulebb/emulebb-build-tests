@@ -27,6 +27,10 @@ class Phone:
         self.retained = False
         self.checksum = "a" * 64
         self.permission = True
+        self.notifications = True
+        self.lan = True
+        self.screen = "app"
+        self.ambiguous_settings = False
         self.incoming = ""
         self.running = False
         self.forward = False
@@ -62,19 +66,47 @@ class Phone:
         if args[:3] == ("shell", "appops", "get"):
             return "MANAGE_EXTERNAL_STORAGE: " + ("allow" if self.permission else "default")
         if args[:4] == ("shell", "cmd", "package", "check-permission"):
-            return "granted"
+            allowed = self.notifications if args[4].endswith("POST_NOTIFICATIONS") else self.lan
+            return "granted" if allowed else "denied"
+        if args[:4] == ("shell", "dumpsys", "activity", "activities"):
+            package = "com.android.settings" if self.screen == "files" else "com.google.android.permissioncontroller"
+            return "mResumedActivity: " + package + "/.PermissionActivity"
+        if args[:3] == ("shell", "am", "start") or args[:3] == ("shell", "input", "keyevent"):
+            self.screen = "app"
         if args[:2] == ("shell", "sh"):
             return self.incoming
         if args == ("shell", "wm", "size"):
             return "Physical size: 1080x1920"
         if args[:2] == ("shell", "cat"):
+            if self.screen == "files":
+                toggle = '<node package="com.android.settings" checkable="true" enabled="true" checked="false" bounds="[0,0][100,100]"/>'
+                return ('<hierarchy><node package="com.android.settings" text="eMuleBB"/>' + toggle
+                        + (toggle.replace("[0,0][100,100]", "[200,0][300,100]") if self.ambiguous_settings else "") + '</hierarchy>')
+            if self.screen in {"notifications", "lan"}:
+                return ('<hierarchy><node package="com.google.android.permissioncontroller" text="Allow eMuleBB?"/>'
+                        '<node package="com.google.android.permissioncontroller" clickable="true" enabled="true" '
+                        'resource-id="com.google.android.permissioncontroller:id/permission_allow_button" bounds="[0,0][100,100]"/></hierarchy>')
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + self.phase + '"/>'
                     '<node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + KEY + '"/>'
                     '<node resource-id="org.emulebb.android:id/bind_addr" enabled="true" text="127.0.0.1:20017"/>'
                     '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,0][100,100]"/>'
                     '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,0][300,100]"/>'
+                    '<node resource-id="org.emulebb.android:id/grant_all_files_access" enabled="true" bounds="[400,0][500,100]"/>'
+                    '<node resource-id="org.emulebb.android:id/allow_notifications" enabled="true" bounds="[600,0][700,100]"/>'
+                    '<node resource-id="org.emulebb.android:id/allow_local_network" enabled="true" bounds="[800,0][900,100]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
+            if self.screen != "app":
+                if self.screen == "files":
+                    self.permission = True
+                elif self.screen == "notifications":
+                    self.notifications = True
+                elif self.screen == "lan":
+                    self.lan = True
+                return ""
+            if args[3] in {"450", "650", "850"}:
+                self.screen = {"450": "files", "650": "notifications", "850": "lan"}[args[3]]
+                return ""
             self.running = args[3] == "50" and not self.start_fails
             self.phase = "Failed" if args[3] == "50" and self.start_fails else "Running" if self.running else "Stopped"
         if args[:1] == ("forward",):
@@ -94,6 +126,11 @@ class Phone:
             raise ConnectionRefusedError()
         if route == "/":
             return 200, b"<html>synthetic bundle</html>"
+        if route == "/api/v1/diagnostics":
+            assert key == KEY
+            return 200, json.dumps({"data": {"processResources": {
+                "sampledAtMs": 1700000000000, "residentMemoryBytes": 67108864,
+                "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500}, "privateOtherData": KEY}}).encode()
         if key is None:
             return self.unauthenticated, b"{}"
         assert key == KEY
@@ -162,6 +199,7 @@ def test_physical_admission_and_cleanup_refuse_foreign_state(tmp_path, monkeypat
 def test_permission_setup_can_resume_only_its_hash_bound_installation(tmp_path, monkeypatch):
     phone = Phone()
     phone.permission = False
+    phone.ambiguous_settings = True
     receipt = run(tmp_path, monkeypatch, phone, execute=True)
     value = json.loads(receipt.read_text())
     assert value["status"] == "setup-required" and value["runtimeExecution"] == "not-run"
@@ -169,6 +207,104 @@ def test_permission_setup_can_resume_only_its_hash_bound_installation(tmp_path, 
     report = run(tmp_path, monkeypatch, phone, execute=True, receipt=receipt)
     assert json.loads(report.read_text())["runtimeExecution"] == "executed"
     assert len([call for call in phone.calls if call[0] == "install"]) == 1
+
+
+@pytest.mark.parametrize("api", [36, 37])
+def test_normal_permission_ui_changes_only_denied_owned_app_grants(tmp_path, monkeypatch, api):
+    phone = Phone()
+    phone.api = api
+    phone.permission = phone.notifications = phone.lan = False
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads(report.read_text())
+    assert value["status"] == "passed"
+    assert [change["permission"] for change in value["permissionChanges"]] == [
+        "MANAGE_EXTERNAL_STORAGE", "POST_NOTIFICATIONS"] + (["ACCESS_LOCAL_NETWORK"] if api == 37 else [])
+    assert all(change["before"] == "denied" and change["after"] == "granted" for change in value["permissionChanges"])
+    assert value["processResources"]["residentMemoryBytes"] == 67108864
+    assert value["processResources"]["cpuUsagePercent"] == 125.5
+    assert not any(call[:3] == ("shell", "appops", "set") for call in phone.calls)
+    assert not any(call[:3] == ("shell", "pm", "grant") for call in phone.calls)
+
+
+def test_ambiguous_settings_never_guess_a_permission_toggle_or_start(tmp_path, monkeypatch):
+    phone = Phone()
+    phone.permission = False
+    phone.ambiguous_settings = True
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads(report.read_text())
+    assert value["status"] == "setup-required" and value["permissionChanges"] == []
+    assert value["runtimeExecution"] == "not-run" and not phone.running
+    assert [call for call in phone.calls if call[:3] == ("shell", "input", "tap")] == [
+        ("shell", "input", "tap", "450", "50")]
+
+
+@pytest.mark.parametrize("fault", ["foreground", "app-label", "checked", "disabled", "bad-bounds"])
+def test_normal_settings_guard_requires_the_app_and_one_valid_off_toggle(tmp_path, monkeypatch, fault):
+    phone = Phone()
+    phone.permission = False
+    command = phone.command
+
+    def guarded(*args, **kwargs):
+        result = command(*args, **kwargs)
+        if args[2:6] == ("shell", "dumpsys", "activity", "activities") and fault == "foreground":
+            return "mResumedActivity: com.android.other/.OtherActivity"
+        if args[2:4] == ("shell", "cat") and phone.screen == "files":
+            return result.replace({"app-label": "text=\"eMuleBB\"", "checked": "checked=\"false\"",
+                                   "disabled": "enabled=\"true\"", "bad-bounds": "[0,0][100,100]"}.get(fault, "no-match"),
+                                  {"app-label": "text=\"Other App\"", "checked": "checked=\"true\"",
+                                   "disabled": "enabled=\"false\"", "bad-bounds": "[0,0][0,0]"}.get(fault, "no-replacement"))
+        return result
+
+    phone.command = guarded
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads(report.read_text())
+    assert value["status"] == "setup-required" and value["permissionChanges"] == []
+    assert phone.permission is False and phone.running is False
+
+
+def test_permission_controller_resource_namespace_can_differ_from_package(tmp_path, monkeypatch):
+    phone = Phone()
+    phone.notifications = False
+    command = phone.command
+
+    def namespace(*args, **kwargs):
+        result = command(*args, **kwargs)
+        if args[2:4] == ("shell", "cat"):
+            return result.replace("com.google.android.permissioncontroller:id/permission_allow_button",
+                                  "com.android.permissioncontroller:id/permission_allow_button")
+        return result
+
+    phone.command = namespace
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    assert json.loads(report.read_text())["status"] == "passed" and phone.notifications is True
+
+
+@pytest.mark.parametrize("changes", [{"residentMemoryBytes": 0}, {"sampledAtMs": None},
+    {"cpuUsagePercent": float("nan")}, {"cpuUsagePercent": float("inf")}, {"cpuUsagePercent": -1},
+    {"cpuUsagePercent": True}, {"cpuSampleIntervalMs": -1}])
+def test_physical_resource_counters_reject_missing_or_nonfinite_samples(monkeypatch, changes):
+    record = {"sampledAtMs": 1700000000000, "residentMemoryBytes": 67108864,
+              "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500, **changes}
+    monkeypatch.setattr(subject, "_request", lambda *args: (200, json.dumps({"data": {"processResources": record}}).encode()))
+    with pytest.raises(RuntimeError, match="sample"):
+        subject._physical_process_resources(54321, KEY)
+
+
+def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypatch):
+    attempts = [0]
+    clock = [0.0]
+    monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def request(*args):
+        attempts[0] += 1
+        return 200, json.dumps({"data": {"processResources": {"sampledAtMs": 1700000000000,
+            "residentMemoryBytes": 67108864, "cpuUsagePercent": None if attempts[0] == 1 else 250.0,
+            "cpuSampleIntervalMs": None if attempts[0] == 1 else 500}, "operatorData": KEY}}).encode()
+
+    monkeypatch.setattr(subject, "_request", request)
+    result = subject._physical_process_resources(54321, KEY)
+    assert attempts[0] == 2 and result["cpuUsagePercent"] == 250.0 and KEY not in json.dumps(result)
 
 
 def test_exact_existing_apk_admission_keeps_unknown_profile_readonly(tmp_path, monkeypatch):
