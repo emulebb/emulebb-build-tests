@@ -110,6 +110,71 @@ def ui_nodes(xml: str) -> dict[str, dict[str, str]]:
     return result
 
 
+class ProductionUi:
+    """Inspect only the production app UI on one explicitly selected device."""
+
+    def __init__(self, command, *, prefix=PREFIX):
+        self.command = command
+        self.prefix = tuple(prefix)
+        self.path = "/data/local/tmp/emulebb-apk-ui-" + uuid4().hex + ".xml"
+
+    def shell(self, *args):
+        return self.command(*self.prefix, "shell", *args)
+
+    def inspect(self):
+        self.shell("uiautomator", "dump", self.path)
+        # This transient hierarchy contains the visible credential. Never copy
+        # it to the host or retain it as a diagnostic artifact.
+        return ui_nodes(self.shell("cat", self.path))
+
+    def find(self, name, *, enabled=False):
+        size = re.findall(r"(\d+)x(\d+)", self.shell("wm", "size"))
+        if not size:
+            raise RuntimeError("Cannot determine owned Android display dimensions")
+        width, height = map(int, size[-1])
+        deadline = time.monotonic() + 60
+        while True:
+            nodes = self.inspect()
+            if name in nodes:
+                node = nodes[name]
+                if not enabled or node.get("enabled") == "true":
+                    return node
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("APK required control remains disabled: " + name)
+                time.sleep(1)
+                continue
+            # Production controls may span several scrollable viewports.
+            for direction in (1, -1):
+                for _ in range(6):
+                    first, last = (height * 3 // 4, height // 4) if direction == 1 else (height // 4, height * 3 // 4)
+                    self.shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
+                    nodes = self.inspect()
+                    if name in nodes:
+                        break
+                if name in nodes:
+                    break
+            if name not in nodes:
+                raise RuntimeError("APK required control is not reachable: " + name)
+
+    def click(self, name):
+        node = self.find(name, enabled=True)
+        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+        if bounds is None or node.get("enabled") != "true":
+            raise RuntimeError("APK required control is missing or disabled: " + name)
+        x1, y1, x2, y2 = map(int, bounds.groups())
+        self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+
+    def wait_state(self, expected, timeout=90):
+        deadline = time.monotonic() + timeout
+        while True:
+            state = self.find("service_status").get("text", "")
+            if state == expected:
+                return
+            if state == "Failed" or time.monotonic() >= deadline:
+                raise RuntimeError("APK did not reach expected service state: " + expected)
+            time.sleep(1)
+
+
 def _request(port: int, path: str, key: str | None = None) -> tuple[int, bytes]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     try:
@@ -141,63 +206,12 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
               "localTransfer": "not-run", "fileLinks": "not-run", "physicalDevice": "not-run"}
     port = None
     installed = False
-    ui_path = "/data/local/tmp/emulebb-apk-ui-" + uuid4().hex + ".xml"
+    ui = ProductionUi(command)
+    ui_path = ui.path
+    inspect, find, click, wait_state = ui.inspect, ui.find, ui.click, ui.wait_state
 
     def shell(*args):
         return command(*PREFIX, "shell", *args)
-
-    def inspect():
-        shell("uiautomator", "dump", ui_path)
-        # Never write the UI hierarchy to the host: it contains the visible key.
-        return ui_nodes(shell("cat", ui_path))
-
-    def find(name, *, enabled=False):
-        # The lean production shell is scrollable. Never assume controls or
-        # credentials appear in the same accessibility viewport.
-        size = re.findall(r"(\d+)x(\d+)", shell("wm", "size"))
-        if not size:
-            raise RuntimeError("Cannot determine owned Android display dimensions")
-        width, height = map(int, size[-1])
-        deadline = time.monotonic() + 60
-        while True:
-            nodes = inspect()
-            if name in nodes:
-                node = nodes[name]
-                if not enabled or node.get("enabled") == "true":
-                    return node
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("APK required control remains disabled: " + name)
-                time.sleep(1)
-                continue
-            for direction in (1, -1):
-                for _ in range(6):
-                    first, last = (height * 3 // 4, height // 4) if direction == 1 else (height // 4, height * 3 // 4)
-                    shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
-                    nodes = inspect()
-                    if name in nodes:
-                        break
-                if name in nodes:
-                    break
-            if name not in nodes:
-                raise RuntimeError("APK required control is not reachable: " + name)
-
-    def click(name):
-        node = find(name, enabled=True)
-        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
-        if bounds is None or node.get("enabled") != "true":
-            raise RuntimeError("APK required control is missing or disabled: " + name)
-        x1, y1, x2, y2 = map(int, bounds.groups())
-        shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
-
-    def wait_state(expected, timeout=90):
-        deadline = time.monotonic() + timeout
-        while True:
-            state = find("service_status").get("text", "")
-            if state == expected:
-                return
-            if state == "Failed" or time.monotonic() >= deadline:
-                raise RuntimeError("APK did not reach expected service state: " + expected)
-            time.sleep(1)
 
     def assert_listener_stopped(quiet_seconds=2):
         deadline = time.monotonic() + 30
