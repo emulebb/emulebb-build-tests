@@ -317,6 +317,46 @@ def test_exact_existing_apk_admission_keeps_unknown_profile_readonly(tmp_path, m
     assert not any(call[0] == "install" or call[:3] == ("shell", "am", "start") for call in phone.calls)
 
 
+@pytest.mark.parametrize("phase", ["Starting", "Running"])
+def test_known_owned_active_service_is_gracefully_stopped_before_smoke(tmp_path, monkeypatch, phase):
+    phone = Phone()
+    receipt = run(tmp_path, monkeypatch, phone)
+    phone.running, phone.phase = True, phase
+    report = run(tmp_path, monkeypatch, phone, execute=True, receipt=receipt)
+    value = json.loads(report.read_text())
+    assert value["status"] == "passed" and value["initialServicePhase"] == phase
+    assert value["initialServiceNormalization"] == {"from": phase, "method": "normal-ui-stop", "status": "passed"}
+    assert [call[3] for call in phone.calls if call[:3] == ("shell", "input", "tap")] == ["250", "50", "250"]
+    assert not phone.running and value["runtimeExecution"] == "executed"
+
+
+def test_known_owned_failed_service_can_retry_after_normal_permission_setup(tmp_path, monkeypatch):
+    phone = Phone()
+    receipt = run(tmp_path, monkeypatch, phone)
+    phone.phase, phone.notifications = "Failed", False
+    report = run(tmp_path, monkeypatch, phone, execute=True, receipt=receipt)
+    value = json.loads(report.read_text())
+    assert value["status"] == "passed" and value["initialServicePhase"] == "Failed"
+    assert "initialServiceNormalization" not in value
+    assert phone.notifications and not phone.running
+
+
+@pytest.mark.parametrize("phase", ["Service connection interrupted", "Stopping", KEY])
+def test_disconnected_or_unknown_initial_status_is_not_guessed_or_mutated(tmp_path, monkeypatch, phase):
+    phone = Phone()
+    receipt = run(tmp_path, monkeypatch, phone)
+    phone.running, phone.phase = True, phase
+    with pytest.raises(RuntimeError, match="stable admitted service phase"):
+        run(tmp_path, monkeypatch, phone, execute=True, receipt=receipt)
+    report = (tmp_path / "resume/physical-device.json").read_text()
+    value = json.loads(report)
+    expected = "connection-interrupted" if phase == "Service connection interrupted" else "Stopping" if phase == "Stopping" else "unrecognized"
+    assert value["initialServicePhase"] == value["uiFailure"]["servicePhase"] == expected
+    assert value["phase"] == "inspect-initial-service-phase" and value["runtimeExecution"] == "not-run"
+    assert not any(call[:3] == ("shell", "input", "tap") for call in phone.calls)
+    assert phone.running and KEY not in report
+
+
 @pytest.mark.parametrize("debug,signer,authority,error", [
     (True, "b" * 64, "b" * 64, RuntimeError), (None, "b" * 64, "b" * 64, RuntimeError),
     (False, "c" * 64, "b" * 64, RuntimeError), (False, "b" * 64, None, ValueError),

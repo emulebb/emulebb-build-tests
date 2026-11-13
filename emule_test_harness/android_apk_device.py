@@ -20,12 +20,23 @@ import time
 from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, _request, admit_production_certificate, required_apk_cases
 
 
+def _safe_service_phase(text: str | None) -> str:
+    """Classify only source-owned status values; never retain arbitrary screen text."""
+    if text in {"Stopped", "Starting", "Running", "Stopping", "Failed"}:
+        return text
+    if text == "Service connection interrupted":
+        return "connection-interrupted"
+    return "unrecognized"
+
+
 def _ui_failure_metadata(ui: ProductionUi) -> dict:
     """Retain only resource IDs/boolean flags and foreground package, never UI values."""
     result = {"foregroundPackage": None}
     errors = []
     try:
         elements = ui.elements()
+        status = next((node for node in elements if node.get("resource-id") == APPLICATION_ID + ":id/service_status"), {})
+        result["servicePhase"] = _safe_service_phase(status.get("text"))
         controls = []
         for node in elements:
             resource = node.get("resource-id", "")
@@ -117,7 +128,8 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
         finally:
             ui.shell("input", "keyevent", "KEYCODE_BACK")
             ui.shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
-            ui.wait_state("Stopped")
+            if _safe_service_phase(ui.find("service_status").get("text")) not in {"Stopped", "Failed"}:
+                raise RuntimeError("Physical app changed service phase during normal permission setup")
 
     complete = allow("MANAGE_EXTERNAL_STORAGE", "grant_all_files_access", settings=True)
     if complete:
@@ -369,18 +381,33 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         if render_webui:
             from .rust_webui_live_proof import require_file_link_browser
             require_file_link_browser()
-        value["phase"] = "normal-app-setup"
+        value["phase"] = "normal-app-launch"
         ui = ProductionUi(command, prefix=prefix)
         shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
-        state = ui.find("service_status").get("text")
-        if state != "Stopped":
-            raise RuntimeError("Physical app must be stopped before the bounded owned smoke")
+        value["phase"] = "inspect-initial-service-phase"
+        state = _safe_service_phase(ui.find("service_status").get("text"))
+        value["initialServicePhase"] = state
+        if state in {"Starting", "Running"}:
+            value["phase"] = "normalize-owned-service-stop"
+            value["initialServiceNormalization"] = {"from": state, "method": "normal-ui-stop", "status": "attempted"}
+            # Also attempt a graceful stop on failure: the exact installed APK
+            # and prior owned-install receipt already admit this running service.
+            attempted_start = True
+            ui.click("stop_service")
+            ui.wait_state("Stopped")
+            attempted_start = False
+            value["initialServiceNormalization"]["status"] = "passed"
+            passed("owned-existing-service-gracefully-stopped")
+        elif state not in {"Stopped", "Failed"}:
+            raise RuntimeError("Physical app has no stable admitted service phase")
+        value["phase"] = "normal-permission-ui"
         value["permissions"] = _normal_permission_setup(ui, api=api, changes=value["permissionChanges"])
         if not value["permissions"]["complete"]:
             value.update(status="setup-required", phase="complete-permissions-in-normal-app-ui")
             return report
         # A fresh Incoming folder is implicitly shared. Never enumerate or
         # publish pre-existing phone files before REST can select a test root.
+        value["phase"] = "inspect-empty-default-incoming"
         incoming = shell("sh", "-c", shlex.quote(
             "if test -L /sdcard/Download/eMuleBB; then echo redirected; "
             "elif test -d /sdcard/Download/eMuleBB; then ls -A /sdcard/Download/eMuleBB; "
@@ -388,14 +415,17 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         if incoming not in {"", "absent"}:
             raise RuntimeError("Default incoming is not empty; refusing first-start implicit sharing of phone files")
         passed("empty-default-incoming-before-first-start")
+        value["phase"] = "read-bootstrap-bind-address"
         bind = ui.find("bind_addr", enabled=True).get("text", "")
         match = re.fullmatch(r"(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]*)", bind)
         if match is None or int(match[1]) > 65535:
             raise RuntimeError("Physical smoke requires the app's loopback REST binding")
         remote_port = int(match[1])
+        value["phase"] = "read-bootstrap-api-key"
         key = ui.find("api_key", enabled=True).get("text", "")
         if not 32 <= len(key) <= 512 or any(ord(char) < 33 or ord(char) > 126 for char in key):
             raise RuntimeError("Physical app UI did not expose a valid generated API key")
+        value["phase"] = "allocate-owned-rest-forward"
         forwarded = command(*prefix, "forward", "--no-rebind", "tcp:0", f"tcp:{remote_port}")
         if re.fullmatch(r"[1-9][0-9]*", forwarded) is None or int(forwarded) > 65535:
             raise RuntimeError("Physical smoke could not allocate its private REST forward")
