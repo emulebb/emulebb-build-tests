@@ -222,9 +222,29 @@ def _stopped_service_flags(ui: ProductionUi) -> dict:
         present = "DaemonService" in document
         foreground = re.findall(r"\bisForeground=(true|false)\b", document)
         requested = re.findall(r"\bstartRequested=(true|false)\b", document)
-        # ServiceRecord.dump omits its foreground fields once both the flag and
-        # foreground notification ID are clear. startRequested is still dumped.
-        if not present or (requested and "true" not in foreground and "true" not in requested):
+        flag_tokens = re.findall(r"\b(isForeground|startRequested|foregroundId|delayedStop|lastStartId)=([^\s]*)", document)
+        if any((value not in {"true", "false"} if name in {"isForeground", "startRequested", "delayedStop"}
+                else re.fullmatch(r"[0-9]+", value) is None) for name, value in flag_tokens):
+            raise RuntimeError("Physical foreground-service flags are unrecognized")
+        pending = any(value == "true" if name == "delayedStop" else int(value) != 0
+                      for name, value in flag_tokens if name in {"delayedStop", "foregroundId"})
+        # AOSP ServiceRecord.dump omits foreground fields when both are clear,
+        # and omits the start group when !startRequested && !delayedStop &&
+        # lastStartId == 0. Require the complete owned bound-record shape,
+        # including binding sections AFTER that group, before trusting absence.
+        # frameworks/base/services/core/java/com/android/server/am/ServiceRecord.java
+        bound_never_started = (present and not flag_tokens
+            and len(re.findall(r"\bServiceRecord\{", document)) == 1
+            and re.search(r"(?m)^\s*\* ServiceRecord\{[^\n]*\bu0 " + re.escape(APPLICATION_ID)
+                          + r"/\.DaemonService(?: c:" + re.escape(APPLICATION_ID) + r")?\}", document) is not None
+            and re.search(r"(?m)^\s*intent=\{[^\n]*\bcmp=" + re.escape(APPLICATION_ID) + r"/\.DaemonService(?:\s|\})", document) is not None
+            and re.search(r"(?m)^\s*packageName=" + re.escape(APPLICATION_ID) + r"\s*$", document) is not None
+            and re.search(r"(?m)^\s*app=ProcessRecord\{[^\n]+\}", document) is not None
+            and re.search(r"(?s)\bcreateTime=[^\n]+\n\s*lastActivity=[^\n]+.*?\n\s*Bindings:\s*\n"
+                          r".*?\bIntentBindRecord\{.*?\bAppBindRecord\{.*?\n\s*All Connections:\s*\n"
+                          r"[^\n]*\bConnectionRecord\{[^\n]+\}", document) is not None)
+        if not present or (not pending and "true" not in foreground and "true" not in requested
+                           and (requested or bound_never_started)):
             return {"present": present, "foreground": False, "startRequested": False}
         if time.monotonic() >= deadline:
             raise RuntimeError("Physical service remained foreground or start-requested after Stop")

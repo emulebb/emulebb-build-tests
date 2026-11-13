@@ -603,6 +603,59 @@ def test_stopped_bound_service_dump_omits_inactive_foreground_fields():
     assert subject._stopped_service_flags(ui) == {"present": True, "foreground": False, "startRequested": False}
 
 
+BOUND_NEVER_STARTED = """ACTIVITY MANAGER SERVICES (dumpsys activity services)
+  User 0 active services:
+  * ServiceRecord{123abc u0 org.emulebb.android/.DaemonService c:org.emulebb.android}
+    intent={cmp=org.emulebb.android/.DaemonService}
+    packageName=org.emulebb.android
+    processName=org.emulebb.android:daemon
+    targetSdkVersion=37
+    app=ProcessRecord{456def 1234:org.emulebb.android:daemon/u0a123}
+    createTime=-2m startingBgTimeout=--
+    lastActivity=-1m restartTime=-- createdFromFg=true
+    Bindings:
+    * IntentBindRecord{789abc CREATE}:
+      intent={cmp=org.emulebb.android/.DaemonService}
+      binder=android.os.BinderProxy@123abc
+      requested=true received=true hasBound=true doRebind=false
+      * Client AppBindRecord{456abc ProcessRecord{789def 1235:org.emulebb.android/u0a123}}
+        Connections:
+          ConnectionRecord{123def u0 CR org.emulebb.android/.DaemonService:@123abc flags=0x1}
+    All Connections:
+      ConnectionRecord{123def u0 CR org.emulebb.android/.DaemonService:@123abc flags=0x1}
+"""
+
+
+def test_complete_owned_bound_never_started_service_has_implicitly_clear_start_and_foreground_flags():
+    # AOSP omits the start group when all three controlling values are clear;
+    # this is the actual Android 16 phone's observed structural shape.
+    ui = SimpleNamespace(shell=lambda *args: BOUND_NEVER_STARTED)
+    assert subject._stopped_service_flags(ui) == {"present": True, "foreground": False, "startRequested": False}
+
+
+@pytest.mark.parametrize("change", [
+    lambda text: text.split("    Bindings:")[0],
+    lambda text: text.split("    All Connections:")[0],
+    lambda text: text.replace("AppBindRecord{", "UnknownBinding{"),
+    lambda text: text.replace("packageName=org.emulebb.android", "packageName=other.app"),
+    lambda text: text.replace("* ServiceRecord{123abc u0", "* ServiceRecord{123abc u10"),
+    lambda text: text.replace("app=ProcessRecord{456def 1234:org.emulebb.android:daemon/u0a123}", "app=null"),
+    lambda text: text + "\n isForeground=true foregroundId=42\n",
+    lambda text: text + "\n startRequested=true delayedStop=false lastStartId=1\n",
+    lambda text: text + "\n startRequested=false delayedStop=true lastStartId=1\n",
+    lambda text: text + "\n isForeground=false foregroundId=42 startRequested=false\n",
+    lambda text: text + "\n isForeground=unknown startRequested=false\n",
+    lambda text: text + "\n startRequested=unknown\n",
+])
+def test_absent_start_fields_do_not_admit_truncated_foreign_unknown_or_active_bound_records(monkeypatch, change):
+    clock = [0.0]
+    monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    ui = SimpleNamespace(shell=lambda *args: change(BOUND_NEVER_STARTED))
+    with pytest.raises(RuntimeError, match="remained foreground|unrecognized"):
+        subject._stopped_service_flags(ui)
+
+
 @pytest.mark.parametrize("locked", [False, True])
 def test_missing_app_ui_never_swipes_launcher_or_keyguard(tmp_path, monkeypatch, locked):
     phone = Phone()
