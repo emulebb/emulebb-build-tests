@@ -71,26 +71,40 @@ class _Campaign:
 
 def _server_configuration(base, key):
     rows = request_json(base, "GET", "/api/v1/servers", key).get("items")
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+    if (not isinstance(rows, list) or any(not isinstance(row, dict)
+            or not isinstance(row.get("address"), str) or not row["address"]
+            or type(row.get("port")) is not int or not 0 < row["port"] <= 65535 for row in rows)):
         raise RuntimeError("APK transfer peer returned an invalid server collection")
+    # Complete ServerCreate/ServerUpdate configuration, excluding live counters.
     fields = ("address", "port", "name", "priority", "static", "enabled")
     return sorted(({name: row.get(name) for name in fields} for row in rows),
                   key=lambda row: (str(row["address"]), str(row["port"])))
 
 
 @contextmanager
-def local_listener(base: str, key: str, *, fresh_peer=False, campaign=None):
+def local_listener(base: str, key: str, *, role="app", campaign=None):
     """Direct listener startup to loopback without replacing operator servers."""
-    role = "peer" if fresh_peer else "app"
+    if role not in {"peer", "app"}:
+        raise ValueError("Local listener diagnostics require a known participant role")
     def stage(name):
         if campaign is not None:
             campaign.mark(role + "-listener-" + name)
     stage("server-inventory")
     before = _server_configuration(base, key)
     existing = [row for row in before if row["address"] == "127.0.0.1" and row["port"] == 20031]
-    if existing and not fresh_peer:
-        stage("existing-loopback-endpoint-precondition")
-        raise RuntimeError("Qualification loopback endpoint already belongs to the operator")
+    if len(existing) > 1:
+        stage("duplicate-loopback-endpoint-precondition")
+        raise RuntimeError("Qualification loopback endpoint is duplicated")
+    if existing:
+        row = existing[0]
+        if (not isinstance(row["name"], str) or not isinstance(row["priority"], str)
+                or row["priority"] not in {"low", "normal", "high"}
+                or type(row["static"]) is not bool or type(row["enabled"]) is not bool):
+            stage("malformed-loopback-endpoint-precondition")
+            raise RuntimeError("Qualification loopback endpoint has invalid configuration")
+        if not row["enabled"]:
+            stage("disabled-loopback-endpoint-precondition")
+            raise RuntimeError("Qualification cannot connect a disabled loopback endpoint")
     name = "Owned APK qualification " + uuid4().hex
     route = "/api/v1/servers/" + quote("127.0.0.1:20031", safe="")
     created = False
@@ -366,7 +380,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
                     rust_source=rust_source, bind_ip=str(address), prefix=prefix,
                     bind_interface=binding.get("activeInterfaceId") or None,
                     spawn_daemon=spawn_daemon, stop_client=stop_client, campaign=campaign) as (_home, peer_port):
-                with local_listener(f"http://127.0.0.1:{peer_port}", PEER_KEY, fresh_peer=True, campaign=campaign):
+                with local_listener(f"http://127.0.0.1:{peer_port}", PEER_KEY, role="peer", campaign=campaign):
                     app_attempted = True
                     with local_listener(base, api_key, campaign=campaign):
                         campaign.record(listenerControl={"peer": "acknowledged", "app": "acknowledged"})
@@ -494,7 +508,7 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
             source_link = ed2k_link_with_source(item["ed2kLink"], bind_ip, 20029)
             campaign.record(transferHash=file_hash)
             campaign.mark("directed-local-listener-start")
-            with local_listener(peer_base, PEER_KEY, fresh_peer=True, campaign=campaign), local_listener(base, api_key, campaign=campaign):
+            with local_listener(peer_base, PEER_KEY, role="peer", campaign=campaign), local_listener(base, api_key, campaign=campaign):
                 campaign.mark("enqueue-owned-transfer")
                 request("POST", "/api/v1/transfers", {"link": source_link, "paused": False})
                 deadline = time.monotonic() + 120

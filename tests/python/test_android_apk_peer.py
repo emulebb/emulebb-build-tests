@@ -322,10 +322,12 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
     calls, restarts = [], []
     peer_base, app_base = "http://127.0.0.1:22222", "http://127.0.0.1:12345"
     original = {"daemon": {"incomingDir": "/operator/Incoming"}, "nat": {"enabled": True}}
-    servers = {peer_base: [{"address": "127.0.0.1", "port": 20031, "name": "Fresh peer seed"}],
+    servers = {peer_base: [{"address": "127.0.0.1", "port": 20031, "name": "Fresh peer seed",
+                           "priority": "normal", "static": False, "enabled": True}],
                app_base: [{"address": "192.0.2.100", "port": 4661, "name": "Operator"}]}
     if failure == "existing-app":
-        servers[app_base].append({"address": "127.0.0.1", "port": 20031, "name": "Operator loopback"})
+        servers[app_base].append({"address": "127.0.0.1", "port": 20031, "name": "Operator loopback",
+                                  "priority": "high", "static": True, "enabled": True})
     before = deepcopy(servers)
 
     @contextmanager
@@ -364,20 +366,56 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
     monkeypatch.setattr(subject, "request_json", request)
     args = dict(apk_port=12345, api_key="operator-secret", adb="adb", child={}, report_dir=tmp_path,
                 rust_source=tmp_path, restart_service=lambda: restarts.append(True))
-    if failure:
+    if failure and failure != "existing-app":
         with pytest.raises(subject.CampaignFailure) as error:
             subject.probe_local_listeners(lambda *args: pytest.fail("no transfer fixture IO"),
                                          {"sourceRevision": IDENTITY["sourceRevision"]}, **args)
         expected = {"peer-connect": "peer-listener-directed-connect", "app-create": "app-listener-server-create",
-                    "app-connect": "app-listener-directed-connect", "existing-app": "app-listener-existing-loopback-endpoint-precondition"}[failure]
+                    "app-connect": "app-listener-directed-connect"}[failure]
         assert error.value.failure["phase"] == expected
-        if failure != "existing-app":
-            assert error.value.failure["rest"] == {"httpStatus": 400, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-not-configured"}
+        assert error.value.failure["rest"] == {"httpStatus": 400, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-not-configured"}
     else:
         result = subject.probe_local_listeners(lambda *args: pytest.fail("no transfer fixture IO"),
                                               {"sourceRevision": IDENTITY["sourceRevision"]}, **args)
         assert result == {"status": "passed", "scope": "listener-control-only", "transfer": "not-run"}
     assert len(restarts) == (0 if failure == "peer-connect" else 1)
     assert servers == before
+    if failure == "existing-app":
+        assert not any(base == app_base and method in {"POST", "DELETE"} and not route.endswith("/operations/connect")
+                       for base, method, route in calls)
     raw = (tmp_path / "listener-probe.json").read_text()
     assert "operator-secret" not in raw and "/private/key" not in raw and "192.0.2.20" not in raw
+
+
+@pytest.mark.parametrize("change,expected", [
+    ({"enabled": False}, "disabled-loopback-endpoint-precondition"),
+    ({"enabled": "true"}, "malformed-loopback-endpoint-precondition"),
+    ({"static": "true"}, "malformed-loopback-endpoint-precondition"),
+    ({"priority": []}, "malformed-loopback-endpoint-precondition"),
+    ({"priority": "unsupported"}, "malformed-loopback-endpoint-precondition"),
+    ({"name": None}, "malformed-loopback-endpoint-precondition"),
+    ({"port": "20031"}, "server-inventory"),
+    ({"duplicate": True}, "duplicate-loopback-endpoint-precondition"),
+])
+def test_existing_loopback_endpoint_must_be_one_well_formed_enabled_configuration(tmp_path, change, expected, monkeypatch):
+    from copy import deepcopy
+    row = {"address": "127.0.0.1", "port": 20031, "name": "Operator private name",
+           "priority": "high", "static": True, "enabled": True}
+    duplicate = change.get("duplicate", False)
+    row.update({key: value for key, value in change.items() if key != "duplicate"})
+    rows = [row, deepcopy(row)] if duplicate else [row]
+    calls = []
+
+    def request(base, method, route, key, body=None):
+        calls.append((method, route))
+        assert method == "GET", "invalid existing configuration must never be changed or connected"
+        return {"items": deepcopy(rows)}
+
+    monkeypatch.setattr(subject, "request_json", request)
+    campaign = subject._Campaign(tmp_path / "listener-probe.json", {"sourceRevision": IDENTITY["sourceRevision"]}, subject.PREFIX)
+    with pytest.raises(RuntimeError):
+        with subject.local_listener("http://127.0.0.1:12345", "synthetic", campaign=campaign):
+            pytest.fail("unusable existing endpoint must not connect")
+    assert campaign.value["phase"] == "app-listener-" + expected
+    assert calls == [("GET", "/api/v1/servers")]
+    assert "Operator private name" not in (tmp_path / "listener-probe.json").read_text()
