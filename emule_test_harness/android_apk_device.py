@@ -52,7 +52,7 @@ def _owned_system_chooser(document: str) -> bool:
                         r"((?:android|com\.android\.intentresolver)/[\w.$]*ChooserActivity)\b", document)
     if resumed is None:
         return False
-    records = list(re.finditer(r"(?m)^\s*\* Hist #\d+: ActivityRecord\{([0-9a-f]+) u0 ([^\s}]+)[^\n]*", document))
+    records = list(re.finditer(r"(?m)^\s*(?:\*\s+)?Hist\s+#\d+:\s+ActivityRecord\{([0-9a-f]+) u0 ([^\s}]+)[^\n]*", document))
     for index, record in enumerate(records):
         if record[1] == resumed[1] and record[2] == resumed[2]:
             block = document[record.end():records[index + 1].start() if index + 1 < len(records) else len(document)]

@@ -112,7 +112,7 @@ def test_diagnostics_share_never_dismisses_or_selects_an_unproved_chooser(monkey
     monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     component = "com.android.intentresolver/.ChooserActivity" if fault != "foreign-activity" else "other.application/.MainActivity"
     origin = "other.application" if fault == "foreign-origin" else "org.emulebb.android"
-    document = ("* Hist #0: ActivityRecord{abc123 u0 " + component + " t12}\n launchedFromPackage=" + origin
+    document = ("* Hist  #0: ActivityRecord{abc123 u0 " + component + " t12}\n launchedFromPackage=" + origin
                 + " launchedFromUid=10123\ntopResumedActivity=ActivityRecord{abc123 u0 " + component + " t12}\n")
     if fault == "missing-record":
         document = "topResumedActivity" + document.partition("topResumedActivity")[2]
@@ -125,6 +125,23 @@ def test_diagnostics_share_never_dismisses_or_selects_an_unproved_chooser(monkey
         subject._share_diagnostics_without_sending(ui)
     assert actions[0] == ("click", "share_diagnostics")
     assert KEY not in str(error.value) and "recipient@" not in str(error.value)
+
+
+@pytest.mark.parametrize("prefix", ["* Hist #", "* Hist  #", "    Hist  #", "\t* Hist\t#"])
+def test_system_chooser_matches_current_aosp_and_observed_phone_history_whitespace(prefix):
+    document = (prefix + "0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
+        " launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
+        "topResumedActivity=ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n")
+    assert subject._owned_system_chooser(document)
+
+
+@pytest.mark.parametrize("resumed", ["def456 u0 com.android.intentresolver/.ChooserActivity", "def456 u0 other.application/.Activity"])
+def test_chooser_origin_from_a_nonresumed_history_record_is_never_accepted(resumed):
+    document = ("* Hist  #0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
+        " launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
+        "* Hist  #1: ActivityRecord{" + resumed + " t13}\n launchedFromPackage=other.application\n"
+        "topResumedActivity=ActivityRecord{" + resumed + " t13}\n")
+    assert not subject._owned_system_chooser(document)
 
 
 def payload():
@@ -206,7 +223,7 @@ class Phone:
             raise RuntimeError("Unknown command: check-permission")
         if args[:4] == ("shell", "dumpsys", "activity", "activities"):
             if self.screen == "chooser":
-                return ("* Hist #0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
+                return ("* Hist  #0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
                         "  launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
                         "topResumedActivity=ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n")
             package = "com.android.settings" if self.screen == "files" else "com.google.android.permissioncontroller"
