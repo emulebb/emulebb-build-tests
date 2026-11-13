@@ -14,6 +14,46 @@ SERIAL = "synthetic-phone._adb-tls-connect._tcp"
 KEY = "synthetic-private-key-not-for-receipts"
 
 
+def selected_adb(monkeypatch):
+    device = subject.AdbDevice.__new__(subject.AdbDevice)
+    device.adb, device.serial, device.server_port, device.version = Path("synthetic-adb"), SERIAL, 5037, 41
+    monkeypatch.setattr(subject, "existing_adb_server_version", lambda port: 41)
+    return device
+
+
+def test_binary_device_reads_preserve_kernel_cmdline_nuls(monkeypatch):
+    device = selected_adb(monkeypatch)
+    calls = []
+
+    def read(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b"/owned/emulebb-rust\0--option\0", stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", read)
+    assert device.command("-s", SERIAL, "exec-out", "cat", "/proc/123/cmdline", binary=True).endswith(b"\0")
+    assert calls[0][0] == ["synthetic-adb", "-H", "127.0.0.1", "-P", "5037", "-s", SERIAL,
+                           "exec-out", "cat", "/proc/123/cmdline"]
+    assert calls[0][1]["text"] is False
+
+
+def test_physical_peer_launcher_owns_only_selected_client_and_discards_native_logs(tmp_path, monkeypatch):
+    device = selected_adb(monkeypatch)
+    calls = []
+    process = object()
+    monkeypatch.setattr(subject.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)) or process)
+    home = "/data/local/tmp/emulebb-apk-peer-" + "a" * 32
+    assert device.spawn_peer("ignored-other-adb", {}, home + "/emulebb-rust", home, home, tmp_path) == (process, None)
+    arguments, options = calls[0]
+    assert arguments[0][:8] == ["synthetic-adb", "-H", "127.0.0.1", "-P", "5037", "-s", SERIAL, "shell"]
+    assert "owned-daemon.pid" in arguments[0][-1] and "LD_LIBRARY_PATH" in arguments[0][-1]
+    assert all(options[name] == subject.subprocess.DEVNULL for name in ("stdin", "stdout", "stderr"))
+    assert options["env"] == dict(subject.os.environ)
+    assert not list(tmp_path.iterdir())
+    with pytest.raises(RuntimeError, match="fresh owned temporary directory"):
+        device.spawn_peer("ignored", {}, "/sdcard/Download/emulebb-rust", "/sdcard/Download", "/sdcard/Download", tmp_path)
+    assert len(calls) == 1
+
+
 def payload():
     return {"apk": {"sha256": "a" * 64}, "signerSha256": "b" * 64, "versionCode": 42, "debug": False,
             "buildIdentity": {"sourceRevision": "c" * 40, "version": "0.1.0-test", "channel": "development"},
@@ -549,7 +589,8 @@ def test_missing_app_ui_never_swipes_launcher_or_keyguard(tmp_path, monkeypatch,
     else:
         with pytest.raises(subject.DeviceUiUnavailable, match="app UI is not visible"):
             run(tmp_path, monkeypatch, phone, execute=True)
-    assert not any(call[:2] == ("shell", "input") for call in phone.calls)
+    inputs = [call for call in phone.calls if call[:2] == ("shell", "input")]
+    assert all(call == ("shell", "input", "keyevent", "KEYCODE_WAKEUP") for call in inputs)
 
 
 def test_known_owned_failed_service_can_retry_after_normal_permission_setup(tmp_path, monkeypatch):

@@ -9,6 +9,7 @@ import hashlib
 import http.client
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shlex
@@ -278,7 +279,7 @@ class AdbDevice:
         if result.returncode or match is None or int(match[1]) != self.version:
             raise RuntimeError("Selected ADB tool differs from the operator server; refusing to restart it")
 
-    def command(self, *arguments, check=True, timeout=10, owned_update: OwnedUpdateApproval | None = None):
+    def command(self, *arguments, check=True, timeout=10, binary=False, owned_update: OwnedUpdateApproval | None = None):
         if arguments[:2] != ("-s", self.serial):
             raise RuntimeError("Physical ADB operations require the exact admitted device serial")
         if len(arguments) < 3 or arguments[2] in {
@@ -306,13 +307,38 @@ class AdbDevice:
             raise RuntimeError("Operator ADB server version changed during physical testing")
         try:
             result = subprocess.run([str(self.adb), "-H", "127.0.0.1", "-P", str(self.server_port), *arguments],
-                                    capture_output=True, text=True, timeout=timeout, check=False)
+                                    capture_output=True, text=not binary, timeout=timeout, check=False)
         except (OSError, subprocess.SubprocessError):
             raise RuntimeError("Selected physical-device ADB operation failed") from None
         if len(result.stdout) > 1024**2 or len(result.stderr) > 1024**2 or check and result.returncode:
             # Raw output can contain private endpoints, paths or the visible key.
             raise RuntimeError("Selected physical-device ADB operation failed")
-        return result.stdout.strip() if result.returncode == 0 else ""
+        return (result.stdout if binary else result.stdout.strip()) if result.returncode == 0 else (b"" if binary else "")
+
+    def spawn_peer(self, adb, child, executable, cwd, library_dir, report_dir):
+        """Own one selected-device CLI client; discard potentially private native logs."""
+        if (re.fullmatch(r"/data/local/tmp/emulebb-apk-peer-[0-9a-f]{32}", cwd) is None
+                or executable != cwd + "/emulebb-rust" or library_dir != cwd):
+            raise RuntimeError("Physical peer launcher requires its fresh owned temporary directory")
+        if existing_adb_server_version(self.server_port) != self.version:
+            raise RuntimeError("Operator ADB server version changed before peer launch")
+        script = ("cd " + shlex.quote(cwd) + " && printf '%s\\n' \"$$\" > "
+                  + shlex.quote(cwd + "/owned-daemon.pid") + " && exec env LD_LIBRARY_PATH="
+                  + shlex.quote(library_dir) + " " + shlex.quote(executable))
+        options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+        try:
+            process = subprocess.Popen([str(self.adb), "-H", "127.0.0.1", "-P", str(self.server_port),
+                "-s", self.serial, "shell", "sh", "-c", shlex.quote(script)], env=os.environ.copy(),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError("Owned physical Android peer launch failed") from None
+        return process, None
+
+    @staticmethod
+    def stop_peer_client(process):
+        """Stop only the owned local ADB client after guest identity-aware cleanup."""
+        from .rust_client import stop_process_tree
+        stop_process_tree(process)
 
 
 def _owned_installation(path: Path | None, digest: str | None, *, payload: dict, device_hash: str) -> bool:
@@ -390,6 +416,12 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     def shell(*args, **kwargs):
         return command(*prefix, "shell", *args, **kwargs)
 
+    def open_main():
+        # A normal wake event exposes UI without changing timeouts or bypassing
+        # a PIN; ProductionUi still rejects an observed locked device.
+        shell("input", "keyevent", "KEYCODE_WAKEUP")
+        shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+
     def passed(name):
         value["cases"].append({"name": name, "status": "passed"})
 
@@ -420,7 +452,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     def restart_for_storage():
         nonlocal attempted_start
         value["phase"] = "restart-approved-storage-stop"
-        shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+        open_main()
         ui.click("stop_service")
         ui.wait_state("Stopped", timeout=30)
         assert_stopped()
@@ -478,7 +510,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                 raise RuntimeError("Compatible update installed version or user ownership differs")
             value["phase"] = "stop-owned-service-before-compatible-update"
             ui = ProductionUi(command, prefix=prefix)
-            shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+            open_main()
             state = _safe_service_phase(ui.find("service_status").get("text"))
             if state in {"Starting", "Running"}:
                 ui.click("stop_service")
@@ -527,7 +559,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         passed("installed-apk-version-bytes-certificate")
         if previous_bootstrap is not None:
             value["phase"] = "verify-owned-update-bootstrap-preservation"
-            shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+            open_main()
             if (ui.find("bind_addr", enabled=True).get("text") != previous_bootstrap["bind"]
                     or ui.find("api_key", enabled=True).get("text") != previous_bootstrap["key"]
                     or ui.find("resume_on_boot").get("checked") != previous_bootstrap["boot"]):
@@ -549,7 +581,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["phase"] = "normal-app-launch"
         if ui is None:
             ui = ProductionUi(command, prefix=prefix)
-        shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+        open_main()
         value["phase"] = "inspect-initial-service-phase"
         state = _safe_service_phase(ui.find("service_status").get("text"))
         value["initialServicePhase"] = state
@@ -659,7 +691,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["foregroundObservation"] = {"seconds": round(elapsed, 3), "samples": samples}
         passed("bounded-physical-foreground-observation")
         value["phase"] = "normal-ui-stop"
-        shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+        open_main()
         ui.click("stop_service")
         value["phase"] = "wait-normal-ui-stop"
         ui.wait_state("Stopped", timeout=30)
@@ -689,7 +721,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         cleanup_errors = []
         if attempted_start and ui is not None:
             try:
-                shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
+                open_main()
                 state = ui.find("service_status").get("text")
                 if state in {"Running", "Starting"}:
                     ui.click("stop_service")

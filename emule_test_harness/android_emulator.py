@@ -173,11 +173,11 @@ def _app_identity(document: dict, expected: dict) -> dict:
     return {**expected, "name": "eMuleBB", "apiVersion": "v1", "lifecycleState": "running"}
 
 
-def _daemon_identity(command, pid: str, executable: str, sha256: str, cwd: str) -> tuple[str, str]:
+def _daemon_identity(command, pid: str, executable: str, sha256: str, cwd: str, *,
+                     prefix=("-s", "emulator-5554")) -> tuple[str, str]:
     """Bind a guest PID to its executable bytes, invocation and kernel start time."""
     if re.fullmatch(r"[1-9][0-9]*", pid) is None:
         raise RuntimeError("Android daemon PID is invalid")
-    prefix = ("-s", "emulator-5554")
     proc = "/proc/" + pid
     if command(*prefix, "shell", "readlink", proc + "/exe") != executable:
         raise RuntimeError("Android daemon executable path differs; refusing to signal it")
@@ -593,7 +593,7 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         if apk_peer_manifest_sha256 is None or apk_rust_source is None or not apk_rust_source.is_dir():
             raise ValueError("APK qualification requires its source-bound native peer and selected Rust source")
         peer_payload = admit_peer(Path("/apk-peer-payload"), manifest_sha256=apk_peer_manifest_sha256,
-                                  identity=apk_payload["buildIdentity"])
+                                  identity=apk_payload["buildIdentity"], expected_abi="x86_64")
         from .rust_webui_live_proof import require_file_link_browser
         require_file_link_browser()
     elif apk_peer_manifest_sha256 is not None or apk_rust_source is not None:

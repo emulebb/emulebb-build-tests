@@ -14,6 +14,7 @@ def fixture(tmp_path, *, identity=IDENTITY):
     binary = tmp_path / "emulebb-rust"
     binary.write_bytes(b"synthetic source-bound CLI")
     value = {"schema": "emulebb.android.apk-peer/1", "sourceRevision": identity["sourceRevision"],
+             "target": "x86_64-linux-android", "abi": "x86_64",
              "buildIdentity": identity, "files": {"emulebb-rust": {
                  "sizeBytes": binary.stat().st_size, "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}}}
     raw = json.dumps(value).encode()
@@ -23,25 +24,53 @@ def fixture(tmp_path, *, identity=IDENTITY):
 
 def test_peer_is_bound_to_actual_cli_bytes_and_same_distribution(tmp_path):
     digest = fixture(tmp_path)
-    value = subject.admit_peer(tmp_path, manifest_sha256=digest, identity=IDENTITY)
+    value = subject.admit_peer(tmp_path, manifest_sha256=digest, identity=IDENTITY, expected_abi="x86_64")
     assert value["sourceRevision"] == IDENTITY["sourceRevision"]
     with pytest.raises(RuntimeError, match="distribution identity"):
-        subject.admit_peer(tmp_path, manifest_sha256=digest, identity={**IDENTITY, "channel": "nightly"})
+        subject.admit_peer(tmp_path, manifest_sha256=digest, identity={**IDENTITY, "channel": "nightly"}, expected_abi="x86_64")
     (tmp_path / "emulebb-rust").write_bytes(b"substituted source bytes")
     with pytest.raises(RuntimeError, match="inconsistent|hash differs"):
-        subject.admit_peer(tmp_path, manifest_sha256=digest, identity=IDENTITY)
+        subject.admit_peer(tmp_path, manifest_sha256=digest, identity=IDENTITY, expected_abi="x86_64")
+
+
+def test_peer_requires_the_selected_device_abi_and_matching_rust_target(tmp_path):
+    digest = fixture(tmp_path)
+    with pytest.raises(RuntimeError, match="distribution identity"):
+        subject.admit_peer(tmp_path, manifest_sha256=digest, identity=IDENTITY, expected_abi="arm64-v8a")
+    value = json.loads((tmp_path / "manifest.json").read_text())
+    value["abi"] = "arm64-v8a"
+    raw = json.dumps(value).encode()
+    (tmp_path / "manifest.json").write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    with pytest.raises(RuntimeError, match="distribution identity"):
+        subject.admit_peer(tmp_path, manifest_sha256=digest, identity=IDENTITY, expected_abi="arm64-v8a")
+    value["target"] = "aarch64-linux-android"
+    raw = json.dumps(value).encode()
+    (tmp_path / "manifest.json").write_bytes(raw)
+    assert subject.admit_peer(tmp_path, manifest_sha256=hashlib.sha256(raw).hexdigest(),
+                              identity=IDENTITY, expected_abi="arm64-v8a")["target"] == "aarch64-linux-android"
+
+
+def test_selected_device_peer_requires_explicit_owned_process_callbacks(tmp_path):
+    calls = []
+    with pytest.raises(ValueError, match="explicit owned launcher"):
+        with subject.production_peer(lambda *args: calls.append(args), {}, adb="adb", child={},
+                                     report_dir=tmp_path, rust_source=tmp_path, bind_ip="127.0.0.1",
+                                     prefix=("-s", "synthetic-phone")):
+            pytest.fail("physical peer must not use the emulator launcher")
+    assert not calls and not list(tmp_path.iterdir())
 
 
 def test_peer_manifest_cannot_be_substituted_or_include_arbitrary_files(tmp_path):
     digest = fixture(tmp_path)
     with pytest.raises(RuntimeError, match="manifest hash"):
-        subject.admit_peer(tmp_path, manifest_sha256="0" * 64, identity=IDENTITY)
+        subject.admit_peer(tmp_path, manifest_sha256="0" * 64, identity=IDENTITY, expected_abi="x86_64")
     value = json.loads((tmp_path / "manifest.json").read_text())
     value["files"]["../outside"] = value["files"]["emulebb-rust"]
     raw = json.dumps(value).encode()
     (tmp_path / "manifest.json").write_bytes(raw)
     with pytest.raises(RuntimeError, match="distribution identity"):
-        subject.admit_peer(tmp_path, manifest_sha256=hashlib.sha256(raw).hexdigest(), identity=IDENTITY)
+        subject.admit_peer(tmp_path, manifest_sha256=hashlib.sha256(raw).hexdigest(), identity=IDENTITY, expected_abi="x86_64")
 
 
 @pytest.mark.parametrize("admitted", [False, True])
@@ -58,7 +87,7 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
     monkeypatch.setattr(android_emulator, "_start_production_daemon", lambda *args: (process, capture))
     monkeypatch.setattr(android_emulator, "_stop_group", lambda value: calls.append("stop-wrapper"))
     monkeypatch.setattr(android_emulator, "_rest_app", lambda *args: (200, {}))
-    monkeypatch.setattr(android_emulator, "_daemon_identity", lambda *args: ("start", "hash"))
+    monkeypatch.setattr(android_emulator, "_daemon_identity", lambda *args, **kwargs: ("start", "hash"))
 
     def fail_identity(*args):
         raise RuntimeError("source identity differs")
@@ -69,17 +98,21 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
         calls.append(args)
         if "sha256sum" in args:
             return "a" * 64 + " " + args[-1]
+        if "readlink" in args:
+            return args[-1]
         if "forward" in args and "--remove" not in args:
             if not admitted:
                 raise ValueError("private forward failed")
             return "22222"
         if "cat" in args:
+            if not admitted:
+                raise ValueError("private admission failed")
             return "1234"
         return ""
 
     peer = {"files": {"emulebb-rust": {"sha256": "a" * 64}}, "payloadRoot": str(tmp_path),
             "buildIdentity": IDENTITY}
-    with pytest.raises(RuntimeError if admitted else ValueError, match="source identity|private forward"):
+    with pytest.raises(RuntimeError if admitted else ValueError, match="source identity|private admission"):
         with subject.production_peer(command, peer, adb="adb", child={}, report_dir=tmp_path,
                                      rust_source=tmp_path, bind_ip="192.0.2.20"):
             pytest.fail("a failed peer must not yield")

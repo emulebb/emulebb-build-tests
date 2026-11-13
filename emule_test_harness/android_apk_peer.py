@@ -45,15 +45,15 @@ def start_local_listener(base: str, key: str) -> None:
         raise RuntimeError("APK transfer peer did not accept its eD2K start operation")
 
 
-def guest_sha256(command, path: str) -> str:
+def guest_sha256(command, path: str, *, prefix=PREFIX) -> str:
     """Preserve spaces/metacharacters through ADB shell's extra command parser."""
-    result = command(*PREFIX, "shell", "sha256sum", shlex.quote(path)).split()
+    result = command(*prefix, "shell", "sha256sum", shlex.quote(path)).split()
     if not result or re.fullmatch(r"[0-9a-f]{64}", result[0]) is None:
         raise RuntimeError("Owned guest file has no valid SHA-256 result")
     return result[0]
 
 
-def admit_peer(root: Path, *, manifest_sha256: str, identity: dict) -> dict:
+def admit_peer(root: Path, *, manifest_sha256: str, identity: dict, expected_abi: str) -> dict:
     """Admit only a producer-verified native archive's exact CLI/runtime subset."""
     if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
         raise ValueError("APK peer requires an immutable manifest hash")
@@ -64,7 +64,9 @@ def admit_peer(root: Path, *, manifest_sha256: str, identity: dict) -> dict:
     if hashlib.sha256(raw).hexdigest() != manifest_sha256:
         raise RuntimeError("APK peer manifest hash differs")
     value = json.loads(raw)
+    targets = {"arm64-v8a": "aarch64-linux-android", "x86_64": "x86_64-linux-android"}
     if (not isinstance(value, dict) or value.get("schema") != "emulebb.android.apk-peer/1"
+            or expected_abi not in targets or value.get("abi") != expected_abi or value.get("target") != targets[expected_abi]
             or value.get("sourceRevision") != identity["sourceRevision"] or value.get("buildIdentity") != identity
             or not isinstance(value.get("files"), dict) or "emulebb-rust" not in value["files"]
             or set(value["files"]) - {"emulebb-rust", "libc++_shared.so"}):
@@ -83,41 +85,63 @@ def admit_peer(root: Path, *, manifest_sha256: str, identity: dict) -> dict:
 
 
 @contextmanager
-def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: Path, rust_source: Path, bind_ip: str):
+def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: Path, rust_source: Path, bind_ip: str,
+                    prefix=PREFIX, bind_interface: str | None = None, spawn_daemon=None, stop_client=None):
     """Own a disjoint CLI profile and verify kernel process identity before signals."""
     from .android_emulator import _app_identity, _daemon_identity, _rest_app, _start_production_daemon, _stop_group
     from .rust_client import write_rust_profile
+
+    if prefix != PREFIX and (spawn_daemon is None or stop_client is None):
+        raise ValueError("Selected-device peer requires its explicit owned launcher and client cleanup")
+    spawn = spawn_daemon or _start_production_daemon
+    stop = stop_client or _stop_group
 
     home = "/data/local/tmp/emulebb-apk-peer-" + uuid4().hex
     profile = report_dir / "peer-profile"
     write_rust_profile(profile, rust_repo=rust_source, incoming_dir=Path(home) / "incoming",
                        rest_addr="127.0.0.1", rest_port=20027, api_key=PEER_KEY,
-                       auto_connect=False, network_kademlia=False, p2p_bind_ip=bind_ip,
+                       auto_connect=False, network_kademlia=False,
+                       p2p_bind_ip=bind_ip if bind_interface is None else None, p2p_bind_interface=bind_interface,
                        ed2k_port=20029, kad_port=20030, server_endpoint="127.0.0.1:20031",
                        nat_enabled=False, replace_servers=True, initial_shared_directory_reload=False,
                        local_only_discovery=True)
-    command(*PREFIX, "shell", "mkdir", "-m", "700", home)
+    command(*prefix, "shell", "mkdir", "-m", "700", home)
     process = capture = None
     forward = pid = identity = None
     executable = home + "/emulebb-rust"
     digest = peer["files"]["emulebb-rust"]["sha256"]
     try:
-        command(*PREFIX, "push", str(profile) + "/.", home, timeout=60)
-        command(*PREFIX, "shell", "chmod", "600", home + "/emulebb-rust-settings.toml")
+        command(*prefix, "push", str(profile) + "/.", home, timeout=60)
+        command(*prefix, "shell", "chmod", "600", home + "/emulebb-rust-settings.toml")
         for name, record in peer["files"].items():
             target = home + "/" + name
-            command(*PREFIX, "push", str(Path(peer["payloadRoot"]) / name), target, timeout=120)
-            if command(*PREFIX, "shell", "sha256sum", target).split() != [record["sha256"], target]:
+            command(*prefix, "push", str(Path(peer["payloadRoot"]) / name), target, timeout=120)
+            if command(*prefix, "shell", "sha256sum", target).split() != [record["sha256"], target]:
                 raise RuntimeError("Guest APK peer file differs from its source-bound bytes")
-            command(*PREFIX, "shell", "chmod", "500", target)
-        process, capture = _start_production_daemon(adb, child, executable, home, home, report_dir)
-        raw_forward = command(*PREFIX, "forward", "--no-rebind", "tcp:0", "tcp:20027")
+            command(*prefix, "shell", "chmod", "500", target)
+        process, capture = spawn(adb, child, executable, home, home, report_dir)
+        # Admit the real process immediately: a physical phone has no disposable
+        # outer guest teardown to clean up an unverified long-running peer.
+        deadline = time.monotonic() + 10
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError("APK peer exited before guest process admission")
+            pid = command(*prefix, "shell", "cat", home + "/owned-daemon.pid", check=False)
+            try:
+                identity = _daemon_identity(command, pid, executable, digest, home, prefix=prefix)
+                break
+            except RuntimeError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("APK peer guest process admission timed out") from None
+                time.sleep(0.25)
+        raw_forward = command(*prefix, "forward", "--no-rebind", "tcp:0", "tcp:20027")
         if re.fullmatch(r"[1-9][0-9]*", raw_forward) is None or int(raw_forward) > 65535:
             raise RuntimeError("APK peer must allocate a private REST forward")
         forward = int(raw_forward)
         deadline = time.monotonic() + 90
         while True:
-            capture.raise_if_failed()
+            if capture is not None:
+                capture.raise_if_failed()
             if process.poll() is not None:
                 raise RuntimeError("APK peer exited before REST readiness")
             try:
@@ -125,14 +149,14 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
             except (OSError, TimeoutError):
                 status = None
             if status == 200:
-                pid = command(*PREFIX, "shell", "cat", home + "/owned-daemon.pid")
-                identity = _daemon_identity(command, pid, executable, digest, home)
                 _app_identity(document, peer["buildIdentity"])
                 break
             if time.monotonic() >= deadline:
                 raise RuntimeError("APK peer REST readiness timed out")
             time.sleep(0.5)
         yield home, forward
+        if _daemon_identity(command, pid, executable, digest, home, prefix=prefix) != identity:
+            raise RuntimeError("APK peer process identity changed before graceful shutdown")
         request_json(f"http://127.0.0.1:{forward}", "POST", "/api/v1/app/shutdown", PEER_KEY, {"confirmShutdown": True})
         if process.wait(timeout=30) != 0:
             raise RuntimeError("APK qualification peer did not exit gracefully")
@@ -142,23 +166,37 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
         try:
             if process is not None and process.poll() is None:
                 if identity is None:
-                    # The outer owned guest teardown is the fail-safe until the
-                    # process is admitted. Retain its files; do not claim cleanup.
+                    # No guest signal is safe before admission. Retain its files
+                    # and emit failure evidence rather than claim cleanup.
                     raise RuntimeError("APK peer failed before guest process admission")
-                if _daemon_identity(command, pid, executable, digest, home) != identity:
+                if _daemon_identity(command, pid, executable, digest, home, prefix=prefix) != identity:
                     raise RuntimeError("APK peer process identity changed; refusing to signal it")
-                command(*PREFIX, "shell", "kill", "-TERM", pid)
+                command(*prefix, "shell", "kill", "-TERM", pid)
                 process.wait(timeout=30)
         except Exception as error:
             cleanup_errors.append(type(error).__name__)
         finally:
-            actions = [lambda: _stop_group(process)]
+            actions = [lambda: stop(process)] if process is not None else []
             if capture is not None:
                 actions.extend([capture.close, capture.raise_if_failed])
             if forward is not None:
-                actions.append(lambda: command(*PREFIX, "forward", "--remove", "tcp:" + str(forward)))
+                def remove_forward():
+                    rows = [row.split() for row in command(*prefix, "forward", "--list").splitlines()]
+                    existing = [row for row in rows if len(row) == 3 and row[1] == f"tcp:{forward}"]
+                    if existing and existing != [[prefix[1], f"tcp:{forward}", "tcp:20027"]]:
+                        raise RuntimeError("APK peer forward ownership changed")
+                    if existing:
+                        command(*prefix, "forward", "--remove", "tcp:" + str(forward))
+                actions.append(remove_forward)
             if not cleanup_errors:
-                actions.append(lambda: command(*PREFIX, "shell", "rm", "-rf", home))
+                def remove_home():
+                    if command(*prefix, "shell", "readlink", "-f", home) != home:
+                        raise RuntimeError("APK peer home was redirected; refusing cleanup")
+                    command(*prefix, "shell", "test", "!", "-L", home)
+                    if guest_sha256(command, executable, prefix=prefix) != digest:
+                        raise RuntimeError("APK peer bytes changed before owned cleanup")
+                    command(*prefix, "shell", "rm", "-rf", home)
+                actions.append(remove_home)
             for action in actions:
                 try:
                     action()
