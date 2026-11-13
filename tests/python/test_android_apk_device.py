@@ -118,12 +118,14 @@ def test_diagnostics_share_never_dismisses_or_selects_an_unproved_chooser(monkey
         document = "topResumedActivity" + document.partition("topResumedActivity")[2]
     def shell(*args):
         actions.append(args)
+        if args == ("cmd", "package", "resolve-activity", "--brief", "--user", "0", "-a", "android.intent.action.CHOOSER"):
+            return "com.android.intentresolver/.ChooserActivity"
         assert args == ("dumpsys", "activity", "activities"), "never touch an unproved recipient UI"
         return document + " private-recipient@example.invalid " + KEY
     ui = SimpleNamespace(click=lambda name: actions.append(("click", name)), shell=shell)
     with pytest.raises(RuntimeError, match="owned Android system chooser") as error:
         subject._share_diagnostics_without_sending(ui)
-    assert actions[0] == ("click", "share_diagnostics")
+    assert ("click", "share_diagnostics") in actions
     assert KEY not in str(error.value) and "recipient@" not in str(error.value)
 
 
@@ -132,7 +134,7 @@ def test_system_chooser_matches_current_aosp_and_observed_phone_history_whitespa
     document = (prefix + "0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
         " launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
         "topResumedActivity=ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n")
-    assert subject._owned_system_chooser(document)
+    assert subject._owned_system_chooser(document, resolved_component="com.android.intentresolver/.ChooserActivity")
 
 
 @pytest.mark.parametrize("resumed", ["def456 u0 com.android.intentresolver/.ChooserActivity", "def456 u0 other.application/.Activity"])
@@ -141,7 +143,42 @@ def test_chooser_origin_from_a_nonresumed_history_record_is_never_accepted(resum
         " launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
         "* Hist  #1: ActivityRecord{" + resumed + " t13}\n launchedFromPackage=other.application\n"
         "topResumedActivity=ActivityRecord{" + resumed + " t13}\n")
-    assert not subject._owned_system_chooser(document)
+    assert not subject._owned_system_chooser(document, resolved_component="com.android.intentresolver/.ChooserActivity")
+
+
+@pytest.mark.parametrize("component", ["com.android.intentresolver/.ChooserActivityLauncher",
+    "com.android.intentresolver/.ChooserActivity", "android/com.android.internal.app.ChooserActivity"])
+def test_share_observer_uses_exact_package_manager_chooser_instead_of_class_suffix(component):
+    calls = []
+    document = ("* Hist  #0: ActivityRecord{abc123 u0 " + component + " t12}\n"
+        " launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
+        "topResumedActivity=ActivityRecord{abc123 u0 " + component + " t12}\n")
+    def shell(*args):
+        calls.append(args)
+        if args[:3] == ("cmd", "package", "resolve-activity"):
+            assert args[3:] == ("--brief", "--user", "0", "-a", "android.intent.action.CHOOSER")
+            return component
+        if args == ("dumpsys", "activity", "activities"):
+            return document
+        assert args == ("input", "keyevent", "KEYCODE_BACK")
+        return ""
+    ui = SimpleNamespace(shell=shell, click=lambda name: calls.append(("click", name)),
+        wait_state=lambda state, **kwargs: calls.append(("state", state)))
+    result = subject._share_diagnostics_without_sending(ui)
+    assert result["recipientSelected"] is False and result["dismissed"] is True
+    assert calls[-2:] == [("input", "keyevent", "KEYCODE_BACK"), ("state", "Stopped")]
+    assert not subject._owned_system_chooser(document, resolved_component=component + "Other")
+    assert not subject._owned_system_chooser(document.replace("launchedFromPackage=org.emulebb.android",
+        "launchedFromPackage=other.application"), resolved_component=component)
+
+
+@pytest.mark.parametrize("resolved", ["other.application/.ChooserActivityLauncher", "No activity found", "", "android/invalid class"])
+def test_untrusted_or_unresolved_platform_chooser_never_opens_share_or_sends_input(resolved):
+    ui = SimpleNamespace(shell=lambda *args: resolved,
+        click=lambda name: pytest.fail("untrusted chooser must not open"))
+    with pytest.raises(RuntimeError, match="trusted platform package"):
+        subject._share_diagnostics_without_sending(ui)
+    assert not subject._owned_system_chooser("", resolved_component=resolved)
 
 
 def payload():
@@ -221,11 +258,13 @@ class Phone:
             return "MANAGE_EXTERNAL_STORAGE: " + ("allow" if self.permission else "default")
         if args[:4] == ("shell", "cmd", "package", "check-permission"):
             raise RuntimeError("Unknown command: check-permission")
+        if args[:4] == ("shell", "cmd", "package", "resolve-activity"):
+            return "com.android.intentresolver/.ChooserActivityLauncher"
         if args[:4] == ("shell", "dumpsys", "activity", "activities"):
             if self.screen == "chooser":
-                return ("* Hist  #0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
+                return ("* Hist  #0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivityLauncher t12}\n"
                         "  launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
-                        "topResumedActivity=ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n")
+                        "topResumedActivity=ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivityLauncher t12}\n")
             package = "com.android.settings" if self.screen == "files" else "com.google.android.permissioncontroller"
             return "mResumedActivity: " + package + "/.PermissionActivity"
         if args[:4] == ("shell", "dumpsys", "activity", "services"):

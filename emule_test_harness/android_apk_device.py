@@ -47,10 +47,24 @@ def _visible_app_version(ui: ProductionUi, version: str) -> dict:
             "displayBounds": [0, 0, width, height], "whollyVisible": True}
 
 
-def _owned_system_chooser(document: str) -> bool:
+def _trusted_chooser_component(component: str) -> bool:
+    return re.fullmatch(r"(?:android|com\.android\.intentresolver)/[\w.$]+", component) is not None
+
+
+def _resolve_system_chooser(ui: ProductionUi) -> str:
+    document = ui.shell("cmd", "package", "resolve-activity", "--brief", "--user", "0", "-a", "android.intent.action.CHOOSER")
+    component = document.splitlines()[-1] if document.splitlines() else ""
+    if not _trusted_chooser_component(component):
+        raise RuntimeError("Android chooser resolution did not select a trusted platform package")
+    return component
+
+
+def _owned_system_chooser(document: str, *, resolved_component: str) -> bool:
+    if not _trusted_chooser_component(resolved_component):
+        return False
     resumed = re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*ActivityRecord\{([0-9a-f]+) u0 "
-                        r"((?:android|com\.android\.intentresolver)/[\w.$]*ChooserActivity)\b", document)
-    if resumed is None:
+                        r"([^\s}]+)", document)
+    if resumed is None or resumed[2] != resolved_component:
         return False
     records = list(re.finditer(r"(?m)^\s*(?:\*\s+)?Hist\s+#\d+:\s+ActivityRecord\{([0-9a-f]+) u0 ([^\s}]+)[^\n]*", document))
     for index, record in enumerate(records):
@@ -61,9 +75,10 @@ def _owned_system_chooser(document: str) -> bool:
 
 
 def _share_diagnostics_without_sending(ui: ProductionUi) -> dict:
+    component = _resolve_system_chooser(ui)
     ui.click("share_diagnostics")
     deadline = time.monotonic() + 30
-    while not _owned_system_chooser(ui.shell("dumpsys", "activity", "activities")):
+    while not _owned_system_chooser(ui.shell("dumpsys", "activity", "activities"), resolved_component=component):
         if time.monotonic() >= deadline:
             raise RuntimeError("Diagnostic ZIP did not open its owned Android system chooser")
         time.sleep(0.5)
