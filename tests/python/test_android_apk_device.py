@@ -57,7 +57,13 @@ class Phone:
         if args[:3] == ("shell", "pm", "path"):
             return "package:/data/app/synthetic/base.apk" if self.installed else ""
         if args[:3] == ("shell", "dumpsys", "package"):
-            return "Package [org.emulebb.android]\nversionCode=42\nversionName=0.1.0-test" if self.installed or self.retained else "Unable to find package"
+            return ("  Package [org.emulebb.android] (synthetic):\n"
+                    "    versionCode=42\n    versionName=0.1.0-test\n"
+                    "    User 0: installed=true hidden=false stopped=false\n"
+                    "      runtime permissions:\n"
+                    "        android.permission.POST_NOTIFICATIONS: granted=" + str(self.notifications).lower() + ", flags=[ USER_SET ]\n"
+                    "        android.permission.ACCESS_LOCAL_NETWORK: granted=" + str(self.lan).lower() + ", flags=[ USER_SET ]\n"
+                    ) if self.installed or self.retained else "Unable to find package"
         if args[:2] == ("shell", "sha256sum"):
             return self.checksum + " " + args[2]
         if args[:1] == ("install",):
@@ -66,8 +72,7 @@ class Phone:
         if args[:3] == ("shell", "appops", "get"):
             return "MANAGE_EXTERNAL_STORAGE: " + ("allow" if self.permission else "default")
         if args[:4] == ("shell", "cmd", "package", "check-permission"):
-            allowed = self.notifications if args[4].endswith("POST_NOTIFICATIONS") else self.lan
-            return "granted" if allowed else "denied"
+            raise RuntimeError("Unknown command: check-permission")
         if args[:4] == ("shell", "dumpsys", "activity", "activities"):
             package = "com.android.settings" if self.screen == "files" else "com.google.android.permissioncontroller"
             return "mResumedActivity: " + package + "/.PermissionActivity"
@@ -489,6 +494,33 @@ def test_readonly_adb_version_protocol_is_bounded(monkeypatch, response):
         with pytest.raises(RuntimeError):
             subject.existing_adb_server_version(5037)
     assert sent == [b"000chost:version"]
+
+
+@pytest.mark.parametrize("granted", [True, False])
+def test_runtime_permission_dump_is_scoped_to_exact_package_and_primary_user(granted):
+    permission = "android.permission.POST_NOTIFICATIONS"
+    document = ("Packages:\n  Package [org.emulebb.other] (other):\n"
+        "    User 0: installed=true\n      runtime permissions:\n"
+        f"        {permission}: granted=true, flags=[ USER_SET ]\n"
+        "  Package [org.emulebb.android] (selected):\n"
+        "    install permissions:\n"
+        f"      {permission}: granted=true\n"
+        "    User 0: ceDataInode=123 installed=true hidden=false stopped=false\n"
+        "      runtime permissions:\n"
+        f"        {permission}: granted={str(granted).lower()}, flags=[ USER_SET|USER_FIXED ]\n"
+        "    User 10: installed=true\n      runtime permissions:\n"
+        f"        {permission}: granted=true, flags=[ USER_SET ]\n")
+    assert subject.runtime_permission_granted(document, permission) is granted
+    assert subject.runtime_permission_granted(document, "android.permission.ACCESS_LOCAL_NETWORK") is False
+
+
+@pytest.mark.parametrize("document", ["Unknown command: check-permission", "",
+    "  Package [org.emulebb.other]:\n    User 0: installed=true\n",
+    "  Package [org.emulebb.android]:\n    User 10: installed=true\n",
+    "  Package [org.emulebb.android]:\n    User 0: installed=false\n"])
+def test_unrelated_or_missing_package_user_is_not_a_permission_grant(document):
+    with pytest.raises(RuntimeError, match="package"):
+        subject.runtime_permission_granted(document, "android.permission.POST_NOTIFICATIONS")
 
 
 def test_ui_failure_metadata_retains_only_resource_ids_flags_and_foreground_package():

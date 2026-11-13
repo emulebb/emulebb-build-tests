@@ -59,14 +59,53 @@ def _ui_failure_metadata(ui: ProductionUi) -> dict:
     return result
 
 
+def runtime_permission_granted(document: str, permission: str) -> bool:
+    """Read only the selected package's User 0 runtime-permission grant record."""
+    if len(document.encode("utf-8")) > 1024**2:
+        raise RuntimeError("Android package permission dump exceeds its bound")
+    lines = document.splitlines()
+
+    def block(start):
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = start + 1
+        while end < len(lines):
+            line = lines[end]
+            if line.strip() and (len(line) - len(line.lstrip()) <= indent
+                                 or re.match(r"\s*Package \[", line)):
+                break
+            end += 1
+        return range(start + 1, end)
+
+    packages = [index for index, line in enumerate(lines)
+                if re.match(r"\s*Package \[" + re.escape(APPLICATION_ID) + r"\](?:\s|$)", line)]
+    if len(packages) != 1:
+        raise RuntimeError("Android permission dump does not identify one selected package")
+    users = [index for index in block(packages[0]) if re.match(r"\s*User 0:(?:\s|$)", lines[index])]
+    if len(users) != 1 or re.search(r"\binstalled=true\b", lines[users[0]]) is None:
+        raise RuntimeError("Android permission dump does not identify the installed primary-user package")
+    sections = [index for index in block(users[0]) if lines[index].strip() == "runtime permissions:"]
+    if not sections:
+        return False
+    if len(sections) != 1:
+        raise RuntimeError("Android package has ambiguous runtime permission sections")
+    matches = []
+    for index in block(sections[0]):
+        match = re.match(r"\s*" + re.escape(permission) + r":\s*granted=(true|false)(?:,|\s|$)", lines[index])
+        if match:
+            matches.append(match[1] == "true")
+    if len(matches) > 1:
+        raise RuntimeError("Android package has ambiguous runtime permission records")
+    return bool(matches and matches[0])
+
+
 def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> dict:
     """Grant only this owned install through app buttons and unambiguous stock UI."""
     def granted(permission):
         if permission == "MANAGE_EXTERNAL_STORAGE":
             return bool(re.search(r"MANAGE_EXTERNAL_STORAGE:\s*allow\b", ui.shell(
                 "appops", "get", "--user", "0", APPLICATION_ID, permission)))
-        return ui.shell("cmd", "package", "check-permission", "android.permission." + permission,
-                        APPLICATION_ID, "0") == "granted"
+        return runtime_permission_granted(ui.shell("dumpsys", "package", APPLICATION_ID),
+                                          "android.permission." + permission)
 
     def foreground(package):
         return bool(re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\b" + re.escape(package) + r"/",
