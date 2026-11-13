@@ -391,7 +391,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                           configuration_receipt: Path | None = None, configuration_receipt_sha256: str | None = None,
                           compatibility_receipt: Path | None = None, compatibility_receipt_sha256: str | None = None,
                           peer_payload: dict | None = None, rust_source: Path | None = None,
-                          peer_launcher=None, peer_client_cleanup=None, probe_local_listeners: bool = False) -> Path:
+                          peer_launcher=None, peer_client_cleanup=None, probe_local_listeners: bool = False,
+                          cleanup_transfer_report: Path | None = None, cleanup_transfer_report_sha256: str | None = None,
+                          cleanup_transfer_fixture_sha256: str | None = None) -> Path:
     """Admit/install or run a bounded owned-phone smoke without resetting user state.
 
     Runtime is limited to a package installed here while previously absent, or a
@@ -399,6 +401,10 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     read-only. Public first-run bootstrap is ordinary app behavior, not isolation.
     """
     admit_production_certificate(payload, expected_cert_sha256=expected_cert_sha256)
+    cleanup_inputs = (cleanup_transfer_report, cleanup_transfer_report_sha256, cleanup_transfer_fixture_sha256)
+    if any(value is not None for value in cleanup_inputs) and (not all(value is not None for value in cleanup_inputs)
+            or not execute or peer_payload is not None or probe_local_listeners or configure_storage):
+        raise ValueError("Owned fixture cleanup requires all three authorities and exclusive owned execution")
     if probe_local_listeners and (not execute or peer_payload is None):
         raise ValueError("Local listener probe requires owned runtime and full admitted peer inputs")
     if peer_payload is not None and (not execute or rust_source is None or not rust_source.is_dir()
@@ -700,6 +706,15 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["phase"] = "physical-process-resources"
         value["processResources"] = _physical_process_resources(port, key)
         passed("physical-process-resources")
+        if cleanup_transfer_report is not None:
+            from .android_apk_cleanup import cleanup_report_fixture
+            value["phase"] = "cleanup-retained-owned-fixture"
+            value["ownedFixtureCleanup"] = cleanup_report_fixture(command, prefix=prefix,
+                retained_report=cleanup_transfer_report, report_sha256=cleanup_transfer_report_sha256,
+                fixture_sha256=cleanup_transfer_fixture_sha256, output_root=output_root,
+                device_hash=device_hash, expected_cert_sha256=expected_cert_sha256,
+                base_url=f"http://127.0.0.1:{port}", api_key=key, report_path=report_dir / "owned-fixture-cleanup.json")
+            passed("retained-owned-fixture-removed")
         if peer_payload is not None:
             from .android_apk_peer import CampaignFailure, probe_local_listeners as listener_probe, transfer_proof
             if peer_payload.get("abi") not in abis or peer_payload.get("buildIdentity") != payload["buildIdentity"]:

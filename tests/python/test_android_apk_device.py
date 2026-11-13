@@ -340,6 +340,28 @@ def test_listener_probe_flag_routes_only_to_control_owner_and_never_claims_trans
     assert "physical-local-listener-control-probe" in {row["name"] for row in value["cases"]}
 
 
+def test_retained_fixture_cleanup_needs_no_peer_and_has_exclusive_hash_authority(tmp_path, monkeypatch):
+    from emule_test_harness import android_apk_cleanup
+    phone = Phone()
+    with pytest.raises(ValueError, match="all three authorities"):
+        run(tmp_path, monkeypatch, phone, execute=True, cleanup_transfer_report=tmp_path)
+    assert not phone.calls
+    calls = []
+
+    def cleanup(command, **kwargs):
+        assert phone.running and kwargs["api_key"] == KEY and kwargs["retained_report"] == tmp_path
+        assert kwargs["report_sha256"] == "d" * 64 and kwargs["fixture_sha256"] == "e" * 64
+        calls.append(kwargs)
+        return {"status": "passed", "settingsChanged": False, "filesRemoved": 1, "directoriesRemoved": 1}
+
+    monkeypatch.setattr(android_apk_cleanup, "cleanup_report_fixture", cleanup)
+    report = run(tmp_path, monkeypatch, phone, execute=True, cleanup_transfer_report=tmp_path,
+        cleanup_transfer_report_sha256="d" * 64, cleanup_transfer_fixture_sha256="e" * 64)
+    value = json.loads(report.read_text())
+    assert value["status"] == value["ownedFixtureCleanup"]["status"] == "passed" and value["transfer"] == "not-run"
+    assert len(calls) == 1 and not phone.running
+
+
 @pytest.mark.parametrize("execute", [False, True])
 @pytest.mark.parametrize("api,page_size", [(34, 4096), (35, 16384), (36, 4096), (37, 16384)])
 def test_absent_install_and_bounded_smoke_preserve_phone_state(tmp_path, monkeypatch, execute, api, page_size):

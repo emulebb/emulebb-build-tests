@@ -17,6 +17,7 @@ from uuid import uuid4
 from .rust_local_ed2k import RustRestFailure, ed2k_link_with_source, publish_shared_tree, request_json
 from .rust_shared_library_fixture import deterministic_payload
 from .android_adb_failure import AdbOperationFailure
+from .android_apk_cleanup import COLLISION_OCCUPANT, remove_owned_fixture
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
@@ -453,7 +454,7 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
     nonce = uuid4().hex
     incoming = "/sdcard/Download/emulebb-apk-proof-" + nonce
     name = "Android Sample.bin"
-    occupant = b"synthetic foreign occupant"
+    occupant = COLLISION_OCCUPANT
     content = deterministic_payload(0, 256 * 1024, generation="android-apk-" + nonce)
     expected_sha = hashlib.sha256(content).hexdigest()
     campaign.record(fixtureOwnership={"nonce": nonce, "payloadSha256": expected_sha,
@@ -568,13 +569,8 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         def remove_fixture():
             if cleanup_errors:
                 return
-            shell("test", "!", "-L", incoming)
-            if shell("readlink", "-f", incoming) != incoming:
-                raise RuntimeError("Owned incoming directory was redirected")
-            if guest_sha256(command, incoming + "/" + name, prefix=prefix) != hashlib.sha256(occupant).hexdigest():
-                raise RuntimeError("Owned collision fixture changed; refusing cleanup")
-            shell("rm", "--", shlex.quote(incoming + "/" + name))
-            shell("rmdir", incoming)
+            remove_owned_fixture(command, prefix=prefix, nonce=nonce,
+                protected_roots=original_roots | {original["daemon"]["incomingDir"]})
         for action_name, action in (("remove-owned-transfer", remove_transfer), ("restore-original-settings", restore_settings),
                                     ("remove-owned-fixture", remove_fixture)):
             campaign.mark("cleanup-" + action_name)

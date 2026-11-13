@@ -40,6 +40,9 @@ def main():
     parser.add_argument("--peer-abi", choices=("arm64-v8a", "x86_64"))
     parser.add_argument("--rust-source", type=Path)
     parser.add_argument("--probe-local-listeners", action="store_true")
+    parser.add_argument("--cleanup-transfer-report", type=Path)
+    parser.add_argument("--cleanup-transfer-report-sha256")
+    parser.add_argument("--cleanup-transfer-fixture-sha256")
     args = parser.parse_args()
     payload = admit_payload(args.apk_payload, args.apk_manifest_name,
                             source_sha=args.apk_source_sha, manifest_sha256=args.apk_manifest_sha256,
@@ -62,7 +65,9 @@ def main():
         compatibility_receipt=args.compatibility_receipt, compatibility_receipt_sha256=args.compatibility_receipt_sha256,
         peer_payload=peer, rust_source=args.rust_source,
         peer_launcher=device.spawn_peer, peer_client_cleanup=device.stop_peer_client,
-        probe_local_listeners=args.probe_local_listeners))
+        probe_local_listeners=args.probe_local_listeners, cleanup_transfer_report=args.cleanup_transfer_report,
+        cleanup_transfer_report_sha256=args.cleanup_transfer_report_sha256,
+        cleanup_transfer_fixture_sha256=args.cleanup_transfer_fixture_sha256))
 
 
 if __name__ == "__main__":

@@ -278,6 +278,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             import shlex
             path = shlex.split(operation[2])[0]
             return hashlib.sha256(guest_files[path]).hexdigest() + " " + path
+        if operation[:3] == ("shell", "ls", "-A"):
+            return "\n".join(path.rsplit("/", 1)[1] for path in guest_files if path.startswith(operation[3] + "/"))
         if operation[:2] == ("shell", "rm"):
             import shlex
             del guest_files[shlex.split(operation[-1])[0]]
