@@ -21,6 +21,31 @@ PREFIX = ("-s", "emulator-5554")
 SUPPORTED_ANDROID_APIS = frozenset({34, 35, 36, 37})
 MIN_SCREEN_OFF_DWELL_SECONDS = 60
 MIN_SCREEN_OFF_SAMPLES = 3
+APK_LIFECYCLE_STAGES = frozenset({
+    "install", "installed-identity", "rest-forward", "initial-start", "initial-wait-running",
+    "initial-authentication", "bundled-webui", "graceful-stop", "notification-denial",
+    "notification-restoration", "all-files-denial", "all-files-revocation",
+    "all-files-restoration-grant", "all-files-restoration-reopen", "all-files-restoration-start",
+    "all-files-restoration-wait-running", "all-files-restoration-authentication",
+    "local-network-revocation", "local-network-restoration", "enable-boot-resume",
+    "enabled-reboot", "enabled-reboot-authentication", "explicit-stop-reboot",
+    "task-manager-stop-reboot", "force-stop-reboot", "restart", "local-transfer",
+    "file-link-intents", "screen-off-doze", "case-coverage",
+    "all-files-access", "notification-permission", "android-api", "local-network-permission",
+    "battery-exemption", "wake-display", "dismiss-keyguard", "launch-main", "wait-stopped",
+    "read-api-key", "validate-api-key", "read-boot-resume", "validate-boot-resume",
+})
+APK_LIFECYCLE_FAILURE_CODES = frozenset({
+    "adb-command-failed", "command-timeout", "device-locked", "app-not-visible",
+    "ui-too-large", "ui-malformed", "ui-ambiguous", "display-size-unavailable",
+    "control-unreachable", "control-disabled", "control-invalid-bounds", "control-unsafe-bounds",
+    "expected-state-not-reached",
+    "invalid-generated-key", "unexpected-boot-default", "listener-still-running",
+    "rest-authentication-failed", "boot-resume-not-retained", "reboot-incomplete",
+    "boot-resume-timeout", "connection-error", "http-error", "other",
+})
+SETUP_SERVICE_PHASES = frozenset({"Stopped", "Starting", "Running", "Stopping", "Failed"})
+SETUP_CONTROL_NAMES = frozenset({"service_status", "api_key", "resume_on_boot"})
 APK_FILE_LINK_CASES = frozenset({
     "os-file-link-resolution", "cold-file-link-without-autostart",
     "pending-and-repeated-intents-without-autostart", "malformed-and-nonfile-intents-rejected",
@@ -136,6 +161,49 @@ class DeviceUiUnavailable(RuntimeError):
         super().__init__("Android device is locked" if reason == "device-locked" else "Production Android app UI is not visible")
 
 
+def _lifecycle_failure(error: Exception, stage: str, observation: dict) -> dict:
+    """Project only fixed lifecycle facts; arbitrary exception/UI text stays in memory."""
+    import subprocess
+    messages = {
+        "Owned Android ADB command failed": "adb-command-failed",
+        "APK UI exceeds its inspection bound": "ui-too-large",
+        "APK UI dump is malformed": "ui-malformed",
+        "APK UI has ambiguous resource controls": "ui-ambiguous",
+        "Cannot determine owned Android display dimensions": "display-size-unavailable",
+        "APK did not reach expected service state: Stopped": "expected-state-not-reached",
+        "APK UI must expose a valid generated API key": "invalid-generated-key",
+        "APK boot resume must initially be disabled": "unexpected-boot-default",
+        "APK Stop left the REST listener running": "listener-still-running",
+        "APK authenticated REST failed": "rest-authentication-failed",
+        "APK boot resume setting was not retained": "boot-resume-not-retained",
+        "APK reboot proof did not observe a fresh unlocked Android boot": "reboot-incomplete",
+        "APK did not resume after an enabled reboot": "boot-resume-timeout",
+    }
+    code = messages.get(str(error), "other")
+    if isinstance(error, DeviceUiUnavailable) and error.reason in {"device-locked", "app-not-visible"}:
+        code = error.reason
+    elif isinstance(error, subprocess.TimeoutExpired):
+        code = "command-timeout"
+    elif isinstance(error, ConnectionError):
+        code = "connection-error"
+    elif isinstance(error, http.client.HTTPException):
+        code = "http-error"
+    else:
+        for state in SETUP_SERVICE_PHASES:
+            if str(error) == "APK did not reach expected service state: " + state:
+                code = "expected-state-not-reached"
+        for name in SETUP_CONTROL_NAMES | {"start_service", "stop_service"}:
+            if str(error) == "APK required control is not reachable: " + name:
+                code = "control-unreachable"
+            elif str(error) == "APK required control remains disabled: " + name:
+                code = "control-disabled"
+            elif str(error) == "APK required control has invalid bounds: " + name:
+                code = "control-invalid-bounds"
+            elif str(error) == "APK required control has no safe visible tap bounds: " + name:
+                code = "control-unsafe-bounds"
+    return {"stage": stage, "code": code, **observation}
+
+
 class ProductionUi:
     """Inspect only the production app UI on one explicitly selected device."""
 
@@ -144,6 +212,7 @@ class ProductionUi:
         self.prefix = tuple(prefix)
         self.path = "/data/local/tmp/emulebb-apk-ui-" + uuid4().hex + ".xml"
         self.last_action = None
+        self.setup_observation = {}
 
     def shell(self, *args):
         return self.command(*self.prefix, "shell", *args)
@@ -155,7 +224,16 @@ class ProductionUi:
         return self.shell("cat", self.path)
 
     def inspect(self):
-        return ui_nodes(self._hierarchy())
+        nodes = ui_nodes(self._hierarchy())
+        # WHY: setup failures precede daemon diagnostics; retain only closed
+        # control flags and service phases, never the visible credential/text.
+        self.setup_observation = {"controls": {
+            name: {"present": name in nodes, "enabled": nodes.get(name, {}).get("enabled") == "true"}
+            for name in sorted(SETUP_CONTROL_NAMES)}}
+        phase = nodes.get("service_status", {}).get("text")
+        if phase in SETUP_SERVICE_PHASES:
+            self.setup_observation["servicePhase"] = phase
+        return nodes
 
     def elements(self):
         """Inspect stock permission UI only in memory, with the same size bound."""
@@ -277,6 +355,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
               "localTransfer": "not-run", "fileLinks": "not-run", "physicalDevice": "not-run"}
     port = None
     installed = False
+    setup_stage = "install"
     ui = ProductionUi(command)
     ui_path = ui.path
     inspect, find, click, wait_state = ui.inspect, ui.find, ui.click, ui.wait_state
@@ -304,11 +383,16 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     def reopen():
         shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
 
-    def prepare_fresh_guest_ui():
+    def prepare_fresh_guest_ui(*, initial=False):
+        nonlocal setup_stage
         # WHY: sys.boot_completed does not imply a visible unlocked display.
         # This owned fresh guest uses normal wake/insecure-keyguard dismissal;
         # secure credential challenges still fail the existing UI admission.
+        if initial:
+            setup_stage = "wake-display"
         shell("input", "keyevent", "KEYCODE_WAKEUP")
+        if initial:
+            setup_stage = "dismiss-keyguard"
         shell("wm", "dismiss-keyguard")
 
     def reboot():
@@ -441,6 +525,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     try:
         command(*PREFIX, "install", "--no-streaming", payload["payloadPath"], timeout=120)
         installed = True
+        setup_stage = "installed-identity"
         package_path = shell("pm", "path", APPLICATION_ID)
         paths = package_path.splitlines()
         if len(paths) != 1 or not paths[0].startswith("package:/data/app/"):
@@ -452,37 +537,55 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             raise RuntimeError("Installed APK versionCode differs from qualified payload")
         result["versionCode"] = int(codes[0])
         passed("installed-apk-identity")
+        setup_stage = "all-files-access"
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
+        setup_stage = "notification-permission"
         shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+        setup_stage = "android-api"
         api = int(shell("getprop", "ro.build.version.sdk"))
         result["androidApiLevel"] = api
         if api >= 37:
+            setup_stage = "local-network-permission"
             shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
+        setup_stage = "battery-exemption"
         shell("dumpsys", "deviceidle", "whitelist", "+" + APPLICATION_ID)
-        prepare_fresh_guest_ui()
+        prepare_fresh_guest_ui(initial=True)
+        setup_stage = "launch-main"
         reopen()
+        setup_stage = "wait-stopped"
         wait_state("Stopped")
+        setup_stage = "read-api-key"
         key = find("api_key", enabled=True).get("text", "")
+        setup_stage = "validate-api-key"
         if len(key) < 32 or not all(33 <= ord(c) <= 126 for c in key):
             raise RuntimeError("APK UI must expose a valid generated API key")
-        if find("resume_on_boot").get("checked") != "false":
+        setup_stage = "read-boot-resume"
+        boot_resume = find("resume_on_boot").get("checked")
+        setup_stage = "validate-boot-resume"
+        if boot_resume != "false":
             raise RuntimeError("APK boot resume must initially be disabled")
         passed("fresh-setup")
+        setup_stage = "rest-forward"
         forward = command(*PREFIX, "forward", "--no-rebind", "tcp:0", "tcp:20017")
         if re.fullmatch(r"[1-9][0-9]*", forward) is None or int(forward) > 65535:
             raise RuntimeError("APK REST forward must allocate a private local port")
         port = int(forward)
+        setup_stage = "initial-start"
         click("start_service")
+        setup_stage = "initial-wait-running"
         wait_state("Running")
+        setup_stage = "initial-authentication"
         if _request(port, "/api/v1/app")[0] != 401:
             raise RuntimeError("APK REST must require authentication")
         authenticated()
         result["runtimeExecution"] = "executed"
         passed("authenticated-source-bound-readiness")
+        setup_stage = "bundled-webui"
         status, body = _request(port, "/")
         if status != 200 or b"<html" not in body.lower():
             raise RuntimeError("APK must serve the bundled WebUI")
         passed("bundled-webui")
+        setup_stage = "graceful-stop"
         click("stop_service")
         wait_state("Stopped")
         assert_listener_stopped()
@@ -490,6 +593,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
 
         # A denied notification grant must not be mistaken for permission to
         # run a foreground service: Android still permits FGS with its notice.
+        setup_stage = "notification-denial"
         shell("pm", "revoke", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
         # Permission/app-op changes can terminate the activity's UID. Return via
         # its real launcher before looking for controls, rather than using stale UI.
@@ -498,12 +602,14 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         wait_state("Running")
         authenticated()
         passed("notification-denied-service-start")
+        setup_stage = "notification-restoration"
         shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
         reopen()
         click("stop_service")
         wait_state("Stopped")
         assert_listener_stopped()
 
+        setup_stage = "all-files-denial"
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
         reopen()
         click("start_service")
@@ -513,22 +619,30 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         click("start_service")
         wait_state("Running")
         authenticated()
+        setup_stage = "all-files-revocation"
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
         reopen()
         assert_listener_stopped()
         passed("all-files-denial-and-runtime-revocation")
+        setup_stage = "all-files-restoration-grant"
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
+        setup_stage = "all-files-restoration-reopen"
         reopen()
+        setup_stage = "all-files-restoration-start"
         click("start_service")
+        setup_stage = "all-files-restoration-wait-running"
         wait_state("Running")
+        setup_stage = "all-files-restoration-authentication"
         authenticated()
 
         if api >= 37:
+            setup_stage = "local-network-revocation"
             shell("pm", "revoke", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
             reopen()
             assert_listener_stopped()
             click("start_service")
             assert_listener_stopped()
+            setup_stage = "local-network-restoration"
             shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
             reopen()
             click("start_service")
@@ -537,10 +651,13 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             passed("android17-local-network-denial-and-revocation")
 
         # Prove actual reboot handling, not an injected fake boot broadcast.
+        setup_stage = "enable-boot-resume"
         click("resume_on_boot")
         if find("resume_on_boot").get("checked") != "true":
             raise RuntimeError("APK boot resume setting was not retained")
+        setup_stage = "enabled-reboot"
         reboot()
+        setup_stage = "enabled-reboot-authentication"
         deadline = time.monotonic() + 90
         while True:
             try:
@@ -551,6 +668,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                     raise RuntimeError("APK did not resume after an enabled reboot") from None
                 time.sleep(1)
         passed("enabled-boot-resume")
+        setup_stage = "explicit-stop-reboot"
         reopen()
         wait_state("Running")
         click("stop_service")
@@ -561,6 +679,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         wait_state("Stopped")
         assert_listener_stopped(quiet_seconds=5)
         passed("explicit-stop-prevents-boot-resume")
+        setup_stage = "task-manager-stop-reboot"
         click("start_service")
         wait_state("Running")
         authenticated()
@@ -572,6 +691,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         wait_state("Stopped")
         assert_listener_stopped(quiet_seconds=5)
         passed("task-manager-stop-prevents-boot-resume")
+        setup_stage = "force-stop-reboot"
         click("start_service")
         wait_state("Running")
         authenticated()
@@ -583,12 +703,14 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         wait_state("Stopped")
         assert_listener_stopped(quiet_seconds=5)
         passed("force-stop-prevents-boot-resume")
+        setup_stage = "restart"
         click("resume_on_boot")
         click("start_service")
         wait_state("Running")
         authenticated()
         passed("restart")
         if peer_payload is not None:
+            setup_stage = "local-transfer"
             from .android_apk_peer import transfer_proof
             if rust_source is None or adb is None or child is None:
                 raise RuntimeError("APK transfer proof requires the owned native peer execution context")
@@ -608,9 +730,11 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 raise RuntimeError("APK transfer did not prove completed delivery restart")
             passed("completed-delivery-survives-restart")
         if qualify_file_links:
+            setup_stage = "file-link-intents"
             file_link_intents()
             passed("file-link-intents-and-webui-confirmation")
         # The foreground service must survive closing its visible shell.
+        setup_stage = "screen-off-doze"
         shell("input", "keyevent", "KEYCODE_HOME")
         shell("input", "keyevent", "KEYCODE_SLEEP")
         shell("dumpsys", "battery", "unplug")
@@ -641,11 +765,16 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             time.sleep(max(0, min(30, dwell - elapsed)))
         passed("screen-off-doze-observation")
         if peer_payload is not None and qualify_file_links:
+            setup_stage = "case-coverage"
             required = required_apk_cases(api)
             if len(cases) != len(required) or {case["name"] for case in cases} != required:
                 raise RuntimeError("APK qualification case coverage differs from its trusted source contract")
         result["status"] = "passed"
         return result
+    except Exception as error:
+        if setup_stage is not None:
+            result["failure"] = _lifecycle_failure(error, setup_stage, ui.setup_observation)
+        raise
     finally:
         active_failure = sys.exc_info()[0] is not None
         cleanup_errors = []

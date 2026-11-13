@@ -541,6 +541,156 @@ def test_install_failure_does_not_claim_execution_and_still_writes_receipt(tmp_p
     assert result["runtimeExecution"] == "not-run"
     assert result["status"] == "failed"
     assert not result["cases"]
+    assert result["failure"] == {"stage": "install", "code": "other"}
+
+
+@pytest.mark.parametrize("arguments,stage", [
+    (("appops", "set", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow"), "all-files-access"),
+    (("pm", "grant", subject.APPLICATION_ID, "android.permission.POST_NOTIFICATIONS"), "notification-permission"),
+    (("getprop", "ro.build.version.sdk"), "android-api"),
+    (("dumpsys", "deviceidle", "whitelist", "+" + subject.APPLICATION_ID), "battery-exemption"),
+    (("input", "keyevent", "KEYCODE_WAKEUP"), "wake-display"),
+    (("wm", "dismiss-keyguard"), "dismiss-keyguard"),
+    (("am", "start", "-W", "-n", subject.APPLICATION_ID + "/.MainActivity"), "launch-main"),
+])
+def test_fresh_setup_command_failure_records_exact_stage_without_private_text(tmp_path, monkeypatch, arguments, stage):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    private = "synthetic-private-command-and-key-value"
+
+    def command(*args, **kwargs):
+        if args[2:] == ("shell", *arguments):
+            raise RuntimeError(private)
+        if args[2:5] == ("shell", "am", "force-stop"):
+            raise RuntimeError("synthetic-private-cleanup-value")
+        return peer.command(*args, **kwargs)
+
+    with pytest.raises(RuntimeError, match=private):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    assert result["failure"] == {"stage": stage, "code": "other"}
+    assert result["runtimeExecution"] == "not-run"
+    assert result["cases"] == [{"name": "installed-apk-identity", "status": "passed"}]
+    assert result["cleanupErrors"] == [{"action": "force-stop", "errorType": "RuntimeError"}]
+    assert "synthetic-private" not in json.dumps(result) and peer.key not in json.dumps(result)
+    assert any(call[2:5] == ("shell", "dumpsys", "battery") for call in peer.calls)
+
+
+@pytest.mark.parametrize("operation", ["grant", "reopen", "start", "wait-running", "authentication"])
+def test_post_revocation_failure_identifies_actual_restoration_operation(tmp_path, monkeypatch, operation):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    grants = [0]
+    private = "synthetic-private-restoration-error"
+    click, wait, request = subject.ProductionUi.click, subject.ProductionUi.wait_state, peer.request
+
+    def fail_if(target):
+        if grants[0] == 3 and operation == target:
+            raise RuntimeError(private)
+
+    def command(*args, **kwargs):
+        if args[2:] == ("shell", "appops", "set", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow"):
+            grants[0] += 1
+            fail_if("grant")
+        if args[2:5] == ("shell", "am", "start"):
+            fail_if("reopen")
+        return peer.command(*args, **kwargs)
+
+    def clicking(ui, name):
+        if name == "start_service":
+            fail_if("start")
+        return click(ui, name)
+
+    def waiting(ui, expected, **kwargs):
+        if expected == "Running":
+            fail_if("wait-running")
+        return wait(ui, expected, **kwargs)
+
+    def requesting(port, path, key=None):
+        if key is not None:
+            fail_if("authentication")
+        return request(port, path, key)
+
+    monkeypatch.setattr(subject.ProductionUi, "click", clicking)
+    monkeypatch.setattr(subject.ProductionUi, "wait_state", waiting)
+    monkeypatch.setattr(subject, "_request", requesting)
+    with pytest.raises(RuntimeError, match=private):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    failure = result["failure"]
+    assert failure["stage"] == "all-files-restoration-" + operation and failure["code"] == "other"
+    assert failure["servicePhase"] in subject.SETUP_SERVICE_PHASES
+    assert set(failure["controls"]) == subject.SETUP_CONTROL_NAMES
+    assert result["runtimeExecution"] == "executed" and len(result["cases"]) == 7
+    assert result["cases"][-1]["name"] == "all-files-denial-and-runtime-revocation"
+    assert private not in json.dumps(result) and peer.key not in json.dumps(result)
+
+
+@pytest.mark.parametrize("phase", ["Stopped", "Starting", "Running", "Stopping", "Failed", "synthetic-private-phase"])
+def test_ui_observation_retains_only_known_controls_booleans_and_service_phase(phase):
+    private = "synthetic-private-key-value"
+    xml = ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + phase + '"/>'
+           '<node resource-id="org.emulebb.android:id/api_key" text="' + private + '" enabled="true"/>'
+           '<node resource-id="org.emulebb.android:id/unknown_private" text="' + private + '"/></hierarchy>')
+    ui = subject.ProductionUi(lambda *args: xml if args[-2:-1] == ("cat",) else "")
+    ui.inspect()
+    observed = ui.setup_observation
+    assert observed["controls"] == {"service_status": {"present": True, "enabled": False},
+                                    "api_key": {"present": True, "enabled": True},
+                                    "resume_on_boot": {"present": False, "enabled": False}}
+    assert observed.get("servicePhase") == (phase if phase in subject.SETUP_SERVICE_PHASES else None)
+    assert "synthetic-private" not in json.dumps(observed)
+
+
+@pytest.mark.parametrize("error,code", [
+    (RuntimeError("Owned Android ADB command failed"), "adb-command-failed"),
+    (subject.DeviceUiUnavailable("device-locked"), "device-locked"),
+    (subject.DeviceUiUnavailable("app-not-visible"), "app-not-visible"),
+    (RuntimeError("APK required control remains disabled: api_key"), "control-disabled"),
+    (RuntimeError("APK required control is not reachable: resume_on_boot"), "control-unreachable"),
+    (RuntimeError("APK did not reach expected service state: Running"), "expected-state-not-reached"),
+    (RuntimeError("APK UI must expose a valid generated API key"), "invalid-generated-key"),
+    (RuntimeError("synthetic-private-error"), "other"),
+])
+def test_lifecycle_failure_codes_are_closed_and_never_copy_exception_text(error, code):
+    result = subject._lifecycle_failure(error, "read-api-key", {})
+    assert result == {"stage": "read-api-key", "code": code}
+    assert code in subject.APK_LIFECYCLE_FAILURE_CODES
+
+
+@pytest.mark.parametrize("fault,stage,code", [
+    ("disabled-key", "read-api-key", "control-disabled"),
+    ("invalid-key", "validate-api-key", "invalid-generated-key"),
+    ("boot-enabled", "validate-boot-resume", "unexpected-boot-default"),
+    ("failed-state", "wait-stopped", "expected-state-not-reached"),
+])
+def test_fresh_ui_admission_failure_keeps_actual_stage_and_safe_observation(tmp_path, monkeypatch, fault, stage, code):
+    import xml.etree.ElementTree as ET
+    peer, admitted = guest(tmp_path, monkeypatch)
+
+    def command(*args, **kwargs):
+        raw = peer.command(*args, **kwargs)
+        if args[2:4] == ("shell", "cat") and "/emulebb-apk-ui-" in args[-1]:
+            root = ET.fromstring(raw)
+            for node in root:
+                name = node.get("resource-id", "").split("/")[-1]
+                if name == "api_key" and fault == "disabled-key":
+                    node.set("enabled", "false")
+                elif name == "api_key" and fault == "invalid-key":
+                    node.set("text", "bad")
+                elif name == "resume_on_boot" and fault == "boot-enabled":
+                    node.set("checked", "true")
+                elif name == "service_status" and fault == "failed-state":
+                    node.set("text", "Failed")
+            return ET.tostring(root, encoding="unicode")
+        return raw
+
+    with pytest.raises(RuntimeError):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    assert result["failure"]["stage"] == stage and result["failure"]["code"] == code
+    assert result["failure"]["servicePhase"] == ("Failed" if fault == "failed-state" else "Stopped")
+    assert result["failure"]["controls"]["api_key"] == {"present": True, "enabled": fault != "disabled-key"}
+    assert result["runtimeExecution"] == "not-run" and len(result["cases"]) == 1
+    assert peer.key not in json.dumps(result)
 
 
 def test_noncanonical_channel_field_cannot_satisfy_source_identity(tmp_path, monkeypatch):
