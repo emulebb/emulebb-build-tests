@@ -81,10 +81,40 @@ class Guest:
         self.calls = []
         self.key = "synthetic-private-key-not-for-receipts"
         self.allow_unauthenticated = False
+        self.files_allowed = True
+        self.local_allowed = True
+        self.desired = False
+        self.boot_enabled = False
+        self.boot_id = 0
+        self.api = 37
+        self.doze_state = "IDLE"
 
     def command(self, *arguments, **kwargs):
         self.calls.append(arguments)
         args = arguments[2:]
+        if args == ("reboot",):
+            self.boot_id += 1
+            self.running = self.desired and self.boot_enabled
+        if args == ("shell", "wm", "size"):
+            return "Physical size: 1080x1920"
+        if args == ("shell", "getprop", "ro.build.version.sdk"):
+            return str(self.api)
+        if args == ("shell", "getprop", "sys.boot_completed"):
+            return "1"
+        if args == ("shell", "cat", "/proc/sys/kernel/random/boot_id"):
+            return str(self.boot_id)
+        if args == ("shell", "dumpsys", "deviceidle", "get", "deep"):
+            return self.doze_state
+        if args == ("shell", "dumpsys", "power"):
+            return "mWakefulness=Asleep"
+        if args[:3] == ("shell", "appops", "set"):
+            self.files_allowed = args[-1] == "allow"
+            if not self.files_allowed:
+                self.running = self.desired = False
+        if args[:3] in (("shell", "pm", "grant"), ("shell", "pm", "revoke")) and args[-1] == "android.permission.ACCESS_LOCAL_NETWORK":
+            self.local_allowed = args[2] == "grant"
+            if not self.local_allowed:
+                self.running = self.desired = False
         if args[:1] == ("forward",) and "--remove" not in args:
             return "12345"
         if args[:3] == ("shell", "pm", "path"):
@@ -94,15 +124,21 @@ class Guest:
         if args[:2] == ("shell", "cat"):
             state = "Running" if self.running else "Stopped"
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + state
-                    + '"/><node resource-id="org.emulebb.android:id/api_key" text="' + self.key
-                    + '"/><node resource-id="org.emulebb.android:id/resume_on_boot" checked="false"/>'
+                    + '"/><node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.key
+                    + '"/><node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" bounds="[400,0][500,100]" checked="'
+                    + str(self.boot_enabled).lower() + '"/>'
                     '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,0][100,100]"/>'
                     '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,0][300,100]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
-            self.running = args[3] == "50"
+            if args[3] == "450":
+                self.boot_enabled = not self.boot_enabled
+            else:
+                self.running = self.desired = args[3] == "50" and self.files_allowed and self.local_allowed
         if args[:3] == ("shell", "am", "force-stop"):
-            self.running = False
+            self.running = self.desired = False
+        if args[:4] == ("shell", "cmd", "activity", "stop-app"):
+            self.running = self.desired = False
         return ""
 
     def request(self, port, path, key=None):
@@ -131,13 +167,22 @@ def guest(tmp_path, monkeypatch):
     return peer, admitted
 
 
-def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize("api", [34, 35, 36, 37])
+def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path, monkeypatch, api):
     peer, admitted = guest(tmp_path, monkeypatch)
+    peer.api = api
     result = subject.exercise(peer.command, admitted, report_dir=tmp_path)
     assert result["status"] == "passed"
-    assert [case["name"] for case in result["cases"]] == [
+    expected = [
         "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness",
-        "bundled-webui", "graceful-stop", "restart", "screen-off-doze-observation"]
+        "bundled-webui", "graceful-stop", "notification-denied-service-start",
+        "all-files-denial-and-runtime-revocation"]
+    if api == 37:
+        expected.append("android17-local-network-denial-and-revocation")
+    expected.extend(["enabled-boot-resume", "explicit-stop-prevents-boot-resume",
+                     "task-manager-stop-prevents-boot-resume", "force-stop-prevents-boot-resume",
+                     "restart", "screen-off-doze-observation"])
+    assert [case["name"] for case in result["cases"]] == expected
     assert result["localTransfer"] == "not-run"
     assert result["physicalDevice"] == "not-run"
     assert result["endurance"]["samples"] == 3
@@ -147,6 +192,62 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     assert any(call[2:4] == ("forward", "--remove") for call in peer.calls)
     for path in (tmp_path / "apk-progress.json", tmp_path / "apk-lifecycle.json"):
         assert peer.key not in path.read_text()
+
+
+def test_successful_force_idle_command_is_not_enough_to_claim_doze(tmp_path, monkeypatch):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    peer.doze_state = "ACTIVE"
+    with pytest.raises(RuntimeError, match="actual deep idle"):
+        subject.exercise(peer.command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    assert result["status"] == "failed"
+    assert "screen-off-doze-observation" not in [case["name"] for case in result["cases"]]
+
+
+def test_scrollable_production_ui_does_not_require_controls_in_one_viewport(tmp_path, monkeypatch):
+    import xml.etree.ElementTree as ET
+    peer, admitted = guest(tmp_path, monkeypatch)
+    viewport = [0]
+
+    def scrolling_command(*args, **kwargs):
+        raw = peer.command(*args, **kwargs)
+        if args[2:5] == ("shell", "input", "swipe"):
+            viewport[0] = 1 if int(args[8]) < int(args[6]) else 0
+        if args[2:4] == ("shell", "cat") and args[4] != "/proc/sys/kernel/random/boot_id":
+            root = ET.fromstring(raw)
+            visible = {"service_status", "api_key"} if viewport[0] == 0 else {"start_service", "stop_service", "resume_on_boot"}
+            for node in list(root):
+                if node.get("resource-id", "").split("/")[-1] not in visible:
+                    root.remove(node)
+            return ET.tostring(root, encoding="unicode")
+        return raw
+
+    result = subject.exercise(scrolling_command, admitted, report_dir=tmp_path)
+    assert result["status"] == "passed"
+    assert any(call[2:5] == ("shell", "input", "swipe") for call in peer.calls)
+
+
+def test_transfer_and_restart_verdicts_use_actual_peer_fixture_result(tmp_path, monkeypatch):
+    from emule_test_harness import android_apk_peer
+    peer, admitted = guest(tmp_path, monkeypatch)
+    calls = []
+    digest = "d" * 64
+    delivered = "/storage/emulated/0/Download/Android Sample (1).bin"
+
+    def transfer(command, payload, **kwargs):
+        assert kwargs["api_key"] == peer.key
+        assert kwargs["apk_port"] == 12345
+        calls.append(payload)
+        return {"status": "passed", "sha256": digest, "deliveredPath": delivered, "collisionPreserved": True}
+
+    monkeypatch.setattr(android_apk_peer, "transfer_proof", transfer)
+    monkeypatch.setattr(android_apk_peer, "guest_sha256", lambda command, path: digest if path == delivered else None)
+    result = subject.exercise(peer.command, admitted, report_dir=tmp_path, peer_payload={"sourceRevision": SOURCE},
+                              rust_source=tmp_path, adb="owned-adb", child={})
+    assert calls == [{"sourceRevision": SOURCE}]
+    assert result["localTransfer"]["status"] == "passed"
+    assert {"local-transfer-and-delivery-collision", "completed-delivery-survives-restart"} <= {case["name"] for case in result["cases"]}
+    assert peer.key not in json.dumps(result)
 
 
 def test_failed_authentication_cleans_up_without_claiming_runtime_success(tmp_path, monkeypatch):

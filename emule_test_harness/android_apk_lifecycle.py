@@ -91,7 +91,9 @@ def _request(port: int, path: str, key: str | None = None) -> tuple[int, bytes]:
         connection.close()
 
 
-def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0) -> dict:
+def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
+             peer_payload: dict | None = None, rust_source: Path | None = None,
+             adb: str | None = None, child: dict | None = None) -> dict:
     """Install and exercise the actual APK through its normal UI and loopback REST.
 
     The caller owns a fresh disposable guest. Long screen-off observation is an
@@ -117,8 +119,38 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0)
         # Never write the UI hierarchy to the host: it contains the visible key.
         return ui_nodes(shell("cat", ui_path))
 
+    def find(name, *, enabled=False):
+        # The lean production shell is scrollable. Never assume controls or
+        # credentials appear in the same accessibility viewport.
+        size = re.findall(r"(\d+)x(\d+)", shell("wm", "size"))
+        if not size:
+            raise RuntimeError("Cannot determine owned Android display dimensions")
+        width, height = map(int, size[-1])
+        deadline = time.monotonic() + 60
+        while True:
+            nodes = inspect()
+            if name in nodes:
+                node = nodes[name]
+                if not enabled or node.get("enabled") == "true":
+                    return node
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("APK required control remains disabled: " + name)
+                time.sleep(1)
+                continue
+            for direction in (1, -1):
+                for _ in range(6):
+                    first, last = (height * 3 // 4, height // 4) if direction == 1 else (height // 4, height * 3 // 4)
+                    shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
+                    nodes = inspect()
+                    if name in nodes:
+                        break
+                if name in nodes:
+                    break
+            if name not in nodes:
+                raise RuntimeError("APK required control is not reachable: " + name)
+
     def click(name):
-        node = inspect().get(name, {})
+        node = find(name, enabled=True)
         bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
         if bounds is None or node.get("enabled") != "true":
             raise RuntimeError("APK required control is missing or disabled: " + name)
@@ -128,12 +160,51 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0)
     def wait_state(expected, timeout=90):
         deadline = time.monotonic() + timeout
         while True:
-            state = inspect().get("service_status", {}).get("text", "")
+            state = find("service_status").get("text", "")
             if state == expected:
                 return
             if state == "Failed" or time.monotonic() >= deadline:
                 raise RuntimeError("APK did not reach expected service state: " + expected)
             time.sleep(1)
+
+    def assert_listener_stopped(quiet_seconds=2):
+        deadline = time.monotonic() + 30
+        quiet_since = None
+        while True:
+            try:
+                _request(port, "/api/v1/app", key)
+            except (OSError, http.client.HTTPException):
+                if quiet_since is None:
+                    quiet_since = time.monotonic()
+                if time.monotonic() - quiet_since >= quiet_seconds:
+                    return
+            else:
+                quiet_since = None
+            if time.monotonic() >= deadline:
+                raise RuntimeError("APK Stop left the REST listener running")
+            time.sleep(1)
+
+    def reopen():
+        shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
+
+    def reboot():
+        previous = shell("cat", "/proc/sys/kernel/random/boot_id")
+        command(*PREFIX, "reboot")
+        deadline = time.monotonic() + 180
+        while True:
+            booted = command(*PREFIX, "shell", "getprop", "sys.boot_completed", check=False)
+            boot_id = command(*PREFIX, "shell", "cat", "/proc/sys/kernel/random/boot_id", check=False)
+            if booted == "1" and boot_id and boot_id != previous:
+                shell("input", "keyevent", "KEYCODE_WAKEUP")
+                shell("wm", "dismiss-keyguard")
+                # ADB forwards are transport-owned and can disappear on reboot.
+                # This private server owns this exact port; never adopt a new one.
+                command(*PREFIX, "forward", "--remove", "tcp:" + str(port), check=False)
+                command(*PREFIX, "forward", "--no-rebind", "tcp:" + str(port), "tcp:20017")
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError("APK reboot proof did not observe a fresh unlocked Android boot")
+            time.sleep(2)
 
     def authenticated():
         from .android_emulator import _app_identity
@@ -157,14 +228,16 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0)
         passed("installed-apk-identity")
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
         shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+        api = int(shell("getprop", "ro.build.version.sdk"))
+        if api >= 37:
+            shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
         shell("dumpsys", "deviceidle", "whitelist", "+" + APPLICATION_ID)
         shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
         wait_state("Stopped")
-        nodes = inspect()
-        key = nodes.get("api_key", {}).get("text", "")
+        key = find("api_key", enabled=True).get("text", "")
         if len(key) < 32 or not all(33 <= ord(c) <= 126 for c in key):
             raise RuntimeError("APK UI must expose a valid generated API key")
-        if nodes.get("resume_on_boot", {}).get("checked") != "false":
+        if find("resume_on_boot").get("checked") != "false":
             raise RuntimeError("APK boot resume must initially be disabled")
         passed("fresh-setup")
         forward = command(*PREFIX, "forward", "--no-rebind", "tcp:0", "tcp:20017")
@@ -184,22 +257,128 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0)
         passed("bundled-webui")
         click("stop_service")
         wait_state("Stopped")
-        try:
-            _request(port, "/api/v1/app", key)
-        except (OSError, http.client.HTTPException):
-            pass
-        else:
-            raise RuntimeError("APK Stop left the REST listener running")
+        assert_listener_stopped()
         passed("graceful-stop")
+
+        # A denied notification grant must not be mistaken for permission to
+        # run a foreground service: Android still permits FGS with its notice.
+        shell("pm", "revoke", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+        click("start_service")
+        wait_state("Running")
+        authenticated()
+        passed("notification-denied-service-start")
+        shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+        click("stop_service")
+        wait_state("Stopped")
+        assert_listener_stopped()
+
+        shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
+        click("start_service")
+        assert_listener_stopped()
+        shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
+        click("start_service")
+        wait_state("Running")
+        authenticated()
+        shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
+        assert_listener_stopped()
+        passed("all-files-denial-and-runtime-revocation")
+        shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
+        reopen()
+        click("start_service")
+        wait_state("Running")
+        authenticated()
+
+        if api >= 37:
+            shell("pm", "revoke", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
+            assert_listener_stopped()
+            reopen()
+            click("start_service")
+            assert_listener_stopped()
+            shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
+            reopen()
+            click("start_service")
+            wait_state("Running")
+            authenticated()
+            passed("android17-local-network-denial-and-revocation")
+
+        # Prove actual reboot handling, not an injected fake boot broadcast.
+        click("resume_on_boot")
+        if find("resume_on_boot").get("checked") != "true":
+            raise RuntimeError("APK boot resume setting was not retained")
+        reboot()
+        deadline = time.monotonic() + 90
+        while True:
+            try:
+                authenticated()
+                break
+            except (OSError, http.client.HTTPException):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("APK did not resume after an enabled reboot") from None
+                time.sleep(1)
+        passed("enabled-boot-resume")
+        reopen()
+        wait_state("Running")
+        click("stop_service")
+        wait_state("Stopped")
+        reboot()
+        assert_listener_stopped(quiet_seconds=5)
+        reopen()
+        wait_state("Stopped")
+        assert_listener_stopped(quiet_seconds=5)
+        passed("explicit-stop-prevents-boot-resume")
+        click("start_service")
+        wait_state("Running")
+        authenticated()
+        shell("cmd", "activity", "stop-app", APPLICATION_ID)
+        assert_listener_stopped()
+        reboot()
+        assert_listener_stopped(quiet_seconds=5)
+        reopen()
+        wait_state("Stopped")
+        assert_listener_stopped(quiet_seconds=5)
+        passed("task-manager-stop-prevents-boot-resume")
+        click("start_service")
+        wait_state("Running")
+        authenticated()
+        shell("am", "force-stop", APPLICATION_ID)
+        assert_listener_stopped()
+        reboot()
+        assert_listener_stopped(quiet_seconds=5)
+        reopen()
+        wait_state("Stopped")
+        assert_listener_stopped(quiet_seconds=5)
+        passed("force-stop-prevents-boot-resume")
+        click("resume_on_boot")
         click("start_service")
         wait_state("Running")
         authenticated()
         passed("restart")
+        if peer_payload is not None:
+            from .android_apk_peer import guest_sha256, transfer_proof
+            if rust_source is None or adb is None or child is None:
+                raise RuntimeError("APK transfer proof requires the owned native peer execution context")
+            result["localTransfer"] = transfer_proof(command, peer_payload, apk_port=port, api_key=key,
+                                                     adb=adb, child=child, report_dir=report_dir, rust_source=rust_source)
+            passed("local-transfer-and-delivery-collision")
+            click("stop_service")
+            wait_state("Stopped")
+            assert_listener_stopped()
+            click("start_service")
+            wait_state("Running")
+            authenticated()
+            delivered = result["localTransfer"]
+            if guest_sha256(command, delivered["deliveredPath"]) != delivered["sha256"]:
+                raise RuntimeError("APK delivered bytes changed across service restart")
+            passed("completed-delivery-survives-restart")
         # The foreground service must survive closing its visible shell.
         shell("input", "keyevent", "KEYCODE_HOME")
         shell("input", "keyevent", "KEYCODE_SLEEP")
         shell("dumpsys", "battery", "unplug")
         shell("dumpsys", "deviceidle", "force-idle")
+        if shell("dumpsys", "deviceidle", "get", "deep") != "IDLE":
+            raise RuntimeError("APK Doze proof did not enter actual deep idle")
+        if re.search(r"mWakefulness=(Asleep|Dozing)\b", shell("dumpsys", "power")) is None:
+            raise RuntimeError("APK screen-off proof did not observe a sleeping device")
         started = time.monotonic()
         dwell = max(60, soak_seconds)
         samples = 0

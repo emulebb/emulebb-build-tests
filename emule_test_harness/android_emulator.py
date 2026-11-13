@@ -559,7 +559,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
                 output_root: Path, report_dir: Path, boot_timeout: float = 300,
                 tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None,
                 apk_source_sha: str | None = None, apk_manifest_sha256: str | None = None,
-                apk_manifest_name: str | None = None, apk_soak_seconds: int = 0) -> Path:
+                apk_manifest_name: str | None = None, apk_soak_seconds: int = 0,
+                apk_peer_manifest_sha256: str | None = None, apk_rust_source: Path | None = None) -> Path:
     """Boot one fresh guest in an isolated container and stop only owned resources."""
     if (platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0
             or not Path("/.dockerenv").is_file() or {name for _, name in socket.if_nameindex()} != {"lo"}):
@@ -584,6 +585,15 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         from .android_apk_lifecycle import admit_payload
         apk_payload = admit_payload(Path("/apk-payload"), apk_manifest_name,
                                     source_sha=apk_source_sha, manifest_sha256=apk_manifest_sha256)
+    peer_payload = None
+    if apk_payload is not None:
+        from .android_apk_peer import admit_peer
+        if apk_peer_manifest_sha256 is None or apk_rust_source is None or not apk_rust_source.is_dir():
+            raise ValueError("APK qualification requires its source-bound native peer and selected Rust source")
+        peer_payload = admit_peer(Path("/apk-peer-payload"), manifest_sha256=apk_peer_manifest_sha256,
+                                  identity=apk_payload["buildIdentity"])
+    elif apk_peer_manifest_sha256 is not None or apk_rust_source is not None:
+        raise ValueError("APK peer inputs require an admitted application payload")
     output_root, sdk_root, image_dir = output_root.resolve(), sdk_root.resolve(), image_dir.resolve()
     if (report_dir.is_symlink() or report_dir.exists() or not report_dir.resolve().is_relative_to(output_root)
             or report_dir.resolve() == output_root or not image_dir.is_relative_to(sdk_root / "system-images")
@@ -692,7 +702,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         if apk_payload is not None:
             from .android_apk_lifecycle import exercise
             value.update(phase="apk-lifecycle", scope="apk-lifecycle")
-            value["apk"] = exercise(command, apk_payload, report_dir=report_dir, soak_seconds=apk_soak_seconds)
+            value["apk"] = exercise(command, apk_payload, report_dir=report_dir, soak_seconds=apk_soak_seconds,
+                                    peer_payload=peer_payload, rust_source=apk_rust_source, adb=adb, child=child)
             value["applicationQualification"] = "apk-lifecycle"
         value["status"] = "passed"
         value["phase"] = "complete"
