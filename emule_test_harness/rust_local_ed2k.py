@@ -21,6 +21,32 @@ class ServerSearchFailure(RuntimeError):
         self.evidence = evidence
 
 
+class RustRestFailure(RuntimeError):
+    """Keep the existing error text plus a closed projection for public receipts."""
+    def __init__(self, message: str, *, status: int, detail: str):
+        super().__init__(message)
+        try:
+            value = json.loads(detail).get("error", {})
+        except (ValueError, AttributeError):
+            value = {}
+        code = value.get("code") if isinstance(value, dict) else None
+        allowed = {"BAD_REQUEST", "INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN"}
+        text = str(value.get("message", "")).lower() if isinstance(value, dict) else ""
+        contexts = (("ed2k network is not configured", "ed2k-not-configured"),
+            ("ed2k network is disabled in settings.core", "ed2k-disabled"),
+            ("ed2k connect requires at least one configured server", "ed2k-no-server"),
+            ("blocked by vpn guard", "vpn-guard-blocked"),
+            ("failed to configure the local ed2k client-udp version", "client-udp-version"),
+            ("failed to initialize kad runtime for ed2k listener", "kad-listener-initialization"),
+            ("failed to bind ed2k tcp listener", "ed2k-listener-bind"),
+            ("nat initial reconcile failed", "nat-initial-reconcile"),
+            ("nat initial reconcile timed out", "nat-initial-timeout"),
+            ("is not assigned to a local interface", "local-bind-interface-missing"),
+            ("server not found", "server-not-found"))
+        self.safe_failure = {"httpStatus": status, "apiCode": code if isinstance(code, str) and code in allowed else "unrecognized",
+                             "coreContext": next((name for marker, name in contexts if marker in text), "unrecognized")}
+
+
 def request_json(
     base_url: str,
     method: str,
@@ -44,9 +70,8 @@ def request_json(
             text = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(
-            f"Rust REST {method} {path} returned HTTP {exc.code}: {detail or exc.reason}"
-        ) from exc
+        raise RustRestFailure(f"Rust REST {method} {path} returned HTTP {exc.code}: {detail or exc.reason}",
+                              status=exc.code, detail=detail) from exc
     data = json.loads(text) if text else {}
     if isinstance(data, dict) and isinstance(data.get("data"), dict):
         return data["data"]

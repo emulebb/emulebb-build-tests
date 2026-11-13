@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--peer-manifest-sha256")
     parser.add_argument("--peer-abi", choices=("arm64-v8a", "x86_64"))
     parser.add_argument("--rust-source", type=Path)
+    parser.add_argument("--probe-local-listeners", action="store_true")
     args = parser.parse_args()
     payload = admit_payload(args.apk_payload, args.apk_manifest_name,
                             source_sha=args.apk_source_sha, manifest_sha256=args.apk_manifest_sha256,
@@ -47,6 +48,8 @@ def main():
     peer_inputs = (args.peer_payload, args.peer_manifest_sha256, args.peer_abi, args.rust_source)
     if any(value is not None for value in peer_inputs) and (not all(value is not None for value in peer_inputs) or not args.execute):
         parser.error("Peer qualification requires --execute and all peer/source inputs")
+    if args.probe_local_listeners and (not args.execute or not all(value is not None for value in peer_inputs)):
+        parser.error("--probe-local-listeners requires --execute and all peer/source inputs")
     peer = None if args.peer_payload is None else admit_peer(args.peer_payload,
         manifest_sha256=args.peer_manifest_sha256, identity=payload["buildIdentity"], expected_abi=args.peer_abi)
     print(probe_physical_device(device.command, payload, serial=args.serial,
@@ -58,7 +61,8 @@ def main():
         configuration_receipt=args.configuration_receipt, configuration_receipt_sha256=args.configuration_receipt_sha256,
         compatibility_receipt=args.compatibility_receipt, compatibility_receipt_sha256=args.compatibility_receipt_sha256,
         peer_payload=peer, rust_source=args.rust_source,
-        peer_launcher=device.spawn_peer, peer_client_cleanup=device.stop_peer_client))
+        peer_launcher=device.spawn_peer, peer_client_cleanup=device.stop_peer_client,
+        probe_local_listeners=args.probe_local_listeners))
 
 
 if __name__ == "__main__":

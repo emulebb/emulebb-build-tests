@@ -14,7 +14,7 @@ import time
 from urllib.parse import quote
 from uuid import uuid4
 
-from .rust_local_ed2k import ed2k_link_with_source, publish_shared_tree, request_json
+from .rust_local_ed2k import RustRestFailure, ed2k_link_with_source, publish_shared_tree, request_json
 from .rust_shared_library_fixture import deterministic_payload
 from .android_adb_failure import AdbOperationFailure
 
@@ -54,7 +54,8 @@ class _Campaign:
         self.value["status"] = "failed"
         self.value.setdefault("failure", {"phase": self.value["phase"],
             "code": self.value["phase"] + "-failed", "errorType": type(error).__name__,
-            **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {})})
+            **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {}),
+            **({"rest": error.safe_failure} if isinstance(error, RustRestFailure) else {})})
         self.save()
 
     def record(self, **values):
@@ -80,23 +81,33 @@ def _server_configuration(base, key):
 @contextmanager
 def local_listener(base: str, key: str, *, fresh_peer=False, campaign=None):
     """Direct listener startup to loopback without replacing operator servers."""
+    role = "peer" if fresh_peer else "app"
+    def stage(name):
+        if campaign is not None:
+            campaign.mark(role + "-listener-" + name)
+    stage("server-inventory")
     before = _server_configuration(base, key)
     existing = [row for row in before if row["address"] == "127.0.0.1" and row["port"] == 20031]
     if existing and not fresh_peer:
+        stage("existing-loopback-endpoint-precondition")
         raise RuntimeError("Qualification loopback endpoint already belongs to the operator")
     name = "Owned APK qualification " + uuid4().hex
     route = "/api/v1/servers/" + quote("127.0.0.1:20031", safe="")
     created = False
     try:
         if not existing:
+            stage("server-create")
             request_json(base, "POST", "/api/v1/servers", key,
                          {"address": "127.0.0.1", "port": 20031, "name": name, "connect": False})
             created = True
         # Directed mode excludes fallback to the preserved public server rows.
         # A real byte transfer below, not this acknowledgement, proves P2P.
+        stage("directed-connect")
         acknowledgement = request_json(base, "POST", route + "/operations/connect", key)
         if acknowledgement.get("operationQueued") is not True:
+            stage("connect-acknowledgement")
             raise RuntimeError("APK transfer peer did not accept its eD2K start operation")
+        stage("ready")
         yield
     except Exception as error:
         if campaign is not None:
@@ -105,12 +116,14 @@ def local_listener(base: str, key: str, *, fresh_peer=False, campaign=None):
     finally:
         if created:
             if campaign is not None:
-                campaign.mark("verify-owned-loopback-server-removal")
+                stage("owned-server-removal-precondition")
             current = _server_configuration(base, key)
             owned = [row for row in current if row["address"] == "127.0.0.1" and row["port"] == 20031]
             if len(owned) != 1 or owned[0]["name"] != name:
                 raise RuntimeError("Qualification server ownership changed; refusing removal")
+            stage("owned-server-remove")
             request_json(base, "DELETE", route, key)
+        stage("server-configuration-restoration")
         if _server_configuration(base, key) != before:
             raise RuntimeError("Qualification altered preexisting server configuration")
 
@@ -327,6 +340,60 @@ def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str
         raise CampaignFailure(campaign.value["failure"]) from None
     campaign.record(status="passed", phase="complete")
     return result
+
+
+def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, adb: str,
+                          child: dict, report_dir: Path, rust_source: Path, restart_service,
+                          prefix=PREFIX, spawn_daemon=None, stop_client=None) -> dict:
+    """Isolate real listener-control rejection without publishing or enqueueing bytes."""
+    campaign = _Campaign(report_dir / "listener-probe.json", peer, prefix)
+    base = f"http://127.0.0.1:{apk_port}"
+    request = lambda method, route: request_json(base, method, route, api_key)
+    app_attempted = False
+    try:
+        original = request("GET", "/api/v1/app/settings")
+        roots = {row["path"] for row in request("GET", "/api/v1/shared-directories")["roots"]}
+        campaign.mark("admit-prior-downloads")
+        if any(row.get("state") != "completed" for row in request("GET", "/api/v1/transfers")["items"]):
+            raise RuntimeError("Listener probe refuses to interrupt unfinished downloads")
+        campaign.mark("admit-network-binding")
+        binding = request("GET", "/api/v1/network")["binding"]
+        address = ipaddress.ip_address(binding["activeConfiguredAddress"])
+        if address.version != 4 or not address.is_private or address.is_loopback or address.is_unspecified:
+            raise RuntimeError("Listener probe requires its actual private IPv4 binding")
+        try:
+            with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
+                    rust_source=rust_source, bind_ip=str(address), prefix=prefix,
+                    bind_interface=binding.get("activeInterfaceId") or None,
+                    spawn_daemon=spawn_daemon, stop_client=stop_client, campaign=campaign) as (_home, peer_port):
+                with local_listener(f"http://127.0.0.1:{peer_port}", PEER_KEY, fresh_peer=True, campaign=campaign):
+                    app_attempted = True
+                    with local_listener(base, api_key, campaign=campaign):
+                        campaign.record(listenerControl={"peer": "acknowledged", "app": "acknowledged"})
+        except Exception as error:
+            campaign.fail(error)
+            raise
+        finally:
+            active_failure = sys.exc_info()[0] is not None
+            if app_attempted:
+                campaign.mark("cleanup-restore-app-listener-state")
+                try:
+                    restart_service()
+                    if (request("GET", "/api/v1/app/settings") != original
+                            or {row["path"] for row in request("GET", "/api/v1/shared-directories")["roots"]} != roots):
+                        raise RuntimeError("Listener probe changed prior configuration")
+                    campaign.cleaned("restore-app-listener-state")
+                except Exception as error:
+                    campaign.fail(error)
+                    campaign.cleaned("restore-app-listener-state", error)
+                    if not active_failure:
+                        raise
+    except Exception as error:
+        campaign.fail(error)
+        campaign.record(phase=campaign.value["failure"]["phase"])
+        raise CampaignFailure(campaign.value["failure"]) from None
+    campaign.record(status="passed", phase="complete")
+    return {"status": "passed", "scope": "listener-control-only", "transfer": "not-run"}
 
 
 def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str,

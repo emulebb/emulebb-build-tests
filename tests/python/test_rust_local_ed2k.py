@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 from pathlib import Path
 
@@ -44,6 +45,20 @@ def test_request_json_includes_http_error_body(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="HTTP 400.*exact failure"):
         rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
+
+
+@pytest.mark.parametrize("code,message,expected", [
+    ("BAD_REQUEST", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
+    ("EMULE_ERROR", "failed to bind eD2k TCP listener on 192.0.2.20:20029", "ed2k-listener-bind"),
+    ("PRIVATE_SECRET", "private operator text", "unrecognized"),
+    (["secret"], "private operator text", "unrecognized"),
+])
+def test_rest_failure_has_closed_status_code_and_core_context(code, message, expected):
+    error = rust_local_ed2k.RustRestFailure("private raw message", status=400,
+        detail=json.dumps({"error": {"code": code, "message": message}}))
+    assert error.safe_failure == {"httpStatus": 400,
+        "apiCode": code if code in ("BAD_REQUEST", "EMULE_ERROR") else "unrecognized", "coreContext": expected}
+    assert "private" not in json.dumps(error.safe_failure) and "192.0.2.20" not in json.dumps(error.safe_failure)
 
 
 def test_wait_for_server_list_metadata_joins_active_server_to_distinct_entity(monkeypatch) -> None:

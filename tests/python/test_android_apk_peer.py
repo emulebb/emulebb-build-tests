@@ -290,9 +290,9 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                      report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
     if failure:
         expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
-                          "path": "verify-delivered-path-and-size", "listener": "directed-local-listener-start",
+                          "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
-                          "known-hash": "peer-shared-file-hash", "server-owner": "verify-owned-loopback-server-removal",
+                          "known-hash": "peer-shared-file-hash", "server-owner": "app-listener-owned-server-removal-precondition",
                           "restore": "cleanup-restore-original-settings"}[failure]
         with pytest.raises(subject.CampaignFailure) as failed:
             subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
@@ -314,3 +314,70 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     if failure == "restore":
         assert json.loads((tmp_path / "transfer-cleanup.json").read_text())["status"] == "failed"
         assert any(path.startswith("/storage/") for path in guest_files), "retain owned files when restoration is unproved"
+
+
+@pytest.mark.parametrize("failure", [None, "peer-connect", "app-create", "app-connect", "existing-app"])
+def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_without_transfer(tmp_path, monkeypatch, failure):
+    from copy import deepcopy
+    calls, restarts = [], []
+    peer_base, app_base = "http://127.0.0.1:22222", "http://127.0.0.1:12345"
+    original = {"daemon": {"incomingDir": "/operator/Incoming"}, "nat": {"enabled": True}}
+    servers = {peer_base: [{"address": "127.0.0.1", "port": 20031, "name": "Fresh peer seed"}],
+               app_base: [{"address": "192.0.2.100", "port": 4661, "name": "Operator"}]}
+    if failure == "existing-app":
+        servers[app_base].append({"address": "127.0.0.1", "port": 20031, "name": "Operator loopback"})
+    before = deepcopy(servers)
+
+    @contextmanager
+    def peer(*args, **kwargs):
+        yield "/unused/owned-peer", 22222
+
+    def request(base, method, route, key, body=None):
+        calls.append((base, method, route))
+        assert route != "/api/v1/transfers" or method == "GET"
+        assert method != "PATCH"
+        if route == "/api/v1/app/settings":
+            return deepcopy(original)
+        if route == "/api/v1/shared-directories":
+            return {"roots": [{"path": "/operator/Shared"}]}
+        if route == "/api/v1/transfers":
+            return {"items": []}
+        if route == "/api/v1/network":
+            return {"binding": {"activeConfiguredAddress": "192.0.2.20"}}
+        if ((failure == "app-create" and base == app_base and route == "/api/v1/servers" and method == "POST")
+                or (failure == "app-connect" and base == app_base and route.endswith("/operations/connect"))
+                or (failure == "peer-connect" and base == peer_base and route.endswith("/operations/connect"))):
+            raise subject.RustRestFailure("raw-private-path-key-endpoint", status=400,
+                detail=json.dumps({"error": {"code": "BAD_REQUEST", "message": "ED2K network is not configured /private/key"}}))
+        if route == "/api/v1/servers":
+            if method == "POST":
+                servers[base].append(deepcopy(body))
+            return {"items": deepcopy(servers[base])}
+        if route.endswith("/operations/connect"):
+            return {"operationQueued": True}
+        if method == "DELETE":
+            assert route == "/api/v1/servers/127.0.0.1%3A20031" and base == app_base
+            servers[base] = [row for row in servers[base] if row["address"] != "127.0.0.1"]
+        return {}
+
+    monkeypatch.setattr(subject, "production_peer", peer)
+    monkeypatch.setattr(subject, "request_json", request)
+    args = dict(apk_port=12345, api_key="operator-secret", adb="adb", child={}, report_dir=tmp_path,
+                rust_source=tmp_path, restart_service=lambda: restarts.append(True))
+    if failure:
+        with pytest.raises(subject.CampaignFailure) as error:
+            subject.probe_local_listeners(lambda *args: pytest.fail("no transfer fixture IO"),
+                                         {"sourceRevision": IDENTITY["sourceRevision"]}, **args)
+        expected = {"peer-connect": "peer-listener-directed-connect", "app-create": "app-listener-server-create",
+                    "app-connect": "app-listener-directed-connect", "existing-app": "app-listener-existing-loopback-endpoint-precondition"}[failure]
+        assert error.value.failure["phase"] == expected
+        if failure != "existing-app":
+            assert error.value.failure["rest"] == {"httpStatus": 400, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-not-configured"}
+    else:
+        result = subject.probe_local_listeners(lambda *args: pytest.fail("no transfer fixture IO"),
+                                              {"sourceRevision": IDENTITY["sourceRevision"]}, **args)
+        assert result == {"status": "passed", "scope": "listener-control-only", "transfer": "not-run"}
+    assert len(restarts) == (0 if failure == "peer-connect" else 1)
+    assert servers == before
+    raw = (tmp_path / "listener-probe.json").read_text()
+    assert "operator-secret" not in raw and "/private/key" not in raw and "192.0.2.20" not in raw

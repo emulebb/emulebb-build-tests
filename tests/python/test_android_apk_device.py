@@ -315,6 +315,31 @@ def test_transfer_primary_stage_survives_restart_phase_updates_and_normal_stop_c
     assert not phone.running and KEY not in report and SERIAL not in report
 
 
+def test_listener_probe_flag_routes_only_to_control_owner_and_never_claims_transfer(tmp_path, monkeypatch):
+    from emule_test_harness import android_apk_peer
+    phone = Phone()
+    calls = []
+    with pytest.raises(ValueError, match="full admitted peer inputs"):
+        run(tmp_path, monkeypatch, phone, execute=True, probe_local_listeners=True)
+    assert not phone.calls
+
+    def probe(command, peer, **kwargs):
+        assert phone.running
+        calls.append(peer)
+        kwargs["restart_service"]()
+        return {"status": "passed", "scope": "listener-control-only", "transfer": "not-run"}
+
+    monkeypatch.setattr(android_apk_peer, "probe_local_listeners", probe)
+    monkeypatch.setattr(android_apk_peer, "transfer_proof", lambda *args, **kwargs: pytest.fail("probe must not enqueue transfer"))
+    peer = {"abi": "arm64-v8a", "buildIdentity": payload()["buildIdentity"]}
+    report = run(tmp_path, monkeypatch, phone, execute=True, probe_local_listeners=True,
+        peer_payload=peer, rust_source=tmp_path, peer_launcher=object(), peer_client_cleanup=object())
+    value = json.loads(report.read_text())
+    assert value["status"] == value["listenerProbe"]["status"] == "passed" and value["transfer"] == "not-run"
+    assert calls == [peer] and not phone.running
+    assert "physical-local-listener-control-probe" in {row["name"] for row in value["cases"]}
+
+
 @pytest.mark.parametrize("execute", [False, True])
 @pytest.mark.parametrize("api,page_size", [(34, 4096), (35, 16384), (36, 4096), (37, 16384)])
 def test_absent_install_and_bounded_smoke_preserve_phone_state(tmp_path, monkeypatch, execute, api, page_size):
