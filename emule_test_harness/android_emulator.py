@@ -592,6 +592,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             raise ValueError("APK qualification requires its source-bound native peer and selected Rust source")
         peer_payload = admit_peer(Path("/apk-peer-payload"), manifest_sha256=apk_peer_manifest_sha256,
                                   identity=apk_payload["buildIdentity"])
+        from .rust_webui_live_proof import require_file_link_browser
+        require_file_link_browser()
     elif apk_peer_manifest_sha256 is not None or apk_rust_source is not None:
         raise ValueError("APK peer inputs require an admitted application payload")
     output_root, sdk_root, image_dir = output_root.resolve(), sdk_root.resolve(), image_dir.resolve()
@@ -703,7 +705,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             from .android_apk_lifecycle import exercise
             value.update(phase="apk-lifecycle", scope="apk-lifecycle")
             value["apk"] = exercise(command, apk_payload, report_dir=report_dir, soak_seconds=apk_soak_seconds,
-                                    peer_payload=peer_payload, rust_source=apk_rust_source, adb=adb, child=child)
+                                    peer_payload=peer_payload, rust_source=apk_rust_source, adb=adb, child=child,
+                                    qualify_file_links=True)
             value["applicationQualification"] = "apk-lifecycle"
         value["status"] = "passed"
         value["phase"] = "complete"

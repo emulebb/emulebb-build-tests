@@ -88,10 +88,29 @@ class Guest:
         self.boot_id = 0
         self.api = 37
         self.doze_state = "IDLE"
+        self.pending_link = ""
+        self.pending_error = ""
+        self.browser = True
+        self.intent_autostart = False
+        self.accept_invalid = False
 
     def command(self, *arguments, **kwargs):
         self.calls.append(arguments)
         args = arguments[2:]
+        if args[:4] == ("shell", "cmd", "package", "resolve-activity"):
+            if "ed2k:" in args[-1]:
+                return subject.APPLICATION_ID + "/.MainActivity"
+            return "com.android.browser/.MainActivity" if self.browser else "No activity found"
+        if args[:4] == ("shell", "dumpsys", "activity", "activities"):
+            return "mResumedActivity: com.android.browser/.MainActivity"
+        if args[:3] == ("shell", "am", "start") and "-d" in args:
+            import shlex
+            link = shlex.split(args[args.index("-d") + 1])[0]
+            valid = "00112233445566778899aabbccddeeff" in link
+            self.pending_link = link if valid or self.accept_invalid else ""
+            self.pending_error = "" if self.pending_link else "Unsupported or malformed eD2K file link"
+            if self.intent_autostart:
+                self.running = True
         if args == ("reboot",):
             self.boot_id += 1
             self.running = self.desired and self.boot_enabled
@@ -127,12 +146,17 @@ class Guest:
                     + '"/><node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.key
                     + '"/><node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" bounds="[400,0][500,100]" checked="'
                     + str(self.boot_enabled).lower() + '"/>'
+                    '<node resource-id="org.emulebb.android:id/pending_link" text="' + self.pending_link + '"/>'
+                    '<node resource-id="org.emulebb.android:id/pending_link_error" text="' + self.pending_error + '"/>'
+                    '<node resource-id="org.emulebb.android:id/open_webui" enabled="true" bounds="[600,0][700,100]"/>'
                     '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,0][100,100]"/>'
                     '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,0][300,100]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
             if args[3] == "450":
                 self.boot_enabled = not self.boot_enabled
+            elif args[3] == "650":
+                self.pending_link = ""
             else:
                 self.running = self.desired = args[3] == "50" and self.files_allowed and self.local_allowed
         if args[:3] == ("shell", "am", "force-stop"):
@@ -249,6 +273,48 @@ def test_permission_changes_that_close_activity_require_real_launcher_reopen(tmp
 
     result = subject.exercise(command, admitted, report_dir=tmp_path)
     assert result["status"] == "passed" and len(closures) >= 8
+
+
+@pytest.mark.parametrize("failure", [None, "autostart", "invalid", "browser", "enqueue", "browser-proof"])
+def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmation(tmp_path, monkeypatch, failure):
+    from emule_test_harness import rust_local_ed2k, rust_webui_live_proof
+    peer, admitted = guest(tmp_path, monkeypatch)
+    peer.intent_autostart = failure == "autostart"
+    peer.accept_invalid = failure == "invalid"
+    peer.browser = failure != "browser"
+    baseline = [{"hash": "b" * 32, "sizeBytes": 262144}]
+    browser_calls = []
+
+    def request(base, method, route, key, body=None):
+        assert key == peer.key and method == "GET" and route == "/api/v1/transfers?limit=100"
+        return {"items": baseline + ([{"hash": "c" * 32, "sizeBytes": 1}]
+                                    if failure == "enqueue" and peer.pending_link else [])}
+
+    def browser(**kwargs):
+        assert kwargs["api_key"] == peer.key and kwargs["file_hash"] == "00112233445566778899aabbccddeeff"
+        assert kwargs["size_bytes"] == 1 and kwargs["identity"] == admitted["buildIdentity"]
+        browser_calls.append(kwargs["link"])
+        return {"status": "failed" if failure == "browser-proof" else "passed"}
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(rust_webui_live_proof, "run_file_link_browser_proof", browser)
+    if failure:
+        messages = {"autostart": "expected service state", "invalid": "malformed or unsupported",
+                    "browser": "installed guest default browser", "enqueue": "silently changed",
+                    "browser-proof": "did not finish cleanly"}
+        with pytest.raises(RuntimeError, match=messages[failure]):
+            subject.exercise(peer.command, admitted, report_dir=tmp_path, qualify_file_links=True)
+        result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+        assert result["status"] == result["fileLinks"]["status"] == "failed"
+    else:
+        result = subject.exercise(peer.command, admitted, report_dir=tmp_path, qualify_file_links=True)
+        assert result["status"] == result["fileLinks"]["status"] == "passed"
+        assert len(browser_calls) == 1
+        assert [case["name"] for case in result["fileLinks"]["cases"]] == [
+            "os-file-link-resolution", "cold-file-link-without-autostart", "pending-and-repeated-intents-without-autostart",
+            "malformed-and-nonfile-intents-rejected", "start-and-repeated-intents-without-enqueue",
+            "native-browser-dispatch-without-enqueue", "bundled-webui-confirmation"]
+    assert peer.key not in (tmp_path / "apk-lifecycle.json").read_text()
 
 
 def test_scrollable_production_ui_does_not_require_controls_in_one_viewport(tmp_path, monkeypatch):

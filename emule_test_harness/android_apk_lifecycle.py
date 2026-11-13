@@ -10,6 +10,7 @@ import http.client
 import json
 from pathlib import Path
 import re
+import shlex
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -93,7 +94,7 @@ def _request(port: int, path: str, key: str | None = None) -> tuple[int, bytes]:
 
 def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
              peer_payload: dict | None = None, rust_source: Path | None = None,
-             adb: str | None = None, child: dict | None = None) -> dict:
+             adb: str | None = None, child: dict | None = None, qualify_file_links: bool = False) -> dict:
     """Install and exercise the actual APK through its normal UI and loopback REST.
 
     The caller owns a fresh disposable guest. Long screen-off observation is an
@@ -106,7 +107,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
               "apkSha256": payload["apk"]["sha256"], "sourceRevision": payload["buildIdentity"]["sourceRevision"],
               "signerSha256": payload["signerSha256"], "runtimeExecution": "not-run",
               "deviceQualification": "emulator-only", "cases": cases,
-              "localTransfer": "not-run", "physicalDevice": "not-run"}
+              "localTransfer": "not-run", "fileLinks": "not-run", "physicalDevice": "not-run"}
     port = None
     installed = False
     ui_path = "/data/local/tmp/emulebb-apk-ui-" + uuid4().hex + ".xml"
@@ -215,6 +216,105 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
 
     def passed(name):
         cases.append({"name": name, "status": "passed"})
+
+    def file_link_intents():
+        from .rust_local_ed2k import request_json
+        from .rust_webui_live_proof import run_file_link_browser_proof
+
+        proof = {"schema": "emulebb.android.apk-file-links/1", "status": "failed", "cases": []}
+        result["fileLinks"] = proof
+        file_hash = "00112233445566778899aabbccddeeff"
+        link = f"ed2k://|file|Android%20Intent%20Sample.bin|1|{file_hash}|/"
+        base = f"http://127.0.0.1:{port}"
+
+        def case(name):
+            proof["cases"].append({"name": name, "status": "passed"})
+
+        def dispatch(value):
+            # ADB shell reparses arguments; raw eD2K pipes must never become a
+            # guest shell pipeline. No raw hierarchy or intent dump is retained.
+            shell("am", "start", "-W", "-a", "android.intent.action.VIEW",
+                  "-c", "android.intent.category.BROWSABLE", "-d", shlex.quote(value))
+
+        def pending():
+            if link not in find("pending_link").get("text", ""):
+                raise RuntimeError("APK did not preserve the requested pending file link")
+
+        def transfer_rows():
+            value = request_json(base, "GET", "/api/v1/transfers?limit=100", key)
+            items = value.get("items")
+            if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                raise RuntimeError("APK file-link proof received an invalid transfer collection")
+            return sorted((item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
+
+        baseline = transfer_rows()
+        click("stop_service")
+        wait_state("Stopped")
+        assert_listener_stopped()
+        resolved = shell("cmd", "package", "resolve-activity", "--brief", "-a", "android.intent.action.VIEW",
+                         "-c", "android.intent.category.BROWSABLE", "-d", shlex.quote(link))
+        if (not resolved.splitlines() or resolved.splitlines()[-1]
+                not in {APPLICATION_ID + "/.MainActivity", APPLICATION_ID + "/" + APPLICATION_ID + ".MainActivity"}):
+            raise RuntimeError("Android does not resolve eD2K file links to the production app")
+        case("os-file-link-resolution")
+        shell("am", "force-stop", APPLICATION_ID)
+        dispatch(link)
+        pending()
+        wait_state("Stopped")
+        assert_listener_stopped()
+        case("cold-file-link-without-autostart")
+        reopen()
+        pending()
+        dispatch(link)
+        pending()
+        assert_listener_stopped()
+        case("pending-and-repeated-intents-without-autostart")
+        for invalid in ("ed2k://|file|Invalid.bin|1|invalid|/", "ed2k://|server|127.0.0.1|4661|/"):
+            dispatch(invalid)
+            if not find("pending_link_error").get("text", ""):
+                raise RuntimeError("APK accepted a malformed or unsupported eD2K intent")
+            if inspect().get("pending_link", {}).get("text"):
+                raise RuntimeError("APK retained an invalid pending file link")
+            assert_listener_stopped()
+        case("malformed-and-nonfile-intents-rejected")
+        dispatch(link)
+        pending()
+        click("start_service")
+        wait_state("Running")
+        authenticated()
+        pending()
+        dispatch(link)
+        pending()
+        if transfer_rows() != baseline:
+            raise RuntimeError("APK intent reception silently changed the transfer queue")
+        case("start-and-repeated-intents-without-enqueue")
+        browser = shell("cmd", "package", "resolve-activity", "--brief", "-a", "android.intent.action.VIEW",
+                        "-c", "android.intent.category.BROWSABLE", "-d", base + "/transfers")
+        component = browser.splitlines()[-1] if browser.splitlines() else ""
+        package = component.partition("/")[0]
+        if "/" not in component or package in {APPLICATION_ID, "android"}:
+            raise RuntimeError("APK file-link proof requires an installed guest default browser")
+        click("open_webui")
+        deadline = time.monotonic() + 30
+        while True:
+            activities = shell("dumpsys", "activity", "activities")
+            if re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\b" + re.escape(package) + r"/", activities):
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("APK did not dispatch the WebUI to the actual guest browser")
+            time.sleep(1)
+        reopen()
+        if inspect().get("pending_link", {}).get("text") or transfer_rows() != baseline:
+            raise RuntimeError("APK browser dispatch retained its pending link or enqueued it")
+        case("native-browser-dispatch-without-enqueue")
+        proof["browser"] = run_file_link_browser_proof(base_url=base, api_key=key, link=link,
+            file_hash=file_hash, size_bytes=1, report_path=report_dir / "apk-file-link-browser.json",
+            identity=payload["buildIdentity"])
+        if proof["browser"].get("status") != "passed" or transfer_rows() != baseline:
+            raise RuntimeError("APK bundled WebUI file-link confirmation did not finish cleanly")
+        authenticated()
+        case("bundled-webui-confirmation")
+        proof["status"] = "passed"
 
     try:
         command(*PREFIX, "install", "--no-streaming", payload["payloadPath"], timeout=120)
@@ -378,6 +478,9 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             if guest_sha256(command, delivered["deliveredPath"]) != delivered["sha256"]:
                 raise RuntimeError("APK delivered bytes changed across service restart")
             passed("completed-delivery-survives-restart")
+        if qualify_file_links:
+            file_link_intents()
+            passed("file-link-intents-and-webui-confirmation")
         # The foreground service must survive closing its visible shell.
         shell("input", "keyevent", "KEYCODE_HOME")
         shell("input", "keyevent", "KEYCODE_SLEEP")

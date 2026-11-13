@@ -110,6 +110,167 @@ def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:
     assert "localStorage" not in read_script
 
 
+@pytest.mark.parametrize("failure", [None, "automatic", "cancel", "body", "size", "hash", "duplicate", "cleanup", "body-cleanup"])
+def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_size(monkeypatch, failure):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs, urlparse
+    from emule_test_harness import rust_local_ed2k
+
+    file_hash = "00112233445566778899aabbccddeeff"
+    link = f"ed2k://|file|Android%20Intent%20Sample.bin|1|{file_hash}|/"
+    baseline = [{"hash": "b" * 32, "sizeBytes": 262144, "state": "completed"}]
+    items = list(baseline)
+    calls = []
+    cleanup = {}
+
+    class Page:
+        authenticated = False
+        value = ""
+        observer = None
+        confirmed = False
+
+        def on(self, event, callback):
+            assert event == "request"
+            self.observer = callback
+
+        def remove_listener(self, event, callback):
+            assert event == "request" and callback is self.observer
+            self.observer = None
+
+        def post(self):
+            body = {"links": [link], "paused": True, "knownFilePolicy": "reject"}
+            if failure in {"body", "body-cleanup"}:
+                body = {"link": link, "paused": True}
+            self.observer(SimpleNamespace(method="POST", url="http://127.0.0.1:1234/api/v1/transfers",
+                                          post_data_json=body))
+            items.append({"hash": "c" * 32 if failure == "hash" else file_hash,
+                          "sizeBytes": 2 if failure == "size" else 1, "state": "paused"})
+
+        def goto(self, url, **kwargs):
+            self.value = parse_qs(urlparse(url).fragment)["ed2k"][0]
+            if failure == "automatic" or failure == "duplicate" and self.confirmed:
+                self.post()
+
+        def get_by_role(self, role, *, name, **kwargs):
+            return self.control(name)
+
+        def get_by_placeholder(self, name):
+            assert name == "X-API-Key"
+            return self.control("key")
+
+        def get_by_label(self, name, **kwargs):
+            assert name in {"eD2K links", "Paused"}
+            return self.control(name)
+
+        def control(self, name):
+            def click(**kwargs):
+                calls.append(name)
+                if name == "Connect":
+                    self.authenticated = True
+                elif name == "Cancel links":
+                    self.value = ""
+                    if failure == "cancel":
+                        self.post()
+                elif name == "Add links":
+                    assert self.authenticated
+                    self.confirmed = True
+                    self.post()
+            return SimpleNamespace(wait_for=lambda **kwargs: None, input_value=lambda: self.value,
+                                   fill=lambda value: None, check=lambda **kwargs: None, click=click)
+
+        def wait_for_function(self, value, **kwargs):
+            assert value == "location.hash === ''"
+
+        def wait_for_timeout(self, duration):
+            assert duration == 1000
+
+        @contextmanager
+        def expect_response(self, predicate, **kwargs):
+            response = SimpleNamespace(ok=True, request=SimpleNamespace(method="POST"),
+                                       url="http://127.0.0.1:1234/api/v1/transfers")
+            assert predicate(response)
+            yield SimpleNamespace(value=response)
+
+    monkeypatch.setattr(rust_webui_live_proof, "api_data", lambda *args: {"items": list(items)})
+
+    def wait(description, timeout_seconds, probe):
+        result = probe()
+        if result is None:
+            raise RuntimeError("confirmed file-link transfer was not persisted")
+        return result
+
+    def delete(base, method, path, key):
+        assert method == "DELETE" and path == f"/api/v1/transfers/{file_hash}/files?confirm=true"
+        if failure in {"cleanup", "body-cleanup"}:
+            raise ValueError("synthetic-private-key-not-for-receipts")
+        items[:] = [item for item in items if item["hash"] != file_hash]
+
+    monkeypatch.setattr(rust_webui_live_proof, "_wait_for_api", wait)
+    monkeypatch.setattr(rust_local_ed2k, "request_json", delete)
+    kwargs = dict(base_url="http://127.0.0.1:1234", api_key="synthetic-private-key-not-for-receipts",
+                  link=link, file_hash=file_hash, size_bytes=1, cleanup_evidence=cleanup)
+    if failure:
+        with pytest.raises(RuntimeError, match={"automatic": "before authentication", "cancel": "cancellation",
+            "body": "exact requested", "body-cleanup": "exact requested", "size": "not persisted", "hash": "not persisted",
+            "duplicate": "automatically changed",
+            "cleanup": "cleanup failed"}[failure]):
+            rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
+    else:
+        result = rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
+        assert result["status"] == "passed" and result["transferHash"] == file_hash and result["sizeBytes"] == 1
+        assert calls == ["Connect", "Cancel links", "Add links", "Cancel links"]
+    assert cleanup["status"] == ("failed" if failure in {"cleanup", "body-cleanup", "hash"} else "passed")
+    if failure not in {"cleanup", "body-cleanup", "hash"}:
+        assert items == baseline
+
+
+def test_file_link_browser_failure_receipt_never_contains_credentials(tmp_path, monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    key = "synthetic-private-key-not-for-receipts"
+    identity = {"sourceRevision": "a" * 40, "version": "0.1.0-test", "channel": "development"}
+
+    def fail():
+        raise ValueError(key)
+
+    monkeypatch.setitem(sys.modules, "playwright", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=fail))
+    monkeypatch.setattr(rust_webui_live_proof, "api_data", lambda *args: identity)
+    report = tmp_path / "browser.json"
+    with pytest.raises(RuntimeError, match="confirmation proof failed") as error:
+        rust_webui_live_proof.run_file_link_browser_proof(base_url="http://127.0.0.1:1234", api_key=key,
+            link="ed2k://|file|Sample.bin|1|" + "b" * 32 + "|/", file_hash="b" * 32, size_bytes=1,
+            report_path=report, identity=identity)
+    assert key not in report.read_text() and key not in str(error.value)
+    assert json.loads(report.read_text())["errorType"] == "ValueError"
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_file_link_browser_preflight_requires_offline_browser_bytes(tmp_path, monkeypatch, installed):
+    from contextlib import contextmanager
+    import sys
+    from types import SimpleNamespace
+
+    executable = tmp_path / "chromium"
+    if installed:
+        executable.write_bytes(b"synthetic browser executable")
+
+    @contextmanager
+    def playwright():
+        yield SimpleNamespace(chromium=SimpleNamespace(executable_path=str(executable)))
+
+    monkeypatch.setitem(sys.modules, "playwright", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=playwright))
+    if installed:
+        rust_webui_live_proof.require_file_link_browser()
+    else:
+        with pytest.raises(RuntimeError, match="installed offline Playwright/Chromium"):
+            rust_webui_live_proof.require_file_link_browser()
+
+
 def test_select_filtered_live_pdf_enforces_safe_shape_and_prefers_sources() -> None:
     selected = rust_webui_live_proof.select_filtered_live_pdf(
         [
