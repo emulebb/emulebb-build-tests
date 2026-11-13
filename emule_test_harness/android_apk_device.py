@@ -365,7 +365,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                           render_webui: bool = False, configure_storage: bool = False,
                           allow_owned_compatible_update: bool = False,
                           configuration_receipt: Path | None = None, configuration_receipt_sha256: str | None = None,
-                          compatibility_receipt: Path | None = None, compatibility_receipt_sha256: str | None = None) -> Path:
+                          compatibility_receipt: Path | None = None, compatibility_receipt_sha256: str | None = None,
+                          peer_payload: dict | None = None, rust_source: Path | None = None,
+                          peer_launcher=None, peer_client_cleanup=None) -> Path:
     """Admit/install or run a bounded owned-phone smoke without resetting user state.
 
     Runtime is limited to a package installed here while previously absent, or a
@@ -373,6 +375,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     read-only. Public first-run bootstrap is ordinary app behavior, not isolation.
     """
     admit_production_certificate(payload, expected_cert_sha256=expected_cert_sha256)
+    if peer_payload is not None and (not execute or rust_source is None or not rust_source.is_dir()
+            or peer_launcher is None or peer_client_cleanup is None):
+        raise ValueError("Physical transfer requires explicit owned runtime, source and peer launcher")
     if configure_storage and not execute:
         raise ValueError("Approved phone storage configuration requires explicit runtime execution")
     if not allow_owned_compatible_update and (compatibility_receipt is not None or compatibility_receipt_sha256 is not None):
@@ -669,6 +674,19 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["phase"] = "physical-process-resources"
         value["processResources"] = _physical_process_resources(port, key)
         passed("physical-process-resources")
+        if peer_payload is not None:
+            from .android_apk_peer import transfer_proof
+            if peer_payload.get("abi") not in abis or peer_payload.get("buildIdentity") != payload["buildIdentity"]:
+                raise RuntimeError("Physical peer differs from the installed application source or ABI")
+            value["phase"] = "controlled-physical-transfer"
+            try:
+                value["transfer"] = transfer_proof(command, peer_payload, apk_port=port, api_key=key,
+                    adb="selected-physical-adb", child={}, report_dir=report_dir, rust_source=rust_source,
+                    restart_service=restart_for_storage, prefix=prefix,
+                    spawn_daemon=peer_launcher, stop_client=peer_client_cleanup)
+            except Exception:
+                raise RuntimeError("Controlled physical transfer or owned cleanup failed") from None
+            passed("physical-local-transfer-delivery-collision-and-restart")
         if render_webui:
             from .rust_webui_live_proof import run_webui_live_proof
             browser = run_webui_live_proof(base_url=f"http://127.0.0.1:{port}", api_key=key,

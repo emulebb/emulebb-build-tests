@@ -414,7 +414,7 @@ def test_full_official_path_matches_source_owned_case_contract(tmp_path, monkeyp
     peer.api = api
     digest = "d" * 64
     monkeypatch.setattr(android_apk_peer, "transfer_proof", lambda *args, **kwargs: {
-        "status": "passed", "sha256": digest, "deliveredPath": "/owned/Android Sample.bin"})
+        "status": "passed", "sha256": digest, "completedDeliverySurvivesRestart": True})
     monkeypatch.setattr(android_apk_peer, "guest_sha256", lambda *args: digest)
     monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *args, **kwargs: {"items": []})
     monkeypatch.setattr(rust_webui_live_proof, "run_file_link_browser_proof", lambda **kwargs: {"status": "passed"})
@@ -458,8 +458,9 @@ def test_transfer_and_restart_verdicts_use_actual_peer_fixture_result(tmp_path, 
     def transfer(command, payload, **kwargs):
         assert kwargs["api_key"] == peer.key
         assert kwargs["apk_port"] == 12345
+        kwargs["restart_service"]()
         calls.append(payload)
-        return {"status": "passed", "sha256": digest, "deliveredPath": delivered, "collisionPreserved": True}
+        return {"status": "passed", "sha256": digest, "completedDeliverySurvivesRestart": True, "collisionPreserved": True}
 
     monkeypatch.setattr(android_apk_peer, "transfer_proof", transfer)
     monkeypatch.setattr(android_apk_peer, "guest_sha256", lambda command, path: digest if path == delivered else None)

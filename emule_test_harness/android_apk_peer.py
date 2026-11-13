@@ -20,29 +20,45 @@ PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
 
 
-def start_local_listener(base: str, key: str) -> None:
-    """Start the real peer runtime with no public discovery/server endpoints."""
-    servers = request_json(base, "GET", "/api/v1/servers", key).get("items")
-    if not isinstance(servers, list):
+def _server_configuration(base, key):
+    rows = request_json(base, "GET", "/api/v1/servers", key).get("items")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise RuntimeError("APK transfer peer returned an invalid server collection")
-    for server in servers:
-        address, port = server.get("address"), server.get("port")
-        if not isinstance(address, str) or not address or type(port) is not int or not 0 < port <= 65535:
-            raise RuntimeError("APK transfer peer returned an invalid server endpoint")
-        endpoint = f"[{address}]:{port}" if ":" in address else f"{address}:{port}"
-        request_json(base, "DELETE", "/api/v1/servers/" + quote(endpoint, safe=""), key)
-    request_json(base, "POST", "/api/v1/servers", key,
-                 {"address": "127.0.0.1", "port": 20031, "name": "Local qualification endpoint", "connect": False})
-    servers = request_json(base, "GET", "/api/v1/servers", key).get("items")
-    if (not isinstance(servers, list) or len(servers) != 1
-            or servers[0].get("address") != "127.0.0.1" or servers[0].get("port") != 20031):
-        raise RuntimeError("APK transfer peer retained a nonlocal server endpoint")
-    # WHY: Core binds the peer listener before its asynchronous server-login
-    # worker; a closed local server endpoint deliberately supplies no discovery.
-    # Actual transfer bytes below, rather than this acknowledgement, prove P2P.
-    acknowledgement = request_json(base, "POST", "/api/v1/servers/operations/connect", key)
-    if acknowledgement.get("operationQueued") is not True:
-        raise RuntimeError("APK transfer peer did not accept its eD2K start operation")
+    fields = ("address", "port", "name", "priority", "static", "enabled")
+    return sorted(({name: row.get(name) for name in fields} for row in rows),
+                  key=lambda row: (str(row["address"]), str(row["port"])))
+
+
+@contextmanager
+def local_listener(base: str, key: str, *, fresh_peer=False):
+    """Direct listener startup to loopback without replacing operator servers."""
+    before = _server_configuration(base, key)
+    existing = [row for row in before if row["address"] == "127.0.0.1" and row["port"] == 20031]
+    if existing and not fresh_peer:
+        raise RuntimeError("Qualification loopback endpoint already belongs to the operator")
+    name = "Owned APK qualification " + uuid4().hex
+    route = "/api/v1/servers/" + quote("127.0.0.1:20031", safe="")
+    created = False
+    try:
+        if not existing:
+            request_json(base, "POST", "/api/v1/servers", key,
+                         {"address": "127.0.0.1", "port": 20031, "name": name, "connect": False})
+            created = True
+        # Directed mode excludes fallback to the preserved public server rows.
+        # A real byte transfer below, not this acknowledgement, proves P2P.
+        acknowledgement = request_json(base, "POST", route + "/operations/connect", key)
+        if acknowledgement.get("operationQueued") is not True:
+            raise RuntimeError("APK transfer peer did not accept its eD2K start operation")
+        yield
+    finally:
+        if created:
+            current = _server_configuration(base, key)
+            owned = [row for row in current if row["address"] == "127.0.0.1" and row["port"] == 20031]
+            if len(owned) != 1 or owned[0]["name"] != name:
+                raise RuntimeError("Qualification server ownership changed; refusing removal")
+            request_json(base, "DELETE", route, key)
+        if _server_configuration(base, key) != before:
+            raise RuntimeError("Qualification altered preexisting server configuration")
 
 
 def guest_sha256(command, path: str, *, prefix=PREFIX) -> str:
@@ -209,61 +225,151 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
 
 
 def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str,
-                   child: dict, report_dir: Path, rust_source: Path) -> dict:
-    """Transfer real deterministic bytes to shared storage and preserve a foreign collision."""
+                   child: dict, report_dir: Path, rust_source: Path, restart_service,
+                   prefix=PREFIX, spawn_daemon=None, stop_client=None) -> dict:
+    """Own a real transfer, collision and restart campaign; restore operator state."""
     base = f"http://127.0.0.1:{apk_port}"
+    def request(method, route, body=None):
+        return request_json(base, method, route, api_key, body)
+
+    def shell(*args):
+        return command(*prefix, "shell", *args)
+
+    def shared_roots():
+        roots = request("GET", "/api/v1/shared-directories").get("roots")
+        if not isinstance(roots, list) or any(not isinstance(row, dict) or not isinstance(row.get("path"), str) for row in roots):
+            raise RuntimeError("APK transfer returned invalid sharing roots")
+        return {row["path"] for row in roots}
+
+    selection = {"daemon": ("incomingDir",), "core": ("autoConnect", "networkKademlia", "networkEd2k"),
+                 "ed2k": ("enableUdpReask", "addServersFromServer"), "nat": ("enabled",)}
+    settings = request("GET", "/api/v1/app/settings")
+    if any(not isinstance(settings.get(group), dict) or any(name not in settings[group] for name in names)
+           for group, names in selection.items()):
+        raise RuntimeError("APK transfer cannot preserve its prior settings")
+    original = {group: {name: settings[group][name] for name in names} for group, names in selection.items()}
+    if not isinstance(original["daemon"]["incomingDir"], str) or not original["daemon"]["incomingDir"].startswith("/"):
+        raise RuntimeError("APK transfer requires its explicit prepared incoming configuration")
+    original_roots = shared_roots()
+    rows = request("GET", "/api/v1/transfers").get("items")
+    if not isinstance(rows, list) or any(row.get("state") != "completed" for row in rows):
+        raise RuntimeError("APK transfer refuses to interrupt preexisting unfinished downloads")
+    prior_hashes = {row.get("hash", "").lower() for row in rows}
+    shared = request("GET", "/api/v1/shared-files").get("items")
+    if not isinstance(shared, list):
+        raise RuntimeError("APK transfer returned invalid preexisting shared files")
+    prior_hashes.update(row.get("hash", "").lower() for row in shared)
     network = request_json(base, "GET", "/api/v1/network", api_key)
     bind_ip = network.get("binding", {}).get("activeConfiguredAddress")
     address = ipaddress.ip_address(bind_ip)
     if address.version != 4 or not address.is_private or address.is_loopback or address.is_unspecified:
         raise RuntimeError("APK local transfer requires a private guest IPv4 binding")
-    incoming = "/sdcard/Download/emulebb-apk-proof-" + uuid4().hex
+    nonce = uuid4().hex
+    incoming = "/sdcard/Download/emulebb-apk-proof-" + nonce
     name = "Android Sample.bin"
     occupant = b"synthetic foreign occupant"
-    content = deterministic_payload(0, 256 * 1024, generation="android-apk")
+    content = deterministic_payload(0, 256 * 1024, generation="android-apk-" + nonce)
     expected_sha = hashlib.sha256(content).hexdigest()
     fixture = report_dir / name
     fixture.write_bytes(content)
     foreign = report_dir / "foreign.bin"
     foreign.write_bytes(occupant)
-    command(*PREFIX, "shell", "mkdir", "-m", "700", incoming)
-    canonical = command(*PREFIX, "shell", "readlink", "-f", incoming)
-    if not PurePosixPath(canonical).is_absolute() or PurePosixPath(canonical).name != PurePosixPath(incoming).name:
+    shell("mkdir", "-m", "700", incoming)
+    canonical = shell("readlink", "-f", incoming)
+    if canonical != "/storage/emulated/0/Download/" + PurePosixPath(incoming).name:
         raise RuntimeError("APK incoming fixture did not resolve to its owned directory")
     incoming = canonical
-    command(*PREFIX, "push", str(foreign), incoming + "/" + name)
-    request_json(base, "PATCH", "/api/v1/app/settings", api_key,
-                 {"daemon": {"incomingDir": incoming}, "core": {"autoConnect": False, "networkKademlia": False},
-                  "ed2k": {"enableUdpReask": False, "addServersFromServer": False}, "nat": {"enabled": False}})
-    with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
-                         rust_source=rust_source, bind_ip=bind_ip) as (home, port):
-        shared = home + "/shared"
-        command(*PREFIX, "shell", "mkdir", "-m", "700", shared)
-        command(*PREFIX, "push", str(fixture), shared + "/" + name)
-        peer_base = f"http://127.0.0.1:{port}"
-        tree = publish_shared_tree(peer_base, PEER_KEY, root=shared, file_name=name)
-        item = tree["sharedFiles"]["matched"]
-        source_link = ed2k_link_with_source(item["ed2kLink"], bind_ip, 20029)
-        for endpoint, key in ((peer_base, PEER_KEY), (base, api_key)):
-            start_local_listener(endpoint, key)
-        request_json(base, "POST", "/api/v1/transfers", api_key, {"link": source_link, "paused": False})
-        deadline = time.monotonic() + 120
-        while True:
-            files = request_json(base, "GET", "/api/v1/shared-files", api_key).get("items", [])
-            result = next((file for file in files if file.get("hash", "").lower() == item["hash"].lower()
-                           and file.get("complete") is True and file.get("partFile") is False), None)
-            if result is not None:
-                path = PurePosixPath(result.get("path", ""))
-                if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
-                    raise RuntimeError("APK delivered file has invalid size, location or collision handling")
-                if guest_sha256(command, str(path)) != expected_sha:
-                    raise RuntimeError("APK delivered bytes differ from the deterministic peer payload")
-                if guest_sha256(command, incoming + "/" + name) != hashlib.sha256(occupant).hexdigest():
-                    raise RuntimeError("APK delivery replaced the foreign destination occupant")
-                break
-            if time.monotonic() >= deadline:
-                raise RuntimeError("APK local transfer did not register a completed delivery within its bound")
-            time.sleep(1)
-    return {"status": "passed", "sizeBytes": len(content), "sha256": expected_sha,
-            "deliveredPath": str(path), "collisionPreserved": True,
-            "deliveredInSharedStorage": True, "peerSourceRevision": peer["sourceRevision"]}
+    file_hash = path = None
+    changed = False
+    cleanup_errors = []
+    try:
+        command(*prefix, "push", str(foreign), incoming + "/" + name)
+        changed = True
+        request("PATCH", "/api/v1/app/settings",
+                {"daemon": {"incomingDir": incoming},
+                 "core": {"autoConnect": False, "networkKademlia": False, "networkEd2k": True},
+                 "ed2k": {"enableUdpReask": False, "addServersFromServer": False}, "nat": {"enabled": False}})
+        restart_service()
+        if request("GET", "/api/v1/app/settings").get("daemon", {}).get("incomingDir") != incoming:
+            raise RuntimeError("APK qualification destination did not survive service restart")
+        interface = network.get("binding", {}).get("activeInterfaceId") or None
+        with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
+                rust_source=rust_source, bind_ip=bind_ip, prefix=prefix, bind_interface=interface,
+                spawn_daemon=spawn_daemon, stop_client=stop_client) as (home, port):
+            shared = home + "/shared"
+            shell("mkdir", "-m", "700", shared)
+            command(*prefix, "push", str(fixture), shared + "/" + name)
+            peer_base = f"http://127.0.0.1:{port}"
+            item = publish_shared_tree(peer_base, PEER_KEY, root=shared, file_name=name)["sharedFiles"]["matched"]
+            file_hash = item["hash"].lower()
+            if re.fullmatch(r"[0-9a-f]{32}", file_hash) is None or file_hash in prior_hashes:
+                file_hash = None
+                raise RuntimeError("APK qualification payload already belongs to the operator")
+            source_link = ed2k_link_with_source(item["ed2kLink"], bind_ip, 20029)
+            with local_listener(peer_base, PEER_KEY, fresh_peer=True), local_listener(base, api_key):
+                request("POST", "/api/v1/transfers", {"link": source_link, "paused": False})
+                deadline = time.monotonic() + 120
+                while True:
+                    files = request("GET", "/api/v1/shared-files").get("items", [])
+                    result = next((row for row in files if row.get("hash", "").lower() == file_hash
+                                   and row.get("complete") is True and row.get("partFile") is False), None)
+                    if result is not None:
+                        path = PurePosixPath(result.get("path", ""))
+                        if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
+                            raise RuntimeError("APK delivered file has invalid size, location or collision handling")
+                        if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
+                            raise RuntimeError("APK delivered bytes differ from the deterministic peer payload")
+                        if guest_sha256(command, incoming + "/" + name, prefix=prefix) != hashlib.sha256(occupant).hexdigest():
+                            raise RuntimeError("APK delivery replaced the foreign destination occupant")
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("APK local transfer did not register a completed delivery within its bound")
+                    time.sleep(1)
+        restart_service()
+        completed = request("GET", "/api/v1/transfers").get("items", [])
+        if not any(row.get("hash", "").lower() == file_hash and row.get("state") == "completed"
+                   and row.get("deliveredPath") == str(path) for row in completed):
+            raise RuntimeError("APK completed delivery metadata did not survive restart")
+        if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
+            raise RuntimeError("APK delivered bytes changed across service restart")
+        return {"status": "passed", "sizeBytes": len(content), "sha256": expected_sha,
+                "collisionPreserved": True, "completedDeliverySurvivesRestart": True,
+                "deliveredInSharedStorage": True, "peerSourceRevision": peer["sourceRevision"],
+                "transport": "same-device-p2p", "wifiDataPlane": "not-claimed"}
+    finally:
+        active_failure = sys.exc_info()[0] is not None
+        def remove_transfer():
+            if file_hash is not None:
+                # Only a hash absent before this nonce-owned campaign is ours.
+                if path is not None and (path.parent != PurePosixPath(incoming)
+                        or guest_sha256(command, str(path), prefix=prefix) != expected_sha):
+                    raise RuntimeError("Owned delivery changed; refusing file deletion")
+                request("DELETE", f"/api/v1/transfers/{file_hash}/files?confirm=true")
+        def restore_settings():
+            if changed:
+                request("PATCH", "/api/v1/app/settings", original)
+                restart_service()
+                restored = request("GET", "/api/v1/app/settings")
+                if any(restored.get(group, {}).get(name) != value for group, names in original.items() for name, value in names.items()):
+                    raise RuntimeError("APK transfer did not restore prior settings")
+                if shared_roots() != original_roots:
+                    raise RuntimeError("APK transfer changed prior sharing roots")
+        def remove_fixture():
+            if cleanup_errors:
+                return
+            shell("test", "!", "-L", incoming)
+            if shell("readlink", "-f", incoming) != incoming:
+                raise RuntimeError("Owned incoming directory was redirected")
+            if guest_sha256(command, incoming + "/" + name, prefix=prefix) != hashlib.sha256(occupant).hexdigest():
+                raise RuntimeError("Owned collision fixture changed; refusing cleanup")
+            shell("rm", "--", shlex.quote(incoming + "/" + name))
+            shell("rmdir", incoming)
+        for action in (remove_transfer, restore_settings, remove_fixture):
+            try:
+                action()
+            except Exception as error:
+                cleanup_errors.append(type(error).__name__)
+        if cleanup_errors:
+            (report_dir / "transfer-cleanup.json").write_text(json.dumps({"status": "failed", "errorTypes": cleanup_errors}) + "\n", encoding="utf-8")
+            if not active_failure:
+                raise RuntimeError("APK transfer cleanup failed; owned evidence retained")

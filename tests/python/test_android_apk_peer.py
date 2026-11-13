@@ -124,12 +124,21 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
         assert json.loads((tmp_path / "peer-cleanup.json").read_text())["status"] == "failed"
 
 
-@pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "public-server"])
+@pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
-    content = subject.deterministic_payload(0, 256 * 1024, generation="android-apk")
+    from types import SimpleNamespace
+    from copy import deepcopy
+    monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
+    content = subject.deterministic_payload(0, 256 * 1024, generation="android-apk-" + "a" * 32)
     guest_files = {}
-    state = {"incoming": None, "created": False}
+    original = {"daemon": {"incomingDir": "/original/Incoming"},
+                "core": {"autoConnect": True, "networkKademlia": True, "networkEd2k": True},
+                "ed2k": {"enableUdpReask": True, "addServersFromServer": True}, "nat": {"enabled": True}}
+    state = {"settings": deepcopy(original), "incoming": original["daemon"]["incomingDir"],
+             "created": False, "restarts": 0, "deleted": False}
     servers = {}
+    deleted_servers = []
+    public_server = {"address": "192.0.2.100", "port": 4661, "name": "Operator server", "enabled": True}
 
     @contextmanager
     def peer(*args, **kwargs):
@@ -144,31 +153,53 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         if route == "/api/v1/network":
             return {"binding": {"activeConfiguredAddress": "192.0.2.20"}}
         if route == "/api/v1/app/settings":
-            state["incoming"] = body["daemon"]["incomingDir"]
-            assert body["ed2k"] == {"enableUdpReask": False, "addServersFromServer": False}
+            if method == "PATCH":
+                state["settings"] = deepcopy(body)
+                if failure == "restore" and body == original:
+                    state["settings"]["core"]["autoConnect"] = False
+            return deepcopy(state["settings"])
+        if route == "/api/v1/shared-directories":
+            return {"roots": [{"path": "/operator/Shared"}]}
         if route == "/api/v1/servers":
+            rows = servers.setdefault(base, [deepcopy(public_server)])
             if method == "POST":
-                assert body == {"address": "127.0.0.1", "port": 20031,
-                                "name": "Local qualification endpoint", "connect": False}
-                servers[base] = [body]
-            return {"items": servers.setdefault(base, [{"address": "192.0.2.100", "port": 4661}])
-                    + ([{"address": "192.0.2.100", "port": 4661}] if failure == "public-server" else [])}
+                assert body["address"] == "127.0.0.1" and body["port"] == 20031 and body["connect"] is False
+                rows.append(deepcopy(body))
+            return {"items": deepcopy(rows)}
         if route.startswith("/api/v1/servers/") and method == "DELETE":
-            assert route == "/api/v1/servers/192.0.2.100%3A4661"
-            servers[base] = []
-        if route == "/api/v1/servers/operations/connect":
+            assert route == "/api/v1/servers/127.0.0.1%3A20031"
+            deleted_servers.append(route)
+            servers[base] = [row for row in servers[base] if row["address"] != "127.0.0.1"]
+        if route.endswith("/operations/connect"):
+            assert route == "/api/v1/servers/127.0.0.1%3A20031/operations/connect"
             return {"connected": False, "connecting": True, "operationQueued": failure != "listener"}
         if route == "/api/v1/transfers":
+            if method == "GET":
+                if failure == "unfinished":
+                    return {"items": [{"hash": "c" * 32, "state": "paused"}]}
+                if not state["created"] or state["deleted"]:
+                    return {"items": []}
+                return {"items": [{"hash": "b" * 32, "state": "paused" if failure == "restart" else "completed",
+                                   "deliveredPath": state["incoming"] + "/Android Sample (1).bin"}]}
             state["created"] = True
             # TransferCreate in the actual Rust REST model accepts singular link
             # and paused; this is the existing release-smoke owner's exact body.
             assert method == "POST" and set(body) == {"link", "paused"} and body["paused"] is False
             assert "|sources,192.0.2.20:20029|/" in body["link"]
+            assert state["incoming"] == state["settings"]["daemon"]["incomingDir"]
+            assert state["restarts"] == 1, "the immutable live incoming destination requires a real restart"
             guest_files[state["incoming"] + "/Android Sample (1).bin"] = b"corrupt" if failure == "payload" else content
             if failure == "occupant":
                 guest_files[state["incoming"] + "/Android Sample.bin"] = content
+            if failure == "server-owner":
+                servers[base][-1]["name"] = "operator changed endpoint"
+        if route.endswith("/files?confirm=true"):
+            assert method == "DELETE" and route == "/api/v1/transfers/" + "b" * 32 + "/files?confirm=true"
+            state["deleted"] = True
+            guest_files.pop(state["incoming"] + "/Android Sample (1).bin", None)
         if route == "/api/v1/shared-files":
-            assert state["created"]
+            if not state["created"]:
+                return {"items": [{"hash": "b" * 32}] if failure == "known-hash" else []}
             return {"items": [{"hash": "b" * 32, "complete": True, "partFile": False,
                               "sizeBytes": len(content),
                               "path": ("/unexpected" if failure == "path" else state["incoming"]) + "/Android Sample (1).bin"}]}
@@ -185,18 +216,39 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             import shlex
             path = shlex.split(operation[2])[0]
             return hashlib.sha256(guest_files[path]).hexdigest() + " " + path
+        if operation[:2] == ("shell", "rm"):
+            import shlex
+            del guest_files[shlex.split(operation[-1])[0]]
+        if operation[:2] == ("shell", "rmdir"):
+            assert not any(path.startswith(operation[2] + "/") for path in guest_files)
         return ""
+
+    def restart():
+        state["restarts"] += 1
+        state["incoming"] = state["settings"]["daemon"]["incomingDir"]
 
     monkeypatch.setattr(subject, "request_json", request)
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
-                     report_dir=tmp_path, rust_source=tmp_path)
+                     report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
     if failure:
         with pytest.raises(RuntimeError, match={"payload": "delivered bytes", "occupant": "foreign destination",
                                                "path": "invalid size", "listener": "eD2K start operation",
-                                               "public-server": "nonlocal server"}[failure]):
+                                               "restart": "metadata did not survive", "unfinished": "unfinished downloads",
+                                               "known-hash": "already belongs", "server-owner": "ownership changed",
+                                               "restore": "cleanup failed"}[failure]):
             subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
     else:
         result = subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert result["status"] == "passed"
         assert result["collisionPreserved"] is True
+        assert result["completedDeliverySurvivesRestart"] is True
         assert result["sha256"] == hashlib.sha256(content).hexdigest()
+        assert state["settings"] == original and state["incoming"] == original["daemon"]["incomingDir"]
+        assert state["restarts"] == 3 and state["deleted"]
+        assert not any(path.startswith("/storage/") for path in guest_files)
+        assert len(deleted_servers) == 2 and all(rows == [public_server] for rows in servers.values())
+    if failure not in {"unfinished", "restore"}:
+        assert state["settings"] == original
+    if failure == "restore":
+        assert json.loads((tmp_path / "transfer-cleanup.json").read_text())["status"] == "failed"
+        assert any(path.startswith("/storage/") for path in guest_files), "retain owned files when restoration is unproved"

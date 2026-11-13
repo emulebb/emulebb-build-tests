@@ -582,21 +582,23 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         authenticated()
         passed("restart")
         if peer_payload is not None:
-            from .android_apk_peer import guest_sha256, transfer_proof
+            from .android_apk_peer import transfer_proof
             if rust_source is None or adb is None or child is None:
                 raise RuntimeError("APK transfer proof requires the owned native peer execution context")
+            def restart_transfer_service():
+                reopen()
+                click("stop_service")
+                wait_state("Stopped")
+                assert_listener_stopped()
+                click("start_service")
+                wait_state("Running")
+                authenticated()
             result["localTransfer"] = transfer_proof(command, peer_payload, apk_port=port, api_key=key,
-                                                     adb=adb, child=child, report_dir=report_dir, rust_source=rust_source)
+                adb=adb, child=child, report_dir=report_dir, rust_source=rust_source,
+                restart_service=restart_transfer_service)
             passed("local-transfer-and-delivery-collision")
-            click("stop_service")
-            wait_state("Stopped")
-            assert_listener_stopped()
-            click("start_service")
-            wait_state("Running")
-            authenticated()
-            delivered = result["localTransfer"]
-            if guest_sha256(command, delivered["deliveredPath"]) != delivered["sha256"]:
-                raise RuntimeError("APK delivered bytes changed across service restart")
+            if result["localTransfer"].get("completedDeliverySurvivesRestart") is not True:
+                raise RuntimeError("APK transfer did not prove completed delivery restart")
             passed("completed-delivery-survives-restart")
         if qualify_file_links:
             file_link_intents()

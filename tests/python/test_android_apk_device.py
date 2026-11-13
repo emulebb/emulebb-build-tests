@@ -205,7 +205,7 @@ class Phone:
             **self.build_identity, "name": "eMuleBB", "apiVersion": "v1", "lifecycle": {"state": "running"}}}).encode()
 
 
-def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=False):
+def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=False, **kwargs):
     monkeypatch.setattr(subject, "_request", phone.request)
     clock = [0.0]
     monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
@@ -214,7 +214,43 @@ def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=
     return subject.probe_physical_device(phone.command, payload(), serial=SERIAL, output_root=tmp_path,
         expected_cert_sha256="b" * 64,
         report_dir=report_dir, execute=execute, configure_storage=configure, dwell_seconds=15, installation_receipt=receipt,
-        installation_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt else None)
+        installation_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt else None, **kwargs)
+
+
+@pytest.mark.parametrize("abi", ["arm64-v8a", "x86_64"])
+def test_physical_transfer_uses_only_owned_matching_source_abi_and_restarts_normally(tmp_path, monkeypatch, abi):
+    from emule_test_harness import android_apk_peer
+    phone = Phone()
+    calls = []
+
+    def transfer(command, peer, **kwargs):
+        assert phone.running and kwargs["prefix"] == ("-s", SERIAL)
+        kwargs["restart_service"]()
+        assert phone.running
+        assert kwargs["spawn_daemon"] is launcher and kwargs["stop_client"] is cleanup
+        calls.append(peer)
+        return {"status": "passed", "collisionPreserved": True, "completedDeliverySurvivesRestart": True}
+
+    launcher, cleanup = object(), object()
+    monkeypatch.setattr(android_apk_peer, "transfer_proof", transfer)
+    peer = {"abi": abi, "buildIdentity": payload()["buildIdentity"]}
+    arguments = {"peer_payload": peer, "rust_source": tmp_path, "peer_launcher": launcher, "peer_client_cleanup": cleanup}
+    if abi == "arm64-v8a":
+        report = run(tmp_path, monkeypatch, phone, execute=True, **arguments)
+        result = json.loads(report.read_text())
+        assert result["status"] == result["transfer"]["status"] == "passed" and calls == [peer]
+        assert phone.running is False and KEY not in report.read_text() and SERIAL not in report.read_text()
+    else:
+        with pytest.raises(RuntimeError, match="source or ABI"):
+            run(tmp_path, monkeypatch, phone, execute=True, **arguments)
+        assert not calls and not phone.running
+
+
+def test_physical_transfer_cannot_run_as_admission_or_without_owned_launcher(tmp_path, monkeypatch):
+    phone = Phone()
+    with pytest.raises(ValueError, match="explicit owned runtime"):
+        run(tmp_path, monkeypatch, phone, peer_payload={})
+    assert not phone.calls
 
 
 @pytest.mark.parametrize("execute", [False, True])
