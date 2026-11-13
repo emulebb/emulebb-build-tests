@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import hashlib
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -22,7 +23,8 @@ MAX_NATIVE_SIZE = 256 * 1024 * 1024
 
 
 def audit_native_payloads(apk: Path, *, scratch: Path, elf_auditor: Callable[..., dict],
-                          library_name: str = "libemulebb_android.so") -> dict:
+                          library_name: str = "libemulebb_android.so",
+                          runtime_libraries: dict[str, dict[str, str]] | None = None) -> dict:
     """Bind both audited JNI libraries to stored, 16KB-aligned APK entries.
 
     Signature, package identity and source provenance require separate checks;
@@ -36,7 +38,22 @@ def audit_native_payloads(apk: Path, *, scratch: Path, elf_auditor: Callable[...
     if not scratch.is_absolute() or not scratch.is_dir() or scratch.is_symlink():
         raise RuntimeError("APK auditing requires an existing absolute owned scratch directory")
     expected = {f"lib/{abi}/{library_name}": abi for abi in ABIS}
+    runtime_expected = {}
+    if runtime_libraries is not None:
+        if not isinstance(runtime_libraries, dict) or set(runtime_libraries) != set(ABIS):
+            raise ValueError("APK runtime inventory requires both explicit ABI maps")
+        for abi, libraries in runtime_libraries.items():
+            if not isinstance(libraries, dict):
+                raise ValueError("APK runtime inventory must map filenames to immutable hashes")
+            for name, checksum in libraries.items():
+                if (name != "libc++_shared.so" or not isinstance(checksum, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", checksum) is None):
+                    raise ValueError("APK runtime inventory permits only the pinned NDK C++ runtime")
+                entry = f"lib/{abi}/{name}"
+                expected[entry] = abi
+                runtime_expected[entry] = checksum
     evidence = {}
+    runtimes = {abi: {} for abi in ABIS}
     with apk.open("rb") as raw, zipfile.ZipFile(raw) as archive:
         raw.seek(0)
         original_checksum = hashlib.file_digest(raw, "sha256").hexdigest()
@@ -72,7 +89,7 @@ def audit_native_payloads(apk: Path, *, scratch: Path, elf_auditor: Callable[...
                 if (flags & 1 or method != zipfile.ZIP_STORED or filename != name.encode("ascii")
                         or offset + entry.file_size > apk.stat().st_size or offset % PAGE_SIZE):
                     raise RuntimeError("APK native payload must have a matching local header and 16KB ZIP alignment")
-                path = Path(temporary) / (abi + ".so")
+                path = Path(temporary) / (abi + "-" + PurePosixPath(name).name)
                 # Read through ZipFile to validate the central directory and CRC;
                 # extraction names are owned constants, never archive paths.
                 with archive.open(entry) as source, path.open("xb") as destination:
@@ -83,11 +100,17 @@ def audit_native_payloads(apk: Path, *, scratch: Path, elf_auditor: Callable[...
                     raise RuntimeError("APK ELF auditor returned inconsistent target evidence")
                 with path.open("rb") as source:
                     checksum = hashlib.file_digest(source, "sha256").hexdigest()
-                evidence[abi] = {"entry": name, "sha256": checksum, "size": entry.file_size,
-                                 "zipOffset": offset, "zipAlignment": PAGE_SIZE, "elf": result}
+                record = {"entry": name, "sha256": checksum, "size": entry.file_size,
+                          "zipOffset": offset, "zipAlignment": PAGE_SIZE, "elf": result}
+                if name in runtime_expected:
+                    if checksum != runtime_expected[name]:
+                        raise RuntimeError("APK runtime bytes differ from the pinned dependency inventory")
+                    runtimes[abi][PurePosixPath(name).name] = record
+                else:
+                    evidence[abi] = record
         raw.seek(0)
         checksum = hashlib.file_digest(raw, "sha256").hexdigest()
         if checksum != original_checksum:
             raise RuntimeError("APK bytes changed during native validation")
     return {"schema": "emulebb.android.apk-native/1", "apk": apk.name,
-            "apkSha256": checksum, "native": evidence, "runtimeExecution": "not-run"}
+            "apkSha256": checksum, "native": evidence, "runtime": runtimes, "runtimeExecution": "not-run"}
