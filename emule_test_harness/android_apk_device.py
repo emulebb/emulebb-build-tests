@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, _request, admit_production_certificate, required_apk_cases
+from .android_apk_lifecycle import APPLICATION_ID, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
 
 
 def _safe_service_phase(text: str | None) -> str:
@@ -32,6 +32,8 @@ def _safe_service_phase(text: str | None) -> str:
 def _ui_failure_metadata(ui: ProductionUi) -> dict:
     """Retain only resource IDs/boolean flags and foreground package, never UI values."""
     result = {"foregroundPackage": None}
+    if getattr(ui, "last_action", None) is not None:
+        result["lastAction"] = ui.last_action
     errors = []
     try:
         elements = ui.elements()
@@ -205,6 +207,25 @@ def _physical_process_resources(port: int, key: str) -> dict:
                     "cpuUsagePercent": cpu, "cpuSampleIntervalMs": interval}
         if time.monotonic() >= deadline:
             raise RuntimeError("Physical process CPU sample did not settle within its bound")
+        time.sleep(0.5)
+
+
+def _stopped_service_flags(ui: ProductionUi) -> dict:
+    """Independently require the owned service's foreground/start flags to clear."""
+    deadline = time.monotonic() + 15
+    while True:
+        document = ui.shell("dumpsys", "activity", "services", APPLICATION_ID)
+        if "ACTIVITY MANAGER SERVICES" not in document:
+            raise RuntimeError("Physical foreground-service state is unavailable")
+        present = "DaemonService" in document
+        foreground = re.findall(r"\bisForeground=(true|false)\b", document)
+        requested = re.findall(r"\bstartRequested=(true|false)\b", document)
+        # ServiceRecord.dump omits its foreground fields once both the flag and
+        # foreground notification ID are clear. startRequested is still dumped.
+        if not present or (requested and "true" not in foreground and "true" not in requested):
+            return {"present": present, "foreground": False, "startRequested": False}
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Physical service remained foreground or start-requested after Stop")
         time.sleep(0.5)
 
 
@@ -433,7 +454,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             # and prior owned-install receipt already admit this running service.
             attempted_start = True
             ui.click("stop_service")
-            ui.wait_state("Stopped")
+            ui.wait_state("Stopped", timeout=30)
             attempted_start = False
             value["initialServiceNormalization"]["status"] = "passed"
             passed("owned-existing-service-gracefully-stopped")
@@ -508,13 +529,27 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             time.sleep(min(5, dwell_seconds - elapsed))
         value["foregroundObservation"] = {"seconds": round(elapsed, 3), "samples": samples}
         passed("bounded-physical-foreground-observation")
+        value["phase"] = "normal-ui-stop"
+        shell("am", "start", "-W", "--user", "0", "-n", APPLICATION_ID + "/.MainActivity")
         ui.click("stop_service")
-        ui.wait_state("Stopped")
+        value["phase"] = "wait-normal-ui-stop"
+        ui.wait_state("Stopped", timeout=30)
+        value["phase"] = "verify-stopped-rest-listener"
         assert_stopped()
+        value["phase"] = "verify-stopped-service-flags"
+        value["stoppedService"] = _stopped_service_flags(ui)
         attempted_start = False
         passed("physical-graceful-stop")
         value.update(status="passed", phase="complete")
         return report
+    except DeviceUiUnavailable as error:
+        value["errorType"] = type(error).__name__
+        if ui is not None:
+            value["uiFailure"] = _ui_failure_metadata(ui)
+        if error.reason == "device-locked" and not attempted_start:
+            value.update(status="setup-required", phase="unlock-device-before-ui-interaction")
+            return report
+        raise
     except Exception as error:
         value["errorType"] = type(error).__name__
         if ui is not None:
@@ -529,10 +564,11 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                 state = ui.find("service_status").get("text")
                 if state in {"Running", "Starting"}:
                     ui.click("stop_service")
-                    ui.wait_state("Stopped")
+                    ui.wait_state("Stopped", timeout=30)
                 elif state not in {"Stopped", "Failed"}:
-                    ui.wait_state("Stopped")
+                    ui.wait_state("Stopped", timeout=30)
                 assert_stopped()
+                _stopped_service_flags(ui)
             except Exception as error:
                 cleanup_errors.append({"action": "normal-ui-stop", "errorType": type(error).__name__})
         if port is not None:

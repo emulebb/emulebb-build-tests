@@ -182,13 +182,13 @@ class Guest:
             state = "Running" if self.running else "Stopped"
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + state
                     + '"/><node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.key
-                    + '"/><node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" bounds="[400,0][500,100]" checked="'
+                    + '"/><node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" bounds="[400,500][500,600]" checked="'
                     + str(self.boot_enabled).lower() + '"/>'
                     '<node resource-id="org.emulebb.android:id/pending_link" text="' + self.pending_link + '"/>'
                     '<node resource-id="org.emulebb.android:id/pending_link_error" text="' + self.pending_error + '"/>'
-                    '<node resource-id="org.emulebb.android:id/open_webui" enabled="true" bounds="[600,0][700,100]"/>'
-                    '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,0][100,100]"/>'
-                    '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,0][300,100]"/>'
+                    '<node resource-id="org.emulebb.android:id/open_webui" enabled="true" bounds="[600,500][700,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,500][100,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,500][300,600]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
             if args[3] == "450":

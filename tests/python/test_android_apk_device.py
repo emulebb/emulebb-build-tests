@@ -40,6 +40,7 @@ class Phone:
         self.api = 36
         self.page_size = 16384
         self.unauthenticated = 401
+        self.foreground_lingers = False
 
     def command(self, *args, **kwargs):
         assert args[:2] == ("-s", SERIAL)
@@ -76,6 +77,9 @@ class Phone:
         if args[:4] == ("shell", "dumpsys", "activity", "activities"):
             package = "com.android.settings" if self.screen == "files" else "com.google.android.permissioncontroller"
             return "mResumedActivity: " + package + "/.PermissionActivity"
+        if args[:4] == ("shell", "dumpsys", "activity", "services"):
+            active = str(self.running or self.foreground_lingers).lower()
+            return "ACTIVITY MANAGER SERVICES\nServiceRecord org.emulebb.android/.DaemonService\nisForeground=" + active + " startRequested=" + active
         if args[:3] == ("shell", "am", "start") or args[:3] == ("shell", "input", "keyevent"):
             self.screen = "app"
         if args[:2] == ("shell", "sh"):
@@ -94,11 +98,11 @@ class Phone:
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + self.phase + '"/>'
                     '<node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + KEY + '"/>'
                     '<node resource-id="org.emulebb.android:id/bind_addr" enabled="true" text="127.0.0.1:20017"/>'
-                    '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,0][100,100]"/>'
-                    '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,0][300,100]"/>'
-                    '<node resource-id="org.emulebb.android:id/grant_all_files_access" enabled="true" bounds="[400,0][500,100]"/>'
-                    '<node resource-id="org.emulebb.android:id/allow_notifications" enabled="true" bounds="[600,0][700,100]"/>'
-                    '<node resource-id="org.emulebb.android:id/allow_local_network" enabled="true" bounds="[800,0][900,100]"/>'
+                    '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,500][100,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,500][300,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/grant_all_files_access" enabled="true" bounds="[400,500][500,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/allow_notifications" enabled="true" bounds="[600,500][700,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/allow_local_network" enabled="true" bounds="[800,500][900,600]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
             if self.screen != "app":
@@ -240,7 +244,7 @@ def test_ambiguous_settings_never_guess_a_permission_toggle_or_start(tmp_path, m
     assert value["status"] == "setup-required" and value["permissionChanges"] == []
     assert value["runtimeExecution"] == "not-run" and not phone.running
     assert [call for call in phone.calls if call[:3] == ("shell", "input", "tap")] == [
-        ("shell", "input", "tap", "450", "50")]
+        ("shell", "input", "tap", "450", "550")]
 
 
 @pytest.mark.parametrize("fault", ["foreground", "app-label", "checked", "disabled", "bad-bounds"])
@@ -333,6 +337,85 @@ def test_known_owned_active_service_is_gracefully_stopped_before_smoke(tmp_path,
     assert value["initialServiceNormalization"] == {"from": phase, "method": "normal-ui-stop", "status": "passed"}
     assert [call[3] for call in phone.calls if call[:3] == ("shell", "input", "tap")] == ["250", "50", "250"]
     assert not phone.running and value["runtimeExecution"] == "executed"
+
+
+def test_clipped_stop_is_scrolled_to_safe_content_before_tapping(tmp_path, monkeypatch):
+    phone = Phone()
+    command = phone.command
+    moved = [False]
+
+    def clipped(*args, **kwargs):
+        result = command(*args, **kwargs)
+        if args[2:5] == ("shell", "input", "swipe"):
+            moved[0] = True
+        if args[2:4] == ("shell", "cat") and phone.screen == "app":
+            return result.replace("[200,500][300,600]", "[200,800][300,900]" if moved[0] else "[200,1850][300,1920]")
+        return result
+
+    phone.command = clipped
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    assert json.loads(report.read_text())["status"] == "passed" and moved[0]
+    assert all(int(call[4]) < 1680 for call in phone.calls if call[:3] == ("shell", "input", "tap"))
+    stop_index = next(index for index, call in enumerate(phone.calls)
+                      if call[:3] == ("shell", "input", "tap") and call[3] == "250")
+    assert any(call[:3] == ("shell", "am", "start") for call in phone.calls[stop_index - 15:stop_index])
+
+
+def test_zero_area_stop_is_never_tapped_or_replaced_with_force_stop(tmp_path, monkeypatch):
+    phone = Phone()
+    command = phone.command
+
+    def zero(*args, **kwargs):
+        return command(*args, **kwargs).replace("[200,500][300,600]", "[200,500][300,500]")
+
+    phone.command = zero
+    with pytest.raises(RuntimeError, match="safe visible tap bounds"):
+        run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads((tmp_path / "initial/physical-device.json").read_text())
+    assert value["phase"] == "normal-ui-stop" and value["uiFailure"]["lastAction"]["bounds"] == [200, 500, 300, 500]
+    assert value["uiFailure"]["lastAction"]["tapped"] is False and phone.running
+    assert not any(call[:3] == ("shell", "input", "tap") and call[3] == "250" for call in phone.calls)
+
+
+def test_closed_rest_and_stopped_ui_do_not_hide_a_lingering_foreground_service(tmp_path, monkeypatch):
+    phone = Phone()
+    phone.foreground_lingers = True
+    with pytest.raises(RuntimeError, match="remained foreground"):
+        run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads((tmp_path / "initial/physical-device.json").read_text())
+    assert value["status"] == "failed" and value["phase"] == "verify-stopped-service-flags"
+    assert not any(case["name"] == "physical-graceful-stop" for case in value["cases"])
+
+
+def test_stopped_bound_service_dump_omits_inactive_foreground_fields():
+    ui = SimpleNamespace(shell=lambda *args: "ACTIVITY MANAGER SERVICES\n"
+                         "* ServiceRecord org.emulebb.android/.DaemonService\nstartRequested=false\n")
+    assert subject._stopped_service_flags(ui) == {"present": True, "foreground": False, "startRequested": False}
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_missing_app_ui_never_swipes_launcher_or_keyguard(tmp_path, monkeypatch, locked):
+    phone = Phone()
+    command = phone.command
+
+    def unavailable(*args, **kwargs):
+        result = command(*args, **kwargs)
+        if args[2:4] == ("shell", "cat"):
+            resource = "com.android.systemui:id/keyguard_root_view" if locked else "com.android.launcher:id/workspace"
+            return '<hierarchy><node resource-id="' + resource + '"/></hierarchy>'
+        if args[2:5] == ("shell", "dumpsys", "window"):
+            return "mShowingLockscreen=" + str(locked).lower()
+        return result
+
+    phone.command = unavailable
+    if locked:
+        report = run(tmp_path, monkeypatch, phone, execute=True)
+        value = json.loads(report.read_text())
+        assert value["status"] == "setup-required" and value["phase"] == "unlock-device-before-ui-interaction"
+    else:
+        with pytest.raises(subject.DeviceUiUnavailable, match="app UI is not visible"):
+            run(tmp_path, monkeypatch, phone, execute=True)
+    assert not any(call[:2] == ("shell", "input") for call in phone.calls)
 
 
 def test_known_owned_failed_service_can_retry_after_normal_permission_setup(tmp_path, monkeypatch):

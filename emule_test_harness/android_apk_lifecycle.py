@@ -125,6 +125,14 @@ def ui_nodes(xml: str) -> dict[str, dict[str, str]]:
     return result
 
 
+class DeviceUiUnavailable(RuntimeError):
+    """A fixed, non-sensitive reason why production UI interaction is unsafe."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__("Android device is locked" if reason == "device-locked" else "Production Android app UI is not visible")
+
+
 class ProductionUi:
     """Inspect only the production app UI on one explicitly selected device."""
 
@@ -132,6 +140,7 @@ class ProductionUi:
         self.command = command
         self.prefix = tuple(prefix)
         self.path = "/data/local/tmp/emulebb-apk-ui-" + uuid4().hex + ".xml"
+        self.last_action = None
 
     def shell(self, *args):
         return self.command(*self.prefix, "shell", *args)
@@ -149,6 +158,18 @@ class ProductionUi:
         """Inspect stock permission UI only in memory, with the same size bound."""
         return ui_elements(self._hierarchy())
 
+    def _require_app(self, nodes):
+        if nodes:
+            return
+        elements = self.elements()
+        locked = any(node.get("resource-id") in {
+            "com.android.systemui:id/keyguard_root_view", "com.android.systemui:id/keyguard_status_view",
+        } for node in elements)
+        if not locked:
+            policy = self.shell("dumpsys", "window", "policy")
+            locked = re.search(r"(?m)^\s*(?:mShowingLockscreen|mKeyguardShowing|showingAndNotOccluded)\s*[:=]\s*true\b", policy) is not None
+        raise DeviceUiUnavailable("device-locked" if locked else "app-not-visible")
+
     def find(self, name, *, enabled=False):
         size = re.findall(r"(\d+)x(\d+)", self.shell("wm", "size"))
         if not size:
@@ -157,6 +178,7 @@ class ProductionUi:
         deadline = time.monotonic() + 60
         while True:
             nodes = self.inspect()
+            self._require_app(nodes)
             if name in nodes:
                 node = nodes[name]
                 if not enabled or node.get("enabled") == "true":
@@ -168,6 +190,7 @@ class ProductionUi:
             # Production controls may span several scrollable viewports.
             for direction in (1, -1):
                 for _ in range(6):
+                    self._require_app(nodes)
                     first, last = (height * 3 // 4, height // 4) if direction == 1 else (height // 4, height * 3 // 4)
                     self.shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
                     nodes = self.inspect()
@@ -179,12 +202,35 @@ class ProductionUi:
                 raise RuntimeError("APK required control is not reachable: " + name)
 
     def click(self, name):
-        node = self.find(name, enabled=True)
-        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
-        if bounds is None or node.get("enabled") != "true":
-            raise RuntimeError("APK required control is missing or disabled: " + name)
-        x1, y1, x2, y2 = map(int, bounds.groups())
-        self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+        size = re.findall(r"(\d+)x(\d+)", self.shell("wm", "size"))
+        if not size:
+            raise RuntimeError("Cannot determine owned Android display dimensions")
+        width, height = map(int, size[-1])
+        top, bottom = height // 8, height * 7 // 8
+        for attempt in range(7):
+            node = self.find(name, enabled=True)
+            bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+            if bounds is None:
+                raise RuntimeError("APK required control has invalid bounds: " + name)
+            x1, y1, x2, y2 = map(int, bounds.groups())
+            self.last_action = {"resourceId": APPLICATION_ID + ":id/" + name, "bounds": [x1, y1, x2, y2],
+                                "viewport": [0, top, width, bottom], "scrollAttempts": attempt, "tapped": False}
+            if 0 <= x1 < x2 <= width and top <= y1 < y2 <= bottom:
+                current = self.inspect()
+                self._require_app(current)
+                if (name not in current or current[name].get("bounds") != node.get("bounds")
+                        or current[name].get("enabled") != "true"):
+                    continue
+                self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+                self.last_action["tapped"] = True
+                return
+            if attempt == 6 or x2 <= x1 or y2 <= y1:
+                raise RuntimeError("APK required control has no safe visible tap bounds: " + name)
+            # Immutable older APKs can draw behind gesture/status bars. Move the
+            # whole control into the central content area before any tap.
+            first, last = (height * 3 // 4, height // 2) if y2 > bottom else (height // 4, height // 2)
+            self._require_app(self.inspect())
+            self.shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
 
     def wait_state(self, expected, timeout=90):
         deadline = time.monotonic() + timeout
