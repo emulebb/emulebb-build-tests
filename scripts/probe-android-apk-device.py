@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--installation-receipt-sha256")
     parser.add_argument("--dwell-seconds", type=int, default=30)
     parser.add_argument("--render-webui", action="store_true")
+    parser.add_argument("--configure-storage", action="store_true")
     args = parser.parse_args()
     payload = admit_payload(args.apk_payload, args.apk_manifest_name,
                             source_sha=args.apk_source_sha, manifest_sha256=args.apk_manifest_sha256,
@@ -37,7 +38,7 @@ def main():
         expected_cert_sha256=args.expected_cert_sha256,
         output_root=get_workspace_output_root(), report_dir=args.report_dir, execute=args.execute,
         installation_receipt=args.installation_receipt, installation_receipt_sha256=args.installation_receipt_sha256,
-        dwell_seconds=args.dwell_seconds, render_webui=args.render_webui))
+        dwell_seconds=args.dwell_seconds, render_webui=args.render_webui, configure_storage=args.configure_storage))
 
 
 if __name__ == "__main__":

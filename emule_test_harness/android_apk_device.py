@@ -328,7 +328,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                           expected_cert_sha256: str,
                           execute: bool = False, installation_receipt: Path | None = None,
                           installation_receipt_sha256: str | None = None, dwell_seconds: int = 30,
-                          render_webui: bool = False) -> Path:
+                          render_webui: bool = False, configure_storage: bool = False) -> Path:
     """Admit/install or run a bounded owned-phone smoke without resetting user state.
 
     Runtime is limited to a package installed here while previously absent, or a
@@ -336,6 +336,8 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     read-only. Public first-run bootstrap is ordinary app behavior, not isolation.
     """
     admit_production_certificate(payload, expected_cert_sha256=expected_cert_sha256)
+    if configure_storage and not execute:
+        raise ValueError("Approved phone storage configuration requires explicit runtime execution")
     if type(dwell_seconds) is not int or not 15 <= dwell_seconds <= 300:
         raise ValueError("Physical foreground observation must be between 15 and 300 seconds")
     if type(payload.get("versionCode")) is not int or not 1 <= payload["versionCode"] <= 2_100_000_000:
@@ -477,9 +479,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         passed("empty-default-incoming-before-first-start")
         value["phase"] = "read-bootstrap-bind-address"
         bind = ui.find("bind_addr", enabled=True).get("text", "")
-        match = re.fullmatch(r"(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]*)", bind)
+        match = re.fullmatch(r"(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|\[::1\]):([1-9][0-9]*)", bind)
         if match is None or int(match[1]) > 65535:
-            raise RuntimeError("Physical smoke requires the app's loopback REST binding")
+            raise RuntimeError("Physical smoke requires wildcard or loopback REST reachable through its owned forward")
         remote_port = int(match[1])
         value["phase"] = "read-bootstrap-api-key"
         key = ui.find("api_key", enabled=True).get("text", "")
@@ -500,6 +502,13 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         app()
         value["runtimeExecution"] = "executed"
         passed("authenticated-source-bound-physical-readiness")
+        if configure_storage:
+            from .android_apk_profile import configure_storage as prepare_storage
+            value["phase"] = "persist-approved-storage-configuration"
+            value["storageConfiguration"] = prepare_storage(command, prefix=prefix,
+                base_url=f"http://127.0.0.1:{port}", api_key=key, payload=payload, device_hash=device_hash,
+                report_path=report_dir / "storage-configuration.json")
+            passed("approved-storage-configuration-persisted")
         status, body = _request(port, "/")
         if status != 200 or b"<html" not in body.lower():
             raise RuntimeError("Physical APK did not serve its bundled WebUI")

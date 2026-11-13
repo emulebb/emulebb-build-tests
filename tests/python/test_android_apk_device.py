@@ -147,7 +147,7 @@ class Phone:
             **payload()["buildIdentity"], "name": "eMuleBB", "apiVersion": "v1", "lifecycle": {"state": "running"}}}).encode()
 
 
-def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None):
+def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=False):
     monkeypatch.setattr(subject, "_request", phone.request)
     clock = [0.0]
     monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
@@ -155,7 +155,7 @@ def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None):
     report_dir = tmp_path / ("resume" if receipt else "initial")
     return subject.probe_physical_device(phone.command, payload(), serial=SERIAL, output_root=tmp_path,
         expected_cert_sha256="b" * 64,
-        report_dir=report_dir, execute=execute, dwell_seconds=15, installation_receipt=receipt,
+        report_dir=report_dir, execute=execute, configure_storage=configure, dwell_seconds=15, installation_receipt=receipt,
         installation_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt else None)
 
 
@@ -324,6 +324,27 @@ def test_exact_existing_apk_admission_keeps_unknown_profile_readonly(tmp_path, m
     assert value["status"] == "passed" and value["ownedInstallation"] is False
     assert value["runtimeExecution"] == "not-run"
     assert not any(call[0] == "install" or call[:3] == ("shell", "am", "start") for call in phone.calls)
+
+
+def test_storage_configuration_requires_owned_execution_and_uses_authenticated_context(tmp_path, monkeypatch):
+    from emule_test_harness import android_apk_profile
+    phone = Phone()
+    with pytest.raises(ValueError, match="explicit runtime execution"):
+        run(tmp_path, monkeypatch, phone, configure=True)
+    assert not phone.calls
+    calls = []
+
+    def configure(command, **kwargs):
+        assert phone.running and kwargs["api_key"] == KEY and kwargs["payload"] == payload()
+        calls.append(kwargs)
+        return {"status": "passed", "application": "persisted-requires-service-restart"}
+
+    monkeypatch.setattr(android_apk_profile, "configure_storage", configure)
+    report = run(tmp_path, monkeypatch, phone, execute=True, configure=True)
+    value = json.loads(report.read_text())
+    assert value["status"] == "passed" and len(calls) == 1
+    assert value["storageConfiguration"]["application"] == "persisted-requires-service-restart"
+    assert KEY not in report.read_text()
 
 
 @pytest.mark.parametrize("phase", ["Starting", "Running"])
