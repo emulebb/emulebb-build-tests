@@ -136,17 +136,11 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0)
             time.sleep(1)
 
     def authenticated():
+        from .android_emulator import _app_identity
         status, raw = _request(port, "/api/v1/app", key)
         if status != 200:
             raise RuntimeError("APK authenticated REST failed")
-        document = json.loads(raw)
-        app = document.get("data", {})
-        expected = payload["buildIdentity"]
-        if (app.get("sourceRevision") != expected["sourceRevision"]
-                or app.get("version") != expected["version"]
-                or app.get("releaseChannel") != expected["channel"]
-                or app.get("lifecycle", {}).get("state") != "running"):
-            raise RuntimeError("APK running daemon identity differs from its selected source")
+        _app_identity(json.loads(raw), payload["buildIdentity"])
 
     def passed(name):
         cases.append({"name": name, "status": "passed"})

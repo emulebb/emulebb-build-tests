@@ -114,8 +114,10 @@ class Guest:
         if key is None:
             return (200 if self.allow_unauthenticated else 401), b"{}"
         assert key == self.key
-        return 200, json.dumps({"data": {"sourceRevision": SOURCE, "version": "0.1.0-test",
-                                         "releaseChannel": "development", "lifecycle": {"state": "running"}}}).encode()
+        return 200, json.dumps({"meta": {"apiVersion": "v1"},
+                                "data": {"name": "eMuleBB", "apiVersion": "v1",
+                                         "sourceRevision": SOURCE, "version": "0.1.0-test",
+                                         "channel": "development", "lifecycle": {"state": "running"}}}).encode()
 
 
 def guest(tmp_path, monkeypatch):
@@ -175,6 +177,25 @@ def test_install_failure_does_not_claim_execution_and_still_writes_receipt(tmp_p
     assert result["runtimeExecution"] == "not-run"
     assert result["status"] == "failed"
     assert not result["cases"]
+
+
+def test_noncanonical_channel_field_cannot_satisfy_source_identity(tmp_path, monkeypatch):
+    peer, admitted = guest(tmp_path, monkeypatch)
+
+    def wrong_shape(port, path, key=None):
+        status, raw = peer.request(port, path, key)
+        if key is not None and path == "/api/v1/app":
+            value = json.loads(raw)
+            value["data"]["releaseChannel"] = value["data"].pop("channel")
+            raw = json.dumps(value).encode()
+        return status, raw
+
+    monkeypatch.setattr(subject, "_request", wrong_shape)
+    with pytest.raises(RuntimeError, match="identify the requested"):
+        subject.exercise(peer.command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    assert result["runtimeExecution"] == "not-run"
+    assert result["status"] == "failed"
 
 
 def test_cleanup_attempts_every_action_and_preserves_original_failure(tmp_path, monkeypatch):
