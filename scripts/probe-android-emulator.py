@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--apk-soak-seconds", type=int, default=0)
     parser.add_argument("--apk-peer-manifest-sha256")
     parser.add_argument("--apk-rust-source", type=Path)
+    parser.add_argument("--expected-cert-sha256")
     arguments = parser.parse_args()
     print(probe_guest(**vars(arguments)))
 

@@ -31,7 +31,7 @@ def payload(tmp_path, mutate=lambda value: None):
     apk.write_bytes(b"synthetic signed APK")
     value = {"schema": "emulebb.android.apk-package/1", "status": "passed",
              "source": {"emulebbRust": {"commit": SOURCE}}, "applicationId": subject.APPLICATION_ID,
-             "minSdk": 34, "targetSdk": 37,
+             "minSdk": 34, "targetSdk": 37, "debug": False,
              "buildIdentity": {"sourceRevision": SOURCE, "version": "0.1.0-test", "channel": "development"},
              "signerSha256": "b" * 64,
              "apk": {"path": apk.name, "sizeBytes": apk.stat().st_size,
@@ -44,33 +44,54 @@ def payload(tmp_path, mutate=lambda value: None):
 
 def test_source_and_actual_apk_bytes_are_bound(tmp_path):
     digest = payload(tmp_path)
-    admitted = subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest)
+    admitted = subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest,
+                                     expected_cert_sha256="b" * 64)
     assert admitted["payloadPath"] == str(tmp_path / "application.apk")
     (tmp_path / "application.apk").write_bytes(b"substituted APK bytes")
     with pytest.raises(RuntimeError, match="changed|hash differs"):
-        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest)
+        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest,
+                              expected_cert_sha256="b" * 64)
 
 
 @pytest.mark.parametrize("field,value", [("status", "failed"), ("applicationId", "org.example.other"),
     ("minSdk", 28), ("targetSdk", 34), ("signerSha256", "unsigned")])
 def test_wrong_publication_contract_is_rejected(tmp_path, field, value):
     digest = payload(tmp_path, lambda document: document.update({field: value}))
-    with pytest.raises(RuntimeError, match="selected signed"):
-        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest)
+    with pytest.raises(RuntimeError, match="selected signed|trusted certificate"):
+        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest,
+                              expected_cert_sha256="b" * 64)
 
 
 def test_source_substitution_is_rejected(tmp_path):
     digest = payload(tmp_path)
     with pytest.raises(RuntimeError, match="selected signed"):
-        subject.admit_payload(tmp_path, "manifest.json", source_sha="c" * 40, manifest_sha256=digest)
+        subject.admit_payload(tmp_path, "manifest.json", source_sha="c" * 40, manifest_sha256=digest,
+                              expected_cert_sha256="b" * 64)
     with pytest.raises(RuntimeError, match="receipt hash"):
-        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256="d" * 64)
+        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256="d" * 64,
+                              expected_cert_sha256="b" * 64)
 
 
 def test_apk_path_cannot_escape_payload(tmp_path):
     digest = payload(tmp_path, lambda document: document["apk"].update(path="../outside.apk"))
     with pytest.raises(RuntimeError, match="selected signed"):
-        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest)
+        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest,
+                              expected_cert_sha256="b" * 64)
+
+
+@pytest.mark.parametrize("changes", [{"debug": True}, {"debug": None}, {"debug": 0}, {"signerSha256": "c" * 64}])
+def test_qualification_rejects_debug_and_payload_selected_signing_authority(tmp_path, changes):
+    digest = payload(tmp_path, lambda document: document.update(changes))
+    with pytest.raises(RuntimeError, match="production release signed by the trusted certificate"):
+        subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest,
+                              expected_cert_sha256="b" * 64)
+
+
+@pytest.mark.parametrize("authority", [None, "", "b" * 63, "B" * 64, False])
+def test_qualification_has_no_missing_or_implicit_expected_certificate(authority):
+    with pytest.raises(ValueError, match="explicit trusted production certificate"):
+        subject.admit_production_certificate({"debug": False, "signerSha256": "b" * 64},
+                                             expected_cert_sha256=authority)
 
 
 def test_production_ui_has_unambiguous_resource_ids():
@@ -199,7 +220,8 @@ class Guest:
 
 def guest(tmp_path, monkeypatch):
     digest = payload(tmp_path)
-    admitted = subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest)
+    admitted = subject.admit_payload(tmp_path, "manifest.json", source_sha=SOURCE, manifest_sha256=digest,
+                                     expected_cert_sha256="b" * 64)
     peer = Guest(admitted)
     monkeypatch.setattr(subject, "_request", peer.request)
     clock = [0.0]

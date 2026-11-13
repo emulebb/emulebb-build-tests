@@ -51,7 +51,16 @@ def required_apk_cases(api: int) -> set[str]:
     return cases
 
 
-def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_sha256: str) -> dict:
+def admit_production_certificate(payload: dict, *, expected_cert_sha256: str) -> None:
+    """Require independently supplied release-signing authority, never self-expectation."""
+    if not isinstance(expected_cert_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", expected_cert_sha256) is None:
+        raise ValueError("APK qualification requires an explicit trusted production certificate SHA-256")
+    if payload.get("debug") is not False or payload.get("signerSha256") != expected_cert_sha256:
+        raise RuntimeError("APK qualification requires a production release signed by the trusted certificate")
+
+
+def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_sha256: str,
+                  expected_cert_sha256: str) -> dict:
     """Bind immutable release identities to one bounded, source-built signed APK."""
     if (re.fullmatch(r"[0-9a-f]{40}", source_sha) is None
             or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
@@ -67,6 +76,7 @@ def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_s
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise RuntimeError("APK receipt must contain an object")
+    admit_production_certificate(value, expected_cert_sha256=expected_cert_sha256)
     identity = value.get("buildIdentity", {})
     apk = value.get("apk", {})
     if (value.get("schema") != "emulebb.android.apk-package/1" or value.get("status") != "passed"

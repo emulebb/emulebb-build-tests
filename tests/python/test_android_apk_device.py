@@ -15,7 +15,7 @@ KEY = "synthetic-private-key-not-for-receipts"
 
 
 def payload():
-    return {"apk": {"sha256": "a" * 64}, "signerSha256": "b" * 64, "versionCode": 42,
+    return {"apk": {"sha256": "a" * 64}, "signerSha256": "b" * 64, "versionCode": 42, "debug": False,
             "buildIdentity": {"sourceRevision": "c" * 40, "version": "0.1.0-test", "channel": "development"},
             "payloadPath": "synthetic.apk"}
 
@@ -108,6 +108,7 @@ def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None):
     monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     report_dir = tmp_path / ("resume" if receipt else "initial")
     return subject.probe_physical_device(phone.command, payload(), serial=SERIAL, output_root=tmp_path,
+        expected_cert_sha256="b" * 64,
         report_dir=report_dir, execute=execute, dwell_seconds=15, installation_receipt=receipt,
         installation_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt else None)
 
@@ -178,6 +179,19 @@ def test_exact_existing_apk_admission_keeps_unknown_profile_readonly(tmp_path, m
     assert value["status"] == "passed" and value["ownedInstallation"] is False
     assert value["runtimeExecution"] == "not-run"
     assert not any(call[0] == "install" or call[:3] == ("shell", "am", "start") for call in phone.calls)
+
+
+@pytest.mark.parametrize("debug,signer,authority,error", [
+    (True, "b" * 64, "b" * 64, RuntimeError), (None, "b" * 64, "b" * 64, RuntimeError),
+    (False, "c" * 64, "b" * 64, RuntimeError), (False, "b" * 64, None, ValueError),
+])
+def test_physical_certificate_and_release_context_fail_before_any_device_operation(tmp_path, debug, signer, authority, error):
+    phone = Phone()
+    report_dir = tmp_path / "not-created"
+    with pytest.raises(error, match="trusted"):
+        subject.probe_physical_device(phone.command, {**payload(), "debug": debug, "signerSha256": signer},
+            expected_cert_sha256=authority, serial=SERIAL, output_root=tmp_path, report_dir=report_dir, execute=True)
+    assert phone.calls == [] and not report_dir.exists()
 
 
 def test_primary_readiness_failure_still_stops_via_ui_and_removes_only_own_artifacts(tmp_path, monkeypatch):

@@ -109,6 +109,18 @@ def test_missing_kvm_never_falls_back(isolated, monkeypatch):
     assert calls.call_args.args[0][-1] == "-accel-check"
 
 
+def test_apk_qualification_needs_independent_certificate_before_guest_execution(isolated, monkeypatch):
+    arguments, _ = isolated
+    arguments.update(apk_source_sha="a" * 40, apk_manifest_sha256="b" * 64,
+                     apk_manifest_name="synthetic.apk.manifest.json")
+    spawn = Mock(side_effect=AssertionError("must not spawn"))
+    monkeypatch.setattr(subject.subprocess, "run", spawn)
+    with pytest.raises(ValueError, match="trusted expected certificate"):
+        subject.probe_guest(**arguments)
+    spawn.assert_not_called()
+    assert not arguments["report_dir"].exists()
+
+
 @pytest.mark.parametrize("outcome", ["success", "guest-mismatch", "exit", "timeout", "capture", "adb-start",
                                     "cleanup", "late-capture", "transient-adb", "tls-success", "tls-failure"])
 def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, outcome):

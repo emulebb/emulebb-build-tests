@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, _request, required_apk_cases
+from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, _request, admit_production_certificate, required_apk_cases
 
 
 def existing_adb_server_version(port: int) -> int:
@@ -115,6 +115,7 @@ def _owned_installation(path: Path | None, digest: str | None, *, payload: dict,
 
 
 def probe_physical_device(command, payload: dict, *, serial: str, output_root: Path, report_dir: Path,
+                          expected_cert_sha256: str,
                           execute: bool = False, installation_receipt: Path | None = None,
                           installation_receipt_sha256: str | None = None, dwell_seconds: int = 30,
                           render_webui: bool = False) -> Path:
@@ -124,6 +125,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
     prior hash-bound receipt for that installation. Unknown existing profiles are
     read-only. Public first-run bootstrap is ordinary app behavior, not isolation.
     """
+    admit_production_certificate(payload, expected_cert_sha256=expected_cert_sha256)
     if type(dwell_seconds) is not int or not 15 <= dwell_seconds <= 300:
         raise ValueError("Physical foreground observation must be between 15 and 300 seconds")
     if type(payload.get("versionCode")) is not int or not 1 <= payload["versionCode"] <= 2_100_000_000:

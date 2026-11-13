@@ -560,7 +560,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
                 tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None,
                 apk_source_sha: str | None = None, apk_manifest_sha256: str | None = None,
                 apk_manifest_name: str | None = None, apk_soak_seconds: int = 0,
-                apk_peer_manifest_sha256: str | None = None, apk_rust_source: Path | None = None) -> Path:
+                apk_peer_manifest_sha256: str | None = None, apk_rust_source: Path | None = None,
+                expected_cert_sha256: str | None = None) -> Path:
     """Boot one fresh guest in an isolated container and stop only owned resources."""
     if (platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0
             or not Path("/.dockerenv").is_file() or {name for _, name in socket.if_nameindex()} != {"lo"}):
@@ -571,9 +572,9 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         raise ValueError("Android TLS proof requires both source and payload manifest identities")
     payload = None if tls_source_sha is None else _tls_payload(
         Path("/tls-payload"), source_sha=tls_source_sha, manifest_sha256=tls_manifest_sha256)
-    apk_values = (apk_source_sha, apk_manifest_sha256, apk_manifest_name)
+    apk_values = (apk_source_sha, apk_manifest_sha256, apk_manifest_name, expected_cert_sha256)
     if any(value is not None for value in apk_values) and not all(value is not None for value in apk_values):
-        raise ValueError("APK proof requires source, manifest hash and manifest filename")
+        raise ValueError("APK proof requires source, manifest hash, manifest filename and trusted expected certificate")
     if apk_source_sha is not None and (payload is not None or api < 34):
         raise ValueError("APK proof requires its own Android 14+ guest")
     if type(apk_soak_seconds) is not int or not 0 <= apk_soak_seconds <= 7 * 86400:
@@ -584,7 +585,8 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
     if apk_source_sha is not None:
         from .android_apk_lifecycle import admit_payload
         apk_payload = admit_payload(Path("/apk-payload"), apk_manifest_name,
-                                    source_sha=apk_source_sha, manifest_sha256=apk_manifest_sha256)
+                                    source_sha=apk_source_sha, manifest_sha256=apk_manifest_sha256,
+                                    expected_cert_sha256=expected_cert_sha256)
     peer_payload = None
     if apk_payload is not None:
         from .android_apk_peer import admit_peer
