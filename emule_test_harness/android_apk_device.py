@@ -20,6 +20,34 @@ import time
 from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, _request, admit_production_certificate, required_apk_cases
 
 
+def _ui_failure_metadata(ui: ProductionUi) -> dict:
+    """Retain only resource IDs/boolean flags and foreground package, never UI values."""
+    result = {"foregroundPackage": None}
+    errors = []
+    try:
+        elements = ui.elements()
+        controls = []
+        for node in elements:
+            resource = node.get("resource-id", "")
+            if re.fullmatch(r"[A-Za-z0-9_.]+:id/[A-Za-z0-9_]+", resource):
+                controls.append({"resourceId": resource, **{flag: node.get(flag) == "true" for flag in (
+                    "enabled", "clickable", "checkable", "checked", "focusable", "focused", "scrollable", "password")}})
+        result.update(hierarchyNodeCount=len(elements), resourceControlCount=len(controls),
+                      controls=controls[:128], controlsTruncated=len(controls) > 128)
+    except Exception as error:
+        errors.append({"action": "resource-ids", "errorType": type(error).__name__})
+    try:
+        activities = ui.shell("dumpsys", "activity", "activities")
+        match = re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*?\b([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)/", activities)
+        if match:
+            result["foregroundPackage"] = match[1]
+    except Exception as error:
+        errors.append({"action": "foreground-package", "errorType": type(error).__name__})
+    if errors:
+        result["inspectionErrors"] = errors
+    return result
+
+
 def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> dict:
     """Grant only this owned install through app buttons and unambiguous stock UI."""
     def granted(permission):
@@ -420,6 +448,8 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         return report
     except Exception as error:
         value["errorType"] = type(error).__name__
+        if ui is not None:
+            value["uiFailure"] = _ui_failure_metadata(ui)
         raise
     finally:
         active_failure = sys.exc_info()[0] is not None

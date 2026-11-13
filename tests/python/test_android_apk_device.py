@@ -449,3 +449,32 @@ def test_readonly_adb_version_protocol_is_bounded(monkeypatch, response):
         with pytest.raises(RuntimeError):
             subject.existing_adb_server_version(5037)
     assert sent == [b"000chost:version"]
+
+
+def test_ui_failure_metadata_retains_only_resource_ids_flags_and_foreground_package():
+    ui = SimpleNamespace(elements=lambda: [{"resource-id": "org.emulebb.android:id/service_status",
+        "text": KEY, "content-desc": KEY, "enabled": "true", "clickable": "false"},
+        {"resource-id": "malformed:" + KEY, "text": KEY}],
+        shell=lambda *args: "topResumedActivity=ActivityRecord{synthetic u0 org.emulebb.android/.MainActivity} " + KEY)
+    value = subject._ui_failure_metadata(ui)
+    assert value["foregroundPackage"] == "org.emulebb.android"
+    assert value["resourceControlCount"] == 1 and value["hierarchyNodeCount"] == 2
+    assert value["controls"][0]["resourceId"] == "org.emulebb.android:id/service_status"
+    assert value["controls"][0]["enabled"] is True and value["controls"][0]["clickable"] is False
+    assert KEY not in json.dumps(value)
+
+
+def test_ui_failure_metadata_bounds_control_count_and_preserves_other_inspections():
+    ui = SimpleNamespace(elements=lambda: [{"resource-id": "org.emulebb.android:id/synthetic"} for _ in range(200)],
+                         shell=lambda *args: "mResumedActivity: org.emulebb.android/.MainActivity")
+    value = subject._ui_failure_metadata(ui)
+    assert len(value["controls"]) == 128 and value["controlsTruncated"] is True
+
+    def fail():
+        raise ValueError(KEY)
+
+    ui.elements = fail
+    value = subject._ui_failure_metadata(ui)
+    assert value["foregroundPackage"] == "org.emulebb.android"
+    assert value["inspectionErrors"] == [{"action": "resource-ids", "errorType": "ValueError"}]
+    assert KEY not in json.dumps(value)
