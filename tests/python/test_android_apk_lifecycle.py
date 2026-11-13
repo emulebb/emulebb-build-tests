@@ -173,6 +173,7 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     peer.api = api
     result = subject.exercise(peer.command, admitted, report_dir=tmp_path)
     assert result["status"] == "passed"
+    assert result["androidApiLevel"] == api
     expected = [
         "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness",
         "bundled-webui", "graceful-stop", "notification-denied-service-start",
@@ -201,6 +202,28 @@ def test_successful_force_idle_command_is_not_enough_to_claim_doze(tmp_path, mon
         subject.exercise(peer.command, admitted, report_dir=tmp_path)
     result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
     assert result["status"] == "failed"
+    assert "screen-off-doze-observation" not in [case["name"] for case in result["cases"]]
+
+
+@pytest.mark.parametrize("exit_state", ["awake", "active"])
+def test_dwell_does_not_pass_if_guest_leaves_screen_off_deep_doze(tmp_path, monkeypatch, exit_state):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    polls = [0]
+
+    def command(*arguments, **kwargs):
+        args = arguments[2:]
+        if args == ("shell", "dumpsys", "deviceidle", "get", "deep"):
+            polls[0] += 1
+            if polls[0] >= 3 and exit_state == "active":
+                return "ACTIVE"
+        if args == ("shell", "dumpsys", "power") and polls[0] >= 3 and exit_state == "awake":
+            return "mWakefulness=Awake"
+        return peer.command(*arguments, **kwargs)
+
+    with pytest.raises(RuntimeError, match="deep idle|sleeping device"):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    assert result["status"] == "failed" and result["endurance"]["observedSeconds"] == 0
     assert "screen-off-doze-observation" not in [case["name"] for case in result["cases"]]
 
 

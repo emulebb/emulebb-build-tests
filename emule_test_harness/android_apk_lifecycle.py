@@ -229,6 +229,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
         shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
         api = int(shell("getprop", "ro.build.version.sdk"))
+        result["androidApiLevel"] = api
         if api >= 37:
             shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
         shell("dumpsys", "deviceidle", "whitelist", "+" + APPLICATION_ID)
@@ -382,14 +383,18 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         shell("input", "keyevent", "KEYCODE_SLEEP")
         shell("dumpsys", "battery", "unplug")
         shell("dumpsys", "deviceidle", "force-idle")
-        if shell("dumpsys", "deviceidle", "get", "deep") != "IDLE":
-            raise RuntimeError("APK Doze proof did not enter actual deep idle")
-        if re.search(r"mWakefulness=(Asleep|Dozing)\b", shell("dumpsys", "power")) is None:
-            raise RuntimeError("APK screen-off proof did not observe a sleeping device")
+        def assert_idle_screen_off():
+            if shell("dumpsys", "deviceidle", "get", "deep") != "IDLE":
+                raise RuntimeError("APK Doze proof did not retain actual deep idle")
+            if re.search(r"mWakefulness=(Asleep|Dozing)\b", shell("dumpsys", "power")) is None:
+                raise RuntimeError("APK screen-off proof did not observe a sleeping device")
+
+        assert_idle_screen_off()
         started = time.monotonic()
         dwell = max(60, soak_seconds)
         samples = 0
         while True:
+            assert_idle_screen_off()
             authenticated()
             samples += 1
             elapsed = time.monotonic() - started
