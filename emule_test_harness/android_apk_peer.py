@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
@@ -15,9 +16,56 @@ from uuid import uuid4
 
 from .rust_local_ed2k import ed2k_link_with_source, publish_shared_tree, request_json
 from .rust_shared_library_fixture import deterministic_payload
+from .android_adb_failure import AdbOperationFailure
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
+
+
+class CampaignFailure(RuntimeError):
+    """Expose only a fixed stage code and exception type, never native output."""
+    def __init__(self, failure):
+        self.failure = failure
+        super().__init__("APK transfer campaign failed: " + failure["code"])
+
+
+class _Campaign:
+    def __init__(self, path, peer, prefix):
+        self.path = path
+        self.value = {"schema": "emulebb.android.transfer-campaign/1", "status": "running",
+                      "phase": "admit-original-settings", "peerSourceRevision": peer["sourceRevision"],
+                      "deviceSerialSha256": hashlib.sha256(prefix[1].encode()).hexdigest(), "cleanup": []}
+        self.save()
+
+    def save(self):
+        # No UI, exception text, operator paths, endpoints or credential values.
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        with temporary.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(self.value, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(self.path)
+
+    def mark(self, phase):
+        self.value["phase"] = phase
+        self.save()
+
+    def fail(self, error):
+        self.value["status"] = "failed"
+        self.value.setdefault("failure", {"phase": self.value["phase"],
+            "code": self.value["phase"] + "-failed", "errorType": type(error).__name__,
+            **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {})})
+        self.save()
+
+    def record(self, **values):
+        self.value.update(values)
+        self.save()
+
+    def cleaned(self, action, error=None):
+        self.value["cleanup"].append({"action": action, "status": "passed" if error is None else "failed",
+            **({"errorType": type(error).__name__} if error is not None else {}),
+            **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {})})
+        self.save()
 
 
 def _server_configuration(base, key):
@@ -30,7 +78,7 @@ def _server_configuration(base, key):
 
 
 @contextmanager
-def local_listener(base: str, key: str, *, fresh_peer=False):
+def local_listener(base: str, key: str, *, fresh_peer=False, campaign=None):
     """Direct listener startup to loopback without replacing operator servers."""
     before = _server_configuration(base, key)
     existing = [row for row in before if row["address"] == "127.0.0.1" and row["port"] == 20031]
@@ -50,8 +98,14 @@ def local_listener(base: str, key: str, *, fresh_peer=False):
         if acknowledgement.get("operationQueued") is not True:
             raise RuntimeError("APK transfer peer did not accept its eD2K start operation")
         yield
+    except Exception as error:
+        if campaign is not None:
+            campaign.fail(error)
+        raise
     finally:
         if created:
+            if campaign is not None:
+                campaign.mark("verify-owned-loopback-server-removal")
             current = _server_configuration(base, key)
             owned = [row for row in current if row["address"] == "127.0.0.1" and row["port"] == 20031]
             if len(owned) != 1 or owned[0]["name"] != name:
@@ -102,7 +156,7 @@ def admit_peer(root: Path, *, manifest_sha256: str, identity: dict, expected_abi
 
 @contextmanager
 def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: Path, rust_source: Path, bind_ip: str,
-                    prefix=PREFIX, bind_interface: str | None = None, spawn_daemon=None, stop_client=None):
+                    prefix=PREFIX, bind_interface: str | None = None, spawn_daemon=None, stop_client=None, campaign=None):
     """Own a disjoint CLI profile and verify kernel process identity before signals."""
     from .android_emulator import _app_identity, _daemon_identity, _rest_app, _start_production_daemon, _stop_group
     from .rust_client import write_rust_profile
@@ -114,33 +168,55 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
 
     home = "/data/local/tmp/emulebb-apk-peer-" + uuid4().hex
     profile = report_dir / "peer-profile"
-    write_rust_profile(profile, rust_repo=rust_source, incoming_dir=Path(home) / "incoming",
-                       rest_addr="127.0.0.1", rest_port=20027, api_key=PEER_KEY,
-                       auto_connect=False, network_kademlia=False,
-                       p2p_bind_ip=bind_ip if bind_interface is None else None, p2p_bind_interface=bind_interface,
-                       ed2k_port=20029, kad_port=20030, server_endpoint="127.0.0.1:20031",
-                       nat_enabled=False, replace_servers=True, initial_shared_directory_reload=False,
-                       local_only_discovery=True)
-    command(*prefix, "shell", "mkdir", "-m", "700", home)
     process = capture = None
     forward = pid = identity = None
+    home_created = False
     executable = home + "/emulebb-rust"
     digest = peer["files"]["emulebb-rust"]["sha256"]
+    def stage(name):
+        if campaign is not None:
+            campaign.mark(name)
     try:
+        if campaign is not None:
+            campaign.record(peerOwnership={"nonce": PurePosixPath(home).name.removeprefix("emulebb-apk-peer-"),
+                                           "executableSha256": digest, "creationVerified": False})
+        stage("peer-profile-seed")
+        write_rust_profile(profile, rust_repo=rust_source, incoming_dir=Path(home) / "incoming",
+                           rest_addr="127.0.0.1", rest_port=20027, api_key=PEER_KEY,
+                           auto_connect=False, network_kademlia=False,
+                           p2p_bind_ip=bind_ip if bind_interface is None else None, p2p_bind_interface=bind_interface,
+                           ed2k_port=20029, kad_port=20030, server_endpoint="127.0.0.1:20031",
+                           nat_enabled=False, replace_servers=True, initial_shared_directory_reload=False,
+                           local_only_discovery=True)
+        stage("peer-home-create")
+        command(*prefix, "shell", "mkdir", "-m", "700", home)
+        home_created = True
+        if campaign is not None:
+            campaign.value["peerOwnership"]["creationVerified"] = True
+            campaign.save()
+        stage("peer-profile-push")
         command(*prefix, "push", str(profile) + "/.", home, timeout=60)
         command(*prefix, "shell", "chmod", "600", home + "/emulebb-rust-settings.toml")
         for name, record in peer["files"].items():
+            stage("peer-binary-push-and-hash")
             target = home + "/" + name
             command(*prefix, "push", str(Path(peer["payloadRoot"]) / name), target, timeout=120)
             if command(*prefix, "shell", "sha256sum", target).split() != [record["sha256"], target]:
                 raise RuntimeError("Guest APK peer file differs from its source-bound bytes")
             command(*prefix, "shell", "chmod", "500", target)
+        stage("peer-process-spawn")
         process, capture = spawn(adb, child, executable, home, home, report_dir)
         # Admit the real process immediately: a physical phone has no disposable
         # outer guest teardown to clean up an unverified long-running peer.
         deadline = time.monotonic() + 10
+        stage("peer-process-admission")
         while True:
             if process.poll() is not None:
+                if campaign is not None:
+                    if capture is not None:
+                        capture.close()
+                    campaign.record(peerProcess={"returnCode": process.returncode,
+                        **({"startup": capture.summary()} if callable(getattr(capture, "summary", None)) else {})})
                 raise RuntimeError("APK peer exited before guest process admission")
             pid = command(*prefix, "shell", "cat", home + "/owned-daemon.pid", check=False)
             try:
@@ -150,15 +226,22 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
                 if time.monotonic() >= deadline:
                     raise RuntimeError("APK peer guest process admission timed out") from None
                 time.sleep(0.25)
+        stage("peer-rest-forward")
         raw_forward = command(*prefix, "forward", "--no-rebind", "tcp:0", "tcp:20027")
         if re.fullmatch(r"[1-9][0-9]*", raw_forward) is None or int(raw_forward) > 65535:
             raise RuntimeError("APK peer must allocate a private REST forward")
         forward = int(raw_forward)
         deadline = time.monotonic() + 90
+        stage("peer-source-bound-readiness")
         while True:
             if capture is not None:
                 capture.raise_if_failed()
             if process.poll() is not None:
+                if campaign is not None:
+                    if capture is not None:
+                        capture.close()
+                    campaign.record(peerProcess={"returnCode": process.returncode,
+                        **({"startup": capture.summary()} if callable(getattr(capture, "summary", None)) else {})})
                 raise RuntimeError("APK peer exited before REST readiness")
             try:
                 status, document = _rest_app(forward, PEER_KEY)
@@ -170,12 +253,18 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
             if time.monotonic() >= deadline:
                 raise RuntimeError("APK peer REST readiness timed out")
             time.sleep(0.5)
+        stage("peer-ready")
         yield home, forward
+        stage("peer-graceful-shutdown")
         if _daemon_identity(command, pid, executable, digest, home, prefix=prefix) != identity:
             raise RuntimeError("APK peer process identity changed before graceful shutdown")
         request_json(f"http://127.0.0.1:{forward}", "POST", "/api/v1/app/shutdown", PEER_KEY, {"confirmShutdown": True})
         if process.wait(timeout=30) != 0:
             raise RuntimeError("APK qualification peer did not exit gracefully")
+    except Exception as error:
+        if campaign is not None:
+            campaign.fail(error)
+        raise
     finally:
         active_failure = sys.exc_info()[0] is not None
         cleanup_errors = []
@@ -204,7 +293,7 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
                     if existing:
                         command(*prefix, "forward", "--remove", "tcp:" + str(forward))
                 actions.append(remove_forward)
-            if not cleanup_errors:
+            if not cleanup_errors and home_created:
                 def remove_home():
                     if command(*prefix, "shell", "readlink", "-f", home) != home:
                         raise RuntimeError("APK peer home was redirected; refusing cleanup")
@@ -227,6 +316,22 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
 def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str,
                    child: dict, report_dir: Path, rust_source: Path, restart_service,
                    prefix=PREFIX, spawn_daemon=None, stop_client=None) -> dict:
+    campaign = _Campaign(report_dir / "transfer-campaign.json", peer, prefix)
+    try:
+        result = _transfer_proof(command, peer, apk_port=apk_port, api_key=api_key, adb=adb,
+            child=child, report_dir=report_dir, rust_source=rust_source, restart_service=restart_service,
+            prefix=prefix, spawn_daemon=spawn_daemon, stop_client=stop_client, campaign=campaign)
+    except Exception as error:
+        campaign.fail(error)
+        campaign.record(phase=campaign.value["failure"]["phase"])
+        raise CampaignFailure(campaign.value["failure"]) from None
+    campaign.record(status="passed", phase="complete")
+    return result
+
+
+def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str,
+                    child: dict, report_dir: Path, rust_source: Path, restart_service,
+                    prefix, spawn_daemon, stop_client, campaign) -> dict:
     """Own a real transfer, collision and restart campaign; restore operator state."""
     base = f"http://127.0.0.1:{apk_port}"
     def request(method, route, body=None):
@@ -250,6 +355,7 @@ def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str
     original = {group: {name: settings[group][name] for name in names} for group, names in selection.items()}
     if not isinstance(original["daemon"]["incomingDir"], str) or not original["daemon"]["incomingDir"].startswith("/"):
         raise RuntimeError("APK transfer requires its explicit prepared incoming configuration")
+    campaign.mark("admit-prior-downloads-and-roots")
     original_roots = shared_roots()
     rows = request("GET", "/api/v1/transfers").get("items")
     if not isinstance(rows, list) or any(row.get("state") != "completed" for row in rows):
@@ -259,6 +365,7 @@ def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str
     if not isinstance(shared, list):
         raise RuntimeError("APK transfer returned invalid preexisting shared files")
     prior_hashes.update(row.get("hash", "").lower() for row in shared)
+    campaign.mark("admit-network-binding")
     network = request_json(base, "GET", "/api/v1/network", api_key)
     bind_ip = network.get("binding", {}).get("activeConfiguredAddress")
     address = ipaddress.ip_address(bind_ip)
@@ -270,11 +377,17 @@ def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str
     occupant = b"synthetic foreign occupant"
     content = deterministic_payload(0, 256 * 1024, generation="android-apk-" + nonce)
     expected_sha = hashlib.sha256(content).hexdigest()
+    campaign.record(fixtureOwnership={"nonce": nonce, "payloadSha256": expected_sha,
+        "occupantSha256": hashlib.sha256(occupant).hexdigest(), "sizeBytes": len(content), "creationVerified": False},
+        originalSettingsSha256=hashlib.sha256(json.dumps(original, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
     fixture = report_dir / name
     fixture.write_bytes(content)
     foreign = report_dir / "foreign.bin"
     foreign.write_bytes(occupant)
+    campaign.mark("fixture-directory-create")
     shell("mkdir", "-m", "700", incoming)
+    campaign.value["fixtureOwnership"]["creationVerified"] = True
+    campaign.save()
     canonical = shell("readlink", "-f", incoming)
     if canonical != "/storage/emulated/0/Download/" + PurePosixPath(incoming).name:
         raise RuntimeError("APK incoming fixture did not resolve to its owned directory")
@@ -283,59 +396,78 @@ def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str
     changed = False
     cleanup_errors = []
     try:
+        campaign.mark("fixture-occupant-push")
         command(*prefix, "push", str(foreign), incoming + "/" + name)
         changed = True
+        campaign.mark("persist-fixture-settings")
         request("PATCH", "/api/v1/app/settings",
                 {"daemon": {"incomingDir": incoming},
                  "core": {"autoConnect": False, "networkKademlia": False, "networkEd2k": True},
                  "ed2k": {"enableUdpReask": False, "addServersFromServer": False}, "nat": {"enabled": False}})
+        campaign.mark("restart-fixture-destination")
         restart_service()
+        campaign.mark("verify-fixture-destination")
         if request("GET", "/api/v1/app/settings").get("daemon", {}).get("incomingDir") != incoming:
             raise RuntimeError("APK qualification destination did not survive service restart")
         interface = network.get("binding", {}).get("activeInterfaceId") or None
         with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
                 rust_source=rust_source, bind_ip=bind_ip, prefix=prefix, bind_interface=interface,
-                spawn_daemon=spawn_daemon, stop_client=stop_client) as (home, port):
+                spawn_daemon=spawn_daemon, stop_client=stop_client, campaign=campaign) as (home, port):
+            campaign.mark("peer-shared-fixture-push")
             shared = home + "/shared"
             shell("mkdir", "-m", "700", shared)
             command(*prefix, "push", str(fixture), shared + "/" + name)
             peer_base = f"http://127.0.0.1:{port}"
+            campaign.mark("peer-shared-file-hash")
             item = publish_shared_tree(peer_base, PEER_KEY, root=shared, file_name=name)["sharedFiles"]["matched"]
             file_hash = item["hash"].lower()
             if re.fullmatch(r"[0-9a-f]{32}", file_hash) is None or file_hash in prior_hashes:
                 file_hash = None
                 raise RuntimeError("APK qualification payload already belongs to the operator")
             source_link = ed2k_link_with_source(item["ed2kLink"], bind_ip, 20029)
-            with local_listener(peer_base, PEER_KEY, fresh_peer=True), local_listener(base, api_key):
+            campaign.record(transferHash=file_hash)
+            campaign.mark("directed-local-listener-start")
+            with local_listener(peer_base, PEER_KEY, fresh_peer=True, campaign=campaign), local_listener(base, api_key, campaign=campaign):
+                campaign.mark("enqueue-owned-transfer")
                 request("POST", "/api/v1/transfers", {"link": source_link, "paused": False})
                 deadline = time.monotonic() + 120
+                campaign.mark("await-completed-delivery")
                 while True:
                     files = request("GET", "/api/v1/shared-files").get("items", [])
                     result = next((row for row in files if row.get("hash", "").lower() == file_hash
                                    and row.get("complete") is True and row.get("partFile") is False), None)
                     if result is not None:
                         path = PurePosixPath(result.get("path", ""))
+                        campaign.mark("verify-delivered-path-and-size")
                         if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
                             raise RuntimeError("APK delivered file has invalid size, location or collision handling")
+                        campaign.mark("verify-delivered-bytes")
                         if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
                             raise RuntimeError("APK delivered bytes differ from the deterministic peer payload")
+                        campaign.mark("verify-collision-preserved")
                         if guest_sha256(command, incoming + "/" + name, prefix=prefix) != hashlib.sha256(occupant).hexdigest():
                             raise RuntimeError("APK delivery replaced the foreign destination occupant")
                         break
                     if time.monotonic() >= deadline:
                         raise RuntimeError("APK local transfer did not register a completed delivery within its bound")
                     time.sleep(1)
+        campaign.mark("restart-completed-delivery")
         restart_service()
+        campaign.mark("verify-completed-delivery-metadata")
         completed = request("GET", "/api/v1/transfers").get("items", [])
         if not any(row.get("hash", "").lower() == file_hash and row.get("state") == "completed"
                    and row.get("deliveredPath") == str(path) for row in completed):
             raise RuntimeError("APK completed delivery metadata did not survive restart")
+        campaign.mark("verify-completed-delivery-bytes")
         if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
             raise RuntimeError("APK delivered bytes changed across service restart")
         return {"status": "passed", "sizeBytes": len(content), "sha256": expected_sha,
                 "collisionPreserved": True, "completedDeliverySurvivesRestart": True,
                 "deliveredInSharedStorage": True, "peerSourceRevision": peer["sourceRevision"],
                 "transport": "same-device-p2p", "wifiDataPlane": "not-claimed"}
+    except Exception as error:
+        campaign.fail(error)
+        raise
     finally:
         active_failure = sys.exc_info()[0] is not None
         def remove_transfer():
@@ -364,11 +496,16 @@ def transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: str
                 raise RuntimeError("Owned collision fixture changed; refusing cleanup")
             shell("rm", "--", shlex.quote(incoming + "/" + name))
             shell("rmdir", incoming)
-        for action in (remove_transfer, restore_settings, remove_fixture):
+        for action_name, action in (("remove-owned-transfer", remove_transfer), ("restore-original-settings", restore_settings),
+                                    ("remove-owned-fixture", remove_fixture)):
+            campaign.mark("cleanup-" + action_name)
             try:
                 action()
+                campaign.cleaned(action_name)
             except Exception as error:
                 cleanup_errors.append(type(error).__name__)
+                campaign.cleaned(action_name, error)
+                campaign.fail(error)
         if cleanup_errors:
             (report_dir / "transfer-cleanup.json").write_text(json.dumps({"status": "failed", "errorTypes": cleanup_errors}) + "\n", encoding="utf-8")
             if not active_failure:

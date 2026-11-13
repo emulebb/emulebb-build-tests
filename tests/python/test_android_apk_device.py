@@ -36,22 +36,63 @@ def test_binary_device_reads_preserve_kernel_cmdline_nuls(monkeypatch):
     assert calls[0][1]["text"] is False
 
 
+@pytest.mark.parametrize("fault,reason,exit_code", [("permission", "permission-denied", 1),
+    ("unknown", "unclassified-command-failure", 23), ("timeout", "command-timeout", None),
+    ("os", "permission-denied", None)])
+def test_adb_failure_projection_never_retains_private_argv_output_or_exception_text(monkeypatch, fault, reason, exit_code):
+    import errno
+    device = selected_adb(monkeypatch)
+
+    def fail(*args, **kwargs):
+        if fault == "timeout":
+            raise subject.subprocess.TimeoutExpired([KEY, SERIAL], 10, output=KEY, stderr=SERIAL)
+        if fault == "os":
+            raise PermissionError(errno.EACCES, KEY, SERIAL)
+        return SimpleNamespace(returncode=exit_code, stdout=KEY,
+            stderr=("Permission denied " if fault == "permission" else "") + KEY + SERIAL)
+
+    monkeypatch.setattr(subject.subprocess, "run", fail)
+    with pytest.raises(subject.AdbOperationFailure) as error:
+        device.command("-s", SERIAL, "shell", "mkdir", "/private/" + KEY)
+    evidence = error.value.safe_failure
+    assert evidence == {"operation": "shell-mkdir", "reason": reason, "exitCode": exit_code}
+    assert KEY not in str(error.value) + json.dumps(evidence) and SERIAL not in json.dumps(evidence)
+
+
 def test_physical_peer_launcher_owns_only_selected_client_and_discards_native_logs(tmp_path, monkeypatch):
+    import io
     device = selected_adb(monkeypatch)
     calls = []
-    process = object()
+    process = SimpleNamespace(stdout=io.BytesIO(b""))
     monkeypatch.setattr(subject.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)) or process)
     home = "/data/local/tmp/emulebb-apk-peer-" + "a" * 32
-    assert device.spawn_peer("ignored-other-adb", {}, home + "/emulebb-rust", home, home, tmp_path) == (process, None)
+    owned, capture = device.spawn_peer("ignored-other-adb", {}, home + "/emulebb-rust", home, home, tmp_path)
+    assert owned is process
+    capture.close()
+    capture.raise_if_failed()
     arguments, options = calls[0]
     assert arguments[0][:8] == ["synthetic-adb", "-H", "127.0.0.1", "-P", "5037", "-s", SERIAL, "shell"]
     assert "owned-daemon.pid" in arguments[0][-1] and "LD_LIBRARY_PATH" in arguments[0][-1]
-    assert all(options[name] == subject.subprocess.DEVNULL for name in ("stdin", "stdout", "stderr"))
+    assert options["stdin"] == subject.subprocess.DEVNULL
+    assert options["stdout"] == subject.subprocess.PIPE and options["stderr"] == subject.subprocess.STDOUT
     assert options["env"] == dict(subject.os.environ)
     assert not list(tmp_path.iterdir())
     with pytest.raises(RuntimeError, match="fresh owned temporary directory"):
         device.spawn_peer("ignored", {}, "/sdcard/Download/emulebb-rust", "/sdcard/Download", "/sdcard/Download", tmp_path)
     assert len(calls) == 1
+
+
+def test_native_startup_capture_retains_only_allowlisted_codes_in_memory(tmp_path):
+    import io
+    capture = subject.StartupSummaryCapture(tmp_path)
+    capture.start(io.BytesIO(("Error: failed to create incoming dir /private/" + KEY
+        + "\nCaused by: Permission denied (os error 13) " + SERIAL).encode()),
+        stop_process=lambda: pytest.fail("readable startup pipe must not require termination"))
+    capture.close()
+    capture.raise_if_failed()
+    assert capture.summary() == {"contexts": ["incoming-directory"], "systemConditions": ["permission-denied"]}
+    assert not list(tmp_path.iterdir())
+    assert KEY not in json.dumps(capture.summary()) and SERIAL not in json.dumps(capture.summary())
 
 
 def payload():
@@ -251,6 +292,27 @@ def test_physical_transfer_cannot_run_as_admission_or_without_owned_launcher(tmp
     with pytest.raises(ValueError, match="explicit owned runtime"):
         run(tmp_path, monkeypatch, phone, peer_payload={})
     assert not phone.calls
+
+
+def test_transfer_primary_stage_survives_restart_phase_updates_and_normal_stop_cleanup(tmp_path, monkeypatch):
+    from emule_test_harness import android_apk_peer
+    phone = Phone()
+    failure = {"phase": "peer-process-admission", "code": "peer-process-admission-failed", "errorType": "RuntimeError"}
+
+    def transfer(command, peer, **kwargs):
+        kwargs["restart_service"]()
+        raise android_apk_peer.CampaignFailure(failure)
+
+    monkeypatch.setattr(android_apk_peer, "transfer_proof", transfer)
+    with pytest.raises(RuntimeError, match="peer-process-admission-failed"):
+        run(tmp_path, monkeypatch, phone, execute=True,
+            peer_payload={"abi": "arm64-v8a", "buildIdentity": payload()["buildIdentity"]},
+            rust_source=tmp_path, peer_launcher=object(), peer_client_cleanup=object())
+    report = (tmp_path / "initial/physical-device.json").read_text()
+    value = json.loads(report)
+    assert value["phase"] == "controlled-transfer-peer-process-admission"
+    assert value["transfer"] == {"status": "failed", "failure": failure}
+    assert not phone.running and KEY not in report and SERIAL not in report
 
 
 @pytest.mark.parametrize("execute", [False, True])

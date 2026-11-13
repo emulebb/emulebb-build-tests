@@ -20,6 +20,7 @@ import time
 
 from .android_apk_lifecycle import APPLICATION_ID, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
 from .android_apk_profile import OwnedUpdateApproval, admit_owned_update, admit_storage_configuration, read_hashed_receipt
+from .android_adb_failure import AdbOperationFailure, StartupSummaryCapture
 
 
 def _safe_service_phase(text: str | None) -> str:
@@ -328,11 +329,12 @@ class AdbDevice:
         try:
             result = subprocess.run([str(self.adb), "-H", "127.0.0.1", "-P", str(self.server_port), *arguments],
                                     capture_output=True, text=not binary, timeout=timeout, check=False)
-        except (OSError, subprocess.SubprocessError):
-            raise RuntimeError("Selected physical-device ADB operation failed") from None
+        except (OSError, subprocess.SubprocessError) as error:
+            raise AdbOperationFailure(arguments[2:], error=error) from None
         if len(result.stdout) > 1024**2 or len(result.stderr) > 1024**2 or check and result.returncode:
             # Raw output can contain private endpoints, paths or the visible key.
-            raise RuntimeError("Selected physical-device ADB operation failed")
+            raise AdbOperationFailure(arguments[2:], exit_code=result.returncode, stderr=result.stderr,
+                output_bound=len(result.stdout) > 1024**2 or len(result.stderr) > 1024**2)
         return (result.stdout if binary else result.stdout.strip()) if result.returncode == 0 else (b"" if binary else "")
 
     def spawn_peer(self, adb, child, executable, cwd, library_dir, report_dir):
@@ -349,10 +351,12 @@ class AdbDevice:
         try:
             process = subprocess.Popen([str(self.adb), "-H", "127.0.0.1", "-P", str(self.server_port),
                 "-s", self.serial, "shell", "sh", "-c", shlex.quote(script)], env=os.environ.copy(),
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
-        except (OSError, subprocess.SubprocessError):
-            raise RuntimeError("Owned physical Android peer launch failed") from None
-        return process, None
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise AdbOperationFailure(("shell", "sh"), error=error) from None
+        capture = StartupSummaryCapture(report_dir)
+        capture.start(process.stdout, stop_process=lambda: self.stop_peer_client(process))
+        return process, capture
 
     @staticmethod
     def stop_peer_client(process):
@@ -695,7 +699,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["processResources"] = _physical_process_resources(port, key)
         passed("physical-process-resources")
         if peer_payload is not None:
-            from .android_apk_peer import transfer_proof
+            from .android_apk_peer import CampaignFailure, transfer_proof
             if peer_payload.get("abi") not in abis or peer_payload.get("buildIdentity") != payload["buildIdentity"]:
                 raise RuntimeError("Physical peer differs from the installed application source or ABI")
             value["phase"] = "controlled-physical-transfer"
@@ -704,6 +708,10 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
                     adb="selected-physical-adb", child={}, report_dir=report_dir, rust_source=rust_source,
                     restart_service=restart_for_storage, prefix=prefix,
                     spawn_daemon=peer_launcher, stop_client=peer_client_cleanup)
+            except CampaignFailure as error:
+                value["transfer"] = {"status": "failed", "failure": error.failure}
+                value["phase"] = "controlled-transfer-" + error.failure["phase"]
+                raise RuntimeError("Controlled physical transfer failed: " + error.failure["code"]) from None
             except Exception:
                 raise RuntimeError("Controlled physical transfer or owned cleanup failed") from None
             passed("physical-local-transfer-delivery-collision-and-restart")

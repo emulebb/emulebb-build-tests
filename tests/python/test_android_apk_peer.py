@@ -61,6 +61,64 @@ def test_selected_device_peer_requires_explicit_owned_process_callbacks(tmp_path
     assert not calls and not list(tmp_path.iterdir())
 
 
+def test_peer_home_creation_failure_retains_durable_nonce_and_safe_native_failure(tmp_path, monkeypatch):
+    from emule_test_harness import rust_client
+    monkeypatch.setattr(rust_client, "write_rust_profile", lambda *args, **kwargs: None)
+    peer = {"sourceRevision": IDENTITY["sourceRevision"], "files": {"emulebb-rust": {"sha256": "a" * 64}}}
+    campaign = subject._Campaign(tmp_path / "transfer-campaign.json", peer, ("-s", "synthetic-device"))
+    mutations = []
+
+    def command(*args, **kwargs):
+        receipt = json.loads((tmp_path / "transfer-campaign.json").read_text())
+        assert receipt["phase"] == "peer-home-create" and len(receipt["peerOwnership"]["nonce"]) == 32
+        assert receipt["peerOwnership"]["creationVerified"] is False
+        mutations.append(args)
+        raise subject.AdbOperationFailure(("shell", "mkdir"), exit_code=1,
+            stderr="mkdir: /private/operator/path: Permission denied synthetic-private-key")
+
+    with pytest.raises(subject.AdbOperationFailure):
+        with subject.production_peer(command, peer, adb="adb", child={}, report_dir=tmp_path,
+                                     rust_source=tmp_path, bind_ip="192.0.2.20", campaign=campaign):
+            pytest.fail("uncreated home must not launch a process")
+    raw = (tmp_path / "transfer-campaign.json").read_text()
+    receipt = json.loads(raw)
+    assert receipt["failure"] == {"phase": "peer-home-create", "code": "peer-home-create-failed",
+        "errorType": "AdbOperationFailure", "adb": {"operation": "shell-mkdir", "reason": "permission-denied", "exitCode": 1}}
+    assert len(mutations) == 1 and not any("rm" in args or "kill" in args for args in mutations)
+    assert "operator" not in raw and "private-key" not in raw and "192.0.2.20" not in raw
+
+
+def test_early_peer_exit_is_recorded_even_when_complete_home_cleanup_succeeds(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from emule_test_harness import rust_client
+    monkeypatch.setattr(rust_client, "write_rust_profile", lambda *args, **kwargs: None)
+    peer = {"sourceRevision": IDENTITY["sourceRevision"], "payloadRoot": str(tmp_path),
+            "files": {"emulebb-rust": {"sha256": "a" * 64}}}
+    campaign = subject._Campaign(tmp_path / "transfer-campaign.json", peer, ("-s", "synthetic-device"))
+    process = SimpleNamespace(poll=lambda: 42, returncode=42)
+    capture = SimpleNamespace(close=lambda: None, raise_if_failed=lambda: None,
+        summary=lambda: {"contexts": ["dynamic-linker"], "systemConditions": []})
+    calls = []
+
+    def command(*args, **kwargs):
+        calls.append(args)
+        if "sha256sum" in args:
+            return "a" * 64 + " " + args[-1]
+        if "readlink" in args:
+            return args[-1]
+        return ""
+
+    with pytest.raises(RuntimeError, match="exited before guest process admission"):
+        with subject.production_peer(command, peer, adb="adb", child={}, report_dir=tmp_path, rust_source=tmp_path,
+                bind_ip="192.0.2.20", campaign=campaign, spawn_daemon=lambda *args: (process, capture), stop_client=lambda process: None):
+            pytest.fail("an already-exited peer cannot be ready")
+    receipt = json.loads((tmp_path / "transfer-campaign.json").read_text())
+    assert receipt["failure"]["phase"] == "peer-process-admission"
+    assert receipt["peerProcess"] == {"returnCode": 42, "startup": {"contexts": ["dynamic-linker"], "systemConditions": []}}
+    assert any("rm" in call for call in calls) and not any("kill" in call for call in calls)
+    assert not (tmp_path / "peer-cleanup.json").exists()
+
+
 def test_peer_manifest_cannot_be_substituted_or_include_arbitrary_files(tmp_path):
     digest = fixture(tmp_path)
     with pytest.raises(RuntimeError, match="manifest hash"):
@@ -231,12 +289,16 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
                      report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
     if failure:
-        with pytest.raises(RuntimeError, match={"payload": "delivered bytes", "occupant": "foreign destination",
-                                               "path": "invalid size", "listener": "eD2K start operation",
-                                               "restart": "metadata did not survive", "unfinished": "unfinished downloads",
-                                               "known-hash": "already belongs", "server-owner": "ownership changed",
-                                               "restore": "cleanup failed"}[failure]):
+        expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
+                          "path": "verify-delivered-path-and-size", "listener": "directed-local-listener-start",
+                          "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
+                          "known-hash": "peer-shared-file-hash", "server-owner": "verify-owned-loopback-server-removal",
+                          "restore": "cleanup-restore-original-settings"}[failure]
+        with pytest.raises(subject.CampaignFailure) as failed:
             subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
+        assert failed.value.failure["phase"] == expected_phase
+        receipt = json.loads((tmp_path / "transfer-campaign.json").read_text())
+        assert receipt["status"] == "failed" and receipt["failure"]["code"] == expected_phase + "-failed"
     else:
         result = subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert result["status"] == "passed"
