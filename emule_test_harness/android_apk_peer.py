@@ -17,7 +17,7 @@ from uuid import uuid4
 from .rust_local_ed2k import RustRestFailure, ed2k_link_with_source, publish_shared_tree, request_json
 from .rust_shared_library_fixture import deterministic_payload
 from .android_adb_failure import AdbOperationFailure
-from .android_apk_cleanup import COLLISION_OCCUPANT, remove_owned_fixture
+from .android_apk_cleanup import COLLISION_OCCUPANT, OwnedFixtureFailure, remove_owned_fixture
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
@@ -56,7 +56,8 @@ class _Campaign:
         self.value.setdefault("failure", {"phase": self.value["phase"],
             "code": self.value["phase"] + "-failed", "errorType": type(error).__name__,
             **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {}),
-            **({"rest": error.safe_failure} if isinstance(error, RustRestFailure) else {})})
+            **({"rest": error.safe_failure} if isinstance(error, RustRestFailure) else {}),
+            **({"ownedFixture": {"code": error.code, "filesRemoved": error.files_removed}} if isinstance(error, OwnedFixtureFailure) else {})})
         self.save()
 
     def record(self, **values):
@@ -66,7 +67,8 @@ class _Campaign:
     def cleaned(self, action, error=None):
         self.value["cleanup"].append({"action": action, "status": "passed" if error is None else "failed",
             **({"errorType": type(error).__name__} if error is not None else {}),
-            **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {})})
+            **({"adb": error.safe_failure} if isinstance(error, AdbOperationFailure) else {}),
+            **({"ownedFixture": {"code": error.code, "filesRemoved": error.files_removed}} if isinstance(error, OwnedFixtureFailure) else {})})
         self.save()
 
 
@@ -569,8 +571,9 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         def remove_fixture():
             if cleanup_errors:
                 return
-            remove_owned_fixture(command, prefix=prefix, nonce=nonce,
-                protected_roots=original_roots | {original["daemon"]["incomingDir"]})
+            removed = remove_owned_fixture(command, prefix=prefix, nonce=nonce,
+                protected_roots=original_roots | {original["daemon"]["incomingDir"]}, payload_sha256=expected_sha)
+            campaign.record(fixtureCleanup=removed)
         for action_name, action in (("remove-owned-transfer", remove_transfer), ("restore-original-settings", restore_settings),
                                     ("remove-owned-fixture", remove_fixture)):
             campaign.mark("cleanup-" + action_name)

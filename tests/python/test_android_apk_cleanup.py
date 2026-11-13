@@ -15,7 +15,8 @@ SIGNER = "c" * 64
 
 @pytest.mark.parametrize("fault", [None, "report-hash", "device", "fixture-hash", "zero", "multiple", "bound",
     "unknown-file", "directory-symlink", "file-symlink", "redirect", "changed-occupant", "current-incoming", "shared-root"])
-def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_directory(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("contents", ["occupant", "payload", "both"])
+def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_directory(tmp_path, monkeypatch, fault, contents):
     retained = tmp_path / "retained"
     retained.mkdir()
     proof = {"schema": "emulebb.android.physical-device/1", "status": "failed", "ownedInstallation": True,
@@ -31,6 +32,11 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
     payload_sha = hashlib.sha256(payload).hexdigest()
     candidate = "/sdcard/Download/emulebb-apk-proof-" + NONCE
     canonical = candidate.replace("/sdcard", "/storage/emulated/0")
+    entries = {}
+    if contents in {"occupant", "both"}:
+        entries[canonical + "/" + subject.FIXTURE_NAME] = subject.OCCUPANT_SHA256
+    if contents in {"payload", "both"}:
+        entries[canonical + "/Android Sample (1).bin"] = payload_sha
     candidates = [candidate]
     if fault == "zero":
         candidates = [candidate[:-32] + "f" * 32]
@@ -50,24 +56,25 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
     def command(*args, **kwargs):
         operation = args[2:]
         operations.append(operation)
-        if operation[:2] == ("shell", "sh"):
-            assert "head -n 17" in operation[-1] and "-maxdepth 1" in operation[-1]
-            return "\n".join(candidates)
+        if operation[:2] == ("exec-out", "sh"):
+            assert kwargs["binary"] is True and "-print0" in operation[-1] and "head -c 8192" in operation[-1]
+            names = candidates if "-name" in operation[-1] else list(entries)
+            if "-name" not in operation[-1] and fault == "unknown-file":
+                names = names + [canonical + "/operator\nfile"]
+            return b"\0".join(name.encode() for name in names) + b"\0"
         if operation[:2] == ("shell", "test"):
-            is_file = shlex.split(operation[-1])[0].endswith(subject.FIXTURE_NAME)
+            is_file = shlex.split(operation[-1])[0] != canonical
             if fault == ("file-symlink" if is_file else "directory-symlink"):
                 raise RuntimeError("private OS message must not be retained")
         if operation[:3] == ("shell", "readlink", "-f"):
             return "/foreign/redirected" if fault == "redirect" else canonical
-        if operation[:3] == ("shell", "ls", "-A"):
-            return subject.FIXTURE_NAME + ("\noperator-file" if fault == "unknown-file" else "")
         if operation[:2] == ("shell", "sha256sum"):
-            return ("0" * 64 if fault == "changed-occupant" else subject.OCCUPANT_SHA256) + " synthetic"
+            return ("0" * 64 if fault == "changed-occupant" else entries[shlex.split(operation[-1])[0]]) + " synthetic"
         if operation[:2] == ("shell", "rm"):
             assert operation[2] == "--" and "-r" not in operation and "-rf" not in operation
             removed.append(shlex.split(operation[-1])[0])
         if operation[:2] == ("shell", "rmdir"):
-            assert removed == [canonical + "/" + subject.FIXTURE_NAME]
+            assert removed == list(entries)
             removed.append(operation[-1])
         return ""
 
@@ -85,8 +92,18 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
             assert not operations and not requests
     else:
         result = subject.cleanup_report_fixture(command, **arguments)
-        assert result["status"] == "passed" and result["filesRemoved"] == result["directoriesRemoved"] == 1
-        assert result["settingsChanged"] is False and removed == [canonical + "/" + subject.FIXTURE_NAME, canonical]
+        assert result["status"] == "passed" and result["filesRemoved"] == len(entries) and result["directoriesRemoved"] == 1
+        assert result["settingsChanged"] is False and removed == list(entries) + [canonical]
+    if fault in {"current-incoming", "shared-root"}:
+        assert json.loads((tmp_path / "cleanup.json").read_text())["failureCode"] == "protected-root"
+    if fault == "changed-occupant":
+        assert json.loads((tmp_path / "cleanup.json").read_text())["failureCode"] == "unknown-contents"
     evidence = (tmp_path / "cleanup.json").read_text()
     assert "operator-secret" not in evidence and "private-serial" not in evidence and "/operator/" not in evidence
     assert "operator-file" not in evidence and "private OS message" not in evidence
+
+
+@pytest.mark.parametrize("raw", [b"missing-nul", b"invalid-utf8\xff\0", b"a\0" * 17, b"a" * 8192])
+def test_nul_inventory_never_guesses_truncated_or_unbounded_filenames(raw):
+    with pytest.raises(subject.OwnedFixtureFailure, match="inventory"):
+        subject._nul_paths(raw, maximum=16)

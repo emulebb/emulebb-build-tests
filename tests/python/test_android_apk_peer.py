@@ -185,7 +185,8 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 
 
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore"])
-def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("keep_published", [False, True])
+def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure, keep_published):
     from types import SimpleNamespace
     from copy import deepcopy
     monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
@@ -258,7 +259,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         if route.endswith("/files?confirm=true"):
             assert method == "DELETE" and route == "/api/v1/transfers/" + "b" * 32 + "/files?confirm=true"
             state["deleted"] = True
-            guest_files.pop(state["incoming"] + "/Android Sample (1).bin", None)
+            if not keep_published:
+                guest_files.pop(state["incoming"] + "/Android Sample (1).bin", None)
         if route == "/api/v1/shared-files":
             if not state["created"]:
                 return {"items": [{"hash": "b" * 32}] if failure == "known-hash" else []}
@@ -269,6 +271,11 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
 
     def command(*args, **kwargs):
         operation = args[2:]
+        if operation[:2] == ("exec-out", "sh"):
+            import shlex
+            root = shlex.split(operation[-1])[0].split()[1]
+            entries = [path for path in guest_files if path.rsplit("/", 1)[0] == root]
+            return b"\0".join(path.encode() for path in entries) + (b"\0" if entries else b"")
         if operation[:1] == ("push",):
             from pathlib import Path
             guest_files[operation[2]] = Path(operation[1]).read_bytes()
@@ -315,6 +322,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         assert state["restarts"] == 3 and state["deleted"]
         assert not any(path.startswith("/storage/") for path in guest_files)
         assert len(deleted_servers) == 2 and all(rows == [public_server] for rows in servers.values())
+        assert json.loads((tmp_path / "transfer-campaign.json").read_text())["fixtureCleanup"] == {
+            "filesRemoved": 2 if keep_published else 1, "directoriesRemoved": 1}
     if failure not in {"unfinished", "restore"}:
         assert state["settings"] == original
     if failure == "restore":
