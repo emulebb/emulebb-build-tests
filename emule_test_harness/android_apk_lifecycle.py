@@ -19,6 +19,8 @@ from uuid import uuid4
 APPLICATION_ID = "org.emulebb.android"
 PREFIX = ("-s", "emulator-5554")
 SUPPORTED_ANDROID_APIS = frozenset({34, 35, 36, 37})
+MIN_SCREEN_OFF_DWELL_SECONDS = 60
+MIN_SCREEN_OFF_SAMPLES = 3
 APK_FILE_LINK_CASES = frozenset({
     "os-file-link-resolution", "cold-file-link-without-autostart",
     "pending-and-repeated-intents-without-autostart", "malformed-and-nonfile-intents-rejected",
@@ -82,6 +84,7 @@ def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_s
     if (value.get("schema") != "emulebb.android.apk-package/1" or value.get("status") != "passed"
             or value.get("applicationId") != APPLICATION_ID or value.get("minSdk") != 34
             or value.get("targetSdk") != 37
+            or type(value.get("versionCode")) is not int or not 1 <= value["versionCode"] <= 2_100_000_000
             or value.get("source", {}).get("emulebbRust", {}).get("commit") != source_sha
             or identity.get("sourceRevision") != source_sha
             or not isinstance(identity.get("version"), str) or not identity["version"]
@@ -438,6 +441,10 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             raise RuntimeError("APK installation must produce exactly one base package")
         if shell("sha256sum", paths[0][8:]).split()[0] != payload["apk"]["sha256"]:
             raise RuntimeError("Installed APK bytes differ from qualified payload")
+        codes = re.findall(r"\bversionCode=(\d+)\b", shell("dumpsys", "package", APPLICATION_ID))
+        if len(codes) != 1 or int(codes[0]) != payload["versionCode"]:
+            raise RuntimeError("Installed APK versionCode differs from qualified payload")
+        result["versionCode"] = int(codes[0])
         passed("installed-apk-identity")
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
         shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
@@ -607,20 +614,22 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
 
         assert_idle_screen_off()
         started = time.monotonic()
-        dwell = max(60, soak_seconds)
+        dwell = max(MIN_SCREEN_OFF_DWELL_SECONDS, soak_seconds)
         samples = 0
         while True:
             assert_idle_screen_off()
             authenticated()
             samples += 1
             elapsed = time.monotonic() - started
-            result["endurance"] = {"requestedSeconds": soak_seconds, "minimumDwellSeconds": 60,
+            result["endurance"] = {"requestedSeconds": soak_seconds,
+                                   "minimumDwellSeconds": MIN_SCREEN_OFF_DWELL_SECONDS,
+                                   "minimumSamples": MIN_SCREEN_OFF_SAMPLES,
                                    "observedSeconds": round(elapsed, 3), "samples": samples,
                                    "over24Hours": elapsed > 86400}
             (report_dir / "apk-progress.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-            if elapsed >= dwell:
+            if elapsed >= dwell and samples >= MIN_SCREEN_OFF_SAMPLES:
                 break
-            time.sleep(min(30, dwell - elapsed))
+            time.sleep(max(0, min(30, dwell - elapsed)))
         passed("screen-off-doze-observation")
         if peer_payload is not None and qualify_file_links:
             required = required_apk_cases(api)

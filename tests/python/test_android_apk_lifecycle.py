@@ -31,7 +31,7 @@ def payload(tmp_path, mutate=lambda value: None):
     apk.write_bytes(b"synthetic signed APK")
     value = {"schema": "emulebb.android.apk-package/1", "status": "passed",
              "source": {"emulebbRust": {"commit": SOURCE}}, "applicationId": subject.APPLICATION_ID,
-             "minSdk": 34, "targetSdk": 37, "debug": False,
+             "minSdk": 34, "targetSdk": 37, "debug": False, "versionCode": 42,
              "buildIdentity": {"sourceRevision": SOURCE, "version": "0.1.0-test", "channel": "development"},
              "signerSha256": "b" * 64,
              "apk": {"path": apk.name, "sizeBytes": apk.stat().st_size,
@@ -54,7 +54,8 @@ def test_source_and_actual_apk_bytes_are_bound(tmp_path):
 
 
 @pytest.mark.parametrize("field,value", [("status", "failed"), ("applicationId", "org.example.other"),
-    ("minSdk", 28), ("targetSdk", 34), ("signerSha256", "unsigned")])
+    ("minSdk", 28), ("targetSdk", 34), ("signerSha256", "unsigned"),
+    ("versionCode", None), ("versionCode", True), ("versionCode", 0), ("versionCode", 2_100_000_001)])
 def test_wrong_publication_contract_is_rejected(tmp_path, field, value):
     digest = payload(tmp_path, lambda document: document.update({field: value}))
     with pytest.raises(RuntimeError, match="selected signed|trusted certificate"):
@@ -176,6 +177,8 @@ class Guest:
             return "12345"
         if args[:3] == ("shell", "pm", "path"):
             return "package:/data/app/synthetic/base.apk"
+        if args == ("shell", "dumpsys", "package", subject.APPLICATION_ID):
+            return "Package [org.emulebb.android]\n  versionCode=" + str(self.payload["versionCode"]) + " minSdk=34 targetSdk=37\n"
         if args[:2] == ("shell", "sha256sum"):
             return self.payload["apk"]["sha256"] + " /data/app/synthetic/base.apk"
         if args[:2] == ("shell", "cat"):
@@ -237,6 +240,7 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     result = subject.exercise(peer.command, admitted, report_dir=tmp_path)
     assert result["status"] == "passed"
     assert result["androidApiLevel"] == api
+    assert result["versionCode"] == admitted["versionCode"]
     expected = [
         "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness",
         "bundled-webui", "graceful-stop", "notification-denied-service-start",
@@ -253,12 +257,55 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     assert result["localTransfer"] == "not-run"
     assert result["physicalDevice"] == "not-run"
     assert result["endurance"]["samples"] == 3
+    assert result["endurance"]["minimumSamples"] == subject.MIN_SCREEN_OFF_SAMPLES == 3
+    assert result["endurance"]["minimumDwellSeconds"] == subject.MIN_SCREEN_OFF_DWELL_SECONDS == 60
     assert result["endurance"]["observedSeconds"] == 60
     assert result["endurance"]["over24Hours"] is False
     assert peer.running is False
     assert any(call[2:4] == ("forward", "--remove") for call in peer.calls)
     for path in (tmp_path / "apk-progress.json", tmp_path / "apk-lifecycle.json"):
         assert peer.key not in path.read_text()
+
+
+@pytest.mark.parametrize("details", ["Unknown command", "versionCode=41", "versionCode=42\nversionCode=43"])
+def test_guest_does_not_claim_install_identity_for_missing_wrong_or_ambiguous_version(tmp_path, monkeypatch, details):
+    peer, admitted = guest(tmp_path, monkeypatch)
+
+    def command(*arguments, **kwargs):
+        if arguments[2:] == ("shell", "dumpsys", "package", subject.APPLICATION_ID):
+            return details
+        return peer.command(*arguments, **kwargs)
+
+    with pytest.raises(RuntimeError, match="Installed APK versionCode"):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    assert result["runtimeExecution"] == "not-run" and result["cases"] == []
+    assert not any(call[2:5] == ("shell", "am", "start") for call in peer.calls)
+
+
+def test_slow_doze_requests_still_require_three_authenticated_samples_without_negative_sleep(tmp_path, monkeypatch):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    request, advance = peer.request, subject.time.sleep
+    samples, sleeps = [], []
+
+    def slow_request(port, path, key=None):
+        result = request(port, path, key)
+        if key is not None and any(call[2:] == ("shell", "dumpsys", "deviceidle", "force-idle") for call in peer.calls):
+            advance(65)
+            samples.append(path)
+        return result
+
+    def sleep(seconds):
+        assert seconds >= 0
+        sleeps.append(seconds)
+        advance(seconds)
+
+    monkeypatch.setattr(subject, "_request", slow_request)
+    monkeypatch.setattr(subject.time, "sleep", sleep)
+    result = subject.exercise(peer.command, admitted, report_dir=tmp_path)
+    assert result["status"] == "passed" and result["endurance"]["samples"] == 3
+    assert result["endurance"]["observedSeconds"] == 195
+    assert samples == ["/api/v1/app"] * 3 and 0 in sleeps
 
 
 def test_successful_force_idle_command_is_not_enough_to_claim_doze(tmp_path, monkeypatch):
