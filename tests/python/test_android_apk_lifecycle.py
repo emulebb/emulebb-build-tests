@@ -204,6 +204,30 @@ def test_successful_force_idle_command_is_not_enough_to_claim_doze(tmp_path, mon
     assert "screen-off-doze-observation" not in [case["name"] for case in result["cases"]]
 
 
+@pytest.mark.parametrize("api", [34, 35, 36, 37])
+def test_permission_changes_that_close_activity_require_real_launcher_reopen(tmp_path, monkeypatch, api):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    peer.api = api
+    visible = [False]
+    closures = []
+
+    def command(*arguments, **kwargs):
+        args = arguments[2:]
+        permission_change = args[:3] in (("shell", "pm", "revoke"), ("shell", "pm", "grant"))
+        storage_change = args[:3] == ("shell", "appops", "set")
+        if permission_change or storage_change:
+            visible[0] = False
+            closures.append(args)
+        if args[:3] == ("shell", "am", "start"):
+            visible[0] = True
+        if args[:2] == ("shell", "uiautomator"):
+            assert visible[0], "The production activity must be reopened after permission changes"
+        return peer.command(*arguments, **kwargs)
+
+    result = subject.exercise(command, admitted, report_dir=tmp_path)
+    assert result["status"] == "passed" and len(closures) >= 8
+
+
 def test_scrollable_production_ui_does_not_require_controls_in_one_viewport(tmp_path, monkeypatch):
     import xml.etree.ElementTree as ET
     peer, admitted = guest(tmp_path, monkeypatch)

@@ -263,23 +263,30 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         # A denied notification grant must not be mistaken for permission to
         # run a foreground service: Android still permits FGS with its notice.
         shell("pm", "revoke", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+        # Permission/app-op changes can terminate the activity's UID. Return via
+        # its real launcher before looking for controls, rather than using stale UI.
+        reopen()
         click("start_service")
         wait_state("Running")
         authenticated()
         passed("notification-denied-service-start")
         shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+        reopen()
         click("stop_service")
         wait_state("Stopped")
         assert_listener_stopped()
 
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
+        reopen()
         click("start_service")
         assert_listener_stopped()
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
+        reopen()
         click("start_service")
         wait_state("Running")
         authenticated()
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
+        reopen()
         assert_listener_stopped()
         passed("all-files-denial-and-runtime-revocation")
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
@@ -290,8 +297,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
 
         if api >= 37:
             shell("pm", "revoke", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
-            assert_listener_stopped()
             reopen()
+            assert_listener_stopped()
             click("start_service")
             assert_listener_stopped()
             shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
