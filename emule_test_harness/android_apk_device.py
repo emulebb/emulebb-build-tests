@@ -32,6 +32,48 @@ def _safe_service_phase(text: str | None) -> str:
     return "unrecognized"
 
 
+def _visible_app_version(ui: ProductionUi, version: str) -> dict:
+    node = ui.find("app_version")
+    size = re.findall(r"(\d+)x(\d+)", ui.shell("wm", "size"))
+    bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+    if (node.get("text") != "eMuleBB " + version or node.get("visible-to-user") == "false"
+            or not size or bounds is None):
+        raise RuntimeError("Physical app version label is absent, mismatched or not visible")
+    width, height = map(int, size[-1])
+    x1, y1, x2, y2 = map(int, bounds.groups())
+    if not (0 <= x1 < x2 <= width and 0 < y1 < y2 < height):
+        raise RuntimeError("Physical app version label is clipped outside the display")
+    return {"versionName": version, "bounds": [x1, y1, x2, y2],
+            "displayBounds": [0, 0, width, height], "whollyVisible": True}
+
+
+def _owned_system_chooser(document: str) -> bool:
+    resumed = re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*ActivityRecord\{([0-9a-f]+) u0 "
+                        r"((?:android|com\.android\.intentresolver)/[\w.$]*ChooserActivity)\b", document)
+    if resumed is None:
+        return False
+    records = list(re.finditer(r"(?m)^\s*\* Hist #\d+: ActivityRecord\{([0-9a-f]+) u0 ([^\s}]+)[^\n]*", document))
+    for index, record in enumerate(records):
+        if record[1] == resumed[1] and record[2] == resumed[2]:
+            block = document[record.end():records[index + 1].start() if index + 1 < len(records) else len(document)]
+            return re.search(r"\blaunchedFromPackage=" + re.escape(APPLICATION_ID) + r"(?:\s|$)", block) is not None
+    return False
+
+
+def _share_diagnostics_without_sending(ui: ProductionUi) -> dict:
+    ui.click("share_diagnostics")
+    deadline = time.monotonic() + 30
+    while not _owned_system_chooser(ui.shell("dumpsys", "activity", "activities")):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Diagnostic ZIP did not open its owned Android system chooser")
+        time.sleep(0.5)
+    # Only dismiss the verified chooser; never inspect or select its recipients.
+    ui.shell("input", "keyevent", "KEYCODE_BACK")
+    ui.wait_state("Stopped", timeout=30)
+    return {"status": "passed", "chooser": "android-system", "launchedFromOwnedApp": True,
+            "recipientSelected": False, "dismissed": True}
+
+
 def _ui_failure_metadata(ui: ProductionUi) -> dict:
     """Retain only resource IDs/boolean flags and foreground package, never UI values."""
     result = {"foregroundPackage": None}
@@ -619,6 +661,9 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         if ui is None:
             ui = ProductionUi(command, prefix=prefix)
         open_main()
+        value["phase"] = "verify-public-app-version-visible"
+        value["appVersion"] = _visible_app_version(ui, value["versionName"])
+        passed("physical-public-version-wholly-visible")
         value["phase"] = "inspect-initial-service-phase"
         state = _safe_service_phase(ui.find("service_status").get("text"))
         value["initialServicePhase"] = state
@@ -766,6 +811,11 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         value["stoppedService"] = _stopped_service_flags(ui)
         attempted_start = False
         passed("physical-graceful-stop")
+        value["phase"] = "share-diagnostics-system-chooser-without-sending"
+        value["diagnosticsShare"] = _share_diagnostics_without_sending(ui)
+        assert_stopped()
+        _stopped_service_flags(ui)
+        passed("physical-diagnostics-chooser-without-sending")
         value.update(status="passed", phase="complete")
         return report
     except DeviceUiUnavailable as error:

@@ -95,6 +95,38 @@ def test_native_startup_capture_retains_only_allowlisted_codes_in_memory(tmp_pat
     assert KEY not in json.dumps(capture.summary()) and SERIAL not in json.dumps(capture.summary())
 
 
+@pytest.mark.parametrize("changes", [{"text": KEY}, {"visible-to-user": "false"}, {"bounds": "[0,0][700,100]"},
+    {"bounds": "[0,100][1100,180]"}, {"bounds": "[0,100][700,100]"}, {"bounds": "invalid"}])
+def test_public_version_label_must_match_and_have_whole_positive_display_bounds(changes):
+    node = {"text": "eMuleBB 0.1.0-test", "bounds": "[0,100][700,180]", **changes}
+    ui = SimpleNamespace(find=lambda name: node, shell=lambda *args: "Physical size: 1080x1920")
+    with pytest.raises(RuntimeError, match="version label") as error:
+        subject._visible_app_version(ui, "0.1.0-test")
+    assert KEY not in str(error.value)
+
+
+@pytest.mark.parametrize("fault", ["foreign-origin", "foreign-activity", "missing-record"])
+def test_diagnostics_share_never_dismisses_or_selects_an_unproved_chooser(monkeypatch, fault):
+    clock, actions = [0.0], []
+    monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    component = "com.android.intentresolver/.ChooserActivity" if fault != "foreign-activity" else "other.application/.MainActivity"
+    origin = "other.application" if fault == "foreign-origin" else "org.emulebb.android"
+    document = ("* Hist #0: ActivityRecord{abc123 u0 " + component + " t12}\n launchedFromPackage=" + origin
+                + " launchedFromUid=10123\ntopResumedActivity=ActivityRecord{abc123 u0 " + component + " t12}\n")
+    if fault == "missing-record":
+        document = "topResumedActivity" + document.partition("topResumedActivity")[2]
+    def shell(*args):
+        actions.append(args)
+        assert args == ("dumpsys", "activity", "activities"), "never touch an unproved recipient UI"
+        return document + " private-recipient@example.invalid " + KEY
+    ui = SimpleNamespace(click=lambda name: actions.append(("click", name)), shell=shell)
+    with pytest.raises(RuntimeError, match="owned Android system chooser") as error:
+        subject._share_diagnostics_without_sending(ui)
+    assert actions[0] == ("click", "share_diagnostics")
+    assert KEY not in str(error.value) and "recipient@" not in str(error.value)
+
+
 def payload():
     return {"apk": {"sha256": "a" * 64}, "signerSha256": "b" * 64, "versionCode": 42, "debug": False,
             "buildIdentity": {"sourceRevision": "c" * 40, "version": "0.1.0-test", "channel": "development"},
@@ -173,6 +205,10 @@ class Phone:
         if args[:4] == ("shell", "cmd", "package", "check-permission"):
             raise RuntimeError("Unknown command: check-permission")
         if args[:4] == ("shell", "dumpsys", "activity", "activities"):
+            if self.screen == "chooser":
+                return ("* Hist #0: ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n"
+                        "  launchedFromPackage=org.emulebb.android launchedFromUid=10123\n"
+                        "topResumedActivity=ActivityRecord{abc123 u0 com.android.intentresolver/.ChooserActivity t12}\n")
             package = "com.android.settings" if self.screen == "files" else "com.google.android.permissioncontroller"
             return "mResumedActivity: " + package + "/.PermissionActivity"
         if args[:4] == ("shell", "dumpsys", "activity", "services"):
@@ -194,6 +230,7 @@ class Phone:
                         '<node package="com.google.android.permissioncontroller" clickable="true" enabled="true" '
                         'resource-id="com.google.android.permissioncontroller:id/permission_allow_button" bounds="[0,0][100,100]"/></hierarchy>')
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + self.phase + '"/>'
+                    '<node resource-id="org.emulebb.android:id/app_version" text="eMuleBB ' + self.version_name + '" bounds="[0,100][700,180]"/>'
                     '<node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.api_key + '"/>'
                     '<node resource-id="org.emulebb.android:id/bind_addr" enabled="true" text="127.0.0.1:20017"/>'
                     '<node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" checked="false"/>'
@@ -202,6 +239,7 @@ class Phone:
                     '<node resource-id="org.emulebb.android:id/grant_all_files_access" enabled="true" bounds="[400,500][500,600]"/>'
                     '<node resource-id="org.emulebb.android:id/allow_notifications" enabled="true" bounds="[600,500][700,600]"/>'
                     '<node resource-id="org.emulebb.android:id/allow_local_network" enabled="true" bounds="[800,500][900,600]"/>'
+                    '<node resource-id="org.emulebb.android:id/share_diagnostics" enabled="true" bounds="[1000,500][1080,600]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
             if self.screen != "app":
@@ -214,6 +252,9 @@ class Phone:
                 return ""
             if args[3] in {"450", "650", "850"}:
                 self.screen = {"450": "files", "650": "notifications", "850": "lan"}[args[3]]
+                return ""
+            if args[3] == "1040":
+                self.screen = "chooser"
                 return ""
             self.running = args[3] == "50" and not self.start_fails
             self.phase = "Failed" if args[3] == "50" and self.start_fails else "Running" if self.running else "Stopped"
@@ -381,6 +422,10 @@ def test_absent_install_and_bounded_smoke_preserve_phone_state(tmp_path, monkeyp
                                ("shell", "pm", "revoke"), ("shell", "am", "force-stop")} for call in phone.calls)
     if execute:
         assert value["networkIsolation"] == "not-claimed" and value["webui"]["rendered"] == "not-run"
+        assert value["appVersion"] == {"versionName": "0.1.0-test", "bounds": [0, 100, 700, 180],
+            "displayBounds": [0, 0, 1080, 1920], "whollyVisible": True}
+        assert value["diagnosticsShare"] == {"status": "passed", "chooser": "android-system",
+            "launchedFromOwnedApp": True, "recipientSelected": False, "dismissed": True}
         assert value["foregroundObservation"]["seconds"] == 15
         assert value["permissions"]["localNetwork"] == (True if api == 37 else "not-required")
 
@@ -654,7 +699,7 @@ def test_known_owned_active_service_is_gracefully_stopped_before_smoke(tmp_path,
     value = json.loads(report.read_text())
     assert value["status"] == "passed" and value["initialServicePhase"] == phase
     assert value["initialServiceNormalization"] == {"from": phase, "method": "normal-ui-stop", "status": "passed"}
-    assert [call[3] for call in phone.calls if call[:3] == ("shell", "input", "tap")] == ["250", "50", "250"]
+    assert [call[3] for call in phone.calls if call[:3] == ("shell", "input", "tap")] == ["250", "50", "250", "1040"]
     assert not phone.running and value["runtimeExecution"] == "executed"
 
 
