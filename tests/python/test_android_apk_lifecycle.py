@@ -804,8 +804,8 @@ def boot_dumps():
             "      runtime permissions:\n"
             "        android.permission.POST_NOTIFICATIONS: granted=true, flags=[ USER_SET ]\n"
             "        android.permission.ACCESS_LOCAL_NETWORK: granted=false, flags=[ USER_SET ]\n"),
-        ("cmd", "package", "query-receivers", "--brief", "--user", "0", "-a",
-         "android.intent.action.BOOT_COMPLETED", "-p", subject.APPLICATION_ID): "1 receivers found:\norg.emulebb.android/.BootReceiver\n",
+        ("cmd", "package", "query-receivers", "--components", "--user", "0", "-a",
+         "android.intent.action.BOOT_COMPLETED", "-p", subject.APPLICATION_ID): "org.emulebb.android/.BootReceiver\n",
         ("dumpsys", "activity", "services", subject.APPLICATION_ID): (
             "ACTIVITY MANAGER SERVICES (dumpsys activity services)\n"
             "  * ServiceRecord{123 u0 org.emulebb.android/.DaemonService}\n"
@@ -868,15 +868,20 @@ def test_boot_timeout_foreign_ambiguous_and_unrecognized_facts_cannot_become_own
 
 
 @pytest.mark.parametrize("collector_fails", [False, True])
-def test_boot_timeout_collects_before_cleanup_without_launch_and_cannot_turn_failure_into_pass(tmp_path, monkeypatch, collector_fails):
+@pytest.mark.parametrize("main_starts_daemon", [False, True])
+@pytest.mark.parametrize("ui_fails", [False, True])
+def test_boot_timeout_prelaunch_facts_and_post_failure_main_cannot_turn_automatic_failure_into_pass(tmp_path, monkeypatch, collector_fails, main_starts_daemon, ui_fails):
     peer, admitted = guest(tmp_path, monkeypatch)
     peer.api = 36
     documents = boot_dumps()
+    documents[("dumpsys", "activity", "services", subject.APPLICATION_ID)] = "ACTIVITY MANAGER SERVICES\n  (nothing)\n"
 
     def command(*args, **kwargs):
         raw = peer.command(*args, **kwargs)
         if args[2:] == ("reboot",):
             peer.running = False
+        if peer.boot_id > 0 and args[2:5] == ("shell", "am", "start"):
+            peer.running = main_starts_daemon
         if args[2:5] == ("shell", "am", "force-stop"):
             raise RuntimeError("synthetic-private-cleanup-error")
         if peer.boot_id > 0 and args[2:3] == ("shell",) and args[3:] in documents:
@@ -887,11 +892,16 @@ def test_boot_timeout_collects_before_cleanup_without_launch_and_cannot_turn_fai
         def failed_collector(*args, **kwargs):
             raise RuntimeError("synthetic-private-collector-error")
         monkeypatch.setattr(subject, "_boot_timeout_facts", failed_collector)
+    if ui_fails:
+        def failed_ui(*args, **kwargs):
+            raise RuntimeError("synthetic-private-ui-error")
+        monkeypatch.setattr(subject, "_post_failure_ui", failed_ui)
     with pytest.raises(RuntimeError, match="did not resume after an enabled reboot"):
         subject.exercise(command, admitted, report_dir=tmp_path)
     result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
     failure = result["failure"]
     assert failure["stage"] == "enabled-reboot-authentication" and failure["code"] == "boot-resume-timeout"
+    assert failure["servicePhase"] == "Running", "pre-reboot cached UI must remain distinct from post-failure inspection"
     assert failure["boot"]["restAttempts"] == failure["boot"]["restConnectionFailures"] == 91
     assert failure["boot"]["restHttpResponses"] == 0
     assert "lastHttpStatus" not in failure["boot"]
@@ -899,15 +909,66 @@ def test_boot_timeout_collects_before_cleanup_without_launch_and_cannot_turn_fai
         assert set(failure["boot"]) == {"restAttempts", "restConnectionFailures", "restHttpResponses"}
     else:
         assert failure["boot"]["userUnlocked"] is True
+        assert failure["boot"]["servicePresent"] is False
         query = next(index for index, args in enumerate(peer.calls) if args[2:] == ("shell", "am", "get-started-user-state", "0"))
         cleanup = next(index for index, args in enumerate(peer.calls) if args[2:5] == ("shell", "am", "force-stop"))
-        assert query < cleanup
+        launch = next(index for index, args in enumerate(peer.calls[query:], query) if args[2:5] == ("shell", "am", "start"))
+        assert query < launch < cleanup
     reboot = next(index for index, args in enumerate(peer.calls) if args[2:] == ("reboot",))
-    assert not any(args[2:5] == ("shell", "am", "start") for args in peer.calls[reboot:])
+    assert len([args for args in peer.calls[reboot:] if args[2:5] == ("shell", "am", "start")]) == 1
+    assert not any(args[2:5] == ("shell", "input", "tap") for args in peer.calls[reboot:])
+    if ui_fails:
+        assert "postFailureUi" not in failure
+    else:
+        assert failure["postFailureUi"] == {"servicePhase": "Running" if main_starts_daemon else "Stopped",
+                                            "resumeOnBoot": True, "errorCategory": "unknown"}
     assert result["status"] == "failed" and result["runtimeExecution"] == "executed"
     assert len(result["cases"]) == 7 and "enabled-boot-resume" not in {case["name"] for case in result["cases"]}
     assert result["cleanupErrors"] == [{"action": "force-stop", "errorType": "RuntimeError"}]
     assert "synthetic-private" not in json.dumps(result) and peer.key not in json.dumps(result)
+
+
+@pytest.mark.parametrize("message,category", [
+    ("Android blocked automatic service startup. Open the app and check its battery settings.", "boot-start-blocked"),
+    ("Android refused the foreground service: ForegroundServiceStartNotAllowedException", "foreground-promotion-denied"),
+    ("All-files access was revoked; stopping the daemon", "required-files-permission"),
+    ("Local-network permission is required. Open the app to grant it.", "required-local-network-permission"),
+    ("Repeated service termination; open the app and press Start to retry", "recovery-budget-blocked"),
+    ("Android refused the foreground service: synthetic-private-error", "unknown"),
+    ("synthetic-private-arbitrary-error", "unknown"),
+])
+def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(message, category):
+    from types import SimpleNamespace
+    ui = SimpleNamespace(find=lambda name, **kwargs: {"checked": "true"} if name == "resume_on_boot" else {"text": "Stopped"},
+        elements=lambda: [{"package": subject.APPLICATION_ID, "class": "android.widget.TextView", "text": message},
+                          {"package": subject.APPLICATION_ID, "class": "android.widget.EditText", "text": "synthetic-private-key"},
+                          {"package": "com.android.other", "class": "android.widget.TextView",
+                           "text": "All-files access was revoked; stopping the daemon"}])
+    facts = subject._post_failure_ui(ui)
+    assert facts == {"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": category}
+    assert category in subject.APK_POST_FAILURE_ERROR_CATEGORIES
+    assert "synthetic-private" not in json.dumps(facts)
+
+
+@pytest.mark.parametrize("reply_arrives", [False, True])
+def test_post_failure_ui_does_not_report_unconfirmed_initial_stopped_unchecked_defaults(monkeypatch, reply_arrives):
+    from types import SimpleNamespace
+    polls = [0]
+    sleeps = []
+
+    def find(name, *, enabled=False):
+        if name == "resume_on_boot":
+            assert enabled is True
+            polls[0] += 1
+            return {"checked": "true" if reply_arrives and polls[0] == 3 else "false"}
+        return {"text": "Stopped"}
+
+    ui = SimpleNamespace(find=find, elements=lambda: [])
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+    facts = subject._post_failure_ui(ui)
+    assert polls[0] == 3 and sleeps == [1, 1]
+    assert facts == ({"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": "unknown"}
+                     if reply_arrives else {"errorCategory": "unknown"})
 
 
 def test_noncanonical_channel_field_cannot_satisfy_source_identity(tmp_path, monkeypatch):

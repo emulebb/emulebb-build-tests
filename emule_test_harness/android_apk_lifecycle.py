@@ -51,6 +51,10 @@ APK_NAVIGATION_CONTROLS = frozenset({
     "pending_link", "pending_link_error", "app_version", "bind_addr", "save_settings",
     "grant_all_files_access", "allow_notifications", "allow_local_network", "share_diagnostics",
 })
+APK_POST_FAILURE_ERROR_CATEGORIES = frozenset({
+    "boot-start-blocked", "foreground-promotion-denied", "required-files-permission",
+    "required-local-network-permission", "recovery-budget-blocked", "unknown",
+})
 APK_FILE_LINK_CASES = frozenset({
     "os-file-link-resolution", "cold-file-link-without-autostart",
     "pending-and-repeated-intents-without-autostart", "malformed-and-nonfile-intents-rejected",
@@ -219,6 +223,51 @@ def _diagnostic_bounds(value: str) -> list[int] | None:
     return None
 
 
+def _post_failure_ui(ui) -> dict:
+    """Read bound production UI only after failed automatic boot, never press Start."""
+    fixed = {
+        "Android blocked automatic service startup. Open the app and check its battery settings.": "boot-start-blocked",
+        "All-files access is required. Open the app to grant it.": "required-files-permission",
+        "All-files access was revoked; stopping the daemon": "required-files-permission",
+        "Grant all-files access before starting": "required-files-permission",
+        "Local-network permission is required. Open the app to grant it.": "required-local-network-permission",
+        "Local-network permission was revoked; stopping the daemon": "required-local-network-permission",
+        "Allow local-network access before starting": "required-local-network-permission",
+        "Repeated service termination; open the app and press Start to retry": "recovery-budget-blocked",
+    }
+    promotion_errors = {"ForegroundServiceStartNotAllowedException", "SecurityException", "MissingForegroundServiceTypeException",
+                        "InvalidForegroundServiceTypeException", "ForegroundServiceTypeNotAllowedException",
+                        "IllegalArgumentException", "IllegalStateException"}
+    promotion_messages = {"Android refused the foreground service: " + error for error in promotion_errors}
+    for attempt in range(3):
+        boot = ui.find("resume_on_boot", enabled=True).get("checked")
+        phase = ui.find("service_status").get("text")
+        categories = set()
+        for node in ui.elements():
+            if node.get("package") != APPLICATION_ID or node.get("class") != "android.widget.TextView":
+                continue
+            text = node.get("text", "")
+            if text in fixed:
+                categories.add(fixed[text])
+            elif text in promotion_messages:
+                categories.add("foreground-promotion-denied")
+        category = next(iter(categories)) if len(categories) == 1 else "unknown"
+        # WHY: setup can enable controls between Binder connection and STATUS.
+        # Initial Stopped/unchecked values alone cannot prove a service reply.
+        # Never report those defaults as lost persisted state without a positive
+        # reply signature; failed automatic boot remains the original verdict.
+        if boot == "true" or phase in SETUP_SERVICE_PHASES - {"Stopped"} or category != "unknown":
+            facts = {"errorCategory": category}
+            if boot in {"true", "false"}:
+                facts["resumeOnBoot"] = boot == "true"
+            if phase in SETUP_SERVICE_PHASES:
+                facts["servicePhase"] = phase
+            return facts
+        if attempt < 2:
+            time.sleep(1)
+    return {"errorCategory": "unknown"}
+
+
 def _boot_timeout_facts(shell, *, api: int) -> dict:
     """Inspect the owned package after failed automatic resume, without launching it.
 
@@ -260,7 +309,8 @@ def _boot_timeout_facts(shell, *, api: int) -> dict:
                                  "\n".join(lines[start + 1:end]))
             if len(stopped) == 1:
                 facts["packageStopped"] = stopped[0] == "true"
-    receiver = read("cmd", "package", "query-receivers", "--brief", "--user", "0", "-a",
+    # AOSP --brief indents component lines; --components emits only components.
+    receiver = read("cmd", "package", "query-receivers", "--components", "--user", "0", "-a",
                     "android.intent.action.BOOT_COMPLETED", "-p", APPLICATION_ID)
     if receiver is not None:
         components = re.findall(r"(?m)^" + re.escape(APPLICATION_ID) + r"/(?:\.BootReceiver|org\.emulebb\.android\.BootReceiver)\s*$", receiver)
@@ -509,6 +559,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     installed = False
     setup_stage = "install"
     boot_observation = None
+    post_failure_ui = None
+    primary_ui_observation = None
     ui = ProductionUi(command)
     ui_path = ui.path
     inspect, find, click, wait_state = ui.inspect, ui.find, ui.click, ui.wait_state
@@ -833,8 +885,17 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                     # WHY: inspect automatic resume BEFORE cleanup or another
                     # Activity launch can change package/service state. Missing
                     # diagnostics must never replace the failed boot verdict.
+                    primary_ui_observation = ui.setup_observation
                     try:
                         boot_observation.update(_boot_timeout_facts(shell, api=api))
+                    except Exception:
+                        pass
+                    # This normal launch is diagnostic AFTER automatic resume
+                    # failed. It must never satisfy the boot case or replace its
+                    # original pre-launch service/REST observations.
+                    try:
+                        reopen()
+                        post_failure_ui = _post_failure_ui(ui)
                     except Exception:
                         pass
                     raise RuntimeError("APK did not resume after an enabled reboot") from None
@@ -946,7 +1007,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         return result
     except Exception as error:
         if setup_stage is not None:
-            result["failure"] = _lifecycle_failure(error, setup_stage, ui.setup_observation)
+            result["failure"] = _lifecycle_failure(error, setup_stage,
+                primary_ui_observation if primary_ui_observation is not None else ui.setup_observation)
             if result["failure"]["code"] in {"control-unreachable", "control-disabled", "control-invalid-bounds",
                     "control-unsafe-bounds", "device-locked", "app-not-visible"}:
                 try:
@@ -957,6 +1019,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                     pass
             if boot_observation is not None:
                 result["failure"]["boot"] = boot_observation
+            if post_failure_ui is not None:
+                result["failure"]["postFailureUi"] = post_failure_ui
         raise
     finally:
         active_failure = sys.exc_info()[0] is not None
