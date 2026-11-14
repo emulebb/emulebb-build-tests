@@ -803,7 +803,9 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                         "-c", "android.intent.category.BROWSABLE", "-d", base + "/transfers")
         component = browser.splitlines()[-1] if browser.splitlines() else ""
         package = component.partition("/")[0]
-        if "/" not in component or package in {APPLICATION_ID, "android"}:
+        # WHY: resolve-activity can return the platform resolver when no default
+        # browser is selected. Its resumed window is not browser-dispatch proof.
+        if "/" not in component or package in {APPLICATION_ID, "android", "com.android.intentresolver"}:
             raise RuntimeError("APK file-link proof requires an installed guest default browser")
         click("open_webui")
         deadline = time.monotonic() + 30

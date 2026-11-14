@@ -405,7 +405,7 @@ def test_permission_changes_that_close_activity_require_real_launcher_reopen(tmp
     assert result["status"] == "passed" and len(closures) >= 8
 
 
-@pytest.mark.parametrize("failure", [None, "autostart", "invalid", "browser", "enqueue", "browser-proof"])
+@pytest.mark.parametrize("failure", [None, "autostart", "invalid", "browser", "android-resolver", "modern-resolver", "enqueue", "browser-proof"])
 def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmation(tmp_path, monkeypatch, failure):
     from emule_test_harness import rust_local_ed2k, rust_webui_live_proof
     peer, admitted = guest(tmp_path, monkeypatch)
@@ -414,6 +414,18 @@ def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmat
     peer.browser = failure != "browser"
     baseline = [{"hash": "b" * 32, "sizeBytes": 262144}]
     browser_calls = []
+    resolver = {"android-resolver": "android/com.android.internal.app.ResolverActivity",
+                "modern-resolver": "com.android.intentresolver/.ResolverActivity"}.get(failure)
+
+    def command(*args, **kwargs):
+        value = peer.command(*args, **kwargs)
+        if resolver:
+            if args[2:6] == ("shell", "cmd", "package", "resolve-activity") and "ed2k:" not in args[-1]:
+                return resolver
+            if args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                # Even a visible resumed resolver must not count as a browser.
+                return "mResumedActivity: " + resolver
+        return value
 
     def request(base, method, route, key, body=None):
         assert key == peer.key and method == "GET" and route == "/api/v1/transfers?limit=100"
@@ -431,13 +443,17 @@ def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmat
     if failure:
         messages = {"autostart": "expected service state", "invalid": "malformed or unsupported",
                     "browser": "installed guest default browser", "enqueue": "silently changed",
-                    "browser-proof": "did not finish cleanly"}
+                    "browser-proof": "did not finish cleanly", "android-resolver": "installed guest default browser",
+                    "modern-resolver": "installed guest default browser"}
         with pytest.raises(RuntimeError, match=messages[failure]):
-            subject.exercise(peer.command, admitted, report_dir=tmp_path, qualify_file_links=True)
+            subject.exercise(command, admitted, report_dir=tmp_path, qualify_file_links=True)
         result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
         assert result["status"] == result["fileLinks"]["status"] == "failed"
+        if resolver:
+            assert not browser_calls
+            assert "native-browser-dispatch-without-enqueue" not in {case["name"] for case in result["fileLinks"]["cases"]}
     else:
-        result = subject.exercise(peer.command, admitted, report_dir=tmp_path, qualify_file_links=True)
+        result = subject.exercise(command, admitted, report_dir=tmp_path, qualify_file_links=True)
         assert result["status"] == result["fileLinks"]["status"] == "passed"
         assert len(browser_calls) == 1
         assert [case["name"] for case in result["fileLinks"]["cases"]] == [
