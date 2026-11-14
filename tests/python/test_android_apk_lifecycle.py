@@ -113,23 +113,24 @@ def test_initial_app_not_visible_records_original_launch_and_precleanup_facts(tm
     assert 'private' not in json.dumps(result)
 
 
-@pytest.mark.parametrize("api", [34, 35, 36, 37])
+@pytest.mark.parametrize("api", [31, 32, 33, 34, 35, 36, 37])
 def test_trusted_case_contract_has_an_explicit_per_api_permission_matrix(api):
     cases = subject.required_apk_cases(api)
     assert {"local-transfer-and-delivery-collision", "completed-delivery-survives-restart",
             "file-link-intents-and-webui-confirmation", "screen-off-doze-observation"} <= cases
-    assert {"explicit-stop-remains-stopped", "task-manager-stop-remains-stopped",
-            "force-stop-remains-stopped", "restart"} <= cases
+    assert {"explicit-stop-remains-stopped", "force-stop-remains-stopped", "restart"} <= cases
+    assert ("task-manager-stop-remains-stopped" in cases) == (api >= 33)
     assert not any("boot" in case for case in cases)
+    assert ("notification-denied-service-start" in cases) == (api >= 33)
     assert ("android17-local-network-denial-and-revocation" in cases) == (api == 37)
     cases.clear()
     assert subject.required_apk_cases(api)
-    assert subject.SUPPORTED_ANDROID_APIS == frozenset({34, 35, 36, 37})
+    assert subject.SUPPORTED_ANDROID_APIS == frozenset({31, 32, 33, 34, 35, 36, 37})
 
 
-@pytest.mark.parametrize("api", [False, True, None, "37", 37.0, 28, 33, 38, 100])
+@pytest.mark.parametrize("api", [False, True, None, "37", 37.0, 28, 30, 38, 100])
 def test_trusted_case_contract_rejects_implicit_or_future_api_coverage(api):
-    with pytest.raises(ValueError, match="only Android APIs 34, 35, 36 and 37"):
+    with pytest.raises(ValueError, match="only Android APIs 31 through 37"):
         subject.required_apk_cases(api)
 
 
@@ -138,7 +139,7 @@ def payload(tmp_path, mutate=lambda value: None):
     apk.write_bytes(b"synthetic signed APK")
     value = {"schema": "emulebb.android.apk-package/1", "status": "passed",
              "source": {"emulebbRust": {"commit": SOURCE}}, "applicationId": subject.APPLICATION_ID,
-             "minSdk": 34, "targetSdk": 37, "debug": False, "versionCode": 42,
+             "minSdk": 31, "targetSdk": 37, "debug": False, "versionCode": 42,
              "buildIdentity": {"sourceRevision": SOURCE, "version": "0.1.0-test", "channel": "development"},
              "signerSha256": "b" * 64,
              "apk": {"path": apk.name, "sizeBytes": apk.stat().st_size,
@@ -161,7 +162,7 @@ def test_source_and_actual_apk_bytes_are_bound(tmp_path):
 
 
 @pytest.mark.parametrize("field,value", [("status", "failed"), ("applicationId", "org.example.other"),
-    ("minSdk", 28), ("targetSdk", 34), ("signerSha256", "unsigned"),
+    ("minSdk", 34), ("targetSdk", 34), ("signerSha256", "unsigned"),
     ("versionCode", None), ("versionCode", True), ("versionCode", 0), ("versionCode", 2_100_000_001)])
 def test_wrong_publication_contract_is_rejected(tmp_path, field, value):
     digest = payload(tmp_path, lambda document: document.update({field: value}))
@@ -332,7 +333,7 @@ class Guest:
         if args[:3] == ("shell", "pm", "path"):
             return "package:/data/app/synthetic/base.apk"
         if args == ("shell", "dumpsys", "package", subject.APPLICATION_ID):
-            return "Package [org.emulebb.android]\n  versionCode=" + str(self.payload["versionCode"]) + " minSdk=34 targetSdk=37\n"
+            return "Package [org.emulebb.android]\n  versionCode=" + str(self.payload["versionCode"]) + " minSdk=31 targetSdk=37\n"
         if args[:2] == ("shell", "sha256sum"):
             return self.payload["apk"]["sha256"] + " /data/app/synthetic/base.apk"
         if args[:2] == ("shell", "cat"):
@@ -550,7 +551,7 @@ def test_initial_owned_guest_wakes_and_dismisses_only_insecure_keyguard_before_u
     assert not any(call[2:5] == ("shell", "input", "text") for call in peer.calls)
 
 
-@pytest.mark.parametrize("api", [34, 35, 36, 37])
+@pytest.mark.parametrize("api", [31, 32, 33, 34, 35, 36, 37])
 def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path, monkeypatch, api):
     peer, admitted = guest(tmp_path, monkeypatch)
     peer.api = api
@@ -560,13 +561,16 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     assert result["versionCode"] == admitted["versionCode"]
     expected = [
         "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness",
-        "bundled-webui", "graceful-stop", "notification-denied-service-start",
-        "all-files-denial-and-runtime-revocation"]
+        "bundled-webui", "graceful-stop"]
+    if api >= 33:
+        expected.append("notification-denied-service-start")
+    expected.append("all-files-denial-and-runtime-revocation")
     if api == 37:
         expected.append("android17-local-network-denial-and-revocation")
-    expected.extend(["explicit-stop-remains-stopped",
-                     "task-manager-stop-remains-stopped", "force-stop-remains-stopped",
-                     "restart", "screen-off-doze-observation"])
+    expected.append("explicit-stop-remains-stopped")
+    if api >= 33:
+        expected.append("task-manager-stop-remains-stopped")
+    expected.extend(["force-stop-remains-stopped", "restart", "screen-off-doze-observation"])
     assert [case["name"] for case in result["cases"]] == expected
     assert set(expected) == subject.required_apk_cases(api) - {
         "local-transfer-and-delivery-collision", "completed-delivery-survives-restart",
@@ -578,6 +582,9 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     assert result["endurance"]["minimumDwellSeconds"] == subject.MIN_SCREEN_OFF_DWELL_SECONDS == 60
     assert result["endurance"]["activityClosed"] is True
     assert not any(call[2:] == ("reboot",) for call in peer.calls)
+    notification_ops = [call for call in peer.calls if "android.permission.POST_NOTIFICATIONS" in call]
+    assert bool(notification_ops) is (api >= 33)
+    assert any(call[2:6] == ("shell", "cmd", "activity", "stop-app") for call in peer.calls) is (api >= 33)
     assert result["endurance"]["observedSeconds"] == 60
     assert result["endurance"]["over24Hours"] is False
     assert peer.running is False
@@ -659,7 +666,7 @@ def test_dwell_does_not_pass_if_guest_leaves_screen_off_deep_doze(tmp_path, monk
     assert "screen-off-doze-observation" not in [case["name"] for case in result["cases"]]
 
 
-@pytest.mark.parametrize("api", [34, 35, 36, 37])
+@pytest.mark.parametrize("api", [31, 32, 33, 34, 35, 36, 37])
 def test_permission_changes_that_close_activity_require_real_launcher_reopen(tmp_path, monkeypatch, api):
     peer, admitted = guest(tmp_path, monkeypatch)
     peer.api = api
@@ -680,7 +687,7 @@ def test_permission_changes_that_close_activity_require_real_launcher_reopen(tmp
         return peer.command(*arguments, **kwargs)
 
     result = subject.exercise(command, admitted, report_dir=tmp_path)
-    assert result["status"] == "passed" and len(closures) >= 8
+    assert result["status"] == "passed" and len(closures) >= (8 if api >= 33 else 5)
 
 
 @pytest.mark.parametrize("failure", [None, "autostart", "invalid", "browser", "android-resolver", "modern-resolver", "enqueue", "browser-proof"])
@@ -742,7 +749,7 @@ def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmat
     assert peer.key not in (tmp_path / "apk-lifecycle.json").read_text()
 
 
-@pytest.mark.parametrize("api", [34, 35, 36, 37])
+@pytest.mark.parametrize("api", [31, 32, 33, 34, 35, 36, 37])
 def test_full_official_path_matches_source_owned_case_contract(tmp_path, monkeypatch, api):
     from emule_test_harness import android_apk_peer, rust_local_ed2k, rust_webui_live_proof
     peer, admitted = guest(tmp_path, monkeypatch)
@@ -1027,6 +1034,44 @@ def test_failed_navigation_records_numeric_progress_and_only_unambiguous_ime_vis
     assert facts.get("imeVisible") == ({"true": True, "false": False}.get(ime))
     assert private not in json.dumps(facts)
     assert not any(call[:3] == ("shell", "input", "tap") for call in calls)
+
+
+@pytest.mark.parametrize('focus,expected', [
+    ('bind_addr', 'bind_addr'), ('api_key', 'api_key'), ('unknown_private', 'other-owned'),
+    ('none', 'none'), ('duplicate', 'ambiguous'),
+])
+@pytest.mark.parametrize('ime,expected_ime', [
+    ('true', 'shown'), ('false', 'hidden'), ('ambiguous', 'ambiguous'),
+    ('oversize', 'oversize'), ('adb-bound', 'oversize'), ('missing', 'unavailable'),
+])
+def test_navigation_failure_classifies_owned_focus_scroll_and_ime_without_text(focus, expected, ime, expected_ime):
+    private = 'synthetic-private-key-and-xml'
+    focused = '' if focus == 'none' else (
+        '<node package="org.emulebb.android" resource-id="org.emulebb.android:id/' +
+        ('bind_addr' if focus == 'duplicate' else focus) + '" focused="true" text="' + private + '"/>')
+    if focus == 'duplicate':
+        focused += '<node package="org.emulebb.android" resource-id="org.emulebb.android:id/api_key" focused="true"/>'
+    hierarchy = ('<hierarchy><node package="org.emulebb.android" class="android.widget.ScrollView" '
+                 'scrollable="true" bounds="[0,0][1080,1920]">' + focused + '</node></hierarchy>')
+    def command(*args):
+        if args[-2:-1] == ('cat',):
+            return hierarchy
+        if args[-2:] == ('dumpsys', 'input_method'):
+            if ime == 'adb-bound':
+                raise AdbOperationFailure(('shell', 'dumpsys'), output_bound=True)
+            if ime == 'oversize':
+                return 'x' * 65537
+            if ime == 'ambiguous':
+                return 'mInputShown=true\nmInputShown=false'
+            return 'mInputShown=' + ime if ime in {'true', 'false'} else private
+        return ''
+    ui = subject.ProductionUi(command)
+    ui.navigation = {'control': 'start_service'}
+    ui.inspect()
+    facts = ui.failure_navigation()
+    assert facts['focusedControl'] == expected and facts['scrollable'] is True
+    assert facts['imeInputShown'] == expected_ime
+    assert private not in json.dumps(facts)
 
 
 @pytest.mark.parametrize("fault", ["null-root", "idle-timeout", "silent-no-write", "partial-write", "invalidation-failed", None])

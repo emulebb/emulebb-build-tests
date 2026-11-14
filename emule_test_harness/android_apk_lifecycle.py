@@ -18,7 +18,7 @@ from uuid import uuid4
 
 APPLICATION_ID = "org.emulebb.android"
 PREFIX = ("-s", "emulator-5554")
-SUPPORTED_ANDROID_APIS = frozenset({34, 35, 36, 37})
+SUPPORTED_ANDROID_APIS = frozenset({31, 32, 33, 34, 35, 36, 37})
 MIN_SCREEN_OFF_DWELL_SECONDS = 60
 MIN_SCREEN_OFF_SAMPLES = 3
 # WHY: Android's power dump can exceed the ADB output bound. Consume it on
@@ -99,8 +99,8 @@ FILE_LINK_BROWSER_REQUIRED_CHECKS = frozenset({
 })
 _APK_BASE_CASES = frozenset({
     "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness", "bundled-webui",
-    "graceful-stop", "notification-denied-service-start", "all-files-denial-and-runtime-revocation",
-    "explicit-stop-remains-stopped", "task-manager-stop-remains-stopped",
+    "graceful-stop", "all-files-denial-and-runtime-revocation",
+    "explicit-stop-remains-stopped",
     "force-stop-remains-stopped", "restart", "local-transfer-and-delivery-collision",
     "completed-delivery-survives-restart", "file-link-intents-and-webui-confirmation", "screen-off-doze-observation",
 })
@@ -113,8 +113,11 @@ def required_apk_cases(api: int) -> set[str]:
     revision. A report cannot select its own required cases or extend this range.
     """
     if type(api) is not int or api not in SUPPORTED_ANDROID_APIS:
-        raise ValueError("APK qualification supports only Android APIs 34, 35, 36 and 37")
+        raise ValueError("APK qualification supports only Android APIs 31 through 37")
     cases = set(_APK_BASE_CASES)
+    if api >= 33:
+        cases.add("notification-denied-service-start")
+        cases.add("task-manager-stop-remains-stopped")
     if api == 37:
         cases.add("android17-local-network-denial-and-revocation")
     return cases
@@ -149,7 +152,7 @@ def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_s
     identity = value.get("buildIdentity", {})
     apk = value.get("apk", {})
     if (value.get("schema") != "emulebb.android.apk-package/1" or value.get("status") != "passed"
-            or value.get("applicationId") != APPLICATION_ID or value.get("minSdk") != 34
+            or value.get("applicationId") != APPLICATION_ID or value.get("minSdk") != 31
             or value.get("targetSdk") != 37
             or type(value.get("versionCode")) is not int or not 1 <= value["versionCode"] <= 2_100_000_000
             or value.get("source", {}).get("emulebbRust", {}).get("commit") != source_sha
@@ -451,6 +454,7 @@ class ProductionUi:
         self.setup_observation = {}
         self.navigation = {}
         self.scroll_bounds = None
+        self.navigation_snapshot = {}
 
     def shell(self, *args):
         return self.command(*self.prefix, "shell", *args)
@@ -469,8 +473,17 @@ class ProductionUi:
         # WHY: retain phase and network wait only from the same bounded UI
         # snapshot, including an explicit unknown for missing or duplicate IDs.
         self.setup_observation = {"networkWait": {"state": "unavailable"}}
+        self.navigation_snapshot = {"focusedControl": "unavailable"}
         hierarchy = self._hierarchy()
         elements = ui_elements(hierarchy)
+        owned_nodes = [node for node in elements if node.get("package") == APPLICATION_ID]
+        focused = [node for node in owned_nodes if node.get("focused") == "true"]
+        if len(focused) == 1:
+            resource = focused[0].get("resource-id", "")
+            self.navigation_snapshot = {"focusedControl": resource.removeprefix(APPLICATION_ID + ":id/")
+                if resource in {APPLICATION_ID + ":id/bind_addr", APPLICATION_ID + ":id/api_key"} else "other-owned"}
+        else:
+            self.navigation_snapshot = {"focusedControl": "unavailable" if not owned_nodes else "none" if not focused else "ambiguous"}
         wait = [node for node in elements if node.get("resource-id") == APPLICATION_ID + ":id/network_wait_status" and node.get("package") == APPLICATION_ID]
         phases = [node for node in elements if node.get("resource-id") == APPLICATION_ID + ":id/service_status" and node.get("package") == APPLICATION_ID]
         if len(wait) == 1:
@@ -479,9 +492,11 @@ class ProductionUi:
         if len(phases) == 1 and phases[0].get("text") in SETUP_SERVICE_PHASES:
             self.setup_observation["networkWait"]["phase"] = phases[0]["text"]
         nodes = ui_nodes(hierarchy)
-        containers = [_diagnostic_bounds(node.get("bounds", "")) for node in elements
-                      if node.get("package") == APPLICATION_ID and node.get("class") == "android.widget.ScrollView"]
+        scrolls = [node for node in elements if node.get("package") == APPLICATION_ID and node.get("class") == "android.widget.ScrollView"]
+        containers = [_diagnostic_bounds(node.get("bounds", "")) for node in scrolls]
         self.scroll_bounds = containers[0] if len(containers) == 1 and containers[0] is not None else None
+        if len(scrolls) == 1 and scrolls[0].get("scrollable") in {"true", "false"}:
+            self.navigation_snapshot["scrollable"] = scrolls[0]["scrollable"] == "true"
         # WHY: setup failures precede daemon diagnostics; retain only closed
         # control flags and service phases, never the visible credential/text.
         self.setup_observation["controls"] = {
@@ -493,18 +508,27 @@ class ProductionUi:
         return nodes
 
     def failure_navigation(self):
-        """Add only a recognized IME visibility bit after a failed control search."""
+        """Classify owned focus and IME state without retaining UI or dump text."""
         facts = dict(self.navigation)
         if not facts:
             return facts
+        facts.update(self.navigation_snapshot)
+        facts["imeInputShown"] = "unavailable"
         try:
             document = self.shell("dumpsys", "input_method")
-            if isinstance(document, str) and len(document.encode("utf-8")) <= 65536:
+            if isinstance(document, str) and len(document.encode("utf-8")) > 65536:
+                facts["imeInputShown"] = "oversize"
+            elif isinstance(document, str):
                 shown = re.findall(r"\bmInputShown=(true|false)\b", document)
                 if len(shown) == 1:
+                    facts["imeInputShown"] = "shown" if shown[0] == "true" else "hidden"
                     facts["imeVisible"] = shown[0] == "true"
-        except Exception:
-            pass
+                elif len(shown) > 1:
+                    facts["imeInputShown"] = "ambiguous"
+        except Exception as error:
+            from .android_adb_failure import AdbOperationFailure
+            if isinstance(error, AdbOperationFailure) and error.safe_failure.get("reason") == "output-bound-exceeded":
+                facts["imeInputShown"] = "oversize"
         return facts
 
     def elements(self):
@@ -832,11 +856,13 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         passed("installed-apk-identity")
         setup_stage = "all-files-access"
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "allow")
-        setup_stage = "notification-permission"
-        shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
         setup_stage = "android-api"
         api = int(shell("getprop", "ro.build.version.sdk"))
+        required_apk_cases(api)
         result["androidApiLevel"] = api
+        if api >= 33:
+            setup_stage = "notification-permission"
+            shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
         if api >= 37:
             setup_stage = "local-network-permission"
             shell("pm", "grant", APPLICATION_ID, "android.permission.ACCESS_LOCAL_NETWORK")
@@ -881,23 +907,22 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         assert_listener_stopped()
         passed("graceful-stop")
 
-        # A denied notification grant must not be mistaken for permission to
-        # run a foreground service: Android still permits FGS with its notice.
-        setup_stage = "notification-denial"
-        shell("pm", "revoke", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
-        # Permission/app-op changes can terminate the activity's UID. Return via
-        # its real launcher before looking for controls, rather than using stale UI.
-        reopen()
-        click("start_service")
-        wait_state("Running")
-        authenticated()
-        passed("notification-denied-service-start")
-        setup_stage = "notification-restoration"
-        shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
-        reopen()
-        click("stop_service")
-        wait_state("Stopped")
-        assert_listener_stopped()
+        if api >= 33:
+            # Runtime notification denial exists only from Android 13 onward.
+            setup_stage = "notification-denial"
+            shell("pm", "revoke", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+            # Permission changes may terminate the activity's UID.
+            reopen()
+            click("start_service")
+            wait_state("Running")
+            authenticated()
+            passed("notification-denied-service-start")
+            setup_stage = "notification-restoration"
+            shell("pm", "grant", APPLICATION_ID, "android.permission.POST_NOTIFICATIONS")
+            reopen()
+            click("stop_service")
+            wait_state("Stopped")
+            assert_listener_stopped()
 
         setup_stage = "all-files-denial"
         shell("appops", "set", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE", "deny")
@@ -941,7 +966,11 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             passed("android17-local-network-denial-and-revocation")
 
         # Each intentional stop must remain stopped after Main binds again.
-        for stage, stop in (("explicit-stop", "ui"), ("task-manager-stop", "task"), ("force-stop", "force")):
+        stops = [("explicit-stop", "ui")]
+        if api >= 33:
+            stops.append(("task-manager-stop", "task"))
+        stops.append(("force-stop", "force"))
+        for stage, stop in stops:
             setup_stage = stage
             reopen()
             wait_state("Running")

@@ -575,8 +575,10 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
     apk_values = (apk_source_sha, apk_manifest_sha256, apk_manifest_name, expected_cert_sha256)
     if any(value is not None for value in apk_values) and not all(value is not None for value in apk_values):
         raise ValueError("APK proof requires source, manifest hash, manifest filename and trusted expected certificate")
-    if apk_source_sha is not None and (payload is not None or api < 34):
-        raise ValueError("APK proof requires its own Android 14+ guest")
+    if apk_source_sha is not None:
+        from .android_apk_lifecycle import SUPPORTED_ANDROID_APIS
+        if payload is not None or api not in SUPPORTED_ANDROID_APIS:
+            raise ValueError("APK proof requires its own Android API 31–37 guest")
     if type(apk_soak_seconds) is not int or not 0 <= apk_soak_seconds <= 7 * 86400:
         raise ValueError("APK observation must be bounded to at most seven days")
     if apk_soak_seconds and apk_source_sha is None:

@@ -138,7 +138,7 @@ def _window_bar_appearance(block: str) -> str:
 
 def _configuration_night_mode(config: str) -> str:
     """Classify a complete Android Configuration.toString() night qualifier."""
-    # WHY: AOSP Android 14–17 prints no qualifier for day and `?night` for
+    # WHY: AOSP Android 12–17 prints no qualifier for day and `?night` for
     # undefined; require its configuration shape before interpreting absence.
     if re.match(r"^\{[0-9]+\.[0-9]+(?:[Ee][+-]?[0-9]+)? +(?:\?|[0-9]+)mcc(?:\?|[0-9]+)mnc(?:\s|})", config) is None:
         raise RuntimeError("Owned activity night configuration is unrecognized")
@@ -476,14 +476,14 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
                 raise RuntimeError("Physical app changed service phase during normal permission setup")
 
     complete = allow("MANAGE_EXTERNAL_STORAGE", "grant_all_files_access", settings=True)
-    if complete:
+    if complete and api >= 33:
         complete = allow("POST_NOTIFICATIONS", "allow_notifications")
     if complete and api >= 37:
         complete = allow("ACCESS_LOCAL_NETWORK", "allow_local_network")
     return {"complete": complete, "allFiles": granted("MANAGE_EXTERNAL_STORAGE"),
             "localNetworkRequired": api >= 37,
             "localNetwork": granted("ACCESS_LOCAL_NETWORK") if api >= 37 else "not-required",
-            "notifications": granted("POST_NOTIFICATIONS"), "batteryExemption": "not-inspected"}
+            "notifications": granted("POST_NOTIFICATIONS") if api >= 33 else "not-required", "batteryExemption": "not-inspected"}
 
 
 def _physical_process_resources(port: int, key: str) -> dict:

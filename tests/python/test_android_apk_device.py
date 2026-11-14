@@ -1019,7 +1019,7 @@ def test_retained_fixture_cleanup_needs_no_peer_and_has_exclusive_hash_authority
 
 
 @pytest.mark.parametrize("execute", [False, True])
-@pytest.mark.parametrize("api,page_size", [(34, 4096), (35, 16384), (36, 4096), (37, 16384)])
+@pytest.mark.parametrize("api,page_size", [(31, 4096), (32, 4096), (33, 4096), (34, 4096), (35, 16384), (36, 4096), (37, 16384)])
 def test_absent_install_and_bounded_smoke_preserve_phone_state(tmp_path, monkeypatch, execute, api, page_size):
     phone = Phone()
     phone.api, phone.page_size = api, page_size
@@ -1043,6 +1043,7 @@ def test_absent_install_and_bounded_smoke_preserve_phone_state(tmp_path, monkeyp
             "launchedFromOwnedApp": True, "recipientSelected": False, "dismissed": True}
         assert value["foregroundObservation"]["seconds"] == 15
         assert value["permissions"]["localNetwork"] == (True if api == 37 else "not-required")
+        assert value["permissions"]["notifications"] == (True if api >= 33 else "not-required")
 
 
 @pytest.mark.parametrize("failure", ["different-apk", "retained", "unknown-profile", "foreign-incoming", "failed-start", "foreign-forward"])
@@ -1081,7 +1082,7 @@ def test_permission_setup_can_resume_only_its_hash_bound_installation(tmp_path, 
     assert len([call for call in phone.calls if call[0] == "install"]) == 1
 
 
-@pytest.mark.parametrize("api", [36, 37])
+@pytest.mark.parametrize("api", [31, 32, 33, 36, 37])
 def test_normal_permission_ui_changes_only_denied_owned_app_grants(tmp_path, monkeypatch, api):
     phone = Phone()
     phone.api = api
@@ -1089,8 +1090,8 @@ def test_normal_permission_ui_changes_only_denied_owned_app_grants(tmp_path, mon
     report = run(tmp_path, monkeypatch, phone, execute=True)
     value = json.loads(report.read_text())
     assert value["status"] == "passed"
-    assert [change["permission"] for change in value["permissionChanges"]] == [
-        "MANAGE_EXTERNAL_STORAGE", "POST_NOTIFICATIONS"] + (["ACCESS_LOCAL_NETWORK"] if api == 37 else [])
+    assert [change["permission"] for change in value["permissionChanges"]] == ["MANAGE_EXTERNAL_STORAGE"] + (
+        ["POST_NOTIFICATIONS"] if api >= 33 else []) + (["ACCESS_LOCAL_NETWORK"] if api == 37 else [])
     assert all(change["before"] == "denied" and change["after"] == "granted" for change in value["permissionChanges"])
     assert value["processResources"]["residentMemoryBytes"] == 67108864
     assert value["processResources"]["cpuUsagePercent"] == 125.5
@@ -1535,7 +1536,7 @@ def test_wrong_receipt_or_other_device_never_admits_existing_profile(tmp_path):
         subject._owned_installation(report, "0" * 64, payload=payload(), device_hash="1" * 64)
 
 
-@pytest.mark.parametrize("api", [33, 38])
+@pytest.mark.parametrize("api", [30, 38])
 def test_unsupported_physical_api_fails_before_installing(tmp_path, monkeypatch, api):
     phone = Phone()
     phone.api = api
