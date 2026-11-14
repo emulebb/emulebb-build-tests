@@ -136,6 +136,35 @@ def _window_bar_appearance(block: str) -> str:
     }))) if appearances else ""
 
 
+def _configuration_night_mode(config: str) -> str:
+    """Classify a complete Android Configuration.toString() night qualifier."""
+    # WHY: AOSP Android 14–17 prints no qualifier for day and `?night` for
+    # undefined; require its configuration shape before interpreting absence.
+    if re.match(r"^\{[0-9]+\.[0-9]+(?:[Ee][+-]?[0-9]+)? +(?:\?|[0-9]+)mcc(?:\?|[0-9]+)mnc(?:\s|})", config) is None:
+        raise RuntimeError("Owned activity night configuration is unrecognized")
+    depth = 0
+    qualifiers = []
+    for match in re.finditer(r"[{}]|[^\s{}]+", config):
+        token = match[0]
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+            if depth < 0 or (depth == 0 and match.end() != len(config)):
+                raise RuntimeError("Owned activity night configuration is unrecognized")
+        elif token in {"night", "?night"}:
+            if depth != 1:
+                raise RuntimeError("Owned activity night configuration is unrecognized")
+            qualifiers.append(token)
+        elif depth == 1 and (token == "notnight" or token.startswith(("night=", "?night="))):
+            raise RuntimeError("Owned activity night configuration is unrecognized")
+    if depth != 0:
+        raise RuntimeError("Owned activity night configuration is unrecognized")
+    if len(qualifiers) > 1:
+        raise RuntimeError("Owned activity night configuration is unrecognized")
+    return {"night": "yes", "?night": "undefined"}.get(qualifiers[0], "no") if qualifiers else "no"
+
+
 def _check_system_theme(command, prefix: tuple, open_main, journal=None) -> dict:
     """Temporarily switch only night mode, restoring its exact recognized setting."""
     def shell(*args, **kwargs):
@@ -172,14 +201,14 @@ def _check_system_theme(command, prefix: tuple, open_main, journal=None) -> dict
         config = re.fullmatch(r"[ \t]*CurrentConfiguration=([^\n]*)", config_lines[0]) if config_lines else None
         if config_lines and config is None:
             raise RuntimeError("Owned activity night configuration is unrecognized")
-        if config is not None and re.search(r"\b(?:night|notnight)\b", config[1]) is None:
-            raise RuntimeError("Owned activity night configuration is unrecognized")
+        actual_mode = _configuration_night_mode(config[1]) if config is not None else None
         if resumed is None or not owned:
             unavailable("Theme observation requires the resumed owned activity and window")
         if config is None:
             unavailable("Owned activity night configuration is unavailable")
-        expected = r"\b(?:night|notnight)\b" if mode is None else r"\b" + ("night" if mode == "yes" else "notnight") + r"\b"
-        if re.search(expected, config[1]) is None:
+        if actual_mode == "undefined":
+            unavailable("Owned activity night configuration is undefined")
+        if mode is not None and actual_mode != mode:
             raise _ThemeNotSettled("Owned activity night configuration has not settled")
         if mode is not None and any((flag in appearance) != (mode == "no") for flag in
                 ("LIGHT_STATUS_BARS", "LIGHT_NAVIGATION_BARS")):

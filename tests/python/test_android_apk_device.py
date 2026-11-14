@@ -126,8 +126,8 @@ def test_theme_unknown_never_mutates_and_failure_restores_exact_baseline(baselin
                 raise RuntimeError('synthetic inspection failure')
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n'
-                ' mLastReportedConfiguration={ ' + ('notnight' if mode[0] == 'yes' else 'night') + ' }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc ' + ('night' if mode[0] == 'yes' else '') + '}\n'
+                ' mLastReportedConfiguration={1.0 ?mcc?mnc ' + ('' if mode[0] == 'yes' else 'night') + '}\n')
         if action == ('dumpsys', 'window', 'windows'):
             flags = '' if mode[0] == 'yes' else 'LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS'
             return ('  Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
@@ -142,6 +142,29 @@ def test_theme_unknown_never_mutates_and_failure_restores_exact_baseline(baselin
     mutations = [call for call in calls if len(call) == 4 and call[:3] == ('cmd', 'uimode', 'night')]
     assert not mutations if baseline == 'unknown' else mutations[-1][-1] == baseline
     assert mode[0] == baseline
+
+
+@pytest.mark.parametrize('configuration,expected', [
+    ('{1.0 ?mcc?mnc ?localeList winConfig={}}', 'no'),
+    ('{1.0 310mcc260mnc ?localeList night winConfig={}}', 'yes'),
+    ('{1.0 ?mcc?mnc ?night}', 'undefined'),
+    ('{1.0 ?mcc?mnc ?localeList nightDim=0 winConfig={ bounds=Rect(0, 0 - 1, 1) } fontWeightAdjustment=0}', 'no'),
+    ('{1.0 ?mcc?mnc ?localeList nightDim=0 night winConfig={ bounds=Rect(0, 0 - 1, 1) } fontWeightAdjustment=0}', 'yes'),
+])
+def test_configuration_night_mode_uses_aosp_serialization(configuration, expected):
+    assert subject._configuration_night_mode(configuration) == expected
+
+
+@pytest.mark.parametrize('configuration', [
+    '', '{}', '{ unknown }', '{1.0 ?mcc?mnc', '{1.0 ?mcc?mnc }}',
+    '{1.0 ?mcc?mnc} trailing', '{1.0 ?mcc?mnc notnight}',
+    '{1.0 ?mcc?mnc night ?night}', '{1.0 ?mcc?mnc night night}',
+    '{1.0 ?mcc?mnc night=48}', '{1.0 ?mcc?mnc winConfig={night}}',
+    '{1.0 ?mcc?mnc winConfig={?night}}',
+])
+def test_configuration_rejects_malformed_or_ambiguous_night_state(configuration):
+    with pytest.raises(RuntimeError, match='configuration'):
+        subject._configuration_night_mode(configuration)
 
 
 def test_theme_rejects_foreign_activity_that_only_references_own_component():
@@ -220,7 +243,7 @@ def test_numeric_theme_checks_both_modes_and_journals_restoration(monkeypatch, i
         if action == ('dumpsys', 'activity', 'activities'):
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc ' + ('night' if mode[0] == 'yes' else '') + '}\n')
         if action == ('dumpsys', 'window', 'windows'):
             return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
                 '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=81812100\n' +
@@ -251,7 +274,7 @@ def test_unknown_theme_window_format_fails_before_mutation():
         if action == ('dumpsys', 'activity', 'activities'):
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ notnight }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc }\n')
         if action == ('dumpsys', 'window', 'windows'):
             return 'Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n unknown\n'
         raise AssertionError(action)
@@ -277,7 +300,7 @@ def test_theme_forced_light_flag_does_not_count_as_navigation_bar_appearance(mon
         if action == ('dumpsys', 'activity', 'activities'):
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc ' + ('night' if mode[0] == 'yes' else '') + '}\n')
         if action == ('dumpsys', 'window', 'windows'):
             return 'Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
         raise AssertionError(action)
@@ -305,7 +328,7 @@ def test_theme_waits_for_recognized_old_state_and_restores_on_timeout(monkeypatc
             night = (mode[0] == 'yes') != old if mode[0] != 'auto' else False
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ ' + ('night' if night else 'notnight') + ' }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc ' + ('night' if night else '') + '}\n')
         if action == ('dumpsys', 'window', 'windows'):
             flags = '' if mode[0] == 'yes' else '    apr=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS\n'
             return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
@@ -322,7 +345,7 @@ def test_theme_waits_for_recognized_old_state_and_restores_on_timeout(monkeypatc
     assert mode[0] == 'auto'
 
 
-@pytest.mark.parametrize('transient', ['no-config', 'no-activity', 'no-resumed', 'no-window',
+@pytest.mark.parametrize('transient', ['no-config', 'no-activity', 'no-resumed', 'no-window', 'undefined',
                                        'no-night-token', 'malformed-config', 'two-configs',
                                        'two-activities', 'two-windows'])
 @pytest.mark.parametrize('timeout', [False, True])
@@ -343,11 +366,13 @@ def test_theme_retries_recreation_only_after_admission_and_restores(monkeypatch,
                 observations[mode[0]] += 1
             missing = active and (timeout or observations[mode[0]] == 1)
             resumed = 'topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-            config = ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n'
+            config = ' CurrentConfiguration={1.0 ?mcc?mnc ' + ('night' if mode[0] == 'yes' else '') + '}\n'
             if missing and transient == 'no-resumed':
                 resumed = ''
             if missing and transient == 'no-config':
                 config = ''
+            if missing and transient == 'undefined':
+                config = ' CurrentConfiguration={1.0 ?mcc?mnc ?night}\n'
             if missing and transient == 'no-night-token':
                 config = ' CurrentConfiguration={ unknown }\n'
             if missing and transient == 'malformed-config':
@@ -387,7 +412,7 @@ def test_theme_retries_recreation_only_after_admission_and_restores(monkeypatch,
     assert journal[-1]['baselineRestored'] and mode[0] == 'auto'
 
 
-@pytest.mark.parametrize('invalid', ['no-config', 'no-window'])
+@pytest.mark.parametrize('invalid', ['no-config', 'no-window', 'undefined'])
 def test_theme_transient_shape_at_baseline_never_mutates(invalid):
     actions = []
     def command(*args, **kwargs):
@@ -398,7 +423,8 @@ def test_theme_transient_shape_at_baseline_never_mutates(invalid):
         if action == ('dumpsys', 'activity', 'activities'):
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n' +
-                ('' if invalid == 'no-config' else ' CurrentConfiguration={ notnight }\n'))
+                ('' if invalid == 'no-config' else ' CurrentConfiguration={1.0 ?mcc?mnc ' +
+                 ('?night' if invalid == 'undefined' else '') + '}\n'))
         if action == ('dumpsys', 'window', 'windows'):
             return '' if invalid == 'no-window' else (
                 'Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
@@ -424,7 +450,7 @@ def test_theme_insecure_window_during_recreation_fails_immediately_and_restores(
             return ('' if mode[0] == 'yes' else
                 'topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ notnight }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc }\n')
         if action == ('dumpsys', 'window', 'windows'):
             return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
                 '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=' +
@@ -791,7 +817,7 @@ def test_theme_journal_survives_failed_restore_and_precedes_mutation(tmp_path, m
         if action == ('shell', 'dumpsys', 'activity', 'activities') and phone.screen == 'app':
             return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
                 '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
-                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n')
+                ' CurrentConfiguration={1.0 ?mcc?mnc ' + ('night' if mode[0] == 'yes' else '') + '}\n')
         if action == ('shell', 'dumpsys', 'window', 'windows'):
             if fault == 'preflight':
                 return 'unknown'
