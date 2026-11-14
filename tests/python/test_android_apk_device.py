@@ -593,6 +593,52 @@ def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=
         installation_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt else None, **kwargs)
 
 
+@pytest.mark.parametrize('fault', [None, 'restore', 'preflight'])
+def test_theme_journal_survives_failed_restore_and_precedes_mutation(tmp_path, monkeypatch, fault):
+    phone = Phone()
+    command = phone.command
+    mode, mutations = ['auto'], []
+    def themed_command(*args, **kwargs):
+        action = args[2:]
+        if action == ('shell', 'cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:4] == ('shell', 'cmd', 'uimode', 'night') and len(action) == 5:
+            journal = json.loads((tmp_path / 'initial' / 'physical-device.json').read_text())['systemTheme']
+            assert journal['baseline'] == 'auto' and journal['baselineRestored'] is False
+            mutations.append(action[4])
+            if fault == 'restore' and action[4] == 'auto':
+                raise RuntimeError('synthetic restore failure')
+            mode[0] = action[4]
+            return ''
+        if action == ('shell', 'dumpsys', 'activity', 'activities') and phone.screen == 'app':
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n')
+        if action == ('shell', 'dumpsys', 'window', 'windows'):
+            if fault == 'preflight':
+                return 'unknown'
+            flags = '' if mode[0] == 'yes' else '    apr=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS\n'
+            return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=SECURE\n' + flags + '}\n'
+                '  Requested w=100 h=200 mLayoutSeq=1\n')
+        return command(*args, **kwargs)
+    phone.command = themed_command
+    if fault:
+        with pytest.raises(RuntimeError):
+            run(tmp_path, monkeypatch, phone, execute=True, check_system_theme=True)
+    else:
+        run(tmp_path, monkeypatch, phone, execute=True, check_system_theme=True)
+    receipt = json.loads((tmp_path / 'initial' / 'physical-device.json').read_text())
+    if fault == 'preflight':
+        assert not mutations and 'systemTheme' not in receipt
+    else:
+        assert mutations == ['yes', 'no', 'auto']
+        assert receipt['systemTheme']['baseline'] == 'auto'
+        assert receipt['systemTheme']['baselineRestored'] is (fault is None)
+        assert receipt['systemTheme']['status'] == ('passed' if fault is None else 'failed')
+        assert receipt['status'] == ('passed' if fault is None else 'failed')
+
+
 @pytest.mark.parametrize('fault', [None, 'wrong-old-hash', 'other-user', 'uninstall-fails', 'install-fails', 'theme-fails'])
 def test_reset_journals_one_uninstall_and_bound_new_install(tmp_path, monkeypatch, fault):
     from emule_test_harness import rust_local_ed2k

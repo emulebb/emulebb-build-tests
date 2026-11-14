@@ -121,7 +121,7 @@ def _window_bar_appearance(block: str) -> str:
     return appearances[0] if appearances else ""
 
 
-def _check_system_theme(command, prefix: tuple, open_main) -> dict:
+def _check_system_theme(command, prefix: tuple, open_main, journal=None) -> dict:
     """Temporarily switch only night mode, restoring its exact recognized setting."""
     def shell(*args, **kwargs):
         return command(*prefix, "shell", *args, **kwargs)
@@ -154,6 +154,10 @@ def _check_system_theme(command, prefix: tuple, open_main) -> dict:
 
     observe()
     approval = ThemeChangeApproval(hashlib.sha256(prefix[1].encode()).hexdigest(), match[1])
+    state = {"baseline": approval.baseline, "status": "in-progress", "baselineRestored": False}
+    if journal is not None:
+        journal(state)
+    checks_passed = False
     try:
         for mode in ("yes", "no"):
             shell("cmd", "uimode", "night", mode, theme_change=approval)
@@ -167,11 +171,21 @@ def _check_system_theme(command, prefix: tuple, open_main) -> dict:
                     if time.monotonic() >= deadline:
                         raise
                     time.sleep(0.25)
+        checks_passed = True
     finally:
-        shell("cmd", "uimode", "night", approval.baseline, theme_change=approval)
-        if shell("cmd", "uimode", "night") != baseline:
-            raise RuntimeError("System night mode restoration failed")
-    return {"nightAndDay": "passed", "baselineRestored": True}
+        restored = False
+        try:
+            shell("cmd", "uimode", "night", approval.baseline, theme_change=approval)
+            if shell("cmd", "uimode", "night") != baseline:
+                raise RuntimeError("System night mode restoration failed")
+            restored = True
+        finally:
+            state.update(status="passed" if checks_passed and restored else "failed", baselineRestored=restored)
+            if checks_passed:
+                state["nightAndDay"] = "passed"
+            if journal is not None:
+                journal(state)
+    return state
 
 
 def _safe_service_phase(text: str | None) -> str:
@@ -936,7 +950,10 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
         open_main()
         if check_system_theme:
             value["phase"] = "verify-system-theme"
-            value["systemTheme"] = _check_system_theme(command, prefix, open_main)
+            def save_theme_journal(state):
+                value["systemTheme"] = dict(state)
+                report.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+            value["systemTheme"] = _check_system_theme(command, prefix, open_main, save_theme_journal)
             passed("physical-system-theme-day-and-night")
         value["phase"] = "verify-public-app-version-visible"
         value["appVersion"] = _visible_app_version(ui, value["versionName"])
