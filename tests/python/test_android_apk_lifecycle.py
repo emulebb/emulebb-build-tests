@@ -739,6 +739,60 @@ def test_failed_navigation_records_numeric_progress_and_only_unambiguous_ime_vis
     assert not any(call[:3] == ("shell", "input", "tap") for call in calls)
 
 
+@pytest.mark.parametrize("fault", ["null-root", "idle-timeout", "silent-no-write", "partial-write", "invalidation-failed", None])
+def test_each_hierarchy_requires_a_fresh_owned_dump_before_controls_can_authorize_a_tap(fault):
+    files, calls = {}, []
+    old = ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="Stopped"/>'
+           '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[50,500][150,600]"/>'
+           '<node resource-id="org.emulebb.android:id/api_key" text="synthetic-private-old-key"/></hierarchy>')
+    fresh = old.replace("[50,500][150,600]", "[300,500][400,600]").replace("old-key", "fresh-key")
+
+    def command(*args):
+        call = args[2:]
+        calls.append(call)
+        if call == ("shell", "wm", "size"):
+            return "Physical size: 1080x1920"
+        if call[:3] == ("shell", "rm", "-f"):
+            assert call == ("shell", "rm", "-f", ui.path)
+            if fault == "invalidation-failed":
+                raise RuntimeError("Owned Android ADB command failed")
+            files.pop(ui.path, None)
+        if call[:3] == ("shell", "uiautomator", "dump"):
+            assert ui.path not in files, "each dump must invalidate its previous owned hierarchy"
+            if fault == "null-root":
+                return "ERROR: null root node returned by UiTestAutomationBridge."
+            if fault == "idle-timeout":
+                return "ERROR: could not get idle state."
+            if fault == "silent-no-write":
+                return ""
+            files[ui.path] = "<hierarchy>" if fault == "partial-write" else fresh
+            return "UI hierchary dumped to: " + ui.path
+        if call[:2] == ("shell", "cat"):
+            if ui.path not in files:
+                raise RuntimeError("Owned Android ADB command failed")
+            return files[ui.path]
+        return ""
+
+    ui = subject.ProductionUi(command)
+    files[ui.path] = old
+    if fault is not None:
+        with pytest.raises(RuntimeError, match="ADB command failed|dump is malformed"):
+            ui.click("start_service")
+        assert not any(call[:3] == ("shell", "input", "tap") for call in calls)
+        assert ui.setup_observation == {}
+        if fault == "invalidation-failed":
+            assert files[ui.path] == old
+            assert not any(call[:2] in {("shell", "cat"), ("shell", "uiautomator")} for call in calls)
+        else:
+            assert files.get(ui.path) != old
+    else:
+        ui.click("start_service")
+        assert ("shell", "input", "tap", "350", "550") in calls
+        dumps = [index for index, call in enumerate(calls) if call[:3] == ("shell", "uiautomator", "dump")]
+        assert len(dumps) == 2 and all(calls[index - 1] == ("shell", "rm", "-f", ui.path) for index in dumps)
+    assert "synthetic-private" not in json.dumps(ui.setup_observation)
+
+
 def boot_dumps():
     """Use AOSP-targeted dump shapes; synthetic private values must stay transient."""
     private = "synthetic-private-diagnostic-text"

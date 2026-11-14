@@ -778,7 +778,9 @@ def test_clipped_stop_is_scrolled_to_safe_content_before_tapping(tmp_path, monke
     assert all(int(call[4]) < 1680 for call in phone.calls if call[:3] == ("shell", "input", "tap"))
     stop_index = next(index for index, call in enumerate(phone.calls)
                       if call[:3] == ("shell", "input", "tap") and call[3] == "250")
-    assert any(call[:3] == ("shell", "am", "start") for call in phone.calls[stop_index - 15:stop_index])
+    start_index = max(index for index, call in enumerate(phone.calls[:stop_index])
+                      if call[:3] == ("shell", "input", "tap") and call[3] == "50")
+    assert any(call[:3] == ("shell", "am", "start") for call in phone.calls[start_index + 1:stop_index])
 
 
 def test_zero_area_stop_is_never_tapped_or_replaced_with_force_stop(tmp_path, monkeypatch):

@@ -329,6 +329,10 @@ class ProductionUi:
         return self.command(*self.prefix, "shell", *args)
 
     def _hierarchy(self):
+        # WHY: AOSP DumpCommand can return success without writing a hierarchy
+        # after null-root/idle failures. Invalidate only this owned UUID file so
+        # an earlier screen can never authorize a tap on the current screen.
+        self.shell("rm", "-f", self.path)
         self.shell("uiautomator", "dump", self.path)
         # This transient hierarchy contains the visible credential. Never copy
         # it to the host or retain it as a diagnostic artifact.
