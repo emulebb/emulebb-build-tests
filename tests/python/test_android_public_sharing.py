@@ -356,7 +356,65 @@ def test_cli_failure_does_not_print_private_exception(tmp_path, monkeypatch, cap
     def fail(): raise RuntimeError("private-operator-path-and-endpoint")
     monkeypatch.setattr(subject, "get_workspace_output_root", fail)
     assert subject.main(["status", "--campaign-dir", str(tmp_path)]) == 1
-    assert "private-operator" not in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "private-operator" not in output
+    assert json.loads(output)["failureStage"] == "output-root"
+    assert json.loads(output)["failureReason"] == "unclassified"
+
+
+@pytest.mark.parametrize("stage,reason", [
+    ("output-root", "unclassified"), ("payload-admission", "apk-payload-hash-mismatch"),
+    ("installation-receipt", "installation-receipt-bound"), ("adb-owner", "adb-server-unavailable"),
+    ("installation-scope", "installation-scope-mismatch"), ("source-resolution", "unclassified"),
+    ("source-inventory", "reparse-entry-rejected"), ("campaign-directory", "campaign-outside-output-root"),
+    ("campaign-operation", "unclassified"),
+])
+def test_cli_reports_closed_preflight_stage_and_reason_without_private_text(tmp_path, monkeypatch, capsys, stage, reason):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "Sample.bin").write_bytes(b"data")
+    phone = FakePhone()
+    installation = installation_evidence(phone)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: tmp_path)
+    monkeypatch.setattr(subject, "admit_payload", lambda *a, **kw: phone.payload)
+    monkeypatch.setattr(subject, "read_hashed_receipt", lambda *a, **kw: installation)
+    monkeypatch.setattr(subject, "AdbDevice", lambda *a, **kw: object())
+    monkeypatch.setattr(subject, "Phone", lambda *a, **kw: phone)
+    messages = {"output-root": "private-operator-path-and-endpoint", "payload-admission": "APK payload hash differs",
+                "installation-receipt": "Phone profile operation requires a bounded receipt and immutable SHA-256",
+                "adb-owner": "Physical testing requires the existing local operator ADB server",
+                "source-inventory": "Campaign paths cannot contain reparse entries"}
+    owners = {"output-root": "get_workspace_output_root", "payload-admission": "admit_payload",
+              "installation-receipt": "read_hashed_receipt", "adb-owner": "AdbDevice", "source-inventory": "inventory"}
+    if stage in owners:
+        def fail(*args, **kwargs): raise RuntimeError(messages[stage])
+        monkeypatch.setattr(subject, owners[stage], fail)
+    if stage == "installation-scope": installation["freshInstallation"] = False
+    if stage == "source-resolution": source = tmp_path / "private-missing-source"
+    if stage == "campaign-operation":
+        def fail_device(): raise RuntimeError("private-device-operation-detail")
+        phone.installed = fail_device
+    campaign = tmp_path if stage == "campaign-directory" else tmp_path / "campaign"
+    args = ["prepare", "--campaign-dir", str(campaign), "--adb", str(tmp_path / "private-adb"),
+            "--serial", "synthetic:5555", "--source-dir", str(source), "--expected-file-count", "1",
+            "--expected-total-bytes", "4", "--route", "direct-wifi", "--installation-receipt",
+            str(tmp_path / "private-installation.json"), "--installation-receipt-sha256", "a" * 64,
+            "--apk-payload", str(tmp_path / "private-apk"), "--apk-manifest-name", "manifest.json",
+            "--apk-manifest-sha256", "b" * 64, "--apk-source-sha", "c" * 40,
+            "--expected-cert-sha256", "d" * 64]
+    assert subject.main(args) == 1
+    output = capsys.readouterr().out
+    value = json.loads(output)
+    assert value["failureStage"] == stage and value["failureReason"] == reason
+    assert value["failureStage"] in subject.PREFLIGHT_STAGES
+    assert "private-" not in output and "synthetic:5555" not in output and str(tmp_path) not in output
+
+
+def test_safe_failure_reason_matches_exact_runtime_literals_only():
+    assert subject.safe_failure_reason(RuntimeError("APK payload hash differs")) == "apk-payload-hash-mismatch"
+    assert subject.safe_failure_reason(RuntimeError("APK payload hash differs: private endpoint")) == "unclassified"
+    assert subject.safe_failure_reason(ValueError("APK payload hash differs")) == "unclassified"
+    assert subject.safe_failure_reason(RuntimeError({"private": "data"})) == "unclassified"
 
 
 def test_detached_observer_discards_expired_builder_lock_token(tmp_path, monkeypatch):

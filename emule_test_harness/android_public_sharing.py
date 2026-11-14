@@ -41,6 +41,34 @@ from .upload_parity_monitor import rust_summary
 
 SCHEMA = "emulebb.android.public-sharing/1"
 MAX_RECEIPT_BYTES = 4 * 1024**2
+PREFLIGHT_STAGES = frozenset({"output-root", "payload-admission", "installation-receipt", "adb-owner",
+                              "installation-scope", "source-resolution", "source-inventory", "campaign-directory",
+                              "campaign-operation"})
+SAFE_FAILURE_REASONS = {
+    "APK receipt must be a bounded regular file": "apk-receipt-bound",
+    "APK receipt hash differs": "apk-receipt-hash-mismatch",
+    "APK receipt does not identify the selected signed Android build": "apk-build-identity-mismatch",
+    "APK payload hash differs": "apk-payload-hash-mismatch",
+    "Phone profile operation requires a bounded receipt and immutable SHA-256": "installation-receipt-bound",
+    "Phone profile receipt hash differs": "installation-receipt-hash-mismatch",
+    "Phone profile receipt must be an object": "installation-receipt-shape",
+    "Physical testing requires the existing local operator ADB server": "adb-server-unavailable",
+    "Selected ADB tool version inspection failed": "adb-tool-inspection",
+    "Selected ADB tool differs from the operator server; refusing to restart it": "adb-version-mismatch",
+    "Prepare requires the exact verified owned installation receipt": "installation-scope-mismatch",
+    "Campaign paths cannot contain reparse entries": "reparse-entry-rejected",
+    "Campaign paths must be regular files or directories": "non-regular-entry",
+    "Approved source directory anchor changed": "source-anchor-changed",
+    "Approved source changed while inventorying": "source-changed-during-inventory",
+    "Approved source file count or byte total differs": "source-shape-mismatch",
+    "Campaign evidence must stay below the configured output root": "campaign-outside-output-root",
+}
+
+
+def safe_failure_reason(error: Exception):
+    """Map exact reviewed literals only; unknown response/path text never escapes."""
+    message = error.args[0] if isinstance(error, RuntimeError) and len(error.args) == 1 else None
+    return SAFE_FAILURE_REASONS.get(message, "unclassified") if isinstance(message, str) else "unclassified"
 
 
 @dataclass(frozen=True)
@@ -455,8 +483,10 @@ def publish_staged_tree(phone: Phone, receipt: dict):
 
 def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             expected_file_count: int, expected_total_bytes: int, installation: dict,
-            admission: dict, limits: Limits, route: str):
+            admission: dict, limits: Limits, route: str, on_preflight_stage=None):
     """Copy approved bytes without modifying the source or overwriting guest files."""
+    if on_preflight_stage is not None:
+        on_preflight_stage("installation-scope")
     limits.validate()
     if route != "direct-wifi" or type(expected_file_count) is not int or not 1 <= expected_file_count <= 10000:
         raise ValueError("Explicit direct Wi-Fi and a bounded approved file count are required")
@@ -474,16 +504,24 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
         raise RuntimeError("Prepare requires the exact verified owned installation receipt")
     # WHY: an explicitly selected operator anchor may cross a junction. Resolve
     # that anchor once; never switch inventory/copy to a newly retargeted alias.
+    if on_preflight_stage is not None:
+        on_preflight_stage("source-resolution")
     source_anchor = source.absolute()
     source = source_anchor.resolve(strict=True)
     source_stat = _regular(source, directory=True)
     source_identity = (source_stat.st_dev, source_stat.st_ino)
     verify_source_anchor(source_anchor, source, source_identity)
+    if on_preflight_stage is not None:
+        on_preflight_stage("source-inventory")
     tree = inventory(source)
     verify_source_anchor(source_anchor, source, source_identity)
     if len(tree["files"]) != expected_file_count or sum(row["sizeBytes"] for row in tree["files"]) != expected_total_bytes:
         raise RuntimeError("Approved source file count or byte total differs")
+    if on_preflight_stage is not None:
+        on_preflight_stage("campaign-directory")
     campaign = _private_root(campaign, output_root, fresh=True)
+    if on_preflight_stage is not None:
+        on_preflight_stage("campaign-operation")
     nonce = uuid4().hex
     receipt = {"schema": SCHEMA, "status": "preparing", "stage": "device-admission", "route": route, "nonce": nonce,
                "deviceSerialSha256": device_hash, "destination": SHARED + "/campaign-" + nonce,
@@ -957,6 +995,12 @@ def main(argv=None):
     parser.add_argument("--worker-token", help=argparse.SUPPRESS)
     arguments = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(arguments)
+    failure_stage = "output-root"
+    def at_preflight_stage(value):
+        nonlocal failure_stage
+        if value not in PREFLIGHT_STAGES:
+            raise ValueError("Unknown preflight stage")
+        failure_stage = value
     try:
         output_root = get_workspace_output_root()
         if args.action == "prepare":
@@ -968,16 +1012,22 @@ def main(argv=None):
             admission = {"root": str(args.apk_payload.absolute()), "manifest_name": args.apk_manifest_name,
                          "manifest_sha256": args.apk_manifest_sha256, "source_sha": args.apk_source_sha,
                          "expected_cert_sha256": args.expected_cert_sha256}
+            at_preflight_stage("payload-admission")
             payload = admit_payload(Path(admission["root"]), **{key: value for key, value in admission.items() if key != "root"})
+            at_preflight_stage("installation-receipt")
             installation = read_hashed_receipt(args.installation_receipt, args.installation_receipt_sha256)
+            at_preflight_stage("adb-owner")
             phone = Phone(AdbDevice(args.adb, args.serial, server_port=args.server_port), payload)
             digest = prepare(phone, campaign=args.campaign_dir, output_root=output_root, source=args.source_dir,
                              expected_file_count=args.expected_file_count, expected_total_bytes=args.expected_total_bytes,
                              installation=installation, admission=admission, route=args.route,
-                             limits=Limits(**{key: getattr(args, key) for key in asdict(Limits())}))
+                             limits=Limits(**{key: getattr(args, key) for key in asdict(Limits())}),
+                             on_preflight_stage=at_preflight_stage)
             print(json.dumps({"status": "prepared", "campaignReceiptSha256": digest}))
             return 0
+        at_preflight_stage("campaign-directory")
         campaign = _private_root(args.campaign_dir, output_root)
+        at_preflight_stage("campaign-operation")
         if not args.campaign_receipt_sha256:
             raise ValueError("Campaign operations require its immutable receipt SHA-256")
         receipt = admit_campaign(campaign, args.campaign_receipt_sha256, args.serial)
@@ -991,7 +1041,9 @@ def main(argv=None):
             print(json.dumps(safe_status(campaign, receipt)))
             return 0
         admission = receipt["admission"]
+        at_preflight_stage("payload-admission")
         payload = admit_payload(Path(admission["root"]), **{key: value for key, value in admission.items() if key != "root"})
+        at_preflight_stage("adb-owner")
         phone = Phone(AdbDevice(args.adb, args.serial, server_port=args.server_port), payload)
         if args.action == "stop":
             result = stop_campaign(phone, receipt, campaign=campaign, output_root=output_root)
@@ -1001,6 +1053,7 @@ def main(argv=None):
         print(json.dumps({"status": result["status"], "service": result.get("service")}))
         return 1 if result["status"] == "failed" else 0
     except Exception as error:
-        print(json.dumps({"status": "failed", "errorType": type(error).__name__,
+        print(json.dumps({"status": "failed", "errorType": type(error).__name__, "failureStage": failure_stage,
+                          "failureReason": safe_failure_reason(error),
                           "message": "Campaign operation failed; inspect local evidence and ownership before retrying"}))
         return 1
