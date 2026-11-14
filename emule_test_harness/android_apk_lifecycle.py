@@ -46,6 +46,11 @@ APK_LIFECYCLE_FAILURE_CODES = frozenset({
 })
 SETUP_SERVICE_PHASES = frozenset({"Stopped", "Starting", "Running", "Stopping", "Failed"})
 SETUP_CONTROL_NAMES = frozenset({"service_status", "api_key", "resume_on_boot"})
+APK_NAVIGATION_CONTROLS = frozenset({
+    "service_status", "api_key", "resume_on_boot", "start_service", "stop_service", "open_webui",
+    "pending_link", "pending_link_error", "app_version", "bind_addr", "save_settings",
+    "grant_all_files_access", "allow_notifications", "allow_local_network", "share_diagnostics",
+})
 APK_FILE_LINK_CASES = frozenset({
     "os-file-link-resolution", "cold-file-link-without-autostart",
     "pending-and-repeated-intents-without-autostart", "malformed-and-nonfile-intents-rejected",
@@ -204,6 +209,110 @@ def _lifecycle_failure(error: Exception, stage: str, observation: dict) -> dict:
     return {"stage": stage, "code": code, **observation}
 
 
+def _diagnostic_bounds(value: str) -> list[int] | None:
+    """Admit only bounded numeric geometry, never arbitrary UI attribute text."""
+    match = re.fullmatch(r"\[(\d{1,5}),(\d{1,5})\]\[(\d{1,5}),(\d{1,5})\]", value)
+    if match:
+        rectangle = [int(item) for item in match.groups()]
+        if max(rectangle) <= 32768:
+            return rectangle
+    return None
+
+
+def _boot_timeout_facts(shell, *, api: int) -> dict:
+    """Inspect the owned package after failed automatic resume, without launching it.
+
+    AOSP ActivityManagerShellCommand, ServiceRecord and ApplicationExitInfo own
+    these fixed formats. Unsupported, ambiguous or truncated facts are omitted.
+    Private system dump values are transient and never copied into the receipt.
+    """
+    from datetime import datetime
+    from .android_apk_device import runtime_permission_granted
+
+    def read(*arguments):
+        try:
+            value = shell(*arguments)
+            return value if isinstance(value, str) and len(value.encode("utf-8")) <= 65536 else None
+        except Exception:
+            return None
+
+    facts = {}
+    state = read("am", "get-started-user-state", "0")
+    if state in {"BOOTING", "RUNNING_LOCKED", "RUNNING_UNLOCKING", "RUNNING_UNLOCKED", "STOPPING", "SHUTDOWN"}:
+        facts["userUnlocked"] = state == "RUNNING_UNLOCKED"
+    package = read("dumpsys", "package", APPLICATION_ID)
+    if package is not None:
+        try:
+            facts["notificationsGranted"] = runtime_permission_granted(package, "android.permission.POST_NOTIFICATIONS")
+            if api >= 37:
+                facts["localNetworkGranted"] = runtime_permission_granted(package, "android.permission.ACCESS_LOCAL_NETWORK")
+        except Exception:
+            pass
+        lines = package.splitlines()
+        headers = [index for index, line in enumerate(lines)
+                   if re.match(r"\s*Package \[" + re.escape(APPLICATION_ID) + r"\]", line)]
+        if len(headers) == 1:
+            start = headers[0]
+            indent = len(lines[start]) - len(lines[start].lstrip())
+            end = next((index for index in range(start + 1, len(lines)) if lines[index].strip()
+                        and len(lines[index]) - len(lines[index].lstrip()) <= indent), len(lines))
+            stopped = re.findall(r"(?m)^\s*User 0:[^\n]*\binstalled=true\b[^\n]*\bstopped=(true|false)\b",
+                                 "\n".join(lines[start + 1:end]))
+            if len(stopped) == 1:
+                facts["packageStopped"] = stopped[0] == "true"
+    receiver = read("cmd", "package", "query-receivers", "--brief", "--user", "0", "-a",
+                    "android.intent.action.BOOT_COMPLETED", "-p", APPLICATION_ID)
+    if receiver is not None:
+        components = re.findall(r"(?m)^" + re.escape(APPLICATION_ID) + r"/(?:\.BootReceiver|org\.emulebb\.android\.BootReceiver)\s*$", receiver)
+        if len(components) == 1:
+            facts["bootReceiverResolved"] = True
+        elif receiver.strip() == "No receivers found":
+            facts["bootReceiverResolved"] = False
+    services = read("dumpsys", "activity", "services", APPLICATION_ID)
+    if services is not None and "ACTIVITY MANAGER SERVICES" in services:
+        headers = re.findall(r"(?m)^\s*\* ServiceRecord\{[^\n]+", services)
+        own = [header for header in headers if re.search(r"\bu0 " + re.escape(APPLICATION_ID) + r"/\.DaemonService(?:\s|\})", header)]
+        if len(headers) == len(own) == 1:
+            facts["servicePresent"] = True
+            for token, field in (("isForeground", "serviceForeground"), ("startRequested", "serviceStartRequested")):
+                values = re.findall(r"\b" + token + r"=(true|false)\b", services)
+                if len(values) == 1:
+                    facts[field] = values[0] == "true"
+        elif not headers and re.search(r"(?m)^\s*\(nothing\)\s*$", services):
+            facts["servicePresent"] = False
+    files = read("appops", "get", "--user", "0", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")
+    if files is not None:
+        modes = re.findall(r"(?m)^\s*MANAGE_EXTERNAL_STORAGE:\s*(allow|deny|ignore|default)\b", files)
+        if len(modes) == 1:
+            facts["allFilesAllowed"] = modes[0] == "allow"
+    whitelist = read("dumpsys", "deviceidle", "whitelist")
+    if whitelist is not None:
+        rows = [line.strip().split(",") for line in whitelist.splitlines() if line.strip()]
+        if rows and all(len(row) == 3 and row[0] in {"user", "system", "system-excidle"}
+                        and re.fullmatch(r"[A-Za-z0-9_.]+", row[1]) and row[2].isdigit() for row in rows):
+            facts["dozeWhitelisted"] = any(row[1] == APPLICATION_ID for row in rows)
+    restriction = read("am", "get-bg-restriction-level", "--user", "0", APPLICATION_ID)
+    if restriction in {"unrestricted", "exempted", "adaptive_bucket", "restricted_bucket", "background_restricted", "hibernation"}:
+        facts["backgroundRestricted"] = restriction in {"background_restricted", "hibernation"}
+    exits = read("dumpsys", "activity", "exit-info", APPLICATION_ID)
+    if exits is not None and "ACTIVITY MANAGER PROCESS EXIT INFO" in exits:
+        records = []
+        for block in re.split(r"(?m)^\s*ApplicationExitInfo[^\n]*:\s*$", exits)[1:]:
+            match = re.search(r"(?m)^\s*process=" + re.escape(APPLICATION_ID) + r":daemon reason=(\d{1,2})\b", block)
+            timestamp = re.search(r"(?m)^\s*timestamp=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})[^\n]*\buser=0\s*$", block)
+            if match and timestamp:
+                try:
+                    records.append((datetime.fromisoformat(timestamp[1]), int(match[1])))
+                except ValueError:
+                    pass
+        if records:
+            latest = max(time for time, _ in records)
+            reasons = [reason for time, reason in records if time == latest]
+            if len(reasons) == 1 and 0 <= reasons[0] <= 16:
+                facts["latestDaemonExitReason"] = reasons[0]
+    return facts
+
+
 class ProductionUi:
     """Inspect only the production app UI on one explicitly selected device."""
 
@@ -213,6 +322,8 @@ class ProductionUi:
         self.path = "/data/local/tmp/emulebb-apk-ui-" + uuid4().hex + ".xml"
         self.last_action = None
         self.setup_observation = {}
+        self.navigation = {}
+        self.scroll_bounds = None
 
     def shell(self, *args):
         return self.command(*self.prefix, "shell", *args)
@@ -224,7 +335,11 @@ class ProductionUi:
         return self.shell("cat", self.path)
 
     def inspect(self):
-        nodes = ui_nodes(self._hierarchy())
+        hierarchy = self._hierarchy()
+        nodes = ui_nodes(hierarchy)
+        containers = [_diagnostic_bounds(node.get("bounds", "")) for node in ui_elements(hierarchy)
+                      if node.get("package") == APPLICATION_ID and node.get("class") == "android.widget.ScrollView"]
+        self.scroll_bounds = containers[0] if len(containers) == 1 and containers[0] is not None else None
         # WHY: setup failures precede daemon diagnostics; retain only closed
         # control flags and service phases, never the visible credential/text.
         self.setup_observation = {"controls": {
@@ -234,6 +349,21 @@ class ProductionUi:
         if phase in SETUP_SERVICE_PHASES:
             self.setup_observation["servicePhase"] = phase
         return nodes
+
+    def failure_navigation(self):
+        """Add only a recognized IME visibility bit after a failed control search."""
+        facts = dict(self.navigation)
+        if not facts:
+            return facts
+        try:
+            document = self.shell("dumpsys", "input_method")
+            if isinstance(document, str) and len(document.encode("utf-8")) <= 65536:
+                shown = re.findall(r"\bmInputShown=(true|false)\b", document)
+                if len(shown) == 1:
+                    facts["imeVisible"] = shown[0] == "true"
+        except Exception:
+            pass
+        return facts
 
     def elements(self):
         """Inspect stock permission UI only in memory, with the same size bound."""
@@ -256,9 +386,16 @@ class ProductionUi:
         if not size:
             raise RuntimeError("Cannot determine owned Android display dimensions")
         width, height = map(int, size[-1])
+        self.navigation = ({"control": name, "forwardAttempts": 0, "backwardAttempts": 0,
+                            "forwardProgress": 0, "backwardProgress": 0}
+                           if name in APK_NAVIGATION_CONTROLS else {})
+        if self.navigation and 0 < width <= 32768 and 0 < height <= 32768:
+            self.navigation["displayBounds"] = [0, 0, width, height]
         deadline = time.monotonic() + 60
         while True:
             nodes = self.inspect()
+            if self.navigation and self.scroll_bounds is not None:
+                self.navigation["scrollBounds"] = self.scroll_bounds
             self._require_app(nodes)
             if name in nodes:
                 node = nodes[name]
@@ -273,8 +410,19 @@ class ProductionUi:
                 for _ in range(6):
                     self._require_app(nodes)
                     first, last = (height * 3 // 4, height // 4) if direction == 1 else (height // 4, height * 3 // 4)
+                    before = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
                     self.shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
                     nodes = self.inspect()
+                    if self.navigation:
+                        prefix = "forward" if direction == 1 else "backward"
+                        self.navigation[prefix + "Attempts"] = min(6, self.navigation[prefix + "Attempts"] + 1)
+                        after = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
+                        self.navigation[prefix + "Progress"] = min(6, self.navigation[prefix + "Progress"] + int(before != after))
+                        gesture = [width // 2, first, width // 2, last]
+                        if max(gesture) <= 32768:
+                            self.navigation["lastGesture"] = gesture
+                        if self.scroll_bounds is not None:
+                            self.navigation["scrollBounds"] = self.scroll_bounds
                     if name in nodes:
                         break
                 if name in nodes:
@@ -356,6 +504,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     port = None
     installed = False
     setup_stage = "install"
+    boot_observation = None
     ui = ProductionUi(command)
     ui_path = ui.path
     inspect, find, click, wait_state = ui.inspect, ui.find, ui.click, ui.wait_state
@@ -415,7 +564,18 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
 
     def authenticated():
         from .android_emulator import _app_identity
-        status, raw = _request(port, "/api/v1/app", key)
+        if boot_observation is not None:
+            boot_observation["restAttempts"] = min(1024, boot_observation["restAttempts"] + 1)
+        try:
+            status, raw = _request(port, "/api/v1/app", key)
+        except (OSError, http.client.HTTPException):
+            if boot_observation is not None:
+                boot_observation["restConnectionFailures"] = min(1024, boot_observation["restConnectionFailures"] + 1)
+            raise
+        if boot_observation is not None:
+            boot_observation["restHttpResponses"] = min(1024, boot_observation["restHttpResponses"] + 1)
+            if type(status) is int and 100 <= status <= 599:
+                boot_observation["lastHttpStatus"] = status
         if status != 200:
             raise RuntimeError("APK authenticated REST failed")
         _app_identity(json.loads(raw), payload["buildIdentity"])
@@ -658,6 +818,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         setup_stage = "enabled-reboot"
         reboot()
         setup_stage = "enabled-reboot-authentication"
+        boot_observation = {"restAttempts": 0, "restConnectionFailures": 0, "restHttpResponses": 0}
         deadline = time.monotonic() + 90
         while True:
             try:
@@ -665,9 +826,17 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 break
             except (OSError, http.client.HTTPException):
                 if time.monotonic() >= deadline:
+                    # WHY: inspect automatic resume BEFORE cleanup or another
+                    # Activity launch can change package/service state. Missing
+                    # diagnostics must never replace the failed boot verdict.
+                    try:
+                        boot_observation.update(_boot_timeout_facts(shell, api=api))
+                    except Exception:
+                        pass
                     raise RuntimeError("APK did not resume after an enabled reboot") from None
                 time.sleep(1)
         passed("enabled-boot-resume")
+        boot_observation = None
         setup_stage = "explicit-stop-reboot"
         reopen()
         wait_state("Running")
@@ -774,6 +943,16 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     except Exception as error:
         if setup_stage is not None:
             result["failure"] = _lifecycle_failure(error, setup_stage, ui.setup_observation)
+            if result["failure"]["code"] in {"control-unreachable", "control-disabled", "control-invalid-bounds",
+                    "control-unsafe-bounds", "device-locked", "app-not-visible"}:
+                try:
+                    navigation = ui.failure_navigation()
+                    if navigation:
+                        result["failure"]["navigation"] = navigation
+                except Exception:
+                    pass
+            if boot_observation is not None:
+                result["failure"]["boot"] = boot_observation
         raise
     finally:
         active_failure = sys.exc_info()[0] is not None

@@ -693,6 +693,169 @@ def test_fresh_ui_admission_failure_keeps_actual_stage_and_safe_observation(tmp_
     assert peer.key not in json.dumps(result)
 
 
+@pytest.mark.parametrize("ime", ["true", "false", "unknown", "ambiguous", "oversize", "query-failed"])
+@pytest.mark.parametrize("moves", [False, True])
+def test_failed_navigation_records_numeric_progress_and_only_unambiguous_ime_visibility(ime, moves):
+    calls = []
+    scrolls = [0]
+    private = "synthetic-private-ui-and-ime-text"
+
+    def command(*args):
+        call = args[2:]
+        calls.append(call)
+        if call == ("shell", "wm", "size"):
+            return "Physical size: 1080x1920"
+        if call[:3] == ("shell", "input", "swipe"):
+            scrolls[0] += 1
+        if call[:2] == ("shell", "cat"):
+            # Moving bounds demonstrate scroll progress without retaining text.
+            y = 100 + (scrolls[0] if moves else 0)
+            return ('<hierarchy><node class="android.widget.ScrollView" package="org.emulebb.android" bounds="[0,24][1080,1800]">'
+                    '<node resource-id="org.emulebb.android:id/service_status" text="Stopped" bounds="[0,' + str(y) + '][500,200]"/>'
+                    '<node text="' + private + '"/></node></hierarchy>')
+        if call == ("shell", "dumpsys", "input_method"):
+            if ime == "query-failed":
+                raise RuntimeError(private)
+            if ime == "oversize":
+                return "mInputShown=true " + "x" * 65536
+            if ime == "ambiguous":
+                return "mInputShown=true mInputShown=false " + private
+            return "mInputShown=" + ime + " " + private
+        return ""
+
+    ui = subject.ProductionUi(command)
+    with pytest.raises(RuntimeError, match="not reachable"):
+        ui.find("start_service", enabled=True)
+    facts = ui.failure_navigation()
+    assert facts["control"] == "start_service" and facts["control"] in subject.APK_NAVIGATION_CONTROLS
+    assert facts["displayBounds"] == [0, 0, 1080, 1920]
+    assert facts["scrollBounds"] == [0, 24, 1080, 1800]
+    assert facts["lastGesture"] == [540, 480, 540, 1440]
+    assert {field: facts[field] for field in ("forwardAttempts", "backwardAttempts", "forwardProgress", "backwardProgress")} == {
+        "forwardAttempts": 6, "backwardAttempts": 6,
+        "forwardProgress": 6 if moves else 0, "backwardProgress": 6 if moves else 0}
+    assert facts.get("imeVisible") == ({"true": True, "false": False}.get(ime))
+    assert private not in json.dumps(facts)
+    assert not any(call[:3] == ("shell", "input", "tap") for call in calls)
+
+
+def boot_dumps():
+    """Use AOSP-targeted dump shapes; synthetic private values must stay transient."""
+    private = "synthetic-private-diagnostic-text"
+    return {
+        ("am", "get-started-user-state", "0"): "RUNNING_UNLOCKED",
+        ("dumpsys", "package", subject.APPLICATION_ID): (
+            "Packages:\n  Package [org.emulebb.android] (owned):\n"
+            "    User 0: installed=true hidden=false stopped=false\n"
+            "      runtime permissions:\n"
+            "        android.permission.POST_NOTIFICATIONS: granted=true, flags=[ USER_SET ]\n"
+            "        android.permission.ACCESS_LOCAL_NETWORK: granted=false, flags=[ USER_SET ]\n"),
+        ("cmd", "package", "query-receivers", "--brief", "--user", "0", "-a",
+         "android.intent.action.BOOT_COMPLETED", "-p", subject.APPLICATION_ID): "1 receivers found:\norg.emulebb.android/.BootReceiver\n",
+        ("dumpsys", "activity", "services", subject.APPLICATION_ID): (
+            "ACTIVITY MANAGER SERVICES (dumpsys activity services)\n"
+            "  * ServiceRecord{123 u0 org.emulebb.android/.DaemonService}\n"
+            "    isForeground=false startRequested=true\n    " + private),
+        ("appops", "get", "--user", "0", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE"): "MANAGE_EXTERNAL_STORAGE: allow; " + private,
+        ("dumpsys", "deviceidle", "whitelist"): "system,com.android.example,1000\nuser,org.emulebb.android,10123\n",
+        ("am", "get-bg-restriction-level", "--user", "0", subject.APPLICATION_ID): "background_restricted",
+        ("dumpsys", "activity", "exit-info", subject.APPLICATION_ID): (
+            "ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)\n"
+            "  package: org.emulebb.android\n"
+            "    ApplicationExitInfo #0:\n"
+            "      timestamp=2026-01-02 03:04:05.006 pid=41 realUid=10123 packageUid=10123 definingUid=10123 user=0\n"
+            "      process=org.emulebb.android:daemon reason=8 (PERMISSION CHANGE) subreason=0 (UNKNOWN) status=0\n"
+            "      description=" + private + " trace=" + private + "\n"
+            "    ApplicationExitInfo #1:\n"
+            "      timestamp=2026-01-01 03:04:05.006 pid=42 realUid=10123 packageUid=10123 definingUid=10123 user=0\n"
+            "      process=org.emulebb.android:daemon reason=10 (USER REQUESTED) subreason=0 (UNKNOWN) status=0\n"
+            "    ApplicationExitInfo #2:\n"
+            "      timestamp=2026-01-03 03:04:05.006 pid=43 realUid=10123 packageUid=10123 definingUid=10123 user=0\n"
+            "      process=org.emulebb.android reason=4 (CRASH) subreason=0 (UNKNOWN) status=0\n"),
+    }
+
+
+def test_boot_timeout_facts_select_exact_owned_process_user_and_only_closed_values():
+    documents = boot_dumps()
+    facts = subject._boot_timeout_facts(lambda *args: documents[args], api=37)
+    assert facts == {"userUnlocked": True, "packageStopped": False, "notificationsGranted": True,
+                     "localNetworkGranted": False, "bootReceiverResolved": True, "servicePresent": True,
+                     "serviceForeground": False, "serviceStartRequested": True, "allFilesAllowed": True,
+                     "dozeWhitelisted": True, "backgroundRestricted": True, "latestDaemonExitReason": 8}
+    assert "synthetic-private" not in json.dumps(facts)
+
+
+@pytest.mark.parametrize("fault", ["unknown", "oversize", "query-failed"])
+def test_boot_timeout_unknown_or_unavailable_queries_are_omitted_not_false(fault):
+    def read(*args):
+        if fault == "query-failed":
+            raise RuntimeError("synthetic-private-query-error")
+        return "synthetic-private-unknown" if fault == "unknown" else "x" * 65537
+    assert subject._boot_timeout_facts(read, api=37) == {}
+
+
+def test_boot_timeout_foreign_ambiguous_and_unrecognized_facts_cannot_become_owned_false_flags():
+    documents = boot_dumps()
+    documents[("dumpsys", "package", subject.APPLICATION_ID)] = (
+        "  Package [org.emulebb.android] (owned):\n    User 10: installed=true stopped=true\n"
+        "  Package [org.emulebb.other] (foreign):\n    User 0: installed=true stopped=false\n")
+    documents[("dumpsys", "activity", "services", subject.APPLICATION_ID)] = (
+        "ACTIVITY MANAGER SERVICES\n  * ServiceRecord{123 u0 org.emulebb.other/.DaemonService}\n"
+        "    isForeground=false startRequested=false\n")
+    documents[("dumpsys", "activity", "exit-info", subject.APPLICATION_ID)] = documents[
+        ("dumpsys", "activity", "exit-info", subject.APPLICATION_ID)].replace("user=0", "user=10")
+    documents[("appops", "get", "--user", "0", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")] = (
+        "MANAGE_EXTERNAL_STORAGE: allow\nMANAGE_EXTERNAL_STORAGE: deny\n")
+    documents[("dumpsys", "deviceidle", "whitelist")] = "unrecognized whitelist format"
+    facts = subject._boot_timeout_facts(lambda *args: documents[args], api=37)
+    assert not {"packageStopped", "notificationsGranted", "localNetworkGranted", "servicePresent",
+                "serviceForeground", "serviceStartRequested", "latestDaemonExitReason", "allFilesAllowed",
+                "dozeWhitelisted"} & set(facts)
+
+
+@pytest.mark.parametrize("collector_fails", [False, True])
+def test_boot_timeout_collects_before_cleanup_without_launch_and_cannot_turn_failure_into_pass(tmp_path, monkeypatch, collector_fails):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    peer.api = 36
+    documents = boot_dumps()
+
+    def command(*args, **kwargs):
+        raw = peer.command(*args, **kwargs)
+        if args[2:] == ("reboot",):
+            peer.running = False
+        if args[2:5] == ("shell", "am", "force-stop"):
+            raise RuntimeError("synthetic-private-cleanup-error")
+        if peer.boot_id > 0 and args[2:3] == ("shell",) and args[3:] in documents:
+            return documents[args[3:]]
+        return raw
+
+    if collector_fails:
+        def failed_collector(*args, **kwargs):
+            raise RuntimeError("synthetic-private-collector-error")
+        monkeypatch.setattr(subject, "_boot_timeout_facts", failed_collector)
+    with pytest.raises(RuntimeError, match="did not resume after an enabled reboot"):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    failure = result["failure"]
+    assert failure["stage"] == "enabled-reboot-authentication" and failure["code"] == "boot-resume-timeout"
+    assert failure["boot"]["restAttempts"] == failure["boot"]["restConnectionFailures"] == 91
+    assert failure["boot"]["restHttpResponses"] == 0
+    assert "lastHttpStatus" not in failure["boot"]
+    if collector_fails:
+        assert set(failure["boot"]) == {"restAttempts", "restConnectionFailures", "restHttpResponses"}
+    else:
+        assert failure["boot"]["userUnlocked"] is True
+        query = next(index for index, args in enumerate(peer.calls) if args[2:] == ("shell", "am", "get-started-user-state", "0"))
+        cleanup = next(index for index, args in enumerate(peer.calls) if args[2:5] == ("shell", "am", "force-stop"))
+        assert query < cleanup
+    reboot = next(index for index, args in enumerate(peer.calls) if args[2:] == ("reboot",))
+    assert not any(args[2:5] == ("shell", "am", "start") for args in peer.calls[reboot:])
+    assert result["status"] == "failed" and result["runtimeExecution"] == "executed"
+    assert len(result["cases"]) == 7 and "enabled-boot-resume" not in {case["name"] for case in result["cases"]}
+    assert result["cleanupErrors"] == [{"action": "force-stop", "errorType": "RuntimeError"}]
+    assert "synthetic-private" not in json.dumps(result) and peer.key not in json.dumps(result)
+
+
 def test_noncanonical_channel_field_cannot_satisfy_source_identity(tmp_path, monkeypatch):
     peer, admitted = guest(tmp_path, monkeypatch)
 
