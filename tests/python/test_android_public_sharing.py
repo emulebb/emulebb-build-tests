@@ -535,6 +535,119 @@ def test_private_failure_receipt_reuses_only_closed_rest_projection(tmp_path, mo
     assert "private-response" not in path.read_text() and "PRIVATE" not in path.read_text()
 
 
+@pytest.mark.parametrize("mode", ["prepare", "observe"])
+def test_private_failure_receipt_reuses_closed_adb_projection(tmp_path, monkeypatch, mode):
+    mock_observer(monkeypatch)
+    phone = FakePhone("Stopped" if mode == "prepare" else "Running")
+    def fail_settings(*args, **kwargs):
+        raise subject.AdbOperationFailure(("shell", "sha256sum", "private-device-secret"),
+            error=subject.subprocess.TimeoutExpired(["private-endpoint"], 10), stderr="private-stderr")
+    monkeypatch.setattr(subject, "_settings", fail_settings)
+    if mode == "prepare":
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "Sample.bin").write_bytes(b"data")
+        campaign = tmp_path / "campaign"
+        monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
+        with pytest.raises(RuntimeError):
+            subject.prepare(phone, campaign=campaign, output_root=tmp_path, source=source, expected_file_count=1,
+                            expected_total_bytes=4, installation=installation_evidence(phone), admission={},
+                            limits=subject.Limits(), route="direct-wifi")
+        path = campaign / "preparation.json"
+        value = subject._read_json(path)
+    else:
+        value = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
+        path = tmp_path / "session.json"
+    assert value["failedAdbSafeFailure"] == {"operation": "shell-sha256", "reason": "command-timeout", "exitCode": None}
+    assert "private-device-secret" not in path.read_text() and "private-stderr" not in path.read_text()
+
+
+@pytest.mark.parametrize("fault", [None, "digest", "device", "status", "stage"])
+def test_failed_preparation_inspection_requires_hash_bound_copy_scope(tmp_path, fault):
+    value = {**receipt(), "status": "failed", "stage": "staged-publication"}
+    if fault == "status": value["status"] = "prepared"
+    if fault == "stage": value["stage"] = "device-admission"
+    subject.write_json(tmp_path / "preparation.json", value)
+    digest = hashlib.sha256((tmp_path / "preparation.json").read_bytes()).hexdigest()
+    if fault:
+        with pytest.raises(RuntimeError):
+            subject.admit_campaign(tmp_path, "0" * 64 if fault == "digest" else digest,
+                                   "foreign:5555" if fault == "device" else "synthetic:5555", failed_preparation=True)
+    else:
+        assert subject.admit_campaign(tmp_path, digest, "synthetic:5555", failed_preparation=True) == value
+        subject.write_json(tmp_path / "campaign.json", value)
+        with pytest.raises(RuntimeError): subject.admit_campaign(tmp_path, digest, "synthetic:5555")
+
+
+@pytest.mark.parametrize("failure", [None, "checksum", "marker"])
+def test_failed_preparation_inspection_is_read_only_and_preserves_partial_payloads(tmp_path, monkeypatch, failure):
+    value = {**receipt(), "status": "failed", "stage": "staged-publication"}
+    subject.write_json(tmp_path / "preparation.json", value)
+    digest = hashlib.sha256((tmp_path / "preparation.json").read_bytes()).hexdigest()
+    phone = FakePhone()
+    for name in ("open", "forward", "stop", "cleanup", "script"):
+        setattr(phone, name, lambda *a, **kw: pytest.fail("inspection attempted a guest mutation"))
+    if failure == "marker": phone.shell = lambda *args: "wrong-nonce" if args[0] == "cat" else args[-1]
+    monkeypatch.setattr(subject, "_stopped_service_flags", lambda ui: {"foreground": False, "startRequested": False})
+    stage, destination = value["staging"], value["destination"]
+    def entries(phone, root, kind=None):
+        dirs = {root, root + "/Sample Folder"} if root == stage else {root}
+        files = {root + "/Sample Folder/Sample Audio.bin"} if root == stage else set()
+        return files if kind == "f" else dirs if kind == "d" else dirs | files
+    monkeypatch.setattr(subject, "_guest_entries", entries)
+    def checksum(*args, **kwargs):
+        if failure == "checksum":
+            raise subject.AdbOperationFailure(("shell", "sha256sum", "private-device-secret"),
+                error=subject.subprocess.TimeoutExpired(["private-endpoint"], 10), stderr="private-stderr")
+        return value["inventory"]["files"][0]["sha256"]
+    monkeypatch.setattr(subject, "guest_sha256", checksum)
+    result = subject.inspect_failed_preparation(phone, value, campaign=tmp_path, output_root=tmp_path, digest=digest)
+    assert result["guestMutations"] == 0
+    assert hashlib.sha256((tmp_path / "preparation.json").read_bytes()).hexdigest() == digest
+    assert "Sample Audio" not in json.dumps(result) and "private-" not in json.dumps(result)
+    assert value["nonce"] not in json.dumps(result)
+    if failure == "checksum":
+        assert result["status"] == "failed" and result["step"] == "staging-checksums"
+        assert result["failedAdbSafeFailure"]["operation"] == "shell-sha256"
+    elif failure == "marker":
+        assert result["status"] == "failed" and result["step"] == "nonce-marker"
+        assert "staging" not in result
+    else:
+        assert result["status"] == "inspected" and result["step"] == "complete"
+        assert result["staging"]["sha256VerifiedFiles"] == 1
+        assert result["destination"]["missingApprovedFiles"] == 1
+    assert len(list(tmp_path.glob("inspection-*.json"))) == 1
+
+
+def test_failed_inspection_cli_admits_selected_apk_and_never_launches_observer(tmp_path, monkeypatch, capsys):
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    value = {**receipt(), "status": "failed", "stage": "staged-publication",
+             "admission": {"root": str(tmp_path / "payload"), "manifest_name": "manifest.json",
+                           "manifest_sha256": "a" * 64, "source_sha": "b" * 40, "expected_cert_sha256": "c" * 64}}
+    subject.write_json(campaign / "preparation.json", value)
+    digest = hashlib.sha256((campaign / "preparation.json").read_bytes()).hexdigest()
+    calls = []
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: tmp_path)
+    def admit(root, **kwargs):
+        calls.append((root, kwargs))
+        return FakePhone().payload
+    monkeypatch.setattr(subject, "admit_payload", admit)
+    monkeypatch.setattr(subject, "AdbDevice", lambda *a, **kw: object())
+    monkeypatch.setattr(subject, "Phone", lambda *a, **kw: FakePhone())
+    monkeypatch.setattr(subject, "observe", lambda *a, **kw: pytest.fail("inspection launched an observer"))
+    def inspect(phone, admitted, **kwargs):
+        assert admitted == value and kwargs["digest"] == digest
+        return {"status": "inspected", "mode": "read-only-failed-preparation", "guestMutations": 0}
+    monkeypatch.setattr(subject, "inspect_failed_preparation", inspect)
+    assert subject.main(["inspect-failed-prepare", "--campaign-dir", str(campaign),
+                         "--campaign-receipt-sha256", digest, "--adb", str(tmp_path / "adb"), "--serial", "synthetic:5555"]) == 0
+    assert calls[0][1]["expected_cert_sha256"] == "c" * 64 and calls[0][1]["source_sha"] == "b" * 40
+    output = capsys.readouterr().out
+    assert "synthetic:5555" not in output and "Sample Audio" not in output
+    assert json.loads(output)["guestMutations"] == 0
+
+
 def test_detached_observer_discards_expired_builder_lock_token(tmp_path, monkeypatch):
     monkeypatch.setenv("EMULEBB_WORKSPACE_LOCK_TOKEN", "delegated-token")
     captured = {}

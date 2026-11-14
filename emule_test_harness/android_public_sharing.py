@@ -32,6 +32,7 @@ from .android_apk_device import AdbDevice, _stopped_service_flags
 from .android_apk_lifecycle import APPLICATION_ID, ProductionUi, admit_payload, required_apk_cases
 from .android_apk_peer import guest_sha256
 from .android_apk_profile import INCOMING, SHARED, read_hashed_receipt
+from .android_adb_failure import AdbOperationFailure
 from .paths import get_workspace_output_root
 from .kad_nodes import DEFAULT_NODES_DAT_URL
 from .rust_local_ed2k import RustRestFailure, request_json
@@ -183,11 +184,11 @@ def _read_json(path: Path, *, digest=None):
     return value
 
 
-def admit_campaign(campaign: Path, digest: str, serial: str | None = None):
+def admit_campaign(campaign: Path, digest: str, serial: str | None = None, *, failed_preparation=False):
     """Require externally hash-bound immutable scope before any device mutation."""
-    value = _read_json(campaign / "campaign.json", digest=digest)
+    value = _read_json(campaign / ("preparation.json" if failed_preparation else "campaign.json"), digest=digest)
     nonce = value.get("nonce", "")
-    if (value.get("schema") != SCHEMA or value.get("status") != "prepared"
+    if (value.get("schema") != SCHEMA or value.get("status") != ("failed" if failed_preparation else "prepared")
             or value.get("route") != "direct-wifi" or re.fullmatch(r"[0-9a-f]{32}", nonce) is None
             or value.get("destination") != SHARED + "/campaign-" + nonce
             or value.get("marker") != "/data/local/tmp/emulebb-public-sharing-" + nonce + ".owner"
@@ -195,6 +196,9 @@ def admit_campaign(campaign: Path, digest: str, serial: str | None = None):
             or serial is not None and value.get("deviceSerialSha256") != hashlib.sha256(serial.encode()).hexdigest()
             or _digest(value.get("inventory")) != value.get("inventorySha256")):
         raise RuntimeError("Campaign ownership or admitted sharing scope differs")
+    if failed_preparation and value.get("stage") not in {
+            "staging-copy", "staged-publication", "guest-verification", "source-reverification"}:
+        raise RuntimeError("Failed inspection requires an admitted owned copy stage")
     Limits(**value["limits"]).validate()
     return value
 
@@ -625,12 +629,78 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
                 if type(status) is int and 100 <= status <= 599:
                     receipt["failedRestSafeFailure"] = {key: error.safe_failure[key]
                         for key in ("httpStatus", "apiCode", "coreContext")}
+            if isinstance(error, AdbOperationFailure):
+                receipt["failedAdbSafeFailure"] = {key: error.safe_failure[key]
+                    for key in ("operation", "reason", "exitCode")}
             write_json(campaign / "preparation.json", receipt)
             raise RuntimeError("Public sharing preparation failed; inspect local evidence") from None
         finally:
             if attempted_start:
                 phone.stop()
             phone.cleanup()
+
+
+def _inspect_copy_tree(phone: Phone, receipt: dict, report: dict, *, family: str, root: str):
+    """Inspect only an owned nonce tree; retain counts, never names or checksums."""
+    expected_dirs = {root} | {root + "/" + name for name in receipt["inventory"]["directories"]}
+    expected_files = {root + "/" + row["path"] for row in receipt["inventory"]["files"]}
+    report["step"] = family + "-tree"
+    entries = _guest_entries(phone, root)
+    files, directories = _guest_entries(phone, root, "f"), _guest_entries(phone, root, "d")
+    counts = {"expectedFiles": len(expected_files), "presentApprovedFiles": len(files & expected_files),
+              "missingApprovedFiles": len(expected_files - files),
+              "presentApprovedDirectories": len(directories & expected_dirs),
+              "missingApprovedDirectories": len(expected_dirs - directories),
+              "unexpectedEntries": len(entries - expected_dirs - expected_files),
+              "nonRegularEntries": len(entries - files - directories), "sha256VerifiedFiles": 0, "mismatchedFiles": 0}
+    report[family] = counts
+    report["step"] = family + "-checksums"
+    for row in receipt["inventory"]["files"]:
+        path = root + "/" + row["path"]
+        if path not in files:
+            continue
+        checksum = guest_sha256(phone.device.command, path, prefix=phone.prefix)
+        counts["sha256VerifiedFiles" if checksum == row["sha256"] else "mismatchedFiles"] += 1
+
+
+def inspect_failed_preparation(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path, digest: str):
+    """Read an exact failed preparation without UI, forwards or guest mutations.
+
+    The service must already be stopped. Staging and destination hashes may
+    reproduce the failed read operation; all partial payloads remain untouched.
+    """
+    if admit_campaign(campaign, digest, phone.device.serial, failed_preparation=True) != receipt:
+        raise RuntimeError("Failed preparation receipt changed before inspection")
+    report = {"schema": SCHEMA, "mode": "read-only-failed-preparation", "status": "inspecting",
+              "preparationReceiptSha256": digest, "preparationStage": receipt["stage"],
+              "inspectionId": uuid4().hex, "step": "installation-identity", "service": "unconfirmed",
+              "fileCount": receipt["fileCount"], "totalBytes": receipt["totalBytes"],
+              "guestMutations": 0, "publicationOrUploadClaim": "not-claimed"}
+    with device_lease(output_root, receipt["deviceSerialSha256"], campaign):
+        try:
+            phone.installed()
+            report["step"] = "stopped-service"
+            _stopped_service_flags(phone.ui)
+            report["service"] = "stopped"
+            report["step"] = "canonical-paths"
+            for root in (SHARED, receipt["staging"], receipt["destination"]):
+                if phone.shell("readlink", "-f", root) != root:
+                    raise RuntimeError("Owned preparation path was redirected")
+            report["step"] = "nonce-marker"
+            if phone.shell("cat", receipt["marker"]) != receipt["nonce"]:
+                raise RuntimeError("Guest campaign ownership marker differs")
+            _inspect_copy_tree(phone, receipt, report, family="staging", root=receipt["staging"])
+            _inspect_copy_tree(phone, receipt, report, family="destination", root=receipt["destination"])
+            report.update(status="inspected", step="complete")
+        except Exception as error:
+            report.update(status="failed", errorType=type(error).__name__)
+            if isinstance(error, AdbOperationFailure):
+                report["failedAdbSafeFailure"] = {key: error.safe_failure[key]
+                    for key in ("operation", "reason", "exitCode")}
+        finally:
+            report["finishedAtUtc"] = utc_now()
+            write_json(campaign / ("inspection-" + report["inspectionId"] + ".json"), report)
+    return report
 
 
 def shared_catalog(phone: Phone, receipt: dict):
@@ -916,6 +986,9 @@ def observe(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path,
                 if type(status) is int and 100 <= status <= 599:
                     session["failedRestSafeFailure"] = {key: error.safe_failure[key]
                         for key in ("httpStatus", "apiCode", "coreContext")}
+            if isinstance(error, AdbOperationFailure):
+                session["failedAdbSafeFailure"] = {key: error.safe_failure[key]
+                    for key in ("operation", "reason", "exitCode")}
             # WHY: loss of scope/route/cap evidence must not silently leave an
             # owned upload service active. Never stop an unverified installation.
             if attempted_start or session["service"] == "running":
@@ -1017,9 +1090,9 @@ def spawn_observer(arguments: list[str], *, campaign: Path):
 def main(argv=None):
     """Operator CLI; errors never expose private paths, endpoints or response text."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "start", "observe", "status", "stop"))
+    parser.add_argument("action", choices=("prepare", "start", "observe", "status", "stop", "inspect-failed-prepare"))
     parser.add_argument("--campaign-dir", type=Path, required=True)
-    parser.add_argument("--campaign-receipt-sha256")
+    parser.add_argument("--campaign-receipt-sha256", help="Immutable campaign.json SHA-256; preparation.json for failed inspection.")
     parser.add_argument("--adb", type=Path)
     parser.add_argument("--serial")
     parser.add_argument("--server-port", type=int, default=5037)
@@ -1075,7 +1148,8 @@ def main(argv=None):
         at_preflight_stage("campaign-operation")
         if not args.campaign_receipt_sha256:
             raise ValueError("Campaign operations require its immutable receipt SHA-256")
-        receipt = admit_campaign(campaign, args.campaign_receipt_sha256, args.serial)
+        receipt = admit_campaign(campaign, args.campaign_receipt_sha256, args.serial,
+                                 failed_preparation=args.action == "inspect-failed-prepare")
         if args.action == "status":
             print(json.dumps(safe_status(campaign, receipt)))
             return 0
@@ -1090,6 +1164,11 @@ def main(argv=None):
         payload = admit_payload(Path(admission["root"]), **{key: value for key, value in admission.items() if key != "root"})
         at_preflight_stage("adb-owner")
         phone = Phone(AdbDevice(args.adb, args.serial, server_port=args.server_port), payload)
+        if args.action == "inspect-failed-prepare":
+            result = inspect_failed_preparation(phone, receipt, campaign=campaign, output_root=output_root,
+                                                digest=args.campaign_receipt_sha256)
+            print(json.dumps(result))
+            return 1 if result["status"] == "failed" else 0
         if args.action == "stop":
             result = stop_campaign(phone, receipt, campaign=campaign, output_root=output_root)
         else:
