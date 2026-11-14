@@ -1091,6 +1091,50 @@ def test_post_failure_ui_does_not_report_unconfirmed_initial_stopped_unchecked_d
                      if reply_arrives else {"errorCategory": "unknown"})
 
 
+@pytest.mark.parametrize("observer_fails", [False, True])
+def test_initial_failed_service_uses_existing_ui_error_without_relaunch_or_replacing_primary_failure(tmp_path, monkeypatch, observer_fails):
+    import xml.etree.ElementTree as ET
+    peer, admitted = guest(tmp_path, monkeypatch)
+    peer.api = 34
+    start_seen = [False]
+
+    def command(*args, **kwargs):
+        raw = peer.command(*args, **kwargs)
+        if args[2:6] == ("shell", "input", "tap", "50"):
+            start_seen[0] = True
+        if start_seen[0] and args[2:4] == ("shell", "cat") and "/emulebb-apk-ui-" in args[-1]:
+            root = ET.fromstring(raw)
+            for index, node in enumerate(root):
+                if node.get("resource-id") == subject.APPLICATION_ID + ":id/service_status":
+                    node.set("text", "Failed")
+                    root.insert(index + 1, ET.Element("node", {
+                        "package": subject.APPLICATION_ID, "class": "android.widget.TextView",
+                        "text": "failed to create incoming dir synthetic-private-path: Permission denied (os error 13)"}))
+                    break
+            return ET.tostring(root, encoding="unicode")
+        return raw
+
+    if observer_fails:
+        def unavailable(*args, **kwargs):
+            raise RuntimeError("synthetic-private-observer-error")
+        monkeypatch.setattr(subject, "_post_failure_ui", unavailable)
+    with pytest.raises(RuntimeError, match="APK did not reach expected service state: Running"):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
+    failure = result["failure"]
+    assert failure["stage"] == "initial-wait-running" and failure["code"] == "expected-state-not-reached"
+    assert failure["servicePhase"] == "Failed"
+    assert result["status"] == "failed" and result["runtimeExecution"] == "not-run"
+    assert [case["name"] for case in result["cases"]] == ["installed-apk-identity", "fresh-setup"]
+    if observer_fails:
+        assert "postFailureUi" not in failure
+    else:
+        assert failure["postFailureUi"] == {"servicePhase": "Failed", "resumeOnBoot": False, "errorCategory": "incoming-storage"}
+    assert len([args for args in peer.calls if args[2:5] == ("shell", "am", "start")]) == 1
+    assert [args[2:] for args in peer.calls if args[2:5] == ("shell", "input", "tap")] == [("shell", "input", "tap", "50", "550")]
+    assert "synthetic-private" not in json.dumps(result) and peer.key not in json.dumps(result)
+
+
 def test_noncanonical_channel_field_cannot_satisfy_source_identity(tmp_path, monkeypatch):
     peer, admitted = guest(tmp_path, monkeypatch)
 

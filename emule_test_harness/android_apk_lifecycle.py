@@ -1110,6 +1110,15 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                     pass
             if boot_observation is not None:
                 result["failure"]["boot"] = boot_observation
+            elif installed and ui.setup_observation:
+                # Other lifecycle failures may already expose the real error.
+                # Inspect only an existing app window; never launch or press
+                # Start to diagnose it, and never replace the primary failure.
+                try:
+                    if ui.inspect():
+                        post_failure_ui = _post_failure_ui(ui)
+                except Exception:
+                    pass
             if post_failure_ui is not None:
                 result["failure"]["postFailureUi"] = post_failure_ui
         raise
