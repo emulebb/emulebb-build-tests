@@ -109,8 +109,20 @@ def test_missing_kvm_never_falls_back(isolated, monkeypatch):
     assert calls.call_args.args[0][-1] == "-accel-check"
 
 
+def test_apk_qualification_needs_independent_certificate_before_guest_execution(isolated, monkeypatch):
+    arguments, _ = isolated
+    arguments.update(apk_source_sha="a" * 40, apk_manifest_sha256="b" * 64,
+                     apk_manifest_name="synthetic.apk.manifest.json")
+    spawn = Mock(side_effect=AssertionError("must not spawn"))
+    monkeypatch.setattr(subject.subprocess, "run", spawn)
+    with pytest.raises(ValueError, match="trusted expected certificate"):
+        subject.probe_guest(**arguments)
+    spawn.assert_not_called()
+    assert not arguments["report_dir"].exists()
+
+
 @pytest.mark.parametrize("outcome", ["success", "guest-mismatch", "exit", "timeout", "capture", "adb-start",
-                                    "cleanup", "late-capture", "transient-adb", "tls-success", "tls-failure"])
+                                    "cleanup", "late-capture", "transient-adb", "tls-success", "tls-failure", "tls-shell-binary", "tls-adb-failure"])
 def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, outcome):
     arguments, _ = isolated
     if outcome.startswith("tls-"):
@@ -118,6 +130,20 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
         monkeypatch.setattr(subject, "_tls_payload", lambda *args, **kwargs: {"synthetic": True})
         proof = Mock(return_value={"status": "passed"})
         if outcome == "tls-failure": proof.side_effect = RuntimeError("TLS case failed")
+        if outcome == "tls-shell-binary":
+            def binary_shell(command, *args, **kwargs):
+                data = command("-s", "emulator-5554", "shell", "sh", "-c", "'find /owned -print0'", binary=True)
+                assert data == b"/owned/Android Sample (1).bin\0"
+                return {"status": "passed"}
+            proof.side_effect = binary_shell
+        if outcome == "tls-adb-failure":
+            def failing_shell(command, *args, **kwargs):
+                from emule_test_harness.android_adb_failure import AdbOperationFailure
+                with pytest.raises(AdbOperationFailure, match='Owned Android ADB command failed') as error:
+                    command('-s', 'emulator-5554', 'shell', 'dumpsys', 'battery', 'unplug')
+                assert error.value.safe_failure == {'operation': 'shell-dumpsys', 'reason': 'permission-denied', 'exitCode': 1}
+                raise error.value
+            proof.side_effect = failing_shell
         monkeypatch.setattr(subject, "_run_tls_payload", proof)
     commands = []
     process = Mock(pid=42, stdout=Mock())
@@ -143,6 +169,8 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
     def run(command, **kwargs):
         commands.append(command)
         last = command[-1]
+        if outcome == 'tls-adb-failure' and last == 'unplug':
+            return SimpleNamespace(returncode=1, stdout='', stderr='permission denied private')
         if last == "start-server" and outcome == "adb-start":
             raise subprocess.TimeoutExpired(command, 10)
         if last == "sys.boot_completed":
@@ -154,10 +182,13 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
         if last == "/proc/self/auxv":
             assert kwargs["text"] is False
             text = struct.pack("<QQQQ", 6, 4096 if outcome == "guest-mismatch" else 16384, 0, 0)
+        if "find /owned -print0" in last:
+            assert command[5:8] == ["shell", "sh", "-c"] and kwargs["text"] is False
+            text = b"/owned/Android Sample (1).bin\0"
         return SimpleNamespace(returncode=0, stdout=text, stderr="")
 
     monkeypatch.setattr(subject.subprocess, "run", run)
-    passed = outcome in {"success", "transient-adb", "tls-success"}
+    passed = outcome in {"success", "transient-adb", "tls-success", "tls-shell-binary"}
     if passed:
         report = subject.probe_guest(**arguments)
         assert report == arguments["report_dir"] / "report.json"
@@ -170,7 +201,7 @@ def test_lifecycle_retains_truthful_report_and_cleans_up(isolated, monkeypatch, 
     assert result["applicationQualification"] == "not-run"
     expected_phase = {"adb-start": "adb-start", "exit": "guest-boot", "timeout": "guest-boot",
                       "capture": "guest-boot", "guest-mismatch": "guest-validation",
-                      "tls-failure": "tls-execution"}.get(outcome, "complete")
+                      "tls-failure": "tls-execution", "tls-adb-failure": "tls-execution"}.get(outcome, "complete")
     assert result["phase"] == expected_phase
     if outcome == "guest-mismatch":
         assert result["observedGuest"]["pageSize"] == "4096"

@@ -173,11 +173,11 @@ def _app_identity(document: dict, expected: dict) -> dict:
     return {**expected, "name": "eMuleBB", "apiVersion": "v1", "lifecycleState": "running"}
 
 
-def _daemon_identity(command, pid: str, executable: str, sha256: str, cwd: str) -> tuple[str, str]:
+def _daemon_identity(command, pid: str, executable: str, sha256: str, cwd: str, *,
+                     prefix=("-s", "emulator-5554")) -> tuple[str, str]:
     """Bind a guest PID to its executable bytes, invocation and kernel start time."""
     if re.fullmatch(r"[1-9][0-9]*", pid) is None:
         raise RuntimeError("Android daemon PID is invalid")
-    prefix = ("-s", "emulator-5554")
     proc = "/proc/" + pid
     if command(*prefix, "shell", "readlink", proc + "/exe") != executable:
         raise RuntimeError("Android daemon executable path differs; refusing to signal it")
@@ -557,7 +557,11 @@ def _ini(path: Path, values: dict[str, str]) -> None:
 
 def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
                 output_root: Path, report_dir: Path, boot_timeout: float = 300,
-                tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None) -> Path:
+                tls_source_sha: str | None = None, tls_manifest_sha256: str | None = None,
+                apk_source_sha: str | None = None, apk_manifest_sha256: str | None = None,
+                apk_manifest_name: str | None = None, apk_soak_seconds: int = 0,
+                apk_peer_manifest_sha256: str | None = None, apk_rust_source: Path | None = None,
+                expected_cert_sha256: str | None = None) -> Path:
     """Boot one fresh guest in an isolated container and stop only owned resources."""
     if (platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0
             or not Path("/.dockerenv").is_file() or {name for _, name in socket.if_nameindex()} != {"lo"}):
@@ -568,6 +572,34 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
         raise ValueError("Android TLS proof requires both source and payload manifest identities")
     payload = None if tls_source_sha is None else _tls_payload(
         Path("/tls-payload"), source_sha=tls_source_sha, manifest_sha256=tls_manifest_sha256)
+    apk_values = (apk_source_sha, apk_manifest_sha256, apk_manifest_name, expected_cert_sha256)
+    if any(value is not None for value in apk_values) and not all(value is not None for value in apk_values):
+        raise ValueError("APK proof requires source, manifest hash, manifest filename and trusted expected certificate")
+    if apk_source_sha is not None:
+        from .android_apk_lifecycle import SUPPORTED_ANDROID_APIS
+        if payload is not None or api not in SUPPORTED_ANDROID_APIS:
+            raise ValueError("APK proof requires its own Android API 31–37 guest")
+    if type(apk_soak_seconds) is not int or not 0 <= apk_soak_seconds <= 7 * 86400:
+        raise ValueError("APK observation must be bounded to at most seven days")
+    if apk_soak_seconds and apk_source_sha is None:
+        raise ValueError("APK observation requires an admitted APK")
+    apk_payload = None
+    if apk_source_sha is not None:
+        from .android_apk_lifecycle import admit_payload
+        apk_payload = admit_payload(Path("/apk-payload"), apk_manifest_name,
+                                    source_sha=apk_source_sha, manifest_sha256=apk_manifest_sha256,
+                                    expected_cert_sha256=expected_cert_sha256)
+    peer_payload = None
+    if apk_payload is not None:
+        from .android_apk_peer import admit_peer
+        if apk_peer_manifest_sha256 is None or apk_rust_source is None or not apk_rust_source.is_dir():
+            raise ValueError("APK qualification requires its source-bound native peer and selected Rust source")
+        peer_payload = admit_peer(Path("/apk-peer-payload"), manifest_sha256=apk_peer_manifest_sha256,
+                                  identity=apk_payload["buildIdentity"], expected_abi="x86_64")
+        from .rust_webui_live_proof import require_file_link_browser
+        require_file_link_browser()
+    elif apk_peer_manifest_sha256 is not None or apk_rust_source is not None:
+        raise ValueError("APK peer inputs require an admitted application payload")
     output_root, sdk_root, image_dir = output_root.resolve(), sdk_root.resolve(), image_dir.resolve()
     if (report_dir.is_symlink() or report_dir.exists() or not report_dir.resolve().is_relative_to(output_root)
             or report_dir.resolve() == output_root or not image_dir.is_relative_to(sdk_root / "system-images")
@@ -615,10 +647,14 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             capture.raise_if_failed()
 
     def command(*arguments: str, check: bool = True, binary: bool = False, timeout: int = 10) -> str | bytes:
+        from .android_adb_failure import AdbOperationFailure
         result = subprocess.run([adb, "-P", "5037", *arguments], env=child, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=not binary, timeout=timeout, check=False)
         if len(result.stdout) > 65536 or len(result.stderr) > 65536 or check and result.returncode:
-            raise RuntimeError("Owned Android ADB command failed")
+            action = arguments[2:] if arguments[:1] == ("-s",) else arguments
+            raise AdbOperationFailure(action, exit_code=result.returncode, stderr=result.stderr,
+                output_bound=len(result.stdout) > 65536 or len(result.stderr) > 65536,
+                message="Owned Android ADB command failed")
         if result.returncode:
             return b"" if binary else ""
         return result.stdout if binary else result.stdout.strip()
@@ -673,6 +709,13 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             value["phase"] = "tls-execution"
             value["tlsProgress"] = {}
             value["tls"] = _run_tls_payload(command, payload, adb=adb, child=child, report_dir=report_dir, progress=value["tlsProgress"])
+        if apk_payload is not None:
+            from .android_apk_lifecycle import exercise
+            value.update(phase="apk-lifecycle", scope="apk-lifecycle")
+            value["apk"] = exercise(command, apk_payload, report_dir=report_dir, soak_seconds=apk_soak_seconds,
+                                    peer_payload=peer_payload, rust_source=apk_rust_source, adb=adb, child=child,
+                                    qualify_file_links=True)
+            value["applicationQualification"] = "apk-lifecycle"
         value["status"] = "passed"
         value["phase"] = "complete"
     except BaseException as error:

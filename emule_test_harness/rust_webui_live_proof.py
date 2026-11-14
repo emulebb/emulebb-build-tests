@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .paths import get_workspace_output_root
@@ -55,6 +56,151 @@ def browser_api_key_read_script() -> str:
     """Return a script that reads the WebUI's tab-scoped credential store."""
 
     return f"() => sessionStorage.getItem({json.dumps(WEBUI_API_KEY_STORAGE_KEY)})"
+
+
+def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
+                           file_hash: str, size_bytes: int, cleanup_evidence: dict,
+                           timeout_seconds: float = 30) -> dict:
+    """Exercise the real handoff form; inspect actual requests and persisted rows."""
+    timeout = int(timeout_seconds * 1000)
+    posts = []
+
+    def observe(request):
+        if request.method == "POST" and urlparse(request.url).path == "/api/v1/transfers":
+            if len(posts) < 8:
+                posts.append(request.post_data_json)
+
+    def rows():
+        value = api_data(base_url, "transfers?limit=100", api_key)
+        items = value.get("items") if isinstance(value, dict) else None
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise RuntimeError("File-link proof received an invalid transfer collection")
+        return items
+
+    def identities(items):
+        return sorted((item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
+
+    baseline = rows()
+    if any(item.get("hash", "").lower() == file_hash for item in baseline):
+        raise RuntimeError("File-link proof requires its own absent transfer hash")
+    page.on("request", observe)
+    handoff_url = base_url.rstrip("/") + "/transfers#" + urlencode({"ed2k": link})
+    from .rust_local_ed2k import request_json
+
+    try:
+        page.goto(handoff_url, wait_until="domcontentloaded", timeout=timeout)
+        page.get_by_role("heading", name="Connect to the local daemon").wait_for(timeout=timeout)
+        if identities(rows()) != identities(baseline) or posts:
+            raise RuntimeError("File-link handoff queued a transfer before authentication")
+        page.get_by_placeholder("X-API-Key").fill(api_key)
+        page.get_by_role("button", name="Connect", exact=True).click(timeout=timeout)
+        field = page.get_by_label("eD2K links", exact=True)
+        field.wait_for(timeout=timeout)
+        if field.input_value() != link or identities(rows()) != identities(baseline) or posts:
+            raise RuntimeError("File-link sign-in lost its prefill or silently queued a transfer")
+        page.get_by_role("button", name="Cancel links", exact=True).click(timeout=timeout)
+        page.wait_for_function("location.hash === ''", timeout=timeout)
+        if field.input_value() or identities(rows()) != identities(baseline) or posts:
+            raise RuntimeError("File-link cancellation retained input or queued a transfer")
+
+        page.goto(handoff_url, wait_until="domcontentloaded", timeout=timeout)
+        field = page.get_by_label("eD2K links", exact=True)
+        field.wait_for(timeout=timeout)
+        if field.input_value() != link:
+            raise RuntimeError("File-link form did not restore the requested link")
+        # Queue only a paused synthetic fixture: this checks the real POST and
+        # persistence without inventing an available P2P source for these bytes.
+        page.get_by_label("Paused", exact=True).check(timeout=timeout)
+        if identities(rows()) != identities(baseline) or posts:
+            raise RuntimeError("File-link handoff queued a transfer before confirmation")
+        with page.expect_response(lambda response: response.request.method == "POST"
+                                  and urlparse(response.url).path == "/api/v1/transfers", timeout=timeout) as response:
+            page.get_by_role("button", name="Add links", exact=True).click(timeout=timeout)
+        if not response.value.ok or posts != [{"links": [link], "paused": True, "knownFilePolicy": "reject"}]:
+            raise RuntimeError("File-link confirmation did not submit the exact requested paused transfer")
+        page.wait_for_function("location.hash === ''", timeout=timeout)
+
+        def confirmed():
+            items = rows()
+            matched = [item for item in items if item.get("hash", "").lower() == file_hash]
+            if (len(matched) == 1 and matched[0].get("sizeBytes") == size_bytes
+                    and matched[0].get("state") == "paused"
+                    and identities(items) == sorted(identities(baseline) + [(file_hash, size_bytes)])):
+                return items
+            return None
+
+        _wait_for_api("confirmed file-link transfer", timeout_seconds, confirmed)
+        page.goto(handoff_url, wait_until="domcontentloaded", timeout=timeout)
+        page.get_by_label("eD2K links", exact=True).wait_for(timeout=timeout)
+        page.wait_for_timeout(1000)
+        if len(posts) != 1 or confirmed() is None:
+            raise RuntimeError("Repeated file-link navigation automatically changed the transfer queue")
+        page.get_by_role("button", name="Cancel links", exact=True).click(timeout=timeout)
+        return {"status": "passed", "signInPreserved": True, "cancelWithoutEnqueue": True,
+                "explicitConfirmation": True, "repeatedNavigationWithoutEnqueue": True,
+                "transferHash": file_hash, "sizeBytes": size_bytes, "state": "paused"}
+    finally:
+        active_failure = sys.exc_info()[0] is not None
+        errors = []
+        try:
+            page.remove_listener("request", observe)
+        except Exception as error:
+            errors.append(type(error).__name__)
+        # The hash was absent before this disposable proof. Delete only its own
+        # partial fixture via the canonical public API, even on a failed check.
+        try:
+            if any(item.get("hash", "").lower() == file_hash for item in rows()):
+                request_json(base_url, "DELETE", f"/api/v1/transfers/{file_hash}/files?confirm=true", api_key)
+            if identities(rows()) != identities(baseline):
+                raise RuntimeError("File-link proof cleanup did not restore the original transfer collection")
+        except Exception as error:
+            errors.append(type(error).__name__)
+        cleanup_evidence.update(status="failed" if errors else "passed", errorTypes=errors)
+        if errors and not active_failure:
+            raise RuntimeError("File-link proof cleanup failed")
+
+
+def run_file_link_browser_proof(*, base_url: str, api_key: str, link: str, file_hash: str,
+                                size_bytes: int, report_path: Path, identity: dict) -> dict:
+    """Use the installed test browser against the source-bound bundled WebUI."""
+    report = {"schema": "emulebb-rust.webui-file-link-proof/1", "status": "failed", "buildIdentity": identity}
+    try:
+        from playwright.sync_api import sync_playwright
+        app = api_data(base_url, "app", api_key)
+        if any(app.get(key) != value for key, value in identity.items()):
+            raise RuntimeError("File-link browser proof source identity differs")
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context()
+                try:
+                    report["confirmation"] = file_link_confirmation(context.new_page(), base_url=base_url,
+                        api_key=api_key, link=link, file_hash=file_hash, size_bytes=size_bytes,
+                        cleanup_evidence=report.setdefault("cleanup", {}))
+                finally:
+                    context.close()
+            finally:
+                browser.close()
+        report["status"] = "passed"
+        return report
+    except Exception as error:
+        # Browser errors can contain form values or URLs. Retain only the type;
+        # the app's generated credential must never enter proof artifacts.
+        report["errorType"] = type(error).__name__
+        raise RuntimeError("Bundled WebUI file-link confirmation proof failed") from None
+    finally:
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+def require_file_link_browser() -> None:
+    """Fail before guest boot when the pinned offline browser is unavailable."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as playwright:
+            if not Path(playwright.chromium.executable_path).is_file():
+                raise RuntimeError("Missing installed Chromium")
+    except Exception:
+        raise RuntimeError("APK qualification requires its installed offline Playwright/Chromium image") from None
 
 
 def _primary_nav_item(page, label: str):
