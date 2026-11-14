@@ -940,7 +940,9 @@ def test_boot_timeout_prelaunch_facts_and_post_failure_main_cannot_turn_automati
 def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(message, category):
     from types import SimpleNamespace
     ui = SimpleNamespace(find=lambda name, **kwargs: {"checked": "true"} if name == "resume_on_boot" else {"text": "Stopped"},
-        elements=lambda: [{"package": subject.APPLICATION_ID, "class": "android.widget.TextView", "text": message},
+        elements=lambda: [{"package": subject.APPLICATION_ID, "class": "android.widget.TextView",
+                           "resource-id": subject.APPLICATION_ID + ":id/service_status", "text": "Stopped"},
+                          {"package": subject.APPLICATION_ID, "class": "android.widget.TextView", "text": message},
                           {"package": subject.APPLICATION_ID, "class": "android.widget.EditText", "text": "synthetic-private-key"},
                           {"package": "com.android.other", "class": "android.widget.TextView",
                            "text": "All-files access was revoked; stopping the daemon"}])
@@ -948,6 +950,108 @@ def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(m
     assert facts == {"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": category}
     assert category in subject.APK_POST_FAILURE_ERROR_CATEGORIES
     assert "synthetic-private" not in json.dumps(facts)
+
+
+@pytest.mark.parametrize("message,category", [
+    ("Cannot load the packaged native daemon", "native-library-unavailable"),
+    ("Open eMuleBB and complete setup before starting", "bootstrap-unavailable"),
+    ("Payload storage is unavailable", "payload-storage-unavailable"),
+    ("Packaged WebUI is incomplete", "webui-assets-invalid"),
+    ("Cannot persist service state", "lifecycle-state-write-failed"),
+    ("Native runtime failed", "native-runtime-failed"),
+    ("Cannot inspect native runtime", "native-status-failed"),
+    ("Native Stop failed", "native-stop-failed"),
+    ("process logging state unavailable", "native-protocol-invalid"),
+    ("previous runtime is still draining", "native-ownership-conflict"),
+    ("invalid bootstrap: synthetic-private-context", "bootstrap-invalid"),
+    ("rest.api_key must contain at least 32 bytes of secret material", "bootstrap-invalid"),
+    ("invalid REST bind address: synthetic-private-context", "bootstrap-invalid"),
+    ("failed to read settings synthetic-private-path: Permission denied (os error 13)", "bootstrap-io"),
+    ("failed to publish bootstrap settings: synthetic-private-cause", "bootstrap-io"),
+    ("profile settings synthetic-private-path have mode 644; rest.api_key requires owner-only permissions (chmod 600)", "bootstrap-invalid"),
+    ("profile is already in use: synthetic-private-path; stop its daemon or offline command before retrying", "profile-ownership"),
+    ("failed to resolve writable profile synthetic-private-path: synthetic-private-cause", "profile-ownership"),
+    ("failed to open metadata store under synthetic-private-path: Permission denied (os error 13)", "metadata-startup"),
+    ("failed to load daemon settings: synthetic-private-cause", "metadata-startup"),
+    ("invalid NAT config in metadata store", "metadata-startup"),
+    ("failed to create incoming dir synthetic-private-path: Permission denied (os error 13)", "incoming-storage"),
+    ("rest.web_root_dir must contain index.html: synthetic-private-path", "webui-assets-invalid"),
+    ("failed to bind REST/WebUI TCP listener at synthetic-private-address: Address in use (os error 98)", "rest-listen-failed"),
+    ("failed to install the process logging subscriber: synthetic-private-cause", "logging-init-failed"),
+    ("embedded host readiness receiver closed during startup", "native-host-invalid"),
+    ("p2pBindIp or p2pBindInterface is required because no default-route IPv4 interface was detected; start with --p2p-bind-interface <NAME>, then save the P2P bind interface in WebUI Settings > Network", "network-default-route-missing"),
+    ("p2pBindIp or p2pBindInterface is required because multiple default-route IPv4 interfaces were detected; start with --p2p-bind-interface <NAME>, then save the P2P bind interface in WebUI Settings > Network", "network-default-route-ambiguous"),
+    ("p2pBindIp or p2pBindInterface is required when VPN Guard blocks public P2P", "network-binding-invalid"),
+    ("p2pBindInterface synthetic-private-interface did not resolve to an IPv4 address", "network-binding-invalid"),
+    ("p2pBindInterface synthetic-private-interface is ambiguous", "network-binding-invalid"),
+    ("p2pBindInterface synthetic-private-interface resolved to non-IPv4 address synthetic-private-address", "network-binding-invalid"),
+    ("failed to enumerate local interfaces: synthetic-private-cause", "network-interface-inventory-failed"),
+    ("kad.listenPort is required when ED2K servers are configured", "network-config-invalid"),
+    ("ed2k.listenPort is required when ED2K servers are configured", "network-config-invalid"),
+])
+def test_post_failure_source_stage_wins_over_dynamic_path_and_lower_level_errno(message, category):
+    result = subject._post_failure_error_category(message)
+    assert result == category and result in subject.APK_POST_FAILURE_ERROR_CATEGORIES
+    assert "synthetic-private" not in result
+
+
+@pytest.mark.parametrize("number,category", [
+    (1, "os-access-denied"), (2, "os-path-missing"), (5, "os-io-failed"), (11, "os-resource-unavailable"),
+    (12, "os-resource-unavailable"), (13, "os-access-denied"), (17, "os-operation-failed"), (20, "os-operation-failed"),
+    (21, "os-operation-failed"), (22, "os-operation-failed"), (24, "os-resource-unavailable"), (28, "os-storage-full"),
+    (30, "os-storage-readonly"), (38, "os-operation-failed"), (95, "os-operation-failed"), (98, "os-address-in-use"),
+    (99, "os-address-unavailable"),
+])
+def test_bare_rust_os_errors_have_only_finite_terminal_categories(number, category):
+    assert subject._post_failure_error_category(f"synthetic-private-value (os error {number})") == category
+    assert subject._post_failure_error_category(f"synthetic-private-value (os error {number}) trailing text") == "unknown"
+
+
+@pytest.mark.parametrize("suffix,category", [
+    ("No such file or directory", "os-path-missing"), ("Permission denied", "os-access-denied"),
+    ("Read-only file system", "os-storage-readonly"), ("No space left on device", "os-storage-full"),
+])
+def test_bare_jvm_io_errors_discard_path_and_match_only_exact_terminal_signature(suffix, category):
+    assert subject._post_failure_error_category("synthetic-private-path (" + suffix + ")") == category
+    assert subject._post_failure_error_category("synthetic-private-path (" + suffix + ") trailing text") == "unknown"
+
+
+@pytest.mark.parametrize("message", [
+    "synthetic-private-path: permission socket SQLite failure", "Permission denied", "No such file or directory",
+    "synthetic-private-value (os error 100)", "synthetic-private-value (os error 101)",
+    "synthetic-private-value (os error 013)", "synthetic-private-value (os error -13)",
+    "synthetic text: failed to read settings synthetic-private-path",
+    "failed to load daemon settingsX: synthetic-private-cause", "invalid REST bind addressed synthetic-private-value",
+    "profile settings synthetic-private-path without exact permission suffix",
+])
+def test_unmatched_error_text_does_not_become_an_invented_stage_or_errno(message):
+    assert subject._post_failure_error_category(message) == "unknown"
+
+
+@pytest.mark.parametrize("fault", ["missing-error", "credential", "other-window", "named-help", "duplicate-status", "missing-status"])
+def test_post_failure_error_context_cannot_come_from_key_help_or_another_window(fault):
+    from types import SimpleNamespace
+    status = {"resource-id": subject.APPLICATION_ID + ":id/service_status", "package": subject.APPLICATION_ID,
+              "class": "android.widget.TextView", "text": "Stopped"}
+    error = {"package": subject.APPLICATION_ID, "class": "android.widget.TextView", "text": "Cannot load the packaged native daemon"}
+    nodes = [status, error]
+    if fault == "missing-error":
+        nodes = [status, {**error, "text": "Files: allowed; synthetic-private-key"},
+                 {**error, "resource-id": subject.APPLICATION_ID + ":id/api_key", "class": "android.widget.EditText"}]
+    elif fault == "credential":
+        nodes[1] = {**error, "class": "android.widget.EditText", "text": "failed to read settings synthetic-private-key"}
+    elif fault == "other-window":
+        nodes[1] = {**error, "package": "com.android.other"}
+    elif fault == "named-help":
+        nodes[1] = {**error, "resource-id": subject.APPLICATION_ID + ":id/storage_paths"}
+    elif fault == "duplicate-status":
+        nodes += [status, error]
+    elif fault == "missing-status":
+        nodes = [error]
+    ui = SimpleNamespace(find=lambda name, **kwargs: {"checked": "true"} if name == "resume_on_boot" else {"text": "Stopped"},
+                         elements=lambda: nodes)
+    facts = subject._post_failure_ui(ui)
+    assert facts == {"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": "unknown"}
 
 
 @pytest.mark.parametrize("reply_arrives", [False, True])

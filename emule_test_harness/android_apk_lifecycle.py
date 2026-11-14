@@ -54,6 +54,15 @@ APK_NAVIGATION_CONTROLS = frozenset({
 APK_POST_FAILURE_ERROR_CATEGORIES = frozenset({
     "boot-start-blocked", "foreground-promotion-denied", "required-files-permission",
     "required-local-network-permission", "recovery-budget-blocked", "unknown",
+    "native-library-unavailable", "bootstrap-unavailable", "payload-storage-unavailable",
+    "webui-assets-invalid", "lifecycle-state-write-failed", "native-runtime-failed",
+    "native-status-failed", "native-stop-failed", "native-protocol-invalid", "native-ownership-conflict",
+    "bootstrap-invalid", "bootstrap-io", "profile-ownership", "metadata-startup", "incoming-storage",
+    "rest-listen-failed", "logging-init-failed", "native-host-invalid", "os-path-missing",
+    "os-access-denied", "os-storage-full", "os-storage-readonly", "os-address-in-use",
+    "os-address-unavailable", "os-resource-unavailable", "os-io-failed", "os-operation-failed",
+    "network-default-route-missing", "network-default-route-ambiguous", "network-binding-invalid",
+    "network-interface-inventory-failed", "network-config-invalid",
 })
 APK_FILE_LINK_CASES = frozenset({
     "os-file-link-resolution", "cold-file-link-without-autostart",
@@ -223,35 +232,115 @@ def _diagnostic_bounds(value: str) -> list[int] | None:
     return None
 
 
-def _post_failure_ui(ui) -> dict:
-    """Read bound production UI only after failed automatic boot, never press Start."""
-    fixed = {
-        "Android blocked automatic service startup. Open the app and check its battery settings.": "boot-start-blocked",
-        "All-files access is required. Open the app to grant it.": "required-files-permission",
-        "All-files access was revoked; stopping the daemon": "required-files-permission",
-        "Grant all-files access before starting": "required-files-permission",
-        "Local-network permission is required. Open the app to grant it.": "required-local-network-permission",
-        "Local-network permission was revoked; stopping the daemon": "required-local-network-permission",
-        "Allow local-network access before starting": "required-local-network-permission",
-        "Repeated service termination; open the app and press Start to retry": "recovery-budget-blocked",
+def _post_failure_error_category(message: str) -> str:
+    """Discard dynamic error data after matching source-owned stages or OS tails.
+
+    These messages come from the Kotlin shell, JNI host and daemon error chains.
+    A category describes the observed post-failure UI, not when the error arose:
+    persisted last-error has no boot/session timestamp.
+    """
+    exact = {
+        "boot-start-blocked": {"Android blocked automatic service startup. Open the app and check its battery settings."},
+        "required-files-permission": {"All-files access is required. Open the app to grant it.",
+            "All-files access was revoked; stopping the daemon", "Grant all-files access before starting"},
+        "required-local-network-permission": {"Local-network permission is required. Open the app to grant it.",
+            "Local-network permission was revoked; stopping the daemon", "Allow local-network access before starting"},
+        "recovery-budget-blocked": {"Repeated service termination; open the app and press Start to retry"},
+        "native-library-unavailable": {"Cannot load the packaged native daemon"},
+        "bootstrap-unavailable": {"Open eMuleBB and complete setup before starting"},
+        "payload-storage-unavailable": {"Payload storage is unavailable"},
+        "webui-assets-invalid": {"Cannot create WebUI directory", "Packaged WebUI is incomplete",
+            "Missing packaged WebUI", "Cannot create WebUI assets"},
+        "lifecycle-state-write-failed": {"Cannot save reboot preference", "Cannot persist explicit service start", "Cannot persist service state"},
+        "native-runtime-failed": {"Service startup failed", "Native runtime failed", "native runtime failed"},
+        "native-status-failed": {"Cannot inspect native runtime"},
+        "native-stop-failed": {"Native Stop failed", "Native Stop failed. Use Android app settings to force-stop eMuleBB.",
+            "Native shutdown could not be confirmed. Use Android app settings to force-stop eMuleBB."},
+        "native-protocol-invalid": {"Native operation failed", "invalid host request", "host state unavailable", "process logging state unavailable"},
+        "native-ownership-conflict": {"previous runtime is still draining", "one Android service process owns one logging profile"},
+        "bootstrap-invalid": {"rest.bind_addr is required", "rest.api_key is required and must not be empty",
+            "rest.api_key must not have leading or trailing whitespace",
+            "rest.api_key must contain only printable ASCII characters without spaces",
+            "rest.api_key is a placeholder and must be replaced", "rest.api_key must contain at least 32 bytes of secret material"},
+        "native-host-invalid": {"profile directory must be absolute", "host directories must be absolute", "host folders must be absolute",
+            "profile has no parent", "WebUI assets must belong to the application directory", "current WebUI assets are not ready",
+            "asset cleanup escaped application directory", "embedded host readiness receiver closed before startup",
+            "embedded host readiness receiver closed during startup"},
+        "network-binding-invalid": {"p2pBindIp or p2pBindInterface is required when VPN Guard blocks public P2P"},
+        "network-config-invalid": {"kad.listenPort is required when ED2K servers are configured",
+            "ed2k.listenPort is required when ED2K servers are configured"},
     }
+    for category, messages in exact.items():
+        if message in messages:
+            return category
     promotion_errors = {"ForegroundServiceStartNotAllowedException", "SecurityException", "MissingForegroundServiceTypeException",
                         "InvalidForegroundServiceTypeException", "ForegroundServiceTypeNotAllowedException",
                         "IllegalArgumentException", "IllegalStateException"}
-    promotion_messages = {"Android refused the foreground service: " + error for error in promotion_errors}
+    if message in {"Android refused the foreground service: " + error for error in promotion_errors}:
+        return "foreground-promotion-denied"
+    prefixes = {
+        "bootstrap-invalid": ("invalid bootstrap: ", "failed to parse settings "),
+        "bootstrap-io": ("failed to read settings ", "failed to inspect settings "),
+        "profile-ownership": ("profile is already in use: ", "failed to resolve writable profile ",
+            "failed to open ownership lock for profile ", "failed to acquire exclusive ownership of profile ", "failed to create default profile "),
+        "metadata-startup": ("failed to open metadata store under ",),
+        "incoming-storage": ("failed to create incoming dir ",),
+        "webui-assets-invalid": ("rest.web_root_dir must be an existing directory: ", "rest.web_root_dir must contain index.html: "),
+        "rest-listen-failed": ("failed to bind REST/WebUI TCP listener at ",),
+        "network-default-route-missing": ("p2pBindIp or p2pBindInterface is required because no default-route IPv4 interface was detected; ",),
+        "network-default-route-ambiguous": ("p2pBindIp or p2pBindInterface is required because multiple default-route IPv4 interfaces were detected; ",),
+    }
+    for category, starts in prefixes.items():
+        if message.startswith(starts):
+            return category
+    contexts = {
+        "bootstrap-invalid": ("invalid REST bind address",),
+        "bootstrap-io": ("failed to publish bootstrap settings",),
+        "metadata-startup": ("failed to load daemon settings", "failed to load kad settings", "failed to load Kad bootstrap endpoints",
+            "failed to load ed2k settings", "invalid ed2k settings", "failed to load nat settings", "invalid NAT config in metadata store"),
+        "logging-init-failed": ("failed to install the process logging subscriber",),
+        "network-interface-inventory-failed": ("failed to enumerate local interfaces",),
+    }
+    for category, starts in contexts.items():
+        if any(message == start or message.startswith(start + ": ") for start in starts):
+            return category
+    if message.startswith("profile settings ") and message.endswith("; rest.api_key requires owner-only permissions (chmod 600)"):
+        return "bootstrap-invalid"
+    if message.startswith("p2pBindInterface ") and (message.endswith((" did not resolve to an IPv4 address", " is ambiguous"))
+            or " resolved to non-IPv4 address " in message):
+        return "network-binding-invalid"
+    # WHY: bare Rust/JVM I/O messages can contain only a private path/address.
+    # Match terminal platform signatures after stage contexts, then discard all
+    # free-form data; words like permission/socket/SQLite alone prove nothing.
+    errno_categories = {1: "os-access-denied", 2: "os-path-missing", 5: "os-io-failed", 11: "os-resource-unavailable",
+        12: "os-resource-unavailable", 13: "os-access-denied", 17: "os-operation-failed", 20: "os-operation-failed",
+        21: "os-operation-failed", 22: "os-operation-failed", 24: "os-resource-unavailable", 28: "os-storage-full",
+        30: "os-storage-readonly", 38: "os-operation-failed", 95: "os-operation-failed", 98: "os-address-in-use", 99: "os-address-unavailable"}
+    for number, category in errno_categories.items():
+        if message.endswith(f" (os error {number})"):
+            return category
+    for suffix, category in {" (No such file or directory)": "os-path-missing", " (Permission denied)": "os-access-denied",
+                            " (Read-only file system)": "os-storage-readonly", " (No space left on device)": "os-storage-full"}.items():
+        if message.endswith(suffix):
+            return category
+    return "unknown"
+
+
+def _post_failure_ui(ui) -> dict:
+    """Read bound production UI only after failed automatic boot, never press Start."""
     for attempt in range(3):
         boot = ui.find("resume_on_boot", enabled=True).get("checked")
         phase = ui.find("service_status").get("text")
-        categories = set()
-        for node in ui.elements():
-            if node.get("package") != APPLICATION_ID or node.get("class") != "android.widget.TextView":
-                continue
-            text = node.get("text", "")
-            if text in fixed:
-                categories.add(fixed[text])
-            elif text in promotion_messages:
-                categories.add("foreground-promotion-denied")
-        category = next(iter(categories)) if len(categories) == 1 else "unknown"
+        nodes = ui.elements()
+        status_indices = [index for index, node in enumerate(nodes) if node.get("resource-id") == APPLICATION_ID + ":id/service_status"]
+        category = "unknown"
+        # MainActivity places its anonymous error TextView directly after status.
+        # Do not classify credentials, help text, or another window's messages.
+        if len(status_indices) == 1 and status_indices[0] + 1 < len(nodes):
+            error = nodes[status_indices[0] + 1]
+            if (error.get("package") == APPLICATION_ID and error.get("class") == "android.widget.TextView"
+                    and not error.get("resource-id")):
+                category = _post_failure_error_category(error.get("text", ""))
         # WHY: setup can enable controls between Binder connection and STATUS.
         # Initial Stopped/unchecked values alone cannot prove a service reply.
         # Never report those defaults as lost persisted state without a positive
