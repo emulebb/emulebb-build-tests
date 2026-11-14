@@ -1,6 +1,7 @@
 """APK admission and production controls reject substituted or ambiguous evidence."""
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -316,8 +317,8 @@ class Guest:
             return str(self.api)
         if args == ("shell", "dumpsys", "deviceidle", "get", "deep"):
             return self.doze_state
-        if args == ("shell", "dumpsys", "power"):
-            return "mWakefulness=Asleep"
+        if args == ("shell", "sh", "-c", subject.shlex.quote(subject.POWER_WAKEFULNESS_SCRIPT)):
+            return "sleep"
         if args[:3] == ("shell", "appops", "set"):
             self.files_allowed = args[-1] == "allow"
             if not self.files_allowed:
@@ -437,6 +438,71 @@ def test_screen_off_failure_retains_exact_substage_and_closed_adb_category(tmp_p
     assert result['failure']['code'] == 'adb-command-failed' and result['failure']['substage'] == 'unplug'
     assert result['failure']['adb'] == {'operation': 'shell-dumpsys', 'reason': 'permission-denied', 'exitCategory': 'nonzero'}
     assert 'private' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('power_result', ['other', 'unknown', 'sleep\nprivate'])
+def test_screen_off_rejects_any_nonexact_power_result(tmp_path, monkeypatch, power_result):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    def command(*args, **kwargs):
+        result = peer.command(*args, **kwargs)
+        if args[2:] == ('shell', 'sh', '-c', subject.shlex.quote(subject.POWER_WAKEFULNESS_SCRIPT)):
+            return power_result
+        return result
+    with pytest.raises(RuntimeError, match='sleeping device'):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / 'apk-lifecycle.json').read_text())
+    assert result['failure']['substage'] == 'check-power' and result['status'] == 'failed'
+    assert 'screen-off-doze-observation' not in {case['name'] for case in result['cases']}
+    assert 'private' not in json.dumps(result)
+
+
+def _power_test_shell():
+    """Use an Android-like pipefail shell, never Windows' WSL launcher."""
+    import os
+    import shutil
+    if os.name != 'nt':
+        return shutil.which('mksh') or shutil.which('bash')
+    git = shutil.which('git')
+    if git:
+        candidate = Path(git).resolve().parent.parent / 'bin' / 'bash.exe'
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+@pytest.mark.parametrize('power,expected', [
+    ('  mWakefulness=Asleep', 'sleep'), ('  mWakefulness=Dozing', 'sleep'),
+    ('  mWakefulness=Awake', 'other'), ('  mWakefulness=Asleep-extra', 'other'),
+    ('  mWakefulness=', 'other'), ('missing', 'unknown'),
+    ('  mWakefulness=Asleep\n  mWakefulness=Dozing', 'unknown'),
+])
+def test_power_filter_executes_actual_shell_classifier(power, expected):
+    import subprocess
+    shell = _power_test_shell()
+    if shell is None:
+        pytest.skip('POSIX shell unavailable')
+    script = ("dumpsys() { printf '%070000d\\n' 0; printf '%s\\n' " + subject.shlex.quote(power) +
+              "; }; " + subject.POWER_WAKEFULNESS_SCRIPT)
+    result = subprocess.run([shell, '-c', script], capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 0 and result.stdout.strip() == expected
+    assert len(result.stdout) < 16
+
+
+@pytest.mark.parametrize('failure', ['dumpsys', 'awk', 'pipefail'])
+def test_power_filter_propagates_command_failures_even_with_valid_looking_output(failure):
+    import subprocess
+    shell = _power_test_shell()
+    if shell is None:
+        pytest.skip('POSIX shell unavailable')
+    prefix = ("dumpsys() { printf '%s\\n' '  mWakefulness=Asleep'; " +
+              ('return 7;' if failure == 'dumpsys' else 'return 0;') + ' }; ')
+    if failure == 'awk':
+        prefix += 'awk() { return 9; }; '
+    elif failure == 'pipefail':
+        prefix += 'set() { return 2; }; '
+    result = subprocess.run([shell, '-c', prefix + subject.POWER_WAKEFULNESS_SCRIPT],
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode != 0
 
 
 @pytest.mark.parametrize("secure", [False, True])
@@ -576,8 +642,8 @@ def test_dwell_does_not_pass_if_guest_leaves_screen_off_deep_doze(tmp_path, monk
             polls[0] += 1
             if polls[0] >= 3 and exit_state == "active":
                 return "ACTIVE"
-        if args == ("shell", "dumpsys", "power") and polls[0] >= 3 and exit_state == "awake":
-            return "mWakefulness=Awake"
+        if args == ("shell", "sh", "-c", subject.shlex.quote(subject.POWER_WAKEFULNESS_SCRIPT)) and polls[0] >= 3 and exit_state == "awake":
+            return "other"
         return peer.command(*arguments, **kwargs)
 
     with pytest.raises(RuntimeError, match="deep idle|sleeping device"):

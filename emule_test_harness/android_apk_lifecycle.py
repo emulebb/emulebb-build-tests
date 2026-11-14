@@ -21,6 +21,13 @@ PREFIX = ("-s", "emulator-5554")
 SUPPORTED_ANDROID_APIS = frozenset({34, 35, 36, 37})
 MIN_SCREEN_OFF_DWELL_SECONDS = 60
 MIN_SCREEN_OFF_SAMPLES = 3
+# WHY: Android's power dump can exceed the ADB output bound. Consume it on
+# device and emit only a closed state while pipefail preserves dump errors.
+POWER_WAKEFULNESS_SCRIPT = (
+    "set -o pipefail || exit 1; dumpsys power | awk '"
+    "/^[[:space:]]*mWakefulness=/ { n++; "
+    "if ($0 ~ /^[[:space:]]*mWakefulness=(Asleep|Dozing)[[:space:]]*$/) asleep=1; else asleep=0 } "
+    "END { if (n != 1) print \"unknown\"; else if (asleep) print \"sleep\"; else print \"other\" }'")
 TRANSFER_FAILURE_PHASES = frozenset({
     "admit-original-settings", "admit-prior-downloads-and-roots", "admit-network-binding", "fixture-directory-create",
     "fixture-occupant-push", "persist-fixture-settings", "restart-fixture-destination", "verify-fixture-destination",
@@ -1002,7 +1009,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             if shell("dumpsys", "deviceidle", "get", "deep") != "IDLE":
                 raise RuntimeError("APK Doze proof did not retain actual deep idle")
             screen_substage = "check-power"
-            if re.search(r"mWakefulness=(Asleep|Dozing)\b", shell("dumpsys", "power")) is None:
+            if shell("sh", "-c", shlex.quote(POWER_WAKEFULNESS_SCRIPT)) != "sleep":
                 raise RuntimeError("APK screen-off proof did not observe a sleeping device")
 
         assert_idle_screen_off()
