@@ -305,6 +305,78 @@ def wifi_default(document: str):
         raise RuntimeError("Campaign requires the direct Wi-Fi default route")
 
 
+def native_battery_facts(elements: list):
+    """Read only the production label's closed PowerManager/ActivityManager facts."""
+    pattern = (r"Files: (?:allowed|required); local network: (?:allowed|required); "
+               r"notifications: (?:allowed|disabled); battery exemption: (allowed|disabled); "
+               r"background restriction: (enabled|disabled)")
+    matches = [match for node in elements if node.get("package") == APPLICATION_ID
+               and (match := re.fullmatch(pattern, node.get("text", ""))) is not None]
+    if len(matches) != 1:
+        return {"batteryOptimizationExempt": None, "backgroundRestricted": None}
+    return {"batteryOptimizationExempt": matches[0][1] == "allowed", "backgroundRestricted": matches[0][2] == "enabled"}
+
+
+def battery_condition(phone: Phone, *, request_exemption=False):
+    """Use the own-app native button and unambiguous stock Settings dialog only.
+
+    This deliberately avoids the disposable emulator's deviceidle/battery shell
+    controls. Eligibility is a recorded prerequisite, never a 24/7 guarantee.
+    """
+    facts = {"batteryOptimizationExempt": None, "backgroundRestricted": None}
+    grant = "not-requested"
+    try:
+        facts = native_battery_facts(phone.ui.elements())
+        if request_exemption and facts["batteryOptimizationExempt"] is False:
+            grant = "unconfirmed"
+            try:
+                phone.ui.click("allow_continuous_background")
+                for _ in range(6):
+                    nodes = phone.ui.elements()
+                    active = phone.shell("dumpsys", "activity", "activities")
+                    settings_foreground = re.search(
+                        r"(?:mResumedActivity|topResumedActivity)[^\n]*\bcom\.android\.settings/", active) is not None
+                    own_app_visible = any(node.get("package") == "com.android.settings"
+                                          and "eMuleBB" in node.get("text", "") for node in nodes)
+                    buttons = [node for node in nodes if node.get("package") == "com.android.settings"
+                               and node.get("resource-id") == "android:id/button1"
+                               and node.get("enabled") == "true" and node.get("clickable") == "true"
+                               and node.get("visible-to-user") != "false"]
+                    if settings_foreground and own_app_visible and len(buttons) == 1:
+                        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", buttons[0].get("bounds", ""))
+                        sizes = re.findall(r"(\d+)x(\d+)", phone.shell("wm", "size"))
+                        if bounds is None or not sizes:
+                            break
+                        x1, y1, x2, y2 = map(int, bounds.groups())
+                        width, height = map(int, sizes[-1])
+                        if not 0 <= x1 < x2 <= width or not 0 <= y1 < y2 <= height:
+                            break
+                        phone.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+                        grant = "normal-settings-ui-tapped"
+                        break
+                    time.sleep(0.5)
+            finally:
+                phone.shell("input", "keyevent", "KEYCODE_BACK")
+                phone.open()
+            for _ in range(6):
+                facts = native_battery_facts(phone.ui.elements())
+                if facts["batteryOptimizationExempt"] is True:
+                    grant = "normal-settings-ui-verified"
+                    break
+                time.sleep(0.5)
+    except Exception:
+        grant = "unavailable" if grant != "not-requested" else "not-requested"
+    constraints = []
+    if facts["batteryOptimizationExempt"] is not True:
+        constraints.append("battery-optimization-not-exempt" if facts["batteryOptimizationExempt"] is False else "battery-exemption-unavailable")
+    if facts["backgroundRestricted"] is not False:
+        constraints.append("background-restricted" if facts["backgroundRestricted"] is True else "background-restriction-unavailable")
+    return {**facts, "source": "production-platform-facts-ui", "observedAtUtc": utc_now(),
+            "exemptionGrant": grant, "constraints": constraints,
+            "continuousOperationPrerequisites": "observed" if not constraints else "constrained",
+            "continuousOperationGuarantee": "not-claimed"}
+
+
 def _guest_entries(phone: Phone, root: str, kind: str | None = None):
     args = ["find", shlex.quote(root)]
     if kind:
@@ -412,6 +484,9 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             phone.open()
             if phone.state() != "Stopped":
                 raise RuntimeError("Prepare requires a normally stopped owned service")
+            receipt["batteryCondition"] = battery_condition(phone, request_exemption=True)
+            if phone.state() != "Stopped":
+                raise RuntimeError("Battery permission setup changed the owned service state")
             wifi_default(phone.shell("dumpsys", "connectivity"))
             for root in (INCOMING, SHARED):
                 if phone.shell("readlink", "-f", shlex.quote(root)) != root or _guest_entries(phone, root) != {root}:
@@ -456,8 +531,15 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
 
 
 def shared_catalog(phone: Phone, receipt: dict):
-    """Resolve every page and join catalog rows to the exact owned path and size."""
-    expected = {receipt["destination"] + "/" + row["path"]: row["sizeBytes"] for row in receipt["inventory"]["files"]}
+    """Join content-level catalog representatives to approved SHA-256/size groups.
+
+    REST returns distinct known contents, choosing one eligible path per hash.
+    Duplicate approved instances can therefore collapse to one row. Coverage of
+    every content group does not prove that every duplicate path was indexed.
+    """
+    expected = {receipt["destination"] + "/" + row["path"]: (row["sha256"], row["sizeBytes"])
+                for row in receipt["inventory"]["files"]}
+    groups = set(expected.values())
     rows, cursors, cursor, total, stable = [], set(), None, None, True
     while True:
         query = {"limit": 200}
@@ -477,14 +559,22 @@ def shared_catalog(phone: Phone, receipt: dict):
             raise RuntimeError("Shared catalog pagination is incomplete")
         cursors.add(cursor)
     stable &= len(rows) == total and len({row.get("path") for row in rows}) == len(rows)
+    group_hashes, hash_groups = {}, {}
     for row in rows:
-        if (row.get("path") not in expected or row.get("sizeBytes") != expected[row["path"]]
+        if (row.get("path") not in expected or row.get("sizeBytes") != expected[row["path"]][1]
                 or row.get("complete") is not True or row.get("partFile") is not False
                 or re.fullmatch(r"[0-9a-fA-F]{32}", row.get("hash", "")) is None):
             raise RuntimeError("Shared catalog contains an unapproved file")
-    return {"matchedFiles": len({row["path"] for row in rows}), "expectedFiles": receipt["fileCount"],
+        group, file_hash = expected[row["path"]], row["hash"].lower()
+        stable &= group not in group_hashes and file_hash not in hash_groups
+        group_hashes[group] = file_hash
+        hash_groups[file_hash] = group
+    return {"catalogRepresentativePaths": len({row["path"] for row in rows}),
+            "approvedFileInstances": len(expected), "duplicateFileInstances": len(expected) - len(groups),
+            "matchedDistinctContents": len(group_hashes), "expectedDistinctContents": len(groups),
+            "allFileInstancesIndexed": "evidence-incomplete",
             "status": ("evidence-incomplete" if not stable else
-                       "observed" if len(rows) == receipt["fileCount"] else "not-observed")}, rows
+                       "observed" if set(group_hashes) == groups else "not-observed")}, rows
 
 
 def _settings(phone: Phone, limits: Limits, *, configure=False):
@@ -559,9 +649,15 @@ def sample(phone: Phone, receipt: dict, previous_uploads=None):
         raise RuntimeError("Runtime upload cap differs from the admitted bound")
     status = phone.request("GET", "/status")
     directories = phone.request("GET", "/shared-directories")
+    hashing = compact_progress(directories)
     upload_evidence, current_uploads = public_upload_evidence(
         phone.request("GET", "/uploads"), rows, previous_uploads or {})
-    return {"observedAtUtc": utc_now(), "catalog": catalog, "hashing": compact_progress(directories),
+    return {"observedAtUtc": utc_now(), "catalog": catalog, "hashing": hashing,
+            "fileInstances": {"approved": receipt["fileCount"],
+                              "copiedAndSha256Verified": receipt["fileCount"] if receipt.get("guestSha256Verified") is True else None,
+                              "runtimeHashedCount": hashing.get("hashedCount"),
+                              "runtimeReusedCount": hashing.get("reusedCount"),
+                              "allPathsIndexed": "evidence-incomplete"},
             "runtime": summary, "nat": {key: status.get("nat", {}).get(key) for key in ("enabled", "tcpMapped", "udpMapped")},
             "claims": {"catalog": catalog["status"],
                        "ed2kConnection": ("observed" if summary.get("ed2kConnected") is True else
@@ -663,6 +759,9 @@ def observe(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path,
                     raise RuntimeError("Start requires the prepared owned service to be stopped")
             elif state != "Running":
                 raise RuntimeError("Resume never restarts a stopped or failed service")
+            session["batteryCondition"] = battery_condition(phone, request_exemption=True)
+            if phone.state() != state:
+                raise RuntimeError("Battery permission setup changed the owned service state")
             phone.forward()
             if start:
                 attempted_start = True
@@ -770,6 +869,7 @@ def safe_status(campaign: Path, receipt: dict):
             "totalBytes": receipt["totalBytes"], "observations": session.get("observations", 0),
             "publicUploadRequestObserved": session.get("publicUploadRequestObserved", False),
             "observedPublicPayloadBytes": session.get("observedPublicPayloadBytes", 0),
+            "batteryCondition": session.get("batteryCondition", receipt.get("batteryCondition")),
             "latest": session.get("latest"), "publicParityClaim": "not-claimed"}
 
 

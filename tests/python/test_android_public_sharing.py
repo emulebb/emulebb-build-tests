@@ -2,6 +2,7 @@
 import hashlib
 import json
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -195,6 +196,7 @@ def mock_observer(monkeypatch, *, fail=False):
     monkeypatch.setattr(subject, "_settings", lambda *a, **kw: None)
     monkeypatch.setattr(subject, "configure_public_discovery", lambda *a: {"connectionAndPublication": "require-live-observation"})
     monkeypatch.setattr(subject, "publish_staged_tree", lambda *a: None)
+    monkeypatch.setattr(subject, "battery_condition", lambda *a, **kw: {"continuousOperationGuarantee": "not-claimed"})
     monkeypatch.setattr(subject, "_guest_free", lambda *a: 1024**4)
     def sample(*args):
         if fail: raise RuntimeError("private-response-must-not-escape")
@@ -374,3 +376,102 @@ def test_os_lease_metadata_remains_on_same_file_after_release(tmp_path):
     assert path.stat().st_ino == before and subject._read_json(path)["active"] is False
     with subject.device_lease(tmp_path, "a" * 64, campaign):
         assert path.stat().st_ino == before
+
+
+def test_content_catalog_collapses_duplicate_instances_without_claiming_all_paths_indexed():
+    value = receipt()
+    original = value["inventory"]["files"][0]
+    duplicate = {**original, "path": "Other Folder/Sample Audio Copy.bin"}
+    distinct = {**original, "path": "Other Folder/Sample Text.bin", "sha256": hashlib.sha256(b"more").hexdigest()}
+    value["inventory"]["files"] = [original, duplicate, distinct]
+    value["fileCount"] = 3
+    rows = [{"hash": file_hash, "path": value["destination"] + "/" + item["path"], "sizeBytes": item["sizeBytes"],
+             "complete": True, "partFile": False} for file_hash, item in (("a" * 32, duplicate), ("b" * 32, distinct))]
+    phone = SimpleNamespace(request=lambda *a: {"items": rows, "total": 2, "nextCursor": None})
+    result, _ = subject.shared_catalog(phone, value)
+    assert result["status"] == "observed" and result["approvedFileInstances"] == 3
+    assert result["expectedDistinctContents"] == result["matchedDistinctContents"] == 2
+    assert result["catalogRepresentativePaths"] == 2 and result["duplicateFileInstances"] == 1
+    assert result["allFileInstancesIndexed"] == "evidence-incomplete"
+    # Two incompatible content IDs for byte-identical approved copies are not
+    # proof of complete distinct-content coverage.
+    rows.append({**rows[0], "hash": "c" * 32, "path": value["destination"] + "/" + original["path"]})
+    ambiguous = SimpleNamespace(request=lambda *a: {"items": rows, "total": 3, "nextCursor": None})
+    assert subject.shared_catalog(ambiguous, value)[0]["status"] == "evidence-incomplete"
+
+
+def test_content_catalog_reads_realistic_cursor_after_first_200_of_221_rows():
+    value = receipt()
+    value["fileCount"] = 221
+    value["inventory"]["files"] = [{"path": f"Sample Folder/Sample-{index:03d}.bin", "sizeBytes": index + 1,
+                                     "sha256": hashlib.sha256(f"sample-{index}".encode()).hexdigest()}
+                                    for index in range(221)]
+    rows = [{"path": value["destination"] + "/" + item["path"], "sizeBytes": item["sizeBytes"],
+             "hash": f"{index + 1:032x}", "complete": True, "partFile": False}
+            for index, item in enumerate(value["inventory"]["files"])]
+    cursor = json.dumps({"sortPath": rows[199]["path"], "hash": rows[199]["hash"]}, separators=(",", ":"))
+    calls = []
+    def request(method, path):
+        query = parse_qs(urlsplit(path).query)
+        calls.append(query)
+        assert query["limit"] == ["200"]
+        if len(calls) == 1:
+            assert "cursor" not in query
+            return {"items": rows[:200], "total": 221, "nextCursor": cursor}
+        assert query["cursor"] == [cursor]
+        return {"items": rows[200:], "total": 221, "nextCursor": None}
+    result, actual = subject.shared_catalog(SimpleNamespace(request=request), value)
+    assert result["status"] == "observed" and result["matchedDistinctContents"] == 221
+    assert len(actual) == 221 and len(calls) == 2
+
+
+def battery_label(*, exempt=False, restricted=False):
+    return {"package": subject.APPLICATION_ID, "text": "Files: allowed; local network: allowed; notifications: allowed; "
+            + "battery exemption: " + ("allowed" if exempt else "disabled") + "; background restriction: "
+            + ("enabled" if restricted else "disabled")}
+
+
+@pytest.mark.parametrize("exempt,restricted", [(False, False), (True, True), (True, False)])
+def test_own_app_battery_facts_record_actual_continuous_operation_constraints(exempt, restricted):
+    phone = SimpleNamespace(ui=SimpleNamespace(elements=lambda: [battery_label(exempt=exempt, restricted=restricted)]))
+    result = subject.battery_condition(phone)
+    assert result["batteryOptimizationExempt"] is exempt and result["backgroundRestricted"] is restricted
+    assert (result["continuousOperationPrerequisites"] == "observed") == (exempt and not restricted)
+    assert result["continuousOperationGuarantee"] == "not-claimed"
+
+
+def test_ambiguous_or_foreign_battery_label_never_proves_platform_state():
+    for nodes in ([battery_label(), battery_label(exempt=True)], [{**battery_label(exempt=True), "package": "foreign.app"}], []):
+        assert subject.native_battery_facts(nodes) == {"batteryOptimizationExempt": None, "backgroundRestricted": None}
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_battery_grant_uses_only_own_native_button_and_unambiguous_settings_dialog(monkeypatch, ambiguous):
+    state = {"dialog": False, "exempt": False}
+    calls = []
+    def elements():
+        if not state["dialog"]:
+            return [battery_label(exempt=state["exempt"])]
+        button = {"package": "com.android.settings", "resource-id": "android:id/button1", "enabled": "true",
+                  "clickable": "true", "bounds": "[600,900][900,1000]"}
+        return [{"package": "com.android.settings", "text": "Allow eMuleBB to always run in background?"},
+                button, *([button] if ambiguous else [])]
+    def click(name):
+        assert name == "allow_continuous_background"
+        calls.append(name)
+        state["dialog"] = True
+    def shell(*args):
+        calls.append(args)
+        if args[:2] == ("dumpsys", "activity"):
+            return "mResumedActivity: com.android.settings/.RequestIgnoreBatteryOptimizations"
+        if args == ("wm", "size"): return "Physical size: 1080x1920"
+        if args[:2] == ("input", "tap"): state["exempt"] = True
+        return ""
+    def open_main(): state["dialog"] = False
+    monkeypatch.setattr(subject.time, "sleep", lambda *a: None)
+    phone = SimpleNamespace(ui=SimpleNamespace(elements=elements, click=click), shell=shell, open=open_main)
+    result = subject.battery_condition(phone, request_exemption=True)
+    assert result["batteryOptimizationExempt"] is (not ambiguous)
+    assert any(isinstance(call, tuple) and call[:2] == ("input", "tap") for call in calls) is (not ambiguous)
+    assert not any(isinstance(call, tuple) and call[:2] in {("dumpsys", "battery"), ("dumpsys", "deviceidle")} for call in calls)
+    assert result["continuousOperationGuarantee"] == "not-claimed"
