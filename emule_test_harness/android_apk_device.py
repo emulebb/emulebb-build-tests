@@ -416,13 +416,20 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
         return bool(re.search(r"(?:mResumedActivity|topResumedActivity)[^\n]*\b" + re.escape(package) + r"/",
                               ui.shell("dumpsys", "activity", "activities")))
 
-    def tap(node):
-        match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+    def rectangle(node):
+        match = re.fullmatch(r"\[(\d{1,5}),(\d{1,5})\]\[(\d{1,5}),(\d{1,5})\]", node.get("bounds", ""))
         if match is None:
-            return False
+            return None
         x1, y1, x2, y2 = map(int, match.groups())
-        if x2 <= x1 or y2 <= y1:
+        if x2 <= x1 or y2 <= y1 or max(x1, y1, x2, y2) > 32768:
+            return None
+        return x1, y1, x2, y2
+
+    def tap(node):
+        bounds = rectangle(node)
+        if bounds is None:
             return False
+        x1, y1, x2, y2 = bounds
         ui.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
         return True
 
@@ -458,6 +465,8 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
         try:
             deadline = time.monotonic() + 10
             candidates = []
+            label_tapped = False
+            change = None
             while True:
                 elements = ui.elements()
                 packages = {"com.android.settings"} if settings else {
@@ -480,6 +489,27 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
                     if settings:
                         settings_diagnostic = settings_snapshot(elements, foreground_matched=True,
                                                                 app_visible=True, candidates=candidates)
+                        if len(candidates) > 1 and not label_tapped:
+                            labels = [node for node in elements if node.get("package") == active
+                                      and node.get("text", "").strip() == "eMuleBB" and node.get("enabled") == "true"]
+                            checkables = [node for node in elements if node.get("package") == active
+                                          and node.get("checkable") == "true"]
+                            label_bounds = rectangle(labels[0]) if len(labels) == 1 else None
+                            switch_bounds = [rectangle(node) for node in checkables]
+                            if label_bounds is not None and all(bounds is not None for bounds in switch_bounds):
+                                x = (label_bounds[0] + label_bounds[2]) // 2
+                                y = (label_bounds[1] + label_bounds[3]) // 2
+                                if not any(x1 <= x < x2 and y1 <= y < y2 for x1, y1, x2, y2 in switch_bounds):
+                                    tap(labels[0])
+                                    label_tapped = True
+                                    change = {"permission": permission, "method": "normal-settings-ui",
+                                              "before": "denied", "after": "unconfirmed"}
+                                    changes.append(change)
+                                    if granted(permission):
+                                        change["after"] = "granted"
+                                        return True
+                                    if time.monotonic() < deadline:
+                                        continue
                     break
                 if settings:
                     settings_diagnostic = settings_snapshot(elements, foreground_matched=active is not None,
@@ -495,13 +525,18 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
                 if settings:
                     settings_diagnostic["reason"] = "candidate-count" if len(candidates) != 1 else "checked-state"
                 return False
+            # The label may itself grant access, including after the immediate check.
+            if settings and label_tapped and granted(permission):
+                change["after"] = "granted"
+                return True
             if not tap(candidates[0]):
                 if settings:
                     settings_diagnostic["reason"] = "invalid-bounds"
                 return False
-            change = {"permission": permission, "method": "normal-settings-ui" if settings else "normal-permission-dialog",
-                      "before": "denied", "after": "unconfirmed"}
-            changes.append(change)
+            if change is None:
+                change = {"permission": permission, "method": "normal-settings-ui" if settings else "normal-permission-dialog",
+                          "before": "denied", "after": "unconfirmed"}
+                changes.append(change)
             deadline = time.monotonic() + 10
             while not granted(permission):
                 if time.monotonic() >= deadline:

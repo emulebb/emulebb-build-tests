@@ -1168,6 +1168,49 @@ def test_settings_diagnostic_does_not_retain_arbitrary_ui_content(tmp_path, monk
     assert "private-secret" not in json.dumps(value)
 
 
+@pytest.mark.parametrize("mode", ["label-grants", "dedicated-page", "still-list", "duplicate-label", "overlap"])
+def test_settings_list_uses_only_unique_owned_label_before_any_toggle(tmp_path, monkeypatch, mode):
+    phone = Phone()
+    phone.permission = False
+    command = phone.command
+    page = False
+    def list_ui(*args, **kwargs):
+        nonlocal page
+        call = args[2:]
+        if call[:3] == ("shell", "input", "tap") and phone.screen == "files" and call[3:] == ("100", "50"):
+            phone.calls.append(call)
+            if mode == "label-grants":
+                phone.permission = True
+            elif mode == "dedicated-page":
+                page = True
+            return ""
+        if call[:2] == ("shell", "cat") and phone.screen == "files":
+            label = '<node package="com.android.settings" text="eMuleBB" enabled="true" bounds="[50,20][150,80]"/>'
+            if mode == "duplicate-label":
+                label += label
+            first_bounds = "[50,20][150,80]" if mode == "overlap" else "[300,20][400,80]"
+            toggle = ('<node package="com.android.settings" enabled="true" checkable="true" checked="false" bounds="'
+                      + first_bounds + '"/>')
+            other = '<node package="com.android.settings" enabled="true" checkable="true" checked="true" bounds="[300,120][400,180]"/>'
+            return "<hierarchy>" + label + toggle + ("" if page else other) + "</hierarchy>"
+        return command(*args, **kwargs)
+    phone.command = list_ui
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads(report.read_text())
+    taps = [call for call in phone.calls if call[:3] == ("shell", "input", "tap")]
+    label_taps = [call for call in taps if call[3:] == ("100", "50")]
+    assert len(label_taps) == (0 if mode in {"duplicate-label", "overlap"} else 1)
+    if mode in {"label-grants", "dedicated-page"}:
+        assert value["status"] == "passed" and phone.permission
+        assert value["permissionChanges"] == [{"permission": "MANAGE_EXTERNAL_STORAGE", "method": "normal-settings-ui",
+                                                "before": "denied", "after": "granted"}]
+        assert taps[:2] == [("shell", "input", "tap", "450", "550"), ("shell", "input", "tap", "100", "50")]
+        assert (("shell", "input", "tap", "350", "50") in taps) is (mode == "dedicated-page")
+    else:
+        assert value["status"] == "setup-required" and not phone.permission
+        assert len(taps) == (1 if mode in {"duplicate-label", "overlap"} else 2)
+
+
 def test_permission_controller_resource_namespace_can_differ_from_package(tmp_path, monkeypatch):
     phone = Phone()
     phone.notifications = False
