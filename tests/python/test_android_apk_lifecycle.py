@@ -146,6 +146,43 @@ def test_ui_errors_do_not_echo_credential_text():
     assert secret not in str(error.value)
 
 
+@pytest.mark.parametrize('label,expected', [
+    ('Waiting for a usable default network', 'waiting'), ('', 'not-waiting'),
+    ('private-value', 'unavailable'), (None, 'unavailable'), ('duplicate', 'unavailable'),
+])
+def test_network_wait_and_phase_are_same_snapshot_closed_values(label, expected):
+    node = '' if label is None else '<node package="org.emulebb.android" resource-id="org.emulebb.android:id/network_wait_status" text="' + ('private-value' if label == 'duplicate' else label) + '"/>'
+    if label == 'duplicate':
+        node += node
+    xml = '<hierarchy><node package="org.emulebb.android" resource-id="org.emulebb.android:id/service_status" text="Starting"/>' + node + '</hierarchy>'
+    ui = subject.ProductionUi(lambda *args: xml if args[-2:-1] == ('cat',) else '')
+    if label == 'duplicate':
+        with pytest.raises(RuntimeError, match='ambiguous'):
+            ui.inspect()
+    else:
+        ui.inspect()
+    assert ui.setup_observation['networkWait'] == {'state': expected, 'phase': 'Starting'}
+    assert 'private-value' not in json.dumps(ui.setup_observation)
+
+
+def test_campaign_failure_carries_only_closed_typed_details():
+    from emule_test_harness.android_apk_peer import CampaignFailure
+    failure = {'phase': 'await-completed-delivery', 'code': 'await-completed-delivery-failed',
+        'errorType': 'private', 'rest': {'httpStatus': 409, 'apiCode': 'DOWNLOAD_CONFLICT',
+            'coreContext': 'unrecognized', 'raw': 'private'},
+        'adb': {'operation': 'push', 'reason': 'no-space', 'exitCode': 7, 'raw': 'private'},
+        'ownedFixture': {'code': 'inventory-invalid', 'filesRemoved': 1, 'raw': 'private'}}
+    result = subject._lifecycle_failure(CampaignFailure(failure), 'local-transfer', {})
+    assert result['code'] == 'other'
+    assert result['transfer'] == {'phase': 'await-completed-delivery', 'code': 'await-completed-delivery-failed',
+        'rest': {'httpStatus': 409, 'apiCode': 'DOWNLOAD_CONFLICT', 'coreContext': 'unrecognized'},
+        'adb': {'operation': 'push', 'reason': 'no-space', 'exitCategory': 'nonzero'},
+        'ownedFixture': {'code': 'inventory-invalid', 'filesRemoved': 1}}
+    assert 'private' not in json.dumps(result)
+    failure['phase'] = 'private'
+    assert 'transfer' not in subject._lifecycle_failure(CampaignFailure(failure), 'local-transfer', {})
+
+
 class Guest:
     """Minimal production UI/ADB peer, with independently observed REST state."""
 
@@ -293,6 +330,23 @@ def test_home_must_leave_app_foreground_before_screen_off(tmp_path, monkeypatch)
     result = json.loads((tmp_path / 'apk-lifecycle.json').read_text())
     assert result['failure']['stage'] == 'screen-off-doze' and 'endurance' not in result
     assert not any(call[2:] == ('shell', 'input', 'keyevent', 'KEYCODE_SLEEP') for call in peer.calls)
+
+
+def test_screen_off_failure_retains_exact_substage_and_closed_adb_category(tmp_path, monkeypatch):
+    from emule_test_harness.android_adb_failure import AdbOperationFailure
+    peer, admitted = guest(tmp_path, monkeypatch)
+    def command(*args, **kwargs):
+        if args[2:] == ('shell', 'dumpsys', 'battery', 'unplug'):
+            raise AdbOperationFailure(args[2:], exit_code=1, stderr='permission denied private',
+                                      message='Owned Android ADB command failed')
+        return peer.command(*args, **kwargs)
+    with pytest.raises(RuntimeError, match='Owned Android ADB command failed'):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / 'apk-lifecycle.json').read_text())
+    assert result['failure']['stage'] == 'screen-off-doze'
+    assert result['failure']['code'] == 'adb-command-failed' and result['failure']['substage'] == 'unplug'
+    assert result['failure']['adb'] == {'operation': 'shell-dumpsys', 'reason': 'permission-denied', 'exitCategory': 'nonzero'}
+    assert 'private' not in json.dumps(result)
 
 
 @pytest.mark.parametrize("secure", [False, True])
@@ -853,7 +907,7 @@ def test_each_hierarchy_requires_a_fresh_owned_dump_before_controls_can_authoriz
         with pytest.raises(RuntimeError, match="ADB command failed|dump is malformed"):
             ui.click("start_service")
         assert not any(call[:3] == ("shell", "input", "tap") for call in calls)
-        assert ui.setup_observation == {}
+        assert ui.setup_observation == {"networkWait": {"state": "unavailable"}}
         if fault == "invalidation-failed":
             assert files[ui.path] == old
             assert not any(call[:2] in {("shell", "cat"), ("shell", "uiautomator")} for call in calls)

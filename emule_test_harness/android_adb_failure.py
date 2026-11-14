@@ -7,10 +7,11 @@ from .bounded_process_output import AsyncBinaryCapture
 
 class AdbOperationFailure(RuntimeError):
     """Keep an actionable category without retaining argv or native output."""
-    def __init__(self, arguments, *, exit_code=None, stderr=None, error=None, output_bound=False):
+    def __init__(self, arguments, *, exit_code=None, stderr=None, error=None, output_bound=False, message=None):
         operation = {("shell", "mkdir"): "shell-mkdir", ("shell", "chmod"): "shell-chmod",
                      ("shell", "sha256sum"): "shell-sha256", ("shell", "cat"): "shell-cat",
-                     ("shell", "sh"): "shell-script", ("exec-out", "cat"): "binary-read"}.get(tuple(arguments[:2]))
+                     ("shell", "sh"): "shell-script", ("shell", "input"): "shell-input",
+                     ("shell", "dumpsys"): "shell-dumpsys", ("exec-out", "cat"): "binary-read"}.get(tuple(arguments[:2]))
         operation = operation or {"push": "push", "forward": "forward", "install": "install"}.get(arguments[0], "device-command")
         reason = "unclassified-command-failure"
         if output_bound:
@@ -34,7 +35,7 @@ class AdbOperationFailure(RuntimeError):
                     break
         self.safe_failure = {"operation": operation, "reason": reason,
                              "exitCode": exit_code if type(exit_code) is int else None}
-        super().__init__("Selected physical-device ADB operation failed: " + operation + "/" + reason)
+        super().__init__(message or "Selected physical-device ADB operation failed: " + operation + "/" + reason)
 
 
 class _StartupCodes:

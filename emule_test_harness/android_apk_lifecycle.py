@@ -21,6 +21,24 @@ PREFIX = ("-s", "emulator-5554")
 SUPPORTED_ANDROID_APIS = frozenset({34, 35, 36, 37})
 MIN_SCREEN_OFF_DWELL_SECONDS = 60
 MIN_SCREEN_OFF_SAMPLES = 3
+TRANSFER_FAILURE_PHASES = frozenset({
+    "admit-original-settings", "admit-prior-downloads-and-roots", "admit-network-binding", "fixture-directory-create",
+    "fixture-occupant-push", "persist-fixture-settings", "restart-fixture-destination", "verify-fixture-destination",
+    "peer-profile-seed", "peer-home-create", "peer-profile-push", "peer-binary-push-and-hash", "peer-process-spawn",
+    "peer-process-admission", "peer-rest-forward", "peer-source-bound-readiness", "peer-ready", "peer-graceful-shutdown",
+    "peer-shared-fixture-push", "peer-shared-file-hash", "directed-local-listener-start", "enqueue-owned-transfer",
+    "await-completed-delivery", "verify-delivered-path-and-size", "verify-delivered-bytes", "verify-collision-preserved",
+    "restart-completed-delivery", "verify-completed-delivery-metadata", "verify-completed-download-evidence",
+    "verify-completed-delivery-bytes", "cleanup-remove-owned-transfer", "cleanup-restore-original-settings", "cleanup-remove-owned-fixture",
+} | {role + "-listener-" + step for role in ("app", "peer") for step in (
+    "server-inventory", "allocate-owned-loopback-endpoint", "server-create", "created-configuration-admission",
+    "directed-connect", "connect-acknowledgement", "ready", "owned-server-disable-precondition", "owned-server-disable",
+    "owned-disabled-row-verification", "preexisting-server-configuration-preservation")})
+ADB_OPERATIONS = frozenset({"shell-mkdir", "shell-chmod", "shell-sha256", "shell-cat", "shell-script", "shell-input", "shell-dumpsys", "binary-read", "push", "forward", "install", "device-command"})
+ADB_REASONS = frozenset({"unclassified-command-failure", "output-bound-exceeded", "command-timeout", "permission-denied", "operation-not-permitted", "missing-file", "already-exists", "no-space", "connection-reset", "unclassified-os-error", "unsupported-option", "device-offline", "device-not-found", "transport-closed"})
+REST_CODES = frozenset({"BAD_REQUEST", "INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN", "DOWNLOAD_CONFLICT", "unrecognized"})
+REST_CONTEXTS = frozenset({"ed2k-not-configured", "ed2k-disabled", "ed2k-no-server", "vpn-guard-blocked", "client-udp-version", "kad-listener-initialization", "ed2k-listener-bind", "nat-initial-reconcile", "nat-initial-timeout", "local-bind-interface-missing", "server-not-found", "unrecognized"})
+FIXTURE_CODES = frozenset({"inventory-invalid", "inventory-limit", "nonce-invalid", "payload-authority-invalid", "protected-root", "unsafe-directory-type", "directory-redirected", "unknown-contents", "unsafe-entry-type", "entry-changed-before-delete", "entry-delete-failed", "directory-remove-failed"})
 APK_LIFECYCLE_STAGES = frozenset({
     "install", "installed-identity", "rest-forward", "initial-start", "initial-wait-running",
     "initial-authentication", "bundled-webui", "graceful-stop", "notification-denial",
@@ -213,7 +231,46 @@ def _lifecycle_failure(error: Exception, stage: str, observation: dict) -> dict:
                 code = "control-invalid-bounds"
             elif str(error) == "APK required control has no safe visible tap bounds: " + name:
                 code = "control-unsafe-bounds"
-    return {"stage": stage, "code": code, **observation}
+    failure = {"stage": stage, "code": code, **observation}
+    from .android_adb_failure import AdbOperationFailure
+    from .android_apk_peer import CampaignFailure
+    if isinstance(error, AdbOperationFailure):
+        failure["adb"] = _safe_adb_failure(error.safe_failure)
+    if isinstance(error, CampaignFailure):
+        detail = error.failure
+        if (isinstance(detail, dict) and isinstance(detail.get("phase"), str)
+                and detail["phase"] in TRANSFER_FAILURE_PHASES and detail.get("code") == detail["phase"] + "-failed"):
+            safe = {"phase": detail["phase"], "code": detail["code"]}
+            if isinstance(detail.get("adb"), dict):
+                safe["adb"] = _safe_adb_failure(detail["adb"])
+            rest = detail.get("rest")
+            if isinstance(rest, dict):
+                safe_rest = {}
+                if type(rest.get("httpStatus")) is int and 100 <= rest["httpStatus"] <= 599:
+                    safe_rest["httpStatus"] = rest["httpStatus"]
+                for name, allowed in (("apiCode", REST_CODES), ("coreContext", REST_CONTEXTS)):
+                    if isinstance(rest.get(name), str) and rest[name] in allowed:
+                        safe_rest[name] = rest[name]
+                if safe_rest:
+                    safe["rest"] = safe_rest
+            fixture = detail.get("ownedFixture")
+            if isinstance(fixture, dict) and isinstance(fixture.get("code"), str) and fixture["code"] in FIXTURE_CODES:
+                safe["ownedFixture"] = {"code": fixture["code"]}
+                if type(fixture.get("filesRemoved")) is int and 0 <= fixture["filesRemoved"] <= 2:
+                    safe["ownedFixture"]["filesRemoved"] = fixture["filesRemoved"]
+            failure["transfer"] = safe
+    return failure
+
+
+def _safe_adb_failure(value: dict) -> dict:
+    """Project only fixed ADB operation, reason and bounded exit category."""
+    result = {}
+    for name, allowed in (("operation", ADB_OPERATIONS), ("reason", ADB_REASONS)):
+        if isinstance(value.get(name), str) and value[name] in allowed:
+            result[name] = value[name]
+    exit_code = value.get("exitCode")
+    result["exitCategory"] = ("success" if exit_code == 0 else "nonzero" if exit_code > 0 else "signal") if type(exit_code) is int else "unavailable"
+    return result
 
 
 def _diagnostic_bounds(value: str) -> list[int] | None:
@@ -397,16 +454,27 @@ class ProductionUi:
         return self.shell("cat", self.path)
 
     def inspect(self):
+        # WHY: retain phase and network wait only from the same bounded UI
+        # snapshot, including an explicit unknown for missing or duplicate IDs.
+        self.setup_observation = {"networkWait": {"state": "unavailable"}}
         hierarchy = self._hierarchy()
+        elements = ui_elements(hierarchy)
+        wait = [node for node in elements if node.get("resource-id") == APPLICATION_ID + ":id/network_wait_status" and node.get("package") == APPLICATION_ID]
+        phases = [node for node in elements if node.get("resource-id") == APPLICATION_ID + ":id/service_status" and node.get("package") == APPLICATION_ID]
+        if len(wait) == 1:
+            text = wait[0].get("text")
+            self.setup_observation["networkWait"]["state"] = {"Waiting for a usable default network": "waiting", "": "not-waiting"}.get(text, "unavailable")
+        if len(phases) == 1 and phases[0].get("text") in SETUP_SERVICE_PHASES:
+            self.setup_observation["networkWait"]["phase"] = phases[0]["text"]
         nodes = ui_nodes(hierarchy)
-        containers = [_diagnostic_bounds(node.get("bounds", "")) for node in ui_elements(hierarchy)
+        containers = [_diagnostic_bounds(node.get("bounds", "")) for node in elements
                       if node.get("package") == APPLICATION_ID and node.get("class") == "android.widget.ScrollView"]
         self.scroll_bounds = containers[0] if len(containers) == 1 and containers[0] is not None else None
         # WHY: setup failures precede daemon diagnostics; retain only closed
         # control flags and service phases, never the visible credential/text.
-        self.setup_observation = {"controls": {
+        self.setup_observation["controls"] = {
             name: {"present": name in nodes, "enabled": nodes.get(name, {}).get("enabled") == "true"}
-            for name in sorted(SETUP_CONTROL_NAMES)}}
+            for name in sorted(SETUP_CONTROL_NAMES)}
         phase = nodes.get("service_status", {}).get("text")
         if phase in SETUP_SERVICE_PHASES:
             self.setup_observation["servicePhase"] = phase
@@ -567,6 +635,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     installed = False
     setup_stage = "install"
     initial_launch_result = "unavailable"
+    screen_substage = None
     post_failure_ui = None
     primary_ui_observation = None
     ui = ProductionUi(command)
@@ -895,18 +964,27 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             passed("file-link-intents-and-webui-confirmation")
         # The foreground service must survive closing its visible shell.
         setup_stage = "screen-off-doze"
+        screen_substage = "home"
         shell("input", "keyevent", "KEYCODE_HOME")
+        screen_substage = "home-check"
         activities = shell("dumpsys", "activity", "activities")
         resumed = re.findall(r"(?m)^.*(?:topResumedActivity|mResumedActivity)[^\n]*\bu0\s+([^\s}]+)", activities)
         if not resumed or len(set(resumed)) != 1 or resumed[0].startswith(APPLICATION_ID + "/"):
             raise RuntimeError("APK activity did not leave the foreground after Home")
+        screen_substage = "home-authentication"
         authenticated()
+        screen_substage = "sleep"
         shell("input", "keyevent", "KEYCODE_SLEEP")
+        screen_substage = "unplug"
         shell("dumpsys", "battery", "unplug")
+        screen_substage = "force-idle"
         shell("dumpsys", "deviceidle", "force-idle")
         def assert_idle_screen_off():
+            nonlocal screen_substage
+            screen_substage = "check-idle"
             if shell("dumpsys", "deviceidle", "get", "deep") != "IDLE":
                 raise RuntimeError("APK Doze proof did not retain actual deep idle")
+            screen_substage = "check-power"
             if re.search(r"mWakefulness=(Asleep|Dozing)\b", shell("dumpsys", "power")) is None:
                 raise RuntimeError("APK screen-off proof did not observe a sleeping device")
 
@@ -916,6 +994,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         samples = 0
         while True:
             assert_idle_screen_off()
+            screen_substage = "sample-authentication"
             authenticated()
             samples += 1
             elapsed = time.monotonic() - started
@@ -941,6 +1020,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         if setup_stage is not None:
             result["failure"] = _lifecycle_failure(error, setup_stage,
                 primary_ui_observation if primary_ui_observation is not None else ui.setup_observation)
+            if setup_stage == "screen-off-doze" and screen_substage is not None:
+                result["failure"]["substage"] = screen_substage
             if setup_stage == "wait-stopped" and result["failure"]["code"] == "app-not-visible":
                 result["failure"]["initialLaunch"] = {"result": initial_launch_result,
                     **_initial_visibility_facts(shell)}
@@ -952,7 +1033,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                         result["failure"]["navigation"] = navigation
                 except Exception:
                     pass
-            if installed and ui.setup_observation:
+            if installed and ui.setup_observation.get("controls"):
                 # Other lifecycle failures may already expose the real error.
                 # Inspect only an existing app window; never launch or press
                 # Start to diagnose it, and never replace the primary failure.

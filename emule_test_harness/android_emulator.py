@@ -645,10 +645,14 @@ def probe_guest(*, sdk_root: Path, image_dir: Path, api: int, page_size: int,
             capture.raise_if_failed()
 
     def command(*arguments: str, check: bool = True, binary: bool = False, timeout: int = 10) -> str | bytes:
+        from .android_adb_failure import AdbOperationFailure
         result = subprocess.run([adb, "-P", "5037", *arguments], env=child, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=not binary, timeout=timeout, check=False)
         if len(result.stdout) > 65536 or len(result.stderr) > 65536 or check and result.returncode:
-            raise RuntimeError("Owned Android ADB command failed")
+            action = arguments[2:] if arguments[:1] == ("-s",) else arguments
+            raise AdbOperationFailure(action, exit_code=result.returncode, stderr=result.stderr,
+                output_bound=len(result.stdout) > 65536 or len(result.stderr) > 65536,
+                message="Owned Android ADB command failed")
         if result.returncode:
             return b"" if binary else ""
         return result.stdout if binary else result.stdout.strip()
