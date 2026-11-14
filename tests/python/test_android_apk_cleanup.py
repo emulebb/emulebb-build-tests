@@ -36,7 +36,7 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
     if contents in {"occupant", "both"}:
         entries[canonical + "/" + subject.FIXTURE_NAME] = subject.OCCUPANT_SHA256
     if contents in {"payload", "both"}:
-        entries[canonical + "/Android Sample (1).bin"] = payload_sha
+        entries[canonical + "/Android Sample_01.bin"] = payload_sha
     candidates = [candidate]
     if fault == "zero":
         candidates = [candidate[:-32] + "f" * 32]
@@ -111,3 +111,37 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
 def test_nul_inventory_never_guesses_truncated_or_unbounded_filenames(raw):
     with pytest.raises(subject.OwnedFixtureFailure, match="inventory"):
         subject._nul_paths(raw, maximum=16)
+
+
+@pytest.mark.parametrize("name,payload_matches", [
+    ("Android Sample_01.bin", False),
+    ("Android Sample_02.bin", True),
+    ("Android Sample_001.bin", True),
+    ("Android Sample (1).bin", True),
+    ("Android Sample (2).bin", True),
+])
+def test_unknown_collision_names_or_bytes_preserve_every_entry(name, payload_matches):
+    payload_sha = hashlib.sha256(subject.deterministic_payload(
+        0, 256 * 1024, generation="android-apk-" + NONCE)).hexdigest()
+    root = "/storage/emulated/0/Download/emulebb-apk-proof-" + NONCE
+    entries = {root + "/" + subject.FIXTURE_NAME: subject.OCCUPANT_SHA256,
+               root + "/" + name: payload_sha if payload_matches else "0" * 64}
+    deletions = []
+
+    def command(*args, **kwargs):
+        operation = args[2:]
+        if operation[:2] == ("shell", "sh"):
+            assert kwargs["binary"] is True
+            return b"\0".join(path.encode() for path in entries) + b"\0"
+        if operation[:3] == ("shell", "readlink", "-f"):
+            return root
+        if operation[:2] == ("shell", "sha256sum"):
+            return entries[shlex.split(operation[-1])[0]] + " synthetic"
+        if operation[:2] in {("shell", "rm"), ("shell", "rmdir")}:
+            deletions.append(operation)
+        return ""
+
+    with pytest.raises(subject.OwnedFixtureFailure, match="unknown-contents") as failure:
+        subject.remove_owned_fixture(command, prefix=("-s", "synthetic-device"), nonce=NONCE,
+            protected_roots=set(), payload_sha256=payload_sha)
+    assert failure.value.files_removed == 0 and not deletions
