@@ -1106,6 +1106,13 @@ def test_ambiguous_settings_never_guess_a_permission_toggle_or_start(tmp_path, m
     report = run(tmp_path, monkeypatch, phone, execute=True)
     value = json.loads(report.read_text())
     assert value["status"] == "setup-required" and value["permissionChanges"] == []
+    diagnostic = value["permissions"]["setupDiagnostic"]
+    assert diagnostic == {"reason": "candidate-count", "foregroundMatched": True, "ownAppVisible": True,
+                          "candidateCount": 2, "controlsTruncated": False,
+                          "controls": [{"resource": "other", "class": "other", "bounds": [0, 0, 100, 100],
+                                        "checked": False, "enabled": True},
+                                       {"resource": "other", "class": "other", "bounds": [200, 0, 300, 100],
+                                        "checked": False, "enabled": True}]}
     assert value["runtimeExecution"] == "not-run" and not phone.running
     assert [call for call in phone.calls if call[:3] == ("shell", "input", "tap")] == [
         ("shell", "input", "tap", "450", "550")]
@@ -1132,7 +1139,33 @@ def test_normal_settings_guard_requires_the_app_and_one_valid_off_toggle(tmp_pat
     report = run(tmp_path, monkeypatch, phone, execute=True)
     value = json.loads(report.read_text())
     assert value["status"] == "setup-required" and value["permissionChanges"] == []
+    diagnostic = value["permissions"]["setupDiagnostic"]
+    assert diagnostic["reason"] == {"foreground": "foreground-or-label-timeout", "app-label": "foreground-or-label-timeout",
+                                    "checked": "checked-state", "disabled": "candidate-count",
+                                    "bad-bounds": "invalid-bounds"}[fault]
+    assert diagnostic["foregroundMatched"] is (fault != "foreground")
+    assert diagnostic["ownAppVisible"] is (fault != "app-label")
     assert phone.permission is False and phone.running is False
+
+
+def test_settings_diagnostic_does_not_retain_arbitrary_ui_content(tmp_path, monkeypatch):
+    phone = Phone()
+    phone.permission = False
+    phone.ambiguous_settings = True
+    command = phone.command
+    def private_control(*args, **kwargs):
+        result = command(*args, **kwargs)
+        if args[2:4] == ("shell", "cat") and phone.screen == "files":
+            result = result.replace('checkable="true"',
+                'resource-id="private-secret-id" class="private-secret-class" text="private-secret-text" checkable="true"')
+        return result
+    phone.command = private_control
+    report = run(tmp_path, monkeypatch, phone, execute=True)
+    value = json.loads(report.read_text())
+    diagnostic = value["permissions"]["setupDiagnostic"]
+    assert diagnostic["candidateCount"] == 2
+    assert all(node["resource"] == node["class"] == "other" for node in diagnostic["controls"])
+    assert "private-secret" not in json.dumps(value)
 
 
 def test_permission_controller_resource_namespace_can_differ_from_package(tmp_path, monkeypatch):
