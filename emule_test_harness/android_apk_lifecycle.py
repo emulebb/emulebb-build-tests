@@ -23,10 +23,11 @@ MIN_SCREEN_OFF_DWELL_SECONDS = 60
 MIN_SCREEN_OFF_SAMPLES = 3
 # WHY: Android's power dump can exceed the ADB output bound. Consume it on
 # device and emit only a closed state while pipefail preserves dump errors.
+# AOSP's two-space global field is distinct from unindented power-group fields.
 POWER_WAKEFULNESS_SCRIPT = (
     "set -o pipefail || exit 1; dumpsys power | awk '"
-    "/^[[:space:]]*mWakefulness=/ { n++; "
-    "if ($0 ~ /^[[:space:]]*mWakefulness=(Asleep|Dozing)[[:space:]]*$/) asleep=1; else asleep=0 } "
+    "/^  mWakefulness=/ { n++; "
+    "if ($0 ~ /^  mWakefulness=(Asleep|Dozing)[[:space:]]*$/) asleep=1; else asleep=0 } "
     "END { if (n != 1) print \"unknown\"; else if (asleep) print \"sleep\"; else print \"other\" }'")
 TRANSFER_FAILURE_PHASES = frozenset({
     "admit-original-settings", "admit-prior-downloads-and-roots", "admit-network-binding", "fixture-directory-create",

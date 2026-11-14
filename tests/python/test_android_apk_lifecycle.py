@@ -475,6 +475,12 @@ def _power_test_shell():
     ('  mWakefulness=Awake', 'other'), ('  mWakefulness=Asleep-extra', 'other'),
     ('  mWakefulness=', 'other'), ('missing', 'unknown'),
     ('  mWakefulness=Asleep\n  mWakefulness=Dozing', 'unknown'),
+    ('POWER MANAGER (dumpsys power)\nPower Manager State:\n  mWakefulness=Asleep\n'
+     'Power Group User Activity:\ngroupId: 0\nmWakefulness=1\ngroupId: 1\nmWakefulness=0', 'sleep'),
+    ('Power Manager State:\n  mWakefulness=Dozing\nPower Group User Activity:\ngroupId: 0\nmWakefulness=1', 'sleep'),
+    ('Power Manager State:\n  mWakefulness=Awake\nPower Group User Activity:\ngroupId: 0\nmWakefulness=0', 'other'),
+    ('Power Group User Activity:\ngroupId: 0\nmWakefulness=0', 'unknown'),
+    ('  mWakefulness=Asleep\nmWakefulness=0\n  mWakefulness=Awake', 'unknown'),
 ])
 def test_power_filter_executes_actual_shell_classifier(power, expected):
     import subprocess
