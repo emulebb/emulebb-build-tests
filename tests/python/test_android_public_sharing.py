@@ -502,6 +502,39 @@ def test_observer_timeout_persists_closed_failed_rest_operation(tmp_path, monkey
     assert "private-settings" not in (tmp_path / "session.json").read_text()
 
 
+@pytest.mark.parametrize("status", [400, 599, 99, 600, True, "400"])
+@pytest.mark.parametrize("mode", ["prepare", "observe"])
+def test_private_failure_receipt_reuses_only_closed_rest_projection(tmp_path, monkeypatch, status, mode):
+    mock_observer(monkeypatch)
+    phone = FakePhone("Stopped" if mode == "prepare" else "Running")
+    def fail_settings(*args, **kwargs):
+        phone.failed_rest_operation = "settings-update"
+        raise subject.RustRestFailure("private-response-text", status=status,
+            detail=json.dumps({"error": {"code": "BAD_REQUEST", "message": "failed to bind eD2k TCP listener: private-response-text"}}))
+    monkeypatch.setattr(subject, "_settings", fail_settings)
+    if mode == "prepare":
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "Sample.bin").write_bytes(b"data")
+        monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
+        campaign = tmp_path / "campaign"
+        with pytest.raises(RuntimeError):
+            subject.prepare(phone, campaign=campaign, output_root=tmp_path, source=source, expected_file_count=1,
+                            expected_total_bytes=4, installation=installation_evidence(phone), admission={},
+                            limits=subject.Limits(), route="direct-wifi")
+        path = campaign / "preparation.json"
+        value = subject._read_json(path)
+    else:
+        value = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
+        path = tmp_path / "session.json"
+    assert value["failedRestOperation"] == "settings-update"
+    if type(status) is int and 100 <= status <= 599:
+        assert value["failedRestSafeFailure"] == {"httpStatus": status, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-listener-bind"}
+    else:
+        assert "failedRestSafeFailure" not in value
+    assert "private-response" not in path.read_text() and "PRIVATE" not in path.read_text()
+
+
 def test_detached_observer_discards_expired_builder_lock_token(tmp_path, monkeypatch):
     monkeypatch.setenv("EMULEBB_WORKSPACE_LOCK_TOKEN", "delegated-token")
     captured = {}

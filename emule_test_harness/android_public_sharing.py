@@ -34,7 +34,7 @@ from .android_apk_peer import guest_sha256
 from .android_apk_profile import INCOMING, SHARED, read_hashed_receipt
 from .paths import get_workspace_output_root
 from .kad_nodes import DEFAULT_NODES_DAT_URL
-from .rust_local_ed2k import request_json
+from .rust_local_ed2k import RustRestFailure, request_json
 from .rust_shared_library_io import compact_progress, path_fingerprint, utc_now, write_json
 from .soak_launch import DEFAULT_SERVER_MET_URL
 from .upload_parity_monitor import rust_summary
@@ -620,6 +620,11 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             operation = getattr(phone, "failed_rest_operation", None)
             if operation in REST_OPERATION_NAMES:
                 receipt["failedRestOperation"] = operation
+            if isinstance(error, RustRestFailure):
+                status = error.safe_failure.get("httpStatus")
+                if type(status) is int and 100 <= status <= 599:
+                    receipt["failedRestSafeFailure"] = {key: error.safe_failure[key]
+                        for key in ("httpStatus", "apiCode", "coreContext")}
             write_json(campaign / "preparation.json", receipt)
             raise RuntimeError("Public sharing preparation failed; inspect local evidence") from None
         finally:
@@ -906,6 +911,11 @@ def observe(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path,
             operation = getattr(phone, "failed_rest_operation", None)
             if operation in REST_OPERATION_NAMES:
                 session["failedRestOperation"] = operation
+            if isinstance(error, RustRestFailure):
+                status = error.safe_failure.get("httpStatus")
+                if type(status) is int and 100 <= status <= 599:
+                    session["failedRestSafeFailure"] = {key: error.safe_failure[key]
+                        for key in ("httpStatus", "apiCode", "coreContext")}
             # WHY: loss of scope/route/cap evidence must not silently leave an
             # owned upload service active. Never stop an unverified installation.
             if attempted_start or session["service"] == "running":
