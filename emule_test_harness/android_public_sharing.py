@@ -105,8 +105,9 @@ def _regular(path: Path, *, directory=False):
 def inventory(source: Path) -> dict:
     """Hash a read-only tree without traversing links, checking concurrent changes."""
     source = source.absolute()
-    for parent in (source, *source.parents):
-        _regular(parent, directory=True)
+    # WHY: DOS canonical paths can retain an operator-approved mounted-volume
+    # ancestor. The pinned source root and its entries define this tree's scope.
+    _regular(source, directory=True)
     directories, files = [], []
     for parent, names, leaves in os.walk(source, followlinks=False):
         for name in sorted(names):

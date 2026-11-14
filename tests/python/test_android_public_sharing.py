@@ -55,6 +55,25 @@ def test_inventory_preserves_real_tree_and_rejects_links(tmp_path):
         subject.inventory(source)
 
 
+def test_inventory_accepts_reparse_ancestor_outside_selected_tree(directory_alias):
+    alias, actual = directory_alias
+    source = actual / "library"
+    source.mkdir()
+    (source / "Sample.bin").write_bytes(b"data")
+    # Simulate the DOS spelling retained below a mounted-volume junction even
+    # after source-anchor canonicalization: the selected leaf itself is regular.
+    result = subject.inventory(alias / "library")
+    assert result == subject.inventory(source)
+    assert result["files"][0]["sha256"] == hashlib.sha256(b"data").hexdigest()
+
+
+def test_inventory_still_rejects_selected_root_reparse(directory_alias):
+    alias, actual = directory_alias
+    (actual / "Sample.bin").write_bytes(b"data")
+    with pytest.raises(RuntimeError):
+        subject.inventory(alias)
+
+
 @pytest.mark.parametrize("fault", ["device", "hash", "destination", "inventory", "route", "limits"])
 def test_campaign_receipt_requires_immutable_exact_scope(tmp_path, fault):
     value = receipt()
