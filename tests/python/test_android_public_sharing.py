@@ -144,6 +144,21 @@ def test_guest_scope_requires_exact_tree_and_hashes(monkeypatch, fault):
         subject.guest_scope(phone, value, hashes=True)
 
 
+@pytest.mark.parametrize("raw,expected", [(b"", set()), (b"/owned/Sample.bin\0", {"/owned/Sample.bin"})])
+def test_guest_entries_accepts_successful_empty_type_filter(raw, expected):
+    calls = []
+    def shell(*args, **kwargs):
+        calls.append((args, kwargs))
+        return raw
+    assert subject._guest_entries(SimpleNamespace(shell=shell), "/owned", "f") == expected
+    assert calls == [(("find", "/owned", "-type", "f", "-print0"), {"binary": True})]
+
+
+def test_guest_entries_still_rejects_nonempty_unterminated_output():
+    with pytest.raises(RuntimeError):
+        subject._guest_entries(SimpleNamespace(shell=lambda *a, **kw: b"/owned/Sample.bin"), "/owned", "f")
+
+
 def test_public_request_is_distinct_from_increasing_payload_and_local_peer():
     catalog = [{"hash": "a" * 32}]
     row = {"clientId": "peer", "address": "93.184.216.34", "requestedFileHash": "a" * 32, "uploadedBytes": 100}

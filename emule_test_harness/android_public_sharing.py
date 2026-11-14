@@ -452,6 +452,8 @@ def _guest_entries(phone: Phone, root: str, kind: str | None = None):
     if kind:
         args += ["-type", kind]
     raw = phone.shell(*args, "-print0", binary=True)
+    if raw == b"":
+        return set()
     if not raw.endswith(b"\0"):
         raise RuntimeError("Guest tree inventory is incomplete")
     return {part.decode("utf-8", errors="strict") for part in raw[:-1].split(b"\0")}
