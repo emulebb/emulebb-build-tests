@@ -47,6 +47,20 @@ def test_request_json_includes_http_error_body(monkeypatch) -> None:
         rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key")
 
 
+@pytest.mark.parametrize("timeout_seconds", [None, 60.0])
+def test_request_json_preserves_default_and_accepts_explicit_deadline(monkeypatch, timeout_seconds):
+    calls = []
+    def open_request(request, *, timeout):
+        calls.append((timeout, request.data))
+        return io.BytesIO(b'{"data":{"ok":true}}')
+    monkeypatch.setattr(rust_local_ed2k.urllib.request, "urlopen", open_request)
+    options = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
+    # Existing positional request bodies remain valid after the keyword-only extension.
+    result = rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/test", "key", {"value": 1}, **options)
+    assert result == {"ok": True}
+    assert calls == [(10.0 if timeout_seconds is None else timeout_seconds, b'{"value": 1}')]
+
+
 @pytest.mark.parametrize("code,message,expected", [
     ("BAD_REQUEST", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
     ("EMULE_ERROR", "failed to bind eD2k TCP listener on 192.0.2.20:20029", "ed2k-listener-bind"),

@@ -63,6 +63,24 @@ SAFE_FAILURE_REASONS = {
     "Approved source file count or byte total differs": "source-shape-mismatch",
     "Campaign evidence must stay below the configured output root": "campaign-outside-output-root",
 }
+REST_OPERATIONS = {
+    ("POST", "/servers/operations/import-met-url"): ("server-metadata-import", 60.0),
+    ("POST", "/kad/operations/import-nodes-url"): ("kad-node-import", 60.0),
+    ("POST", "/servers/operations/connect"): ("server-connect", 60.0),
+    ("PATCH", "/app/settings"): ("settings-update", 60.0),
+    ("POST", "/kad/operations/start"): ("kad-start", 10.0),
+    ("GET", "/app"): ("app-identity-read", 10.0),
+    ("GET", "/app/settings"): ("settings-read", 10.0),
+    ("GET", "/stats"): ("stats-read", 10.0),
+    ("GET", "/status"): ("status-read", 10.0),
+    ("GET", "/servers"): ("server-list-read", 10.0),
+    ("GET", "/kad"): ("kad-status-read", 10.0),
+    ("GET", "/shared-directories"): ("sharing-settings-read", 10.0),
+    ("GET", "/shared-files"): ("shared-catalog-read", 10.0),
+    ("GET", "/transfers"): ("transfer-queue-read", 10.0),
+    ("GET", "/uploads"): ("uploads-read", 10.0),
+}
+REST_OPERATION_NAMES = frozenset(item[0] for item in REST_OPERATIONS.values()) | {"unclassified-rest-operation"}
 
 
 def safe_failure_reason(error: Exception):
@@ -256,6 +274,7 @@ class Phone:
         self.port = None
         self.key = None
         self.remote_port = None
+        self.failed_rest_operation = None
 
     def shell(self, *args, **kwargs):
         return self.device.command(*self.prefix, "shell", *args, **kwargs)
@@ -300,7 +319,16 @@ class Phone:
         return "http://127.0.0.1:" + str(self.port)
 
     def request(self, method, path, body=None):
-        return request_json(self.base, method, "/api/v1" + path, self.key, body)
+        # WHY: discovery imports may fetch for 30s and NAT reconciliation may
+        # take another 20s under the runtime lock. Ordinary reads stay bounded
+        # at 10s; only these named operations receive the explicit 60s budget.
+        operation, timeout = REST_OPERATIONS.get((method, path.partition("?")[0]), ("unclassified-rest-operation", 10.0))
+        self.failed_rest_operation = None
+        try:
+            return request_json(self.base, method, "/api/v1" + path, self.key, body, timeout_seconds=timeout)
+        except Exception:
+            self.failed_rest_operation = operation
+            raise
 
     def identity(self):
         app = self.request("GET", "/app")
@@ -589,6 +617,9 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             return hashlib.sha256((campaign / "campaign.json").read_bytes()).hexdigest()
         except Exception as error:
             receipt.update(status="failed", errorType=type(error).__name__)
+            operation = getattr(phone, "failed_rest_operation", None)
+            if operation in REST_OPERATION_NAMES:
+                receipt["failedRestOperation"] = operation
             write_json(campaign / "preparation.json", receipt)
             raise RuntimeError("Public sharing preparation failed; inspect local evidence") from None
         finally:
@@ -872,6 +903,9 @@ def observe(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path,
                 time.sleep(min(limits.interval_seconds, max(0, deadline - time.monotonic())))
         except Exception as error:
             session.update(status="failed", errorType=type(error).__name__)
+            operation = getattr(phone, "failed_rest_operation", None)
+            if operation in REST_OPERATION_NAMES:
+                session["failedRestOperation"] = operation
             # WHY: loss of scope/route/cap evidence must not silently leave an
             # owned upload service active. Never stop an unverified installation.
             if attempted_start or session["service"] == "running":

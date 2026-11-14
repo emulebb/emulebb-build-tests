@@ -56,8 +56,10 @@ def request_json(
     path: str,
     api_key: str,
     body: dict[str, object] | None = None,
+    *,
+    timeout_seconds: float = 10.0,
 ) -> dict[str, object]:
-    """Runs one authenticated Rust REST request and returns the JSON object payload."""
+    """Run one authenticated JSON request with an explicit, normally ten-second deadline."""
 
     payload = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
@@ -69,7 +71,7 @@ def request_json(
     if payload is not None:
         request.add_header("Content-Type", "application/json; charset=utf-8")
     try:
-        with urllib.request.urlopen(request, timeout=10.0) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             text = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()

@@ -436,6 +436,72 @@ def test_safe_failure_reason_matches_exact_runtime_literals_only():
     assert subject.safe_failure_reason(RuntimeError({"private": "data"})) == "unclassified"
 
 
+@pytest.mark.parametrize("method,path,timeout", [
+    ("POST", "/servers/operations/import-met-url", 60.0),
+    ("POST", "/kad/operations/import-nodes-url", 60.0),
+    ("POST", "/servers/operations/connect", 60.0),
+    ("PATCH", "/app/settings", 60.0),
+    ("GET", "/app/settings", 10.0), ("GET", "/stats", 10.0),
+    ("GET", "/shared-files?limit=200&cursor=opaque", 10.0),
+])
+def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline(monkeypatch, method, path, timeout):
+    phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
+    phone.port, phone.key = 12345, "fixture-key"
+    calls = []
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"ok": True}
+    monkeypatch.setattr(subject, "request_json", request)
+    assert phone.request(method, path, {"value": 1}) == {"ok": True}
+    assert calls == [(("http://127.0.0.1:12345", method, "/api/v1" + path, "fixture-key", {"value": 1}),
+                      {"timeout_seconds": timeout})]
+    assert phone.failed_rest_operation is None
+
+
+def test_phone_request_records_only_closed_failed_operation(monkeypatch):
+    phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
+    phone.port, phone.key = 12345, "fixture-key"
+    def fail(*args, **kwargs): raise TimeoutError("private-response-and-path")
+    monkeypatch.setattr(subject, "request_json", fail)
+    with pytest.raises(TimeoutError): phone.request("PATCH", "/app/settings", {"private": "payload"})
+    assert phone.failed_rest_operation == "settings-update"
+    with pytest.raises(TimeoutError): phone.request("POST", "/private-unknown-route", {})
+    assert phone.failed_rest_operation == "unclassified-rest-operation"
+
+
+def test_prepare_timeout_persists_closed_failed_rest_operation(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "Sample.bin").write_bytes(b"data")
+    campaign = tmp_path / "campaign"
+    phone = FakePhone()
+    mock_observer(monkeypatch)
+    monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
+    def settings(*args, **kwargs):
+        phone.failed_rest_operation = "settings-update"
+        raise TimeoutError("private-settings-response")
+    monkeypatch.setattr(subject, "_settings", settings)
+    with pytest.raises(RuntimeError):
+        subject.prepare(phone, campaign=campaign, output_root=tmp_path, source=source, expected_file_count=1,
+                        expected_total_bytes=4, installation=installation_evidence(phone), admission={},
+                        limits=subject.Limits(), route="direct-wifi")
+    value = subject._read_json(campaign / "preparation.json")
+    assert value["failedRestOperation"] == "settings-update" and value["errorType"] == "TimeoutError"
+    assert "private-settings" not in (campaign / "preparation.json").read_text()
+
+
+def test_observer_timeout_persists_closed_failed_rest_operation(tmp_path, monkeypatch):
+    mock_observer(monkeypatch)
+    phone = FakePhone("Running")
+    def settings(*args, **kwargs):
+        phone.failed_rest_operation = "settings-read"
+        raise TimeoutError("private-settings-response")
+    monkeypatch.setattr(subject, "_settings", settings)
+    value = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
+    assert value["failedRestOperation"] == "settings-read" and value["service"] == "stopped-after-failure"
+    assert "private-settings" not in (tmp_path / "session.json").read_text()
+
+
 def test_detached_observer_discards_expired_builder_lock_token(tmp_path, monkeypatch):
     monkeypatch.setenv("EMULEBB_WORKSPACE_LOCK_TOKEN", "delegated-token")
     captured = {}
