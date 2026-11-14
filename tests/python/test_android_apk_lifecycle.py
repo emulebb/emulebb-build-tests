@@ -46,6 +46,9 @@ def test_trusted_case_contract_has_an_explicit_per_api_permission_matrix(api):
     cases = subject.required_apk_cases(api)
     assert {"local-transfer-and-delivery-collision", "completed-delivery-survives-restart",
             "file-link-intents-and-webui-confirmation", "screen-off-doze-observation"} <= cases
+    assert {"explicit-stop-remains-stopped", "task-manager-stop-remains-stopped",
+            "force-stop-remains-stopped", "restart"} <= cases
+    assert not any("boot" in case for case in cases)
     assert ("android17-local-network-denial-and-revocation" in cases) == (api == 37)
     cases.clear()
     assert subject.required_apk_cases(api)
@@ -155,8 +158,6 @@ class Guest:
         self.files_allowed = True
         self.local_allowed = True
         self.desired = False
-        self.boot_enabled = False
-        self.boot_id = 0
         self.api = 37
         self.doze_state = "IDLE"
         self.pending_link = ""
@@ -173,7 +174,7 @@ class Guest:
                 return subject.APPLICATION_ID + "/.MainActivity"
             return "com.android.browser/.MainActivity" if self.browser else "No activity found"
         if args[:4] == ("shell", "dumpsys", "activity", "activities"):
-            return "mResumedActivity: com.android.browser/.MainActivity"
+            return "topResumedActivity=ActivityRecord{abc u0 com.android.browser/.MainActivity t1}"
         if args[:3] == ("shell", "am", "start") and "-d" in args:
             import shlex
             link = shlex.split(args[args.index("-d") + 1])[0]
@@ -182,17 +183,10 @@ class Guest:
             self.pending_error = "" if self.pending_link else "Unsupported or malformed eD2K file link"
             if self.intent_autostart:
                 self.running = True
-        if args == ("reboot",):
-            self.boot_id += 1
-            self.running = self.desired and self.boot_enabled
         if args == ("shell", "wm", "size"):
             return "Physical size: 1080x1920"
         if args == ("shell", "getprop", "ro.build.version.sdk"):
             return str(self.api)
-        if args == ("shell", "getprop", "sys.boot_completed"):
-            return "1"
-        if args == ("shell", "cat", "/proc/sys/kernel/random/boot_id"):
-            return str(self.boot_id)
         if args == ("shell", "dumpsys", "deviceidle", "get", "deep"):
             return self.doze_state
         if args == ("shell", "dumpsys", "power"):
@@ -217,8 +211,7 @@ class Guest:
             state = "Running" if self.running else "Stopped"
             return ('<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="' + state
                     + '"/><node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.key
-                    + '"/><node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" bounds="[400,500][500,600]" checked="'
-                    + str(self.boot_enabled).lower() + '"/>'
+                    + '"/>'
                     '<node resource-id="org.emulebb.android:id/pending_link" text="' + self.pending_link + '"/>'
                     '<node resource-id="org.emulebb.android:id/pending_link_error" text="' + self.pending_error + '"/>'
                     '<node resource-id="org.emulebb.android:id/open_webui" enabled="true" bounds="[600,500][700,600]"/>'
@@ -226,9 +219,7 @@ class Guest:
                     '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,500][300,600]"/>'
                     '</hierarchy>')
         if args[:3] == ("shell", "input", "tap"):
-            if args[3] == "450":
-                self.boot_enabled = not self.boot_enabled
-            elif args[3] == "650":
+            if args[3] == "650":
                 self.pending_link = ""
             else:
                 self.running = self.desired = args[3] == "50" and self.files_allowed and self.local_allowed
@@ -265,6 +256,45 @@ def guest(tmp_path, monkeypatch):
     return peer, admitted
 
 
+def test_transient_delayed_restart_after_task_manager_stop_cannot_pass_stopped_observation(tmp_path, monkeypatch):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    clock, state = [0.0], {'taskStopped': False, 'reopened': None, 'responded': False}
+    monkeypatch.setattr(subject.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(subject.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    def command(*args, **kwargs):
+        result = peer.command(*args, **kwargs)
+        if args[2:6] == ('shell', 'cmd', 'activity', 'stop-app'):
+            state['taskStopped'] = True
+        if state['taskStopped'] and args[2:5] == ('shell', 'am', 'start'):
+            state['reopened'] = clock[0]
+        return result
+    def request(*args, **kwargs):
+        if state['reopened'] is not None and clock[0] - state['reopened'] >= 10 and not state['responded']:
+            state['responded'] = True
+            return 200, b'{}'
+        return peer.request(*args, **kwargs)
+    monkeypatch.setattr(subject, '_request', request)
+    with pytest.raises(RuntimeError, match='listener running'):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / 'apk-lifecycle.json').read_text())
+    assert result['failure']['stage'] == 'task-manager-stop'
+    assert 'task-manager-stop-remains-stopped' not in {case['name'] for case in result['cases']}
+
+
+def test_home_must_leave_app_foreground_before_screen_off(tmp_path, monkeypatch):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    def command(*args, **kwargs):
+        result = peer.command(*args, **kwargs)
+        if args[2:] == ('shell', 'dumpsys', 'activity', 'activities'):
+            return 'topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}'
+        return result
+    with pytest.raises(RuntimeError, match='activity did not leave'):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / 'apk-lifecycle.json').read_text())
+    assert result['failure']['stage'] == 'screen-off-doze' and 'endurance' not in result
+    assert not any(call[2:] == ('shell', 'input', 'keyevent', 'KEYCODE_SLEEP') for call in peer.calls)
+
+
 @pytest.mark.parametrize("secure", [False, True])
 def test_initial_owned_guest_wakes_and_dismisses_only_insecure_keyguard_before_ui_read(tmp_path, monkeypatch, secure):
     peer, admitted = guest(tmp_path, monkeypatch)
@@ -273,8 +303,6 @@ def test_initial_owned_guest_wakes_and_dismisses_only_insecure_keyguard_before_u
     def command(*arguments, **kwargs):
         args = arguments[2:]
         result = peer.command(*arguments, **kwargs)
-        if args == ("reboot",):
-            display.update(awake=False, locked=True)
         if args == ("shell", "input", "keyevent", "KEYCODE_WAKEUP"):
             display["awake"] = True
         if args == ("shell", "wm", "dismiss-keyguard"):
@@ -320,8 +348,8 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
         "all-files-denial-and-runtime-revocation"]
     if api == 37:
         expected.append("android17-local-network-denial-and-revocation")
-    expected.extend(["enabled-boot-resume", "explicit-stop-prevents-boot-resume",
-                     "task-manager-stop-prevents-boot-resume", "force-stop-prevents-boot-resume",
+    expected.extend(["explicit-stop-remains-stopped",
+                     "task-manager-stop-remains-stopped", "force-stop-remains-stopped",
                      "restart", "screen-off-doze-observation"])
     assert [case["name"] for case in result["cases"]] == expected
     assert set(expected) == subject.required_apk_cases(api) - {
@@ -332,6 +360,8 @@ def test_lifecycle_uses_production_controls_and_persists_no_credentials(tmp_path
     assert result["endurance"]["samples"] == 3
     assert result["endurance"]["minimumSamples"] == subject.MIN_SCREEN_OFF_SAMPLES == 3
     assert result["endurance"]["minimumDwellSeconds"] == subject.MIN_SCREEN_OFF_DWELL_SECONDS == 60
+    assert result["endurance"]["activityClosed"] is True
+    assert not any(call[2:] == ("reboot",) for call in peer.calls)
     assert result["endurance"]["observedSeconds"] == 60
     assert result["endurance"]["over24Hours"] is False
     assert peer.running is False
@@ -525,7 +555,7 @@ def test_scrollable_production_ui_does_not_require_controls_in_one_viewport(tmp_
             viewport[0] = 1 if int(args[8]) < int(args[6]) else 0
         if args[2:4] == ("shell", "cat") and args[4] != "/proc/sys/kernel/random/boot_id":
             root = ET.fromstring(raw)
-            visible = {"service_status", "api_key"} if viewport[0] == 0 else {"start_service", "stop_service", "resume_on_boot"}
+            visible = {"service_status", "api_key"} if viewport[0] == 0 else {"start_service", "stop_service"}
             for node in list(root):
                 if node.get("resource-id", "").split("/")[-1] not in visible:
                     root.remove(node)
@@ -682,8 +712,7 @@ def test_ui_observation_retains_only_known_controls_booleans_and_service_phase(p
     ui.inspect()
     observed = ui.setup_observation
     assert observed["controls"] == {"service_status": {"present": True, "enabled": False},
-                                    "api_key": {"present": True, "enabled": True},
-                                    "resume_on_boot": {"present": False, "enabled": False}}
+                                    "api_key": {"present": True, "enabled": True}}
     assert observed.get("servicePhase") == (phase if phase in subject.SETUP_SERVICE_PHASES else None)
     assert "synthetic-private" not in json.dumps(observed)
 
@@ -693,7 +722,7 @@ def test_ui_observation_retains_only_known_controls_booleans_and_service_phase(p
     (subject.DeviceUiUnavailable("device-locked"), "device-locked"),
     (subject.DeviceUiUnavailable("app-not-visible"), "app-not-visible"),
     (RuntimeError("APK required control remains disabled: api_key"), "control-disabled"),
-    (RuntimeError("APK required control is not reachable: resume_on_boot"), "control-unreachable"),
+    (RuntimeError("APK required control is not reachable: api_key"), "control-unreachable"),
     (RuntimeError("APK did not reach expected service state: Running"), "expected-state-not-reached"),
     (RuntimeError("APK UI must expose a valid generated API key"), "invalid-generated-key"),
     (RuntimeError("synthetic-private-error"), "other"),
@@ -707,7 +736,6 @@ def test_lifecycle_failure_codes_are_closed_and_never_copy_exception_text(error,
 @pytest.mark.parametrize("fault,stage,code", [
     ("disabled-key", "read-api-key", "control-disabled"),
     ("invalid-key", "validate-api-key", "invalid-generated-key"),
-    ("boot-enabled", "validate-boot-resume", "unexpected-boot-default"),
     ("failed-state", "wait-stopped", "expected-state-not-reached"),
 ])
 def test_fresh_ui_admission_failure_keeps_actual_stage_and_safe_observation(tmp_path, monkeypatch, fault, stage, code):
@@ -724,8 +752,6 @@ def test_fresh_ui_admission_failure_keeps_actual_stage_and_safe_observation(tmp_
                     node.set("enabled", "false")
                 elif name == "api_key" and fault == "invalid-key":
                     node.set("text", "bad")
-                elif name == "resume_on_boot" and fault == "boot-enabled":
-                    node.set("checked", "true")
                 elif name == "service_status" and fault == "failed-state":
                     node.set("text", "Failed")
             return ET.tostring(root, encoding="unicode")
@@ -841,110 +867,6 @@ def test_each_hierarchy_requires_a_fresh_owned_dump_before_controls_can_authoriz
     assert "synthetic-private" not in json.dumps(ui.setup_observation)
 
 
-def boot_dumps():
-    """Use AOSP-targeted dump shapes; synthetic private values must stay transient."""
-    private = "synthetic-private-diagnostic-text"
-    return {
-        ("am", "get-started-user-state", "0"): "RUNNING_UNLOCKED",
-        ("dumpsys", "package", subject.APPLICATION_ID): (
-            "Packages:\n  Package [org.emulebb.android] (owned):\n"
-            "    User 0: installed=true hidden=false stopped=false\n"
-            "      runtime permissions:\n"
-            "        android.permission.POST_NOTIFICATIONS: granted=true, flags=[ USER_SET ]\n"
-            "        android.permission.ACCESS_LOCAL_NETWORK: granted=false, flags=[ USER_SET ]\n"),
-        ("cmd", "package", "query-receivers", "--components", "--user", "0", "-a",
-         "android.intent.action.BOOT_COMPLETED", "-p", subject.APPLICATION_ID): "org.emulebb.android/.BootReceiver\n",
-        ("dumpsys", "activity", "services", subject.APPLICATION_ID): (
-            "ACTIVITY MANAGER SERVICES (dumpsys activity services)\n"
-            "  * ServiceRecord{123 u0 org.emulebb.android/.DaemonService}\n"
-            "    isForeground=false startRequested=true\n    " + private),
-        ("appops", "get", "--user", "0", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE"): "MANAGE_EXTERNAL_STORAGE: allow; " + private,
-        ("dumpsys", "deviceidle", "whitelist"): "system,com.android.example,1000\nuser,org.emulebb.android,10123\n",
-        ("am", "get-bg-restriction-level", "--user", "0", subject.APPLICATION_ID): "background_restricted",
-        ("dumpsys", "activity", "exit-info", subject.APPLICATION_ID): (
-            "ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)\n"
-            "  package: org.emulebb.android\n"
-            "    ApplicationExitInfo #0:\n"
-            "      timestamp=2026-01-02 03:04:05.006 pid=41 realUid=10123 packageUid=10123 definingUid=10123 user=0\n"
-            "      process=org.emulebb.android:daemon reason=8 (PERMISSION CHANGE) subreason=0 (UNKNOWN) status=0\n"
-            "      description=" + private + " trace=" + private + "\n"
-            "    ApplicationExitInfo #1:\n"
-            "      timestamp=2026-01-01 03:04:05.006 pid=42 realUid=10123 packageUid=10123 definingUid=10123 user=0\n"
-            "      process=org.emulebb.android:daemon reason=10 (USER REQUESTED) subreason=0 (UNKNOWN) status=0\n"
-            "    ApplicationExitInfo #2:\n"
-            "      timestamp=2026-01-03 03:04:05.006 pid=43 realUid=10123 packageUid=10123 definingUid=10123 user=0\n"
-            "      process=org.emulebb.android reason=4 (CRASH) subreason=0 (UNKNOWN) status=0\n"),
-    }
-
-
-def test_boot_timeout_facts_select_exact_owned_process_user_and_only_closed_values():
-    documents = boot_dumps()
-    facts = subject._boot_timeout_facts(lambda *args: documents[args], api=37)
-    assert facts == {"userUnlocked": True, "packageStopped": False, "notificationsGranted": True,
-                     "localNetworkGranted": False, "bootReceiverResolved": True, "servicePresent": True,
-                     "serviceForeground": False, "serviceStartRequested": True, "allFilesAllowed": True,
-                     "dozeWhitelisted": True, "backgroundRestricted": True, "latestDaemonExitReason": 8}
-    assert "synthetic-private" not in json.dumps(facts)
-
-
-@pytest.mark.parametrize("fault", ["unknown", "oversize", "query-failed"])
-def test_boot_timeout_unknown_or_unavailable_queries_are_omitted_not_false(fault):
-    def read(*args):
-        if fault == "query-failed":
-            raise RuntimeError("synthetic-private-query-error")
-        return "synthetic-private-unknown" if fault == "unknown" else "x" * 65537
-    assert subject._boot_timeout_facts(read, api=37) == {}
-
-
-def test_boot_timeout_foreign_ambiguous_and_unrecognized_facts_cannot_become_owned_false_flags():
-    documents = boot_dumps()
-    documents[("dumpsys", "package", subject.APPLICATION_ID)] = (
-        "  Package [org.emulebb.android] (owned):\n    User 10: installed=true stopped=true\n"
-        "  Package [org.emulebb.other] (foreign):\n    User 0: installed=true stopped=false\n")
-    documents[("dumpsys", "activity", "services", subject.APPLICATION_ID)] = (
-        "ACTIVITY MANAGER SERVICES\n  * ServiceRecord{123 u0 org.emulebb.other/.DaemonService}\n"
-        "    isForeground=false startRequested=false\n")
-    documents[("dumpsys", "activity", "exit-info", subject.APPLICATION_ID)] = documents[
-        ("dumpsys", "activity", "exit-info", subject.APPLICATION_ID)].replace("user=0", "user=10")
-    documents[("appops", "get", "--user", "0", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")] = (
-        "MANAGE_EXTERNAL_STORAGE: allow\nMANAGE_EXTERNAL_STORAGE: deny\n")
-    documents[("dumpsys", "deviceidle", "whitelist")] = "unrecognized whitelist format"
-    facts = subject._boot_timeout_facts(lambda *args: documents[args], api=37)
-    assert not {"packageStopped", "notificationsGranted", "localNetworkGranted", "servicePresent",
-                "serviceForeground", "serviceStartRequested", "latestDaemonExitReason", "allFilesAllowed",
-                "dozeWhitelisted"} & set(facts)
-
-
-@pytest.mark.parametrize('document,expected', [
-    ('Uid mode: MANAGE_EXTERNAL_STORAGE: deny\nMANAGE_EXTERNAL_STORAGE: allow; time=private\n',
-     {'uidMode': 'deny', 'packageMode': 'allow', 'defaultMode': 'unavailable'}),
-    ('No operations.\nDefault mode: default\n',
-     {'uidMode': 'unavailable', 'packageMode': 'unavailable', 'defaultMode': 'default'}),
-    ('Uid mode: MANAGE_EXTERNAL_STORAGE: allow\nUid mode: MANAGE_EXTERNAL_STORAGE: deny\n',
-     {'uidMode': 'unavailable', 'packageMode': 'unavailable', 'defaultMode': 'unavailable'}),
-    ('MANAGE_EXTERNAL_STORAGE: allow\nMANAGE_EXTERNAL_STORAGE: \n',
-     {'uidMode': 'unavailable', 'packageMode': 'unavailable', 'defaultMode': 'unavailable'}),
-])
-def test_all_files_modes_keep_uid_and_package_distinct(document, expected):
-    assert subject._all_files_modes(lambda *args: document) == expected
-
-
-@pytest.mark.parametrize('text,channel,duplicate,expected', [
-    ('Waiting for network', 'daemon', False, 'waiting-for-network'),
-    ('Running', 'daemon', False, 'running'),
-    ('private', 'daemon', False, 'unavailable'),
-    ('Waiting for network', 'foreign', False, 'unavailable'),
-    ('Waiting for network', 'daemon', True, 'unavailable'),
-])
-def test_service_notification_is_exact_owned_closed_state(text, channel, duplicate, expected):
-    block = ("  NotificationRecord(0x123: pkg=org.emulebb.android user=UserHandle{0} id=1 tag=null)\n"
-             "    effectiveNotificationChannel=NotificationChannel{mId='" + channel + "'}\n"
-             '    android.text=String (' + text + ')\n')
-    assert subject._service_notification_state(lambda *args: block + (block if duplicate else '')) == expected
-    assert subject._service_notification_state(lambda *args: block.replace('tag=null', 'tag=foreign')) == 'unavailable'
-    assert subject._service_notification_state(lambda *args: block.replace('id=1 ', 'id=10 ')) == 'unavailable'
-
-
 def test_initial_visibility_facts_do_not_retain_unrelated_values():
     docs = {('dumpsys', 'activity', 'activities'): 'topResumedActivity=ActivityRecord{a u0 org.emulebb.android/.MainActivity t1}\n',
             ('dumpsys', 'window', 'windows'): 'Window #0 Window{a u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n',
@@ -961,75 +883,7 @@ def test_initial_visibility_facts_do_not_retain_unrelated_values():
     assert subject._initial_visibility_facts(lambda *args: docs.get(args, ''))['window'] == 'absent'
 
 
-@pytest.mark.parametrize("collector_fails", [False, True])
-@pytest.mark.parametrize("main_starts_daemon", [False, True])
-@pytest.mark.parametrize("ui_fails", [False, True])
-def test_boot_timeout_prelaunch_facts_and_post_failure_main_cannot_turn_automatic_failure_into_pass(tmp_path, monkeypatch, collector_fails, main_starts_daemon, ui_fails):
-    peer, admitted = guest(tmp_path, monkeypatch)
-    peer.api = 36
-    documents = boot_dumps()
-    documents[("dumpsys", "activity", "services", subject.APPLICATION_ID)] = "ACTIVITY MANAGER SERVICES\n  (nothing)\n"
-
-    def command(*args, **kwargs):
-        raw = peer.command(*args, **kwargs)
-        if args[2:] == ("reboot",):
-            peer.running = False
-        if peer.boot_id > 0 and args[2:5] == ("shell", "am", "start"):
-            peer.running = main_starts_daemon
-        if args[2:5] == ("shell", "am", "force-stop"):
-            raise RuntimeError("synthetic-private-cleanup-error")
-        if peer.boot_id > 0 and args[2:3] == ("shell",) and args[3:] in documents:
-            return documents[args[3:]]
-        return raw
-
-    if collector_fails:
-        def failed_collector(*args, **kwargs):
-            raise RuntimeError("synthetic-private-collector-error")
-        monkeypatch.setattr(subject, "_boot_timeout_facts", failed_collector)
-    if ui_fails:
-        def failed_ui(*args, **kwargs):
-            raise RuntimeError("synthetic-private-ui-error")
-        monkeypatch.setattr(subject, "_post_failure_ui", failed_ui)
-    with pytest.raises(RuntimeError, match="did not resume after an enabled reboot"):
-        subject.exercise(command, admitted, report_dir=tmp_path)
-    result = json.loads((tmp_path / "apk-lifecycle.json").read_text())
-    failure = result["failure"]
-    assert failure["stage"] == "enabled-reboot-authentication" and failure["code"] == "boot-resume-timeout"
-    assert failure["servicePhase"] == "Running", "pre-reboot cached UI must remain distinct from post-failure inspection"
-    assert failure["boot"]["restAttempts"] == failure["boot"]["restConnectionFailures"] == 91
-    assert failure["boot"]["restHttpResponses"] == 0
-    assert "lastHttpStatus" not in failure["boot"]
-    if collector_fails:
-        assert failure["boot"]["serviceNotificationState"] == "unavailable"
-    else:
-        assert failure["boot"]["userUnlocked"] is True
-        assert failure["boot"]["servicePresent"] is False
-        query = next(index for index, args in enumerate(peer.calls) if args[2:] == ("shell", "am", "get-started-user-state", "0"))
-        cleanup = next(index for index, args in enumerate(peer.calls) if args[2:5] == ("shell", "am", "force-stop"))
-        launch = next(index for index, args in enumerate(peer.calls[query:], query) if args[2:5] == ("shell", "am", "start"))
-        assert query < launch < cleanup
-    reboot = next(index for index, args in enumerate(peer.calls) if args[2:] == ("reboot",))
-    mode_query = ("shell", "appops", "get", "--user", "0", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")
-    queries = [index for index, args in enumerate(peer.calls) if args[2:] == mode_query]
-    assert any(index < reboot for index in queries) and any(index > reboot for index in queries)
-    notification = next(index for index, args in enumerate(peer.calls) if args[2:] == ("shell", "dumpsys", "notification", "--noredact"))
-    launch = next(index for index, args in enumerate(peer.calls[reboot:], reboot) if args[2:5] == ("shell", "am", "start"))
-    assert reboot < notification < launch
-    assert len([args for args in peer.calls[reboot:] if args[2:5] == ("shell", "am", "start")]) == 1
-    assert not any(args[2:5] == ("shell", "input", "tap") for args in peer.calls[reboot:])
-    if ui_fails:
-        assert "postFailureUi" not in failure
-    else:
-        assert failure["postFailureUi"] == {"servicePhase": "Running" if main_starts_daemon else "Stopped",
-                                            "resumeOnBoot": True, "errorCategory": "unknown"}
-    assert result["status"] == "failed" and result["runtimeExecution"] == "executed"
-    assert len(result["cases"]) == 7 and "enabled-boot-resume" not in {case["name"] for case in result["cases"]}
-    assert result["cleanupErrors"] == [{"action": "force-stop", "errorType": "RuntimeError"}]
-    assert "synthetic-private" not in json.dumps(result) and peer.key not in json.dumps(result)
-
-
 @pytest.mark.parametrize("message,category", [
-    ("Android blocked automatic service startup. Open the app and check its battery settings.", "boot-start-blocked"),
     ("Android refused the foreground service: ForegroundServiceStartNotAllowedException", "foreground-promotion-denied"),
     ("All-files access was revoked; stopping the daemon", "required-files-permission"),
     ("Local-network permission is required. Open the app to grant it.", "required-local-network-permission"),
@@ -1039,7 +893,7 @@ def test_boot_timeout_prelaunch_facts_and_post_failure_main_cannot_turn_automati
 ])
 def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(message, category):
     from types import SimpleNamespace
-    ui = SimpleNamespace(find=lambda name, **kwargs: {"checked": "true"} if name == "resume_on_boot" else {"text": "Stopped"},
+    ui = SimpleNamespace(find=lambda name, **kwargs: {"text": "Stopped"},
         elements=lambda: [{"package": subject.APPLICATION_ID, "class": "android.widget.TextView",
                            "resource-id": subject.APPLICATION_ID + ":id/service_status", "text": "Stopped"},
                           {"package": subject.APPLICATION_ID, "class": "android.widget.TextView", "text": message},
@@ -1047,7 +901,7 @@ def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(m
                           {"package": "com.android.other", "class": "android.widget.TextView",
                            "text": "All-files access was revoked; stopping the daemon"}])
     facts = subject._post_failure_ui(ui)
-    assert facts == {"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": category}
+    assert facts == ({"errorCategory": "unknown"} if category == "unknown" else {"servicePhase": "Stopped", "errorCategory": category})
     assert category in subject.APK_POST_FAILURE_ERROR_CATEGORIES
     assert "synthetic-private" not in json.dumps(facts)
 
@@ -1148,31 +1002,10 @@ def test_post_failure_error_context_cannot_come_from_key_help_or_another_window(
         nodes += [status, error]
     elif fault == "missing-status":
         nodes = [error]
-    ui = SimpleNamespace(find=lambda name, **kwargs: {"checked": "true"} if name == "resume_on_boot" else {"text": "Stopped"},
+    ui = SimpleNamespace(find=lambda name, **kwargs: {"text": "Stopped"},
                          elements=lambda: nodes)
     facts = subject._post_failure_ui(ui)
-    assert facts == {"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": "unknown"}
-
-
-@pytest.mark.parametrize("reply_arrives", [False, True])
-def test_post_failure_ui_does_not_report_unconfirmed_initial_stopped_unchecked_defaults(monkeypatch, reply_arrives):
-    from types import SimpleNamespace
-    polls = [0]
-    sleeps = []
-
-    def find(name, *, enabled=False):
-        if name == "resume_on_boot":
-            assert enabled is True
-            polls[0] += 1
-            return {"checked": "true" if reply_arrives and polls[0] == 3 else "false"}
-        return {"text": "Stopped"}
-
-    ui = SimpleNamespace(find=find, elements=lambda: [])
-    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
-    facts = subject._post_failure_ui(ui)
-    assert polls[0] == 3 and sleeps == [1, 1]
-    assert facts == ({"servicePhase": "Stopped", "resumeOnBoot": True, "errorCategory": "unknown"}
-                     if reply_arrives else {"errorCategory": "unknown"})
+    assert facts == {"errorCategory": "unknown"}
 
 
 @pytest.mark.parametrize("observer_fails", [False, True])
@@ -1213,7 +1046,7 @@ def test_initial_failed_service_uses_existing_ui_error_without_relaunch_or_repla
     if observer_fails:
         assert "postFailureUi" not in failure
     else:
-        assert failure["postFailureUi"] == {"servicePhase": "Failed", "resumeOnBoot": False, "errorCategory": "incoming-storage"}
+        assert failure["postFailureUi"] == {"servicePhase": "Failed", "errorCategory": "incoming-storage"}
     assert len([args for args in peer.calls if args[2:5] == ("shell", "am", "start")]) == 1
     assert [args[2:] for args in peer.calls if args[2:5] == ("shell", "input", "tap")] == [("shell", "input", "tap", "50", "550")]
     assert "synthetic-private" not in json.dumps(result) and peer.key not in json.dumps(result)

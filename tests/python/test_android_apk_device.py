@@ -731,7 +731,6 @@ class Phone:
                     '<node resource-id="org.emulebb.android:id/app_version" text="eMuleBB ' + self.version_name + '" bounds="[0,100][700,180]"/>'
                     '<node resource-id="org.emulebb.android:id/api_key" enabled="true" text="' + self.api_key + '"/>'
                     '<node resource-id="org.emulebb.android:id/bind_addr" enabled="true" text="127.0.0.1:20017"/>'
-                    '<node resource-id="org.emulebb.android:id/resume_on_boot" enabled="true" checked="false"/>'
                     '<node resource-id="org.emulebb.android:id/start_service" enabled="true" bounds="[0,500][100,600]"/>'
                     '<node resource-id="org.emulebb.android:id/stop_service" enabled="true" bounds="[200,500][300,600]"/>'
                     '<node resource-id="org.emulebb.android:id/grant_all_files_access" enabled="true" bounds="[400,500][500,600]"/>'

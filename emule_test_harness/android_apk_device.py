@@ -948,9 +948,8 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             if match is None or int(match[1]) > 65535:
                 raise RuntimeError("Owned update cannot verify the previous REST listener")
             remote_port = int(match[1])
-            previous_bootstrap = {"bind": bind, "key": ui.find("api_key", enabled=True).get("text", ""),
-                                  "boot": ui.find("resume_on_boot").get("checked")}
-            if len(previous_bootstrap["key"]) < 32 or previous_bootstrap["boot"] not in {"true", "false"}:
+            previous_bootstrap = {"bind": bind, "key": ui.find("api_key", enabled=True).get("text", "")}
+            if len(previous_bootstrap["key"]) < 32:
                 raise RuntimeError("Owned update cannot inspect its existing bootstrap preferences")
             forwarded = command(*prefix, "forward", "--no-rebind", "tcp:0", f"tcp:{remote_port}")
             if re.fullmatch(r"[1-9][0-9]*", forwarded) is None or int(forwarded) > 65535:
@@ -1005,9 +1004,8 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             value["phase"] = "verify-owned-update-bootstrap-preservation"
             open_main()
             if (ui.find("bind_addr", enabled=True).get("text") != previous_bootstrap["bind"]
-                    or ui.find("api_key", enabled=True).get("text") != previous_bootstrap["key"]
-                    or ui.find("resume_on_boot").get("checked") != previous_bootstrap["boot"]):
-                raise RuntimeError("Owned compatible update changed bootstrap or reboot preferences")
+                    or ui.find("api_key", enabled=True).get("text") != previous_bootstrap["key"]):
+                raise RuntimeError("Owned compatible update changed bootstrap preferences")
             value["ownedCompatibleUpdate"]["bootstrapPreferencesPreserved"] = True
         if configured_storage is not None:
             if update_approval is None:

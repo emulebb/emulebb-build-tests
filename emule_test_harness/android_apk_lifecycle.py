@@ -27,32 +27,30 @@ APK_LIFECYCLE_STAGES = frozenset({
     "notification-restoration", "all-files-denial", "all-files-revocation",
     "all-files-restoration-grant", "all-files-restoration-reopen", "all-files-restoration-start",
     "all-files-restoration-wait-running", "all-files-restoration-authentication",
-    "local-network-revocation", "local-network-restoration", "enable-boot-resume",
-    "enabled-reboot", "enabled-reboot-authentication", "explicit-stop-reboot",
-    "task-manager-stop-reboot", "force-stop-reboot", "restart", "local-transfer",
+    "local-network-revocation", "local-network-restoration", "explicit-stop",
+    "task-manager-stop", "force-stop", "restart", "local-transfer",
     "file-link-intents", "screen-off-doze", "case-coverage",
     "all-files-access", "notification-permission", "android-api", "local-network-permission",
     "battery-exemption", "wake-display", "dismiss-keyguard", "launch-main", "wait-stopped",
-    "read-api-key", "validate-api-key", "read-boot-resume", "validate-boot-resume",
+    "read-api-key", "validate-api-key",
 })
 APK_LIFECYCLE_FAILURE_CODES = frozenset({
     "adb-command-failed", "command-timeout", "device-locked", "app-not-visible",
     "ui-too-large", "ui-malformed", "ui-ambiguous", "display-size-unavailable",
     "control-unreachable", "control-disabled", "control-invalid-bounds", "control-unsafe-bounds",
     "expected-state-not-reached",
-    "invalid-generated-key", "unexpected-boot-default", "listener-still-running",
-    "rest-authentication-failed", "boot-resume-not-retained", "reboot-incomplete",
-    "boot-resume-timeout", "connection-error", "http-error", "other",
+    "invalid-generated-key", "listener-still-running",
+    "rest-authentication-failed", "connection-error", "http-error", "other",
 })
 SETUP_SERVICE_PHASES = frozenset({"Stopped", "Starting", "Running", "Stopping", "Failed"})
-SETUP_CONTROL_NAMES = frozenset({"service_status", "api_key", "resume_on_boot"})
+SETUP_CONTROL_NAMES = frozenset({"service_status", "api_key"})
 APK_NAVIGATION_CONTROLS = frozenset({
-    "service_status", "api_key", "resume_on_boot", "start_service", "stop_service", "open_webui",
+    "service_status", "api_key", "start_service", "stop_service", "open_webui",
     "pending_link", "pending_link_error", "app_version", "bind_addr", "save_settings",
     "grant_all_files_access", "allow_notifications", "allow_local_network", "share_diagnostics",
 })
 APK_POST_FAILURE_ERROR_CATEGORIES = frozenset({
-    "boot-start-blocked", "foreground-promotion-denied", "required-files-permission",
+    "foreground-promotion-denied", "required-files-permission",
     "required-local-network-permission", "recovery-budget-blocked", "unknown",
     "native-library-unavailable", "bootstrap-unavailable", "payload-storage-unavailable",
     "webui-assets-invalid", "lifecycle-state-write-failed", "native-runtime-failed",
@@ -76,8 +74,8 @@ FILE_LINK_BROWSER_REQUIRED_CHECKS = frozenset({
 _APK_BASE_CASES = frozenset({
     "installed-apk-identity", "fresh-setup", "authenticated-source-bound-readiness", "bundled-webui",
     "graceful-stop", "notification-denied-service-start", "all-files-denial-and-runtime-revocation",
-    "enabled-boot-resume", "explicit-stop-prevents-boot-resume", "task-manager-stop-prevents-boot-resume",
-    "force-stop-prevents-boot-resume", "restart", "local-transfer-and-delivery-collision",
+    "explicit-stop-remains-stopped", "task-manager-stop-remains-stopped",
+    "force-stop-remains-stopped", "restart", "local-transfer-and-delivery-collision",
     "completed-delivery-survives-restart", "file-link-intents-and-webui-confirmation", "screen-off-doze-observation",
 })
 
@@ -190,12 +188,8 @@ def _lifecycle_failure(error: Exception, stage: str, observation: dict) -> dict:
         "Cannot determine owned Android display dimensions": "display-size-unavailable",
         "APK did not reach expected service state: Stopped": "expected-state-not-reached",
         "APK UI must expose a valid generated API key": "invalid-generated-key",
-        "APK boot resume must initially be disabled": "unexpected-boot-default",
         "APK Stop left the REST listener running": "listener-still-running",
         "APK authenticated REST failed": "rest-authentication-failed",
-        "APK boot resume setting was not retained": "boot-resume-not-retained",
-        "APK reboot proof did not observe a fresh unlocked Android boot": "reboot-incomplete",
-        "APK did not resume after an enabled reboot": "boot-resume-timeout",
     }
     code = messages.get(str(error), "other")
     if isinstance(error, DeviceUiUnavailable) and error.reason in {"device-locked", "app-not-visible"}:
@@ -240,7 +234,6 @@ def _post_failure_error_category(message: str) -> str:
     persisted last-error has no boot/session timestamp.
     """
     exact = {
-        "boot-start-blocked": {"Android blocked automatic service startup. Open the app and check its battery settings."},
         "required-files-permission": {"All-files access is required. Open the app to grant it.",
             "All-files access was revoked; stopping the daemon", "Grant all-files access before starting"},
         "required-local-network-permission": {"Local-network permission is required. Open the app to grant it.",
@@ -251,7 +244,7 @@ def _post_failure_error_category(message: str) -> str:
         "payload-storage-unavailable": {"Payload storage is unavailable"},
         "webui-assets-invalid": {"Cannot create WebUI directory", "Packaged WebUI is incomplete",
             "Missing packaged WebUI", "Cannot create WebUI assets"},
-        "lifecycle-state-write-failed": {"Cannot save reboot preference", "Cannot persist explicit service start", "Cannot persist service state"},
+        "lifecycle-state-write-failed": {"Cannot persist explicit service start", "Cannot persist service state"},
         "native-runtime-failed": {"Service startup failed", "Native runtime failed", "native runtime failed"},
         "native-status-failed": {"Cannot inspect native runtime"},
         "native-stop-failed": {"Native Stop failed", "Native Stop failed. Use Android app settings to force-stop eMuleBB.",
@@ -327,9 +320,8 @@ def _post_failure_error_category(message: str) -> str:
 
 
 def _post_failure_ui(ui) -> dict:
-    """Read bound production UI only after failed automatic boot, never press Start."""
+    """Read a closed error classification from the existing bound production UI."""
     for attempt in range(3):
-        boot = ui.find("resume_on_boot", enabled=True).get("checked")
         phase = ui.find("service_status").get("text")
         nodes = ui.elements()
         status_indices = [index for index, node in enumerate(nodes) if node.get("resource-id") == APPLICATION_ID + ":id/service_status"]
@@ -341,39 +333,15 @@ def _post_failure_ui(ui) -> dict:
             if (error.get("package") == APPLICATION_ID and error.get("class") == "android.widget.TextView"
                     and not error.get("resource-id")):
                 category = _post_failure_error_category(error.get("text", ""))
-        # WHY: setup can enable controls between Binder connection and STATUS.
-        # Initial Stopped/unchecked values alone cannot prove a service reply.
-        # Never report those defaults as lost persisted state without a positive
-        # reply signature; failed automatic boot remains the original verdict.
-        if boot == "true" or phase in SETUP_SERVICE_PHASES - {"Stopped"} or category != "unknown":
+        # WHY: initial Stopped alone cannot prove a Binder STATUS reply.
+        if phase in SETUP_SERVICE_PHASES - {"Stopped"} or category != "unknown":
             facts = {"errorCategory": category}
-            if boot in {"true", "false"}:
-                facts["resumeOnBoot"] = boot == "true"
             if phase in SETUP_SERVICE_PHASES:
                 facts["servicePhase"] = phase
             return facts
         if attempt < 2:
             time.sleep(1)
     return {"errorCategory": "unknown"}
-
-
-def _all_files_modes(shell) -> dict:
-    """Classify separate AOSP UID, package and platform-default AppOps rows."""
-    facts = {name: "unavailable" for name in ("uidMode", "packageMode", "defaultMode")}
-    try:
-        document = shell("appops", "get", "--user", "0", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")
-        if not isinstance(document, str) or len(document.encode("utf-8")) > 65536:
-            return facts
-        for name, prefix in (("uidMode", r"Uid mode: MANAGE_EXTERNAL_STORAGE:"),
-                             ("packageMode", r"MANAGE_EXTERNAL_STORAGE:"),
-                             ("defaultMode", r"Default mode:")):
-            rows = re.findall(r"(?m)^[ \t]*" + prefix + r"([^\n]*)$", document)
-            match = re.match(r"^[ \t]*(allow|deny|ignore|default)(?:[ \t;]|$)", rows[0]) if len(rows) == 1 else None
-            if match:
-                facts[name] = match[1]
-    except Exception:
-        pass
-    return facts
 
 
 def _initial_visibility_facts(shell) -> dict:
@@ -400,118 +368,6 @@ def _initial_visibility_facts(shell) -> dict:
     values = re.findall(r"(?m)^\s*(?:mShowingLockscreen|mKeyguardShowing|showingAndNotOccluded)\s*[:=]\s*(true|false)\b", policy)
     if values and len(set(values)) == 1:
         facts["keyguard"] = "showing" if values[0] == "true" else "hidden"
-    return facts
-
-
-def _service_notification_state(shell) -> str:
-    """Classify only the owned daemon notification's exact source-owned text."""
-    try:
-        document = shell("dumpsys", "notification", "--noredact")
-        if not isinstance(document, str) or len(document.encode("utf-8")) > 1024**2:
-            return "unavailable"
-        blocks = re.split(r"(?m)^\s*NotificationRecord\(", document)[1:]
-        owned = [block for block in blocks if re.match(r"[^\n]*\bpkg=" + re.escape(APPLICATION_ID) + r"\s+user=UserHandle\{0\}\s+id=1\s+tag=null(?=\s|\))", block)]
-        if len(owned) != 1 or len(re.findall(r"(?m)^\s*effectiveNotificationChannel=NotificationChannel\{[^\n]*\bmId='daemon'", owned[0])) != 1:
-            return "unavailable"
-        texts = re.findall(r"(?m)^\s*android\.text=(?:String|SpannableString|CharSequence) \(([^\n]*)\)\s*$", owned[0])
-        states = {"Waiting for network": "waiting-for-network", "Starting": "starting", "Running": "running", "Stopping": "stopping", "Stopped": "stopped", "Failed": "failed"}
-        return states.get(texts[0], "unavailable") if len(texts) == 1 else "unavailable"
-    except Exception:
-        return "unavailable"
-
-
-def _boot_timeout_facts(shell, *, api: int) -> dict:
-    """Inspect the owned package after failed automatic resume, without launching it.
-
-    AOSP ActivityManagerShellCommand, ServiceRecord and ApplicationExitInfo own
-    these fixed formats. Unsupported, ambiguous or truncated facts are omitted.
-    Private system dump values are transient and never copied into the receipt.
-    """
-    from datetime import datetime
-    from .android_apk_device import runtime_permission_granted
-
-    def read(*arguments):
-        try:
-            value = shell(*arguments)
-            return value if isinstance(value, str) and len(value.encode("utf-8")) <= 65536 else None
-        except Exception:
-            return None
-
-    facts = {}
-    state = read("am", "get-started-user-state", "0")
-    if state in {"BOOTING", "RUNNING_LOCKED", "RUNNING_UNLOCKING", "RUNNING_UNLOCKED", "STOPPING", "SHUTDOWN"}:
-        facts["userUnlocked"] = state == "RUNNING_UNLOCKED"
-    package = read("dumpsys", "package", APPLICATION_ID)
-    if package is not None:
-        try:
-            facts["notificationsGranted"] = runtime_permission_granted(package, "android.permission.POST_NOTIFICATIONS")
-            if api >= 37:
-                facts["localNetworkGranted"] = runtime_permission_granted(package, "android.permission.ACCESS_LOCAL_NETWORK")
-        except Exception:
-            pass
-        lines = package.splitlines()
-        headers = [index for index, line in enumerate(lines)
-                   if re.match(r"\s*Package \[" + re.escape(APPLICATION_ID) + r"\]", line)]
-        if len(headers) == 1:
-            start = headers[0]
-            indent = len(lines[start]) - len(lines[start].lstrip())
-            end = next((index for index in range(start + 1, len(lines)) if lines[index].strip()
-                        and len(lines[index]) - len(lines[index].lstrip()) <= indent), len(lines))
-            stopped = re.findall(r"(?m)^\s*User 0:[^\n]*\binstalled=true\b[^\n]*\bstopped=(true|false)\b",
-                                 "\n".join(lines[start + 1:end]))
-            if len(stopped) == 1:
-                facts["packageStopped"] = stopped[0] == "true"
-    # AOSP --brief indents component lines; --components emits only components.
-    receiver = read("cmd", "package", "query-receivers", "--components", "--user", "0", "-a",
-                    "android.intent.action.BOOT_COMPLETED", "-p", APPLICATION_ID)
-    if receiver is not None:
-        components = re.findall(r"(?m)^" + re.escape(APPLICATION_ID) + r"/(?:\.BootReceiver|org\.emulebb\.android\.BootReceiver)\s*$", receiver)
-        if len(components) == 1:
-            facts["bootReceiverResolved"] = True
-        elif receiver.strip() == "No receivers found":
-            facts["bootReceiverResolved"] = False
-    services = read("dumpsys", "activity", "services", APPLICATION_ID)
-    if services is not None and "ACTIVITY MANAGER SERVICES" in services:
-        headers = re.findall(r"(?m)^\s*\* ServiceRecord\{[^\n]+", services)
-        own = [header for header in headers if re.search(r"\bu0 " + re.escape(APPLICATION_ID) + r"/\.DaemonService(?:\s|\})", header)]
-        if len(headers) == len(own) == 1:
-            facts["servicePresent"] = True
-            for token, field in (("isForeground", "serviceForeground"), ("startRequested", "serviceStartRequested")):
-                values = re.findall(r"\b" + token + r"=(true|false)\b", services)
-                if len(values) == 1:
-                    facts[field] = values[0] == "true"
-        elif not headers and re.search(r"(?m)^\s*\(nothing\)\s*$", services):
-            facts["servicePresent"] = False
-    files = read("appops", "get", "--user", "0", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")
-    if files is not None:
-        modes = re.findall(r"(?m)^\s*MANAGE_EXTERNAL_STORAGE:\s*(allow|deny|ignore|default)\b", files)
-        if len(modes) == 1:
-            facts["allFilesAllowed"] = modes[0] == "allow"
-    whitelist = read("dumpsys", "deviceidle", "whitelist")
-    if whitelist is not None:
-        rows = [line.strip().split(",") for line in whitelist.splitlines() if line.strip()]
-        if rows and all(len(row) == 3 and row[0] in {"user", "system", "system-excidle"}
-                        and re.fullmatch(r"[A-Za-z0-9_.]+", row[1]) and row[2].isdigit() for row in rows):
-            facts["dozeWhitelisted"] = any(row[1] == APPLICATION_ID for row in rows)
-    restriction = read("am", "get-bg-restriction-level", "--user", "0", APPLICATION_ID)
-    if restriction in {"unrestricted", "exempted", "adaptive_bucket", "restricted_bucket", "background_restricted", "hibernation"}:
-        facts["backgroundRestricted"] = restriction in {"background_restricted", "hibernation"}
-    exits = read("dumpsys", "activity", "exit-info", APPLICATION_ID)
-    if exits is not None and "ACTIVITY MANAGER PROCESS EXIT INFO" in exits:
-        records = []
-        for block in re.split(r"(?m)^\s*ApplicationExitInfo[^\n]*:\s*$", exits)[1:]:
-            match = re.search(r"(?m)^\s*process=" + re.escape(APPLICATION_ID) + r":daemon reason=(\d{1,2})\b", block)
-            timestamp = re.search(r"(?m)^\s*timestamp=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})[^\n]*\buser=0\s*$", block)
-            if match and timestamp:
-                try:
-                    records.append((datetime.fromisoformat(timestamp[1]), int(match[1])))
-                except ValueError:
-                    pass
-        if records:
-            latest = max(time for time, _ in records)
-            reasons = [reason for time, reason in records if time == latest]
-            if len(reasons) == 1 and 0 <= reasons[0] <= 16:
-                facts["latestDaemonExitReason"] = reasons[0]
     return facts
 
 
@@ -710,7 +566,6 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     port = None
     installed = False
     setup_stage = "install"
-    boot_observation = None
     initial_launch_result = "unavailable"
     post_failure_ui = None
     primary_ui_observation = None
@@ -721,8 +576,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     def shell(*args):
         return command(*PREFIX, "shell", *args)
 
-    def assert_listener_stopped(quiet_seconds=2):
-        deadline = time.monotonic() + 30
+    def assert_listener_stopped(quiet_seconds=2, *, fail_on_response=False):
+        deadline = time.monotonic() + max(30, quiet_seconds + 5)
         quiet_since = None
         while True:
             try:
@@ -733,6 +588,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 if time.monotonic() - quiet_since >= quiet_seconds:
                     return
             else:
+                if fail_on_response:
+                    raise RuntimeError("APK Stop left the REST listener running")
                 quiet_since = None
             if time.monotonic() >= deadline:
                 raise RuntimeError("APK Stop left the REST listener running")
@@ -753,39 +610,9 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             setup_stage = "dismiss-keyguard"
         shell("wm", "dismiss-keyguard")
 
-    def reboot(*, capture_modes=False):
-        previous = shell("cat", "/proc/sys/kernel/random/boot_id")
-        command(*PREFIX, "reboot")
-        deadline = time.monotonic() + 180
-        while True:
-            booted = command(*PREFIX, "shell", "getprop", "sys.boot_completed", check=False)
-            boot_id = command(*PREFIX, "shell", "cat", "/proc/sys/kernel/random/boot_id", check=False)
-            if booted == "1" and boot_id and boot_id != previous:
-                modes = _all_files_modes(shell) if capture_modes else None
-                prepare_fresh_guest_ui()
-                # ADB forwards are transport-owned and can disappear on reboot.
-                # This private server owns this exact port; never adopt a new one.
-                command(*PREFIX, "forward", "--remove", "tcp:" + str(port), check=False)
-                command(*PREFIX, "forward", "--no-rebind", "tcp:" + str(port), "tcp:20017")
-                return modes
-            if time.monotonic() >= deadline:
-                raise RuntimeError("APK reboot proof did not observe a fresh unlocked Android boot")
-            time.sleep(2)
-
     def authenticated():
         from .android_emulator import _app_identity
-        if boot_observation is not None:
-            boot_observation["restAttempts"] = min(1024, boot_observation["restAttempts"] + 1)
-        try:
-            status, raw = _request(port, "/api/v1/app", key)
-        except (OSError, http.client.HTTPException):
-            if boot_observation is not None:
-                boot_observation["restConnectionFailures"] = min(1024, boot_observation["restConnectionFailures"] + 1)
-            raise
-        if boot_observation is not None:
-            boot_observation["restHttpResponses"] = min(1024, boot_observation["restHttpResponses"] + 1)
-            if type(status) is int and 100 <= status <= 599:
-                boot_observation["lastHttpStatus"] = status
+        status, raw = _request(port, "/api/v1/app", key)
         if status != 200:
             raise RuntimeError("APK authenticated REST failed")
         _app_identity(json.loads(raw), payload["buildIdentity"])
@@ -933,11 +760,6 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         setup_stage = "validate-api-key"
         if len(key) < 32 or not all(33 <= ord(c) <= 126 for c in key):
             raise RuntimeError("APK UI must expose a valid generated API key")
-        setup_stage = "read-boot-resume"
-        boot_resume = find("resume_on_boot").get("checked")
-        setup_stage = "validate-boot-resume"
-        if boot_resume != "false":
-            raise RuntimeError("APK boot resume must initially be disabled")
         passed("fresh-setup")
         setup_stage = "rest-forward"
         forward = command(*PREFIX, "forward", "--no-rebind", "tcp:0", "tcp:20017")
@@ -1024,84 +846,28 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             authenticated()
             passed("android17-local-network-denial-and-revocation")
 
-        # Prove actual reboot handling, not an injected fake boot broadcast.
-        setup_stage = "enable-boot-resume"
-        click("resume_on_boot")
-        if find("resume_on_boot").get("checked") != "true":
-            raise RuntimeError("APK boot resume setting was not retained")
-        setup_stage = "enabled-reboot"
-        boot_observation = {"restAttempts": 0, "restConnectionFailures": 0, "restHttpResponses": 0,
-                            "allFilesBeforeReboot": _all_files_modes(shell), "nativeRouteProbe": "unavailable"}
-        boot_observation["allFilesAfterReboot"] = reboot(capture_modes=True)
-        setup_stage = "enabled-reboot-authentication"
-        deadline = time.monotonic() + 90
-        while True:
-            try:
-                authenticated()
-                break
-            except (OSError, http.client.HTTPException):
-                if time.monotonic() >= deadline:
-                    # WHY: inspect automatic resume BEFORE cleanup or another
-                    # Activity launch can change package/service state. Missing
-                    # diagnostics must never replace the failed boot verdict.
-                    primary_ui_observation = ui.setup_observation
-                    try:
-                        boot_observation.update(_boot_timeout_facts(shell, api=api))
-                    except Exception:
-                        pass
-                    boot_observation["serviceNotificationState"] = _service_notification_state(shell)
-                    # This normal launch is diagnostic AFTER automatic resume
-                    # failed. It must never satisfy the boot case or replace its
-                    # original pre-launch service/REST observations.
-                    try:
-                        reopen()
-                        post_failure_ui = _post_failure_ui(ui)
-                    except Exception:
-                        pass
-                    raise RuntimeError("APK did not resume after an enabled reboot") from None
-                time.sleep(1)
-        passed("enabled-boot-resume")
-        boot_observation = None
-        setup_stage = "explicit-stop-reboot"
-        reopen()
-        wait_state("Running")
-        click("stop_service")
-        wait_state("Stopped")
-        reboot()
-        assert_listener_stopped(quiet_seconds=5)
-        reopen()
-        wait_state("Stopped")
-        assert_listener_stopped(quiet_seconds=5)
-        passed("explicit-stop-prevents-boot-resume")
-        setup_stage = "task-manager-stop-reboot"
-        click("start_service")
-        wait_state("Running")
-        authenticated()
-        shell("cmd", "activity", "stop-app", APPLICATION_ID)
-        assert_listener_stopped()
-        reboot()
-        assert_listener_stopped(quiet_seconds=5)
-        reopen()
-        wait_state("Stopped")
-        assert_listener_stopped(quiet_seconds=5)
-        passed("task-manager-stop-prevents-boot-resume")
-        setup_stage = "force-stop-reboot"
-        click("start_service")
-        wait_state("Running")
-        authenticated()
-        shell("am", "force-stop", APPLICATION_ID)
-        assert_listener_stopped()
-        reboot()
-        assert_listener_stopped(quiet_seconds=5)
-        reopen()
-        wait_state("Stopped")
-        assert_listener_stopped(quiet_seconds=5)
-        passed("force-stop-prevents-boot-resume")
+        # Each intentional stop must remain stopped after Main binds again.
+        for stage, stop in (("explicit-stop", "ui"), ("task-manager-stop", "task"), ("force-stop", "force")):
+            setup_stage = stage
+            reopen()
+            wait_state("Running")
+            authenticated()
+            if stop == "ui":
+                click("stop_service")
+                wait_state("Stopped")
+            elif stop == "task":
+                shell("cmd", "activity", "stop-app", APPLICATION_ID)
+            else:
+                shell("am", "force-stop", APPLICATION_ID)
+            assert_listener_stopped(quiet_seconds=5)
+            reopen()
+            wait_state("Stopped")
+            assert_listener_stopped(quiet_seconds=30, fail_on_response=True)
+            passed(stage + "-remains-stopped")
+            click("start_service")
+            wait_state("Running")
+            authenticated()
         setup_stage = "restart"
-        click("resume_on_boot")
-        click("start_service")
-        wait_state("Running")
-        authenticated()
         passed("restart")
         if peer_payload is not None:
             setup_stage = "local-transfer"
@@ -1130,6 +896,11 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         # The foreground service must survive closing its visible shell.
         setup_stage = "screen-off-doze"
         shell("input", "keyevent", "KEYCODE_HOME")
+        activities = shell("dumpsys", "activity", "activities")
+        resumed = re.findall(r"(?m)^.*(?:topResumedActivity|mResumedActivity)[^\n]*\bu0\s+([^\s}]+)", activities)
+        if not resumed or len(set(resumed)) != 1 or resumed[0].startswith(APPLICATION_ID + "/"):
+            raise RuntimeError("APK activity did not leave the foreground after Home")
+        authenticated()
         shell("input", "keyevent", "KEYCODE_SLEEP")
         shell("dumpsys", "battery", "unplug")
         shell("dumpsys", "deviceidle", "force-idle")
@@ -1149,6 +920,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             samples += 1
             elapsed = time.monotonic() - started
             result["endurance"] = {"requestedSeconds": soak_seconds,
+                                   "activityClosed": True,
                                    "minimumDwellSeconds": MIN_SCREEN_OFF_DWELL_SECONDS,
                                    "minimumSamples": MIN_SCREEN_OFF_SAMPLES,
                                    "observedSeconds": round(elapsed, 3), "samples": samples,
@@ -1180,9 +952,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                         result["failure"]["navigation"] = navigation
                 except Exception:
                     pass
-            if boot_observation is not None:
-                result["failure"]["boot"] = boot_observation
-            elif installed and ui.setup_observation:
+            if installed and ui.setup_observation:
                 # Other lifecycle failures may already expose the real error.
                 # Inspect only an existing app window; never launch or press
                 # Start to diagnose it, and never replace the primary failure.
