@@ -322,6 +322,121 @@ def test_theme_waits_for_recognized_old_state_and_restores_on_timeout(monkeypatc
     assert mode[0] == 'auto'
 
 
+@pytest.mark.parametrize('transient', ['no-config', 'no-activity', 'no-resumed', 'no-window',
+                                       'no-night-token', 'malformed-config', 'two-configs',
+                                       'two-activities', 'two-windows'])
+@pytest.mark.parametrize('timeout', [False, True])
+def test_theme_retries_recreation_only_after_admission_and_restores(monkeypatch, transient, timeout):
+    mode, clock, observations, journal = ['auto'], [0.0], {'yes': 0, 'no': 0}, []
+    monkeypatch.setattr(subject.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(subject.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    def command(*args, **kwargs):
+        action = args[3:]
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        active = mode[0] in observations
+        if action == ('dumpsys', 'activity', 'activities'):
+            if active:
+                observations[mode[0]] += 1
+            missing = active and (timeout or observations[mode[0]] == 1)
+            resumed = 'topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+            config = ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n'
+            if missing and transient == 'no-resumed':
+                resumed = ''
+            if missing and transient == 'no-config':
+                config = ''
+            if missing and transient == 'no-night-token':
+                config = ' CurrentConfiguration={ unknown }\n'
+            if missing and transient == 'malformed-config':
+                config = ' CurrentConfiguration: { night }\n'
+            if missing and transient == 'two-configs':
+                config += config
+            block = '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n' + config
+            if missing and transient == 'no-activity':
+                block = ''
+            if missing and transient == 'two-activities':
+                block += '* Hist #1: ActivityRecord{def u0 org.emulebb.android/.MainActivity t2}\n' + config
+            return resumed + block
+        if action == ('dumpsys', 'window', 'windows'):
+            missing = active and (timeout or observations[mode[0]] == 1)
+            block = ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=81812100\n' +
+                ('    apr=18\n' if mode[0] == 'no' else '') +
+                '  }\n  Requested w=100 h=200 mLayoutSeq=1\n')
+            if missing and transient == 'no-window':
+                return ''
+            return block + block.replace('Window #0', 'Window #1') if missing and transient == 'two-windows' else block
+        raise AssertionError(action)
+    if transient in {'no-night-token', 'malformed-config', 'two-configs', 'two-activities', 'two-windows'}:
+        with pytest.raises(RuntimeError) as error:
+            subject._check_system_theme(command, ('-s', SERIAL), lambda: None,
+                                        lambda state: journal.append(state.copy()))
+        assert type(error.value) is RuntimeError and clock[0] == 0 and journal[-1]['status'] == 'failed'
+    elif timeout:
+        with pytest.raises(subject._ThemeNotSettled):
+            subject._check_system_theme(command, ('-s', SERIAL), lambda: None,
+                                        lambda state: journal.append(state.copy()))
+        assert clock[0] >= 5 and journal[-1]['status'] == 'failed'
+    else:
+        result = subject._check_system_theme(command, ('-s', SERIAL), lambda: None,
+                                             lambda state: journal.append(state.copy()))
+        assert result['status'] == 'passed' and observations['yes'] == observations['no'] == 2
+    assert journal[-1]['baselineRestored'] and mode[0] == 'auto'
+
+
+@pytest.mark.parametrize('invalid', ['no-config', 'no-window'])
+def test_theme_transient_shape_at_baseline_never_mutates(invalid):
+    actions = []
+    def command(*args, **kwargs):
+        action = args[3:]
+        actions.append(action)
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: auto'
+        if action == ('dumpsys', 'activity', 'activities'):
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n' +
+                ('' if invalid == 'no-config' else ' CurrentConfiguration={ notnight }\n'))
+        if action == ('dumpsys', 'window', 'windows'):
+            return '' if invalid == 'no-window' else (
+                'Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=81812100}\n'
+                '  Requested w=100 h=200 mLayoutSeq=1\n')
+        raise AssertionError(action)
+    with pytest.raises(RuntimeError):
+        subject._check_system_theme(command, ('-s', SERIAL), lambda: None)
+    assert not any(len(action) == 4 and action[:3] == ('cmd', 'uimode', 'night') for action in actions)
+
+
+def test_theme_insecure_window_during_recreation_fails_immediately_and_restores(monkeypatch):
+    mode, journal = ['auto'], []
+    monkeypatch.setattr(subject.time, 'sleep', lambda seconds: pytest.fail('unsafe window was retried'))
+    def command(*args, **kwargs):
+        action = args[3:]
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        if action == ('dumpsys', 'activity', 'activities'):
+            return ('' if mode[0] == 'yes' else
+                'topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ notnight }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=' +
+                ('81810100' if mode[0] == 'yes' else '81812100') + '}\n'
+                '  Requested w=100 h=200 mLayoutSeq=1\n')
+        raise AssertionError(action)
+    with pytest.raises(RuntimeError, match='attributes'):
+        subject._check_system_theme(command, ('-s', SERIAL), lambda: None,
+                                    lambda state: journal.append(state.copy()))
+    assert journal[-1]['status'] == 'failed' and journal[-1]['baselineRestored'] and mode[0] == 'auto'
+
+
 def test_binary_device_reads_preserve_kernel_cmdline_nuls(monkeypatch):
     device = selected_adb(monkeypatch)
     calls = []

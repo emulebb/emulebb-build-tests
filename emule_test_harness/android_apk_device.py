@@ -145,6 +145,11 @@ def _check_system_theme(command, prefix: tuple, open_main, journal=None) -> dict
     if match is None:
         raise RuntimeError("System night mode baseline is not exactly restorable")
     def observe(mode=None):
+        def unavailable(message):
+            # WHY: activity recreation can temporarily remove owned records after
+            # a mode switch; baseline admission must still fail before mutation.
+            raise (RuntimeError if mode is None else _ThemeNotSettled)(message)
+
         activity = shell("dumpsys", "activity", "activities")
         window = shell("dumpsys", "window", "windows")
         # Bound inspection to the app's resumed activity and its own window;
@@ -152,17 +157,30 @@ def _check_system_theme(command, prefix: tuple, open_main, journal=None) -> dict
         resumed = re.search(r"(?m)^.*(?:topResumedActivity|mResumedActivity).*" + re.escape(APPLICATION_ID) + r"/\.MainActivity\b.*$", activity)
         blocks = re.split(r"(?m)^\s*Window #\d+ ", window)
         owned = [block for block in blocks[1:] if re.search(r"\bu0 " + re.escape(APPLICATION_ID) + r"/" + re.escape(APPLICATION_ID) + r"\.MainActivity\b", block.partition("\n")[0])]
-        if resumed is None or len(owned) != 1:
-            raise RuntimeError("Theme observation requires the resumed owned activity and window")
+        if len(owned) > 1:
+            raise RuntimeError("Theme observation has ambiguous owned windows")
+        # A present, unique owned window must remain secure even while the
+        # activity is being recreated; invalid attributes are never retried.
+        appearance = _window_bar_appearance(owned[0]).split() if len(owned) == 1 else None
         activity_blocks = re.split(r"(?m)^\s*\*?\s*Hist\s+#\d+:", activity)
         own_activity = [block for block in activity_blocks[1:] if re.search(r"\bu0 " + re.escape(APPLICATION_ID) + r"/\.MainActivity\b", block.partition("\n")[0])]
-        config = re.search(r"(?m)^\s*CurrentConfiguration=([^\n]*)$", own_activity[0]) if len(own_activity) == 1 else None
+        if len(own_activity) > 1:
+            raise RuntimeError("Theme observation has ambiguous owned activities")
+        config_lines = re.findall(r"(?m)^[ \t]*CurrentConfiguration\b[^\n]*$", own_activity[0]) if own_activity else []
+        if len(config_lines) > 1:
+            raise RuntimeError("Owned activity night configuration is ambiguous")
+        config = re.fullmatch(r"[ \t]*CurrentConfiguration=([^\n]*)", config_lines[0]) if config_lines else None
+        if config_lines and config is None:
+            raise RuntimeError("Owned activity night configuration is unrecognized")
+        if config is not None and re.search(r"\b(?:night|notnight)\b", config[1]) is None:
+            raise RuntimeError("Owned activity night configuration is unrecognized")
+        if resumed is None or not owned:
+            unavailable("Theme observation requires the resumed owned activity and window")
+        if config is None:
+            unavailable("Owned activity night configuration is unavailable")
         expected = r"\b(?:night|notnight)\b" if mode is None else r"\b" + ("night" if mode == "yes" else "notnight") + r"\b"
-        if config is None or re.search(r"\b(?:night|notnight)\b", config[1]) is None:
-            raise RuntimeError("Owned activity night configuration differs")
         if re.search(expected, config[1]) is None:
             raise _ThemeNotSettled("Owned activity night configuration has not settled")
-        appearance = _window_bar_appearance(owned[0]).split()
         if mode is not None and any((flag in appearance) != (mode == "no") for flag in
                 ("LIGHT_STATUS_BARS", "LIGHT_NAVIGATION_BARS")):
             raise _ThemeNotSettled("Owned window bar appearance has not settled")
