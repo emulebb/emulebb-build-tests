@@ -19,7 +19,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from .android_apk_lifecycle import APPLICATION_ID, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
+from .android_apk_lifecycle import APPLICATION_ID, APK_NAVIGATION_CONTROLS, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
 from .android_apk_profile import OwnedUpdateApproval, admit_owned_update, admit_storage_configuration, read_hashed_receipt
 from .android_adb_failure import AdbOperationFailure, StartupSummaryCapture
 
@@ -322,6 +322,22 @@ def _ui_failure_metadata(ui: ProductionUi) -> dict:
     if getattr(ui, "last_action", None) is not None:
         result["lastAction"] = ui.last_action
     errors = []
+    try:
+        navigation = ui.failure_navigation() if hasattr(ui, "failure_navigation") else {}
+        if isinstance(navigation, dict) and navigation.get("control") in APK_NAVIGATION_CONTROLS:
+            safe = {"control": navigation["control"]}
+            for name in ("displayBounds", "scrollBounds", "lastGesture"):
+                value = navigation.get(name)
+                if isinstance(value, list) and len(value) == 4 and all(type(n) is int and 0 <= n <= 32768 for n in value):
+                    safe[name] = value
+            for name in ("forwardAttempts", "backwardAttempts", "forwardProgress", "backwardProgress"):
+                if type(navigation.get(name)) is int and 0 <= navigation[name] <= 6:
+                    safe[name] = navigation[name]
+            if type(navigation.get("imeVisible")) is bool:
+                safe["imeVisible"] = navigation["imeVisible"]
+            result["navigation"] = safe
+    except Exception as error:
+        errors.append({"action": "navigation", "errorType": type(error).__name__})
     try:
         elements = ui.elements()
         status = next((node for node in elements if node.get("resource-id") == APPLICATION_ID + ":id/service_status"), {})

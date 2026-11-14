@@ -9,6 +9,38 @@ from emule_test_harness import android_apk_lifecycle as subject
 SOURCE = "a" * 40
 
 
+def test_initial_app_not_visible_records_original_launch_and_precleanup_facts(tmp_path, monkeypatch):
+    peer, admitted = guest(tmp_path, monkeypatch)
+    def command(*arguments, **kwargs):
+        args = arguments[2:]
+        result = peer.command(*arguments, **kwargs)
+        if args[:3] == ('shell', 'am', 'start'):
+            return 'Status: ok\nprivate-launch-data'
+        if args[:2] == ('shell', 'cat') and '/emulebb-apk-ui-' in args[-1]:
+            return '<hierarchy><node resource-id="com.android.launcher:id/workspace"/></hierarchy>'
+        if args == ('shell', 'dumpsys', 'window', 'policy'):
+            return 'mKeyguardShowing=false\nprivate-data'
+        if args == ('shell', 'dumpsys', 'activity', 'activities'):
+            return 'topResumedActivity=ActivityRecord{a u0 other.package/.Home t1}\nprivate-data'
+        if args == ('shell', 'dumpsys', 'window', 'windows'):
+            return 'Window #0 Window{a u0 other.package/.Home}:\nprivate-data'
+        if args == ('shell', 'pidof', subject.APPLICATION_ID):
+            return '1234'
+        return result
+    with pytest.raises(subject.DeviceUiUnavailable):
+        subject.exercise(command, admitted, report_dir=tmp_path)
+    result = json.loads((tmp_path / 'apk-lifecycle.json').read_text())
+    assert result['failure']['code'] == 'app-not-visible'
+    assert result['failure']['initialLaunch'] == {'result': 'ok', 'resumed': 'other', 'window': 'absent',
+                                                  'process': 'present', 'keyguard': 'hidden'}
+    cleanup = next(index for index, call in enumerate(peer.calls) if call[2:5] == ('shell', 'am', 'force-stop'))
+    assert all(next(index for index, call in enumerate(peer.calls) if call[2:] == command) < cleanup for command in (
+        ('shell', 'dumpsys', 'activity', 'activities'), ('shell', 'dumpsys', 'window', 'windows'),
+        ('shell', 'pidof', subject.APPLICATION_ID)))
+    assert sum(call[2:5] == ('shell', 'am', 'start') for call in peer.calls) == 1
+    assert 'private' not in json.dumps(result)
+
+
 @pytest.mark.parametrize("api", [34, 35, 36, 37])
 def test_trusted_case_contract_has_an_explicit_per_api_permission_matrix(api):
     cases = subject.required_apk_cases(api)
@@ -883,6 +915,52 @@ def test_boot_timeout_foreign_ambiguous_and_unrecognized_facts_cannot_become_own
                 "dozeWhitelisted"} & set(facts)
 
 
+@pytest.mark.parametrize('document,expected', [
+    ('Uid mode: MANAGE_EXTERNAL_STORAGE: deny\nMANAGE_EXTERNAL_STORAGE: allow; time=private\n',
+     {'uidMode': 'deny', 'packageMode': 'allow', 'defaultMode': 'unavailable'}),
+    ('No operations.\nDefault mode: default\n',
+     {'uidMode': 'unavailable', 'packageMode': 'unavailable', 'defaultMode': 'default'}),
+    ('Uid mode: MANAGE_EXTERNAL_STORAGE: allow\nUid mode: MANAGE_EXTERNAL_STORAGE: deny\n',
+     {'uidMode': 'unavailable', 'packageMode': 'unavailable', 'defaultMode': 'unavailable'}),
+    ('MANAGE_EXTERNAL_STORAGE: allow\nMANAGE_EXTERNAL_STORAGE: \n',
+     {'uidMode': 'unavailable', 'packageMode': 'unavailable', 'defaultMode': 'unavailable'}),
+])
+def test_all_files_modes_keep_uid_and_package_distinct(document, expected):
+    assert subject._all_files_modes(lambda *args: document) == expected
+
+
+@pytest.mark.parametrize('text,channel,duplicate,expected', [
+    ('Waiting for network', 'daemon', False, 'waiting-for-network'),
+    ('Running', 'daemon', False, 'running'),
+    ('private', 'daemon', False, 'unavailable'),
+    ('Waiting for network', 'foreign', False, 'unavailable'),
+    ('Waiting for network', 'daemon', True, 'unavailable'),
+])
+def test_service_notification_is_exact_owned_closed_state(text, channel, duplicate, expected):
+    block = ("  NotificationRecord(0x123: pkg=org.emulebb.android user=UserHandle{0} id=1 tag=null)\n"
+             "    effectiveNotificationChannel=NotificationChannel{mId='" + channel + "'}\n"
+             '    android.text=String (' + text + ')\n')
+    assert subject._service_notification_state(lambda *args: block + (block if duplicate else '')) == expected
+    assert subject._service_notification_state(lambda *args: block.replace('tag=null', 'tag=foreign')) == 'unavailable'
+    assert subject._service_notification_state(lambda *args: block.replace('id=1 ', 'id=10 ')) == 'unavailable'
+
+
+def test_initial_visibility_facts_do_not_retain_unrelated_values():
+    docs = {('dumpsys', 'activity', 'activities'): 'topResumedActivity=ActivityRecord{a u0 org.emulebb.android/.MainActivity t1}\n',
+            ('dumpsys', 'window', 'windows'): 'Window #0 Window{a u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n',
+            ('pidof', subject.APPLICATION_ID): '1234',
+            ('dumpsys', 'window', 'policy'): 'mKeyguardShowing=false\n'}
+    facts = subject._initial_visibility_facts(lambda *args: docs.get(args, '') + '\nprivate-value')
+    assert facts == {'resumed': 'owned', 'window': 'present', 'process': 'unavailable', 'keyguard': 'hidden'}
+    assert 'private' not in json.dumps(facts)
+    docs[('dumpsys', 'window', 'windows')] = 'Window #0 Window{a u0 org.emulebb.android/org.emulebb.android.MainActivity.Other}:\n'
+    docs[('dumpsys', 'activity', 'activities')] = 'topResumedActivity=ActivityRecord{a u0 org.emulebb.android/.MainActivity.Other t1}\n'
+    facts = subject._initial_visibility_facts(lambda *args: docs.get(args, ''))
+    assert facts['window'] == 'absent' and facts['resumed'] == 'other'
+    docs[('dumpsys', 'window', 'windows')] = 'Window #0 Window{a u0 org.emulebb.android/org.emulebb.android.MainActivity-extra}:\n'
+    assert subject._initial_visibility_facts(lambda *args: docs.get(args, ''))['window'] == 'absent'
+
+
 @pytest.mark.parametrize("collector_fails", [False, True])
 @pytest.mark.parametrize("main_starts_daemon", [False, True])
 @pytest.mark.parametrize("ui_fails", [False, True])
@@ -922,7 +1000,7 @@ def test_boot_timeout_prelaunch_facts_and_post_failure_main_cannot_turn_automati
     assert failure["boot"]["restHttpResponses"] == 0
     assert "lastHttpStatus" not in failure["boot"]
     if collector_fails:
-        assert set(failure["boot"]) == {"restAttempts", "restConnectionFailures", "restHttpResponses"}
+        assert failure["boot"]["serviceNotificationState"] == "unavailable"
     else:
         assert failure["boot"]["userUnlocked"] is True
         assert failure["boot"]["servicePresent"] is False
@@ -931,6 +1009,12 @@ def test_boot_timeout_prelaunch_facts_and_post_failure_main_cannot_turn_automati
         launch = next(index for index, args in enumerate(peer.calls[query:], query) if args[2:5] == ("shell", "am", "start"))
         assert query < launch < cleanup
     reboot = next(index for index, args in enumerate(peer.calls) if args[2:] == ("reboot",))
+    mode_query = ("shell", "appops", "get", "--user", "0", subject.APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")
+    queries = [index for index, args in enumerate(peer.calls) if args[2:] == mode_query]
+    assert any(index < reboot for index in queries) and any(index > reboot for index in queries)
+    notification = next(index for index, args in enumerate(peer.calls) if args[2:] == ("shell", "dumpsys", "notification", "--noredact"))
+    launch = next(index for index, args in enumerate(peer.calls[reboot:], reboot) if args[2:5] == ("shell", "am", "start"))
+    assert reboot < notification < launch
     assert len([args for args in peer.calls[reboot:] if args[2:5] == ("shell", "am", "start")]) == 1
     assert not any(args[2:5] == ("shell", "input", "tap") for args in peer.calls[reboot:])
     if ui_fails:

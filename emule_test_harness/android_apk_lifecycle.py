@@ -357,6 +357,69 @@ def _post_failure_ui(ui) -> dict:
     return {"errorCategory": "unknown"}
 
 
+def _all_files_modes(shell) -> dict:
+    """Classify separate AOSP UID, package and platform-default AppOps rows."""
+    facts = {name: "unavailable" for name in ("uidMode", "packageMode", "defaultMode")}
+    try:
+        document = shell("appops", "get", "--user", "0", APPLICATION_ID, "MANAGE_EXTERNAL_STORAGE")
+        if not isinstance(document, str) or len(document.encode("utf-8")) > 65536:
+            return facts
+        for name, prefix in (("uidMode", r"Uid mode: MANAGE_EXTERNAL_STORAGE:"),
+                             ("packageMode", r"MANAGE_EXTERNAL_STORAGE:"),
+                             ("defaultMode", r"Default mode:")):
+            rows = re.findall(r"(?m)^[ \t]*" + prefix + r"([^\n]*)$", document)
+            match = re.match(r"^[ \t]*(allow|deny|ignore|default)(?:[ \t;]|$)", rows[0]) if len(rows) == 1 else None
+            if match:
+                facts[name] = match[1]
+    except Exception:
+        pass
+    return facts
+
+
+def _initial_visibility_facts(shell) -> dict:
+    """Read only closed owned-window, process and keyguard facts; never launch."""
+    facts = {key: "unavailable" for key in ("resumed", "window", "process", "keyguard")}
+    def read(*args):
+        try:
+            value = shell(*args)
+            return value if isinstance(value, str) and len(value.encode("utf-8")) <= 1024**2 else ""
+        except Exception:
+            return ""
+    activity = read("dumpsys", "activity", "activities")
+    resumed = re.findall(r"(?m)^.*(?:topResumedActivity|mResumedActivity)[^\n]*\bu0\s+([^\s}]+)", activity)
+    if resumed and len(set(resumed)) == 1:
+        facts["resumed"] = "owned" if resumed[0] in {APPLICATION_ID + "/.MainActivity", APPLICATION_ID + "/" + APPLICATION_ID + ".MainActivity"} else "other"
+    windows = read("dumpsys", "window", "windows")
+    if re.search(r"(?m)^\s*Window #\d+ ", windows):
+        owned = re.findall(r"(?m)^\s*Window #\d+ [^\n]*\bu0 " + re.escape(APPLICATION_ID) + r"/" + re.escape(APPLICATION_ID) + r"\.MainActivity(?=[\s}:])", windows)
+        facts["window"] = "present" if len(owned) == 1 else "absent" if not owned else "unavailable"
+    pid = read("pidof", APPLICATION_ID).strip()
+    if re.fullmatch(r"\d+(?:\s+\d+)*", pid):
+        facts["process"] = "present"
+    policy = read("dumpsys", "window", "policy")
+    values = re.findall(r"(?m)^\s*(?:mShowingLockscreen|mKeyguardShowing|showingAndNotOccluded)\s*[:=]\s*(true|false)\b", policy)
+    if values and len(set(values)) == 1:
+        facts["keyguard"] = "showing" if values[0] == "true" else "hidden"
+    return facts
+
+
+def _service_notification_state(shell) -> str:
+    """Classify only the owned daemon notification's exact source-owned text."""
+    try:
+        document = shell("dumpsys", "notification", "--noredact")
+        if not isinstance(document, str) or len(document.encode("utf-8")) > 1024**2:
+            return "unavailable"
+        blocks = re.split(r"(?m)^\s*NotificationRecord\(", document)[1:]
+        owned = [block for block in blocks if re.match(r"[^\n]*\bpkg=" + re.escape(APPLICATION_ID) + r"\s+user=UserHandle\{0\}\s+id=1\s+tag=null(?=\s|\))", block)]
+        if len(owned) != 1 or len(re.findall(r"(?m)^\s*effectiveNotificationChannel=NotificationChannel\{[^\n]*\bmId='daemon'", owned[0])) != 1:
+            return "unavailable"
+        texts = re.findall(r"(?m)^\s*android\.text=(?:String|SpannableString|CharSequence) \(([^\n]*)\)\s*$", owned[0])
+        states = {"Waiting for network": "waiting-for-network", "Starting": "starting", "Running": "running", "Stopping": "stopping", "Stopped": "stopped", "Failed": "failed"}
+        return states.get(texts[0], "unavailable") if len(texts) == 1 else "unavailable"
+    except Exception:
+        return "unavailable"
+
+
 def _boot_timeout_facts(shell, *, api: int) -> dict:
     """Inspect the owned package after failed automatic resume, without launching it.
 
@@ -648,6 +711,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     installed = False
     setup_stage = "install"
     boot_observation = None
+    initial_launch_result = "unavailable"
     post_failure_ui = None
     primary_ui_observation = None
     ui = ProductionUi(command)
@@ -675,7 +739,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             time.sleep(1)
 
     def reopen():
-        shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
+        return shell("am", "start", "-W", "-n", APPLICATION_ID + "/.MainActivity")
 
     def prepare_fresh_guest_ui(*, initial=False):
         nonlocal setup_stage
@@ -689,7 +753,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             setup_stage = "dismiss-keyguard"
         shell("wm", "dismiss-keyguard")
 
-    def reboot():
+    def reboot(*, capture_modes=False):
         previous = shell("cat", "/proc/sys/kernel/random/boot_id")
         command(*PREFIX, "reboot")
         deadline = time.monotonic() + 180
@@ -697,12 +761,13 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             booted = command(*PREFIX, "shell", "getprop", "sys.boot_completed", check=False)
             boot_id = command(*PREFIX, "shell", "cat", "/proc/sys/kernel/random/boot_id", check=False)
             if booted == "1" and boot_id and boot_id != previous:
+                modes = _all_files_modes(shell) if capture_modes else None
                 prepare_fresh_guest_ui()
                 # ADB forwards are transport-owned and can disappear on reboot.
                 # This private server owns this exact port; never adopt a new one.
                 command(*PREFIX, "forward", "--remove", "tcp:" + str(port), check=False)
                 command(*PREFIX, "forward", "--no-rebind", "tcp:" + str(port), "tcp:20017")
-                return
+                return modes
             if time.monotonic() >= deadline:
                 raise RuntimeError("APK reboot proof did not observe a fresh unlocked Android boot")
             time.sleep(2)
@@ -858,7 +923,9 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         shell("dumpsys", "deviceidle", "whitelist", "+" + APPLICATION_ID)
         prepare_fresh_guest_ui(initial=True)
         setup_stage = "launch-main"
-        reopen()
+        launch = reopen()
+        statuses = re.findall(r"(?m)^Status:\s*(ok|timeout|error)\s*$", launch) if isinstance(launch, str) else []
+        initial_launch_result = statuses[0] if len(statuses) == 1 else "unavailable"
         setup_stage = "wait-stopped"
         wait_state("Stopped")
         setup_stage = "read-api-key"
@@ -963,9 +1030,10 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         if find("resume_on_boot").get("checked") != "true":
             raise RuntimeError("APK boot resume setting was not retained")
         setup_stage = "enabled-reboot"
-        reboot()
+        boot_observation = {"restAttempts": 0, "restConnectionFailures": 0, "restHttpResponses": 0,
+                            "allFilesBeforeReboot": _all_files_modes(shell), "nativeRouteProbe": "unavailable"}
+        boot_observation["allFilesAfterReboot"] = reboot(capture_modes=True)
         setup_stage = "enabled-reboot-authentication"
-        boot_observation = {"restAttempts": 0, "restConnectionFailures": 0, "restHttpResponses": 0}
         deadline = time.monotonic() + 90
         while True:
             try:
@@ -981,6 +1049,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                         boot_observation.update(_boot_timeout_facts(shell, api=api))
                     except Exception:
                         pass
+                    boot_observation["serviceNotificationState"] = _service_notification_state(shell)
                     # This normal launch is diagnostic AFTER automatic resume
                     # failed. It must never satisfy the boot case or replace its
                     # original pre-launch service/REST observations.
@@ -1100,6 +1169,9 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         if setup_stage is not None:
             result["failure"] = _lifecycle_failure(error, setup_stage,
                 primary_ui_observation if primary_ui_observation is not None else ui.setup_observation)
+            if setup_stage == "wait-stopped" and result["failure"]["code"] == "app-not-visible":
+                result["failure"]["initialLaunch"] = {"result": initial_launch_result,
+                    **_initial_visibility_facts(shell)}
             if result["failure"]["code"] in {"control-unreachable", "control-disabled", "control-invalid-bounds",
                     "control-unsafe-bounds", "device-locked", "app-not-visible"}:
                 try:

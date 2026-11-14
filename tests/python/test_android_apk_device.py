@@ -1646,12 +1646,15 @@ def test_ui_failure_metadata_retains_only_resource_ids_flags_and_foreground_pack
     ui = SimpleNamespace(elements=lambda: [{"resource-id": "org.emulebb.android:id/service_status",
         "text": KEY, "content-desc": KEY, "enabled": "true", "clickable": "false"},
         {"resource-id": "malformed:" + KEY, "text": KEY}],
-        shell=lambda *args: "topResumedActivity=ActivityRecord{synthetic u0 org.emulebb.android/.MainActivity} " + KEY)
+        shell=lambda *args: "topResumedActivity=ActivityRecord{synthetic u0 org.emulebb.android/.MainActivity} " + KEY,
+        failure_navigation=lambda: {"control": "api_key", "scrollBounds": [0, 10, 100, 200],
+                                    "forwardAttempts": 2, "raw": KEY})
     value = subject._ui_failure_metadata(ui)
     assert value["foregroundPackage"] == "org.emulebb.android"
     assert value["resourceControlCount"] == 1 and value["hierarchyNodeCount"] == 2
     assert value["controls"][0]["resourceId"] == "org.emulebb.android:id/service_status"
     assert value["controls"][0]["enabled"] is True and value["controls"][0]["clickable"] is False
+    assert value["navigation"] == {"control": "api_key", "scrollBounds": [0, 10, 100, 200], "forwardAttempts": 2}
     assert KEY not in json.dumps(value)
 
 
