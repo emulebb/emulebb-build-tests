@@ -21,6 +21,244 @@ def selected_adb(monkeypatch):
     return device
 
 
+def test_physical_wrapper_forwards_explicit_opt_ins(monkeypatch, tmp_path):
+    import importlib.util
+    import sys
+    wrapper = Path(__file__).resolve().parents[2] / 'scripts' / 'probe-android-apk-device.py'
+    spec = importlib.util.spec_from_file_location('physical_wrapper_test', wrapper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    device = SimpleNamespace(command=object(), spawn_peer=object(), stop_peer_client=object())
+    seen = {}
+    monkeypatch.setattr(module, 'admit_payload', lambda *args, **kwargs: payload())
+    monkeypatch.setattr(module, 'AdbDevice', lambda *args, **kwargs: device)
+    monkeypatch.setattr(module, 'get_workspace_output_root', lambda: tmp_path)
+    monkeypatch.setattr(module, 'probe_physical_device', lambda *args, **kwargs: seen.update(kwargs) or 'report')
+    monkeypatch.setattr(sys, 'argv', ['probe', '--adb', 'adb', '--serial', SERIAL, '--apk-payload', 'apk',
+        '--apk-manifest-name', 'manifest', '--apk-manifest-sha256', 'a', '--apk-source-sha', 'b',
+        '--expected-cert-sha256', 'c', '--report-dir', 'report', '--execute', '--reset-owned-profile',
+        '--verify-fresh-defaults', '--check-system-theme'])
+    module.main()
+    assert all(seen[name] is True for name in ('reset_owned_profile', 'verify_fresh_defaults', 'check_system_theme'))
+
+
+def test_reset_uninstall_is_exact_device_and_package_only(monkeypatch):
+    device = selected_adb(monkeypatch)
+    calls = []
+    monkeypatch.setattr(subject.subprocess, "run", lambda args, **kwargs: calls.append(args)
+        or SimpleNamespace(returncode=0, stdout="Success", stderr=""))
+    approval = subject.OwnedResetApproval(hashlib.sha256(SERIAL.encode()).hexdigest(), {})
+    for command, token in [(('uninstall', '--user', '0', 'other.package'), approval),
+                           (('uninstall', '--user', '10', subject.APPLICATION_ID), approval),
+                           (('uninstall', '--user', '0', subject.APPLICATION_ID), None),
+                           (('uninstall', '--user', '0', subject.APPLICATION_ID), subject.OwnedResetApproval('0' * 64, {}))]:
+        with pytest.raises(RuntimeError):
+            device.command('-s', SERIAL, *command, owned_reset=token)
+    assert not calls
+    device.command('-s', SERIAL, 'uninstall', '--user', '0', subject.APPLICATION_ID, owned_reset=approval)
+    assert len(calls) == 1
+
+
+def test_theme_mutation_requires_selected_device_and_narrow_mode(monkeypatch):
+    device = selected_adb(monkeypatch)
+    calls = []
+    monkeypatch.setattr(subject.subprocess, 'run', lambda args, **kwargs: calls.append(args)
+        or SimpleNamespace(returncode=0, stdout='', stderr=''))
+    approval = subject.ThemeChangeApproval(hashlib.sha256(SERIAL.encode()).hexdigest(), 'auto')
+    for action, token in [(('cmd', 'uimode', 'night', 'yes'), None),
+                          (('cmd', 'uimode', 'night', 'custom'), approval),
+                          (('cmd', 'uimode', 'car', 'yes'), approval),
+                          (('cmd', 'uimode', 'night', 'yes'), subject.ThemeChangeApproval('0' * 64, 'auto'))]:
+        with pytest.raises(RuntimeError):
+            device.command('-s', SERIAL, 'shell', *action, theme_change=token)
+    assert not calls
+    device.command('-s', SERIAL, 'shell', 'cmd', 'uimode', 'night', 'yes', theme_change=approval)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('field,bad', [('deviceSerialSha256', '0' * 64), ('signerSha256', '0' * 64),
+    ('apkSha256', 'bad'), ('versionCode', True), ('status', 'failed'), ('ownedInstallation', False)])
+def test_reset_authority_rejects_foreign_or_invalid_receipts(field, bad):
+    device_hash = hashlib.sha256(SERIAL.encode()).hexdigest()
+    receipt = {'schema': 'emulebb.android.physical-device/1', 'status': 'passed', 'ownedInstallation': True,
+        'debugBuild': False, 'deviceSerialSha256': device_hash, 'signerSha256': 'b' * 64,
+        'apkSha256': 'a' * 64, 'versionCode': 42, 'versionName': '0.1.0-test'}
+    subject._admit_reset(receipt, device_hash=device_hash, signer='b' * 64)
+    receipt[field] = bad
+    with pytest.raises(RuntimeError):
+        subject._admit_reset(receipt, device_hash=device_hash, signer='b' * 64)
+
+
+def test_reset_candidate_must_still_match_admitted_hash(tmp_path):
+    candidate = tmp_path / 'candidate.apk'
+    candidate.write_bytes(b'candidate')
+    target = {'payloadPath': str(candidate), 'apk': {'sha256': hashlib.sha256(b'candidate').hexdigest()}}
+    subject._verify_reset_candidate(target)
+    candidate.write_bytes(b'changed')
+    with pytest.raises(RuntimeError, match='bytes changed'):
+        subject._verify_reset_candidate(target)
+
+
+def test_fresh_defaults_require_actual_incoming_and_only_canonical_shared_root():
+    from emule_test_harness.android_apk_profile import INCOMING, SHARED
+    subject._verify_fresh_storage({'daemon': {'incomingDir': INCOMING}}, {'roots': [{'path': SHARED}]})
+    for settings, roots in [({'daemon': {'incomingDir': '/other'}}, {'roots': [{'path': SHARED}]}),
+                            ({'daemon': {'incomingDir': INCOMING}}, {'roots': []}),
+                            ({'daemon': {'incomingDir': INCOMING}}, {'roots': [{'path': SHARED}, {'path': '/other'}]})]:
+        with pytest.raises(RuntimeError):
+            subject._verify_fresh_storage(settings, roots)
+
+
+@pytest.mark.parametrize('baseline,fail', [('unknown', False), ('auto', True), ('no', False)])
+def test_theme_unknown_never_mutates_and_failure_restores_exact_baseline(baseline, fail):
+    calls = []
+    mode = [baseline]
+    def command(*args, **kwargs):
+        action = args[3:]
+        calls.append(action)
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        if action == ('dumpsys', 'activity', 'activities'):
+            if fail and mode[0] == 'yes':
+                raise RuntimeError('synthetic inspection failure')
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n'
+                ' mLastReportedConfiguration={ ' + ('notnight' if mode[0] == 'yes' else 'night') + ' }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            flags = '' if mode[0] == 'yes' else 'LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS'
+            return ('  Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0)(fillxfill) ty=BASE_APPLICATION\n    fl=SECURE\n'
+                + ('    apr=' + flags + '\n' if flags else '') + '}\n  Requested w=100 h=200 mLayoutSeq=1\n')
+        raise AssertionError(action)
+    if baseline == 'unknown' or fail:
+        with pytest.raises(RuntimeError):
+            subject._check_system_theme(command, ('-s', SERIAL), lambda: None)
+    else:
+        assert subject._check_system_theme(command, ('-s', SERIAL), lambda: None)['baselineRestored']
+    mutations = [call for call in calls if len(call) == 4 and call[:3] == ('cmd', 'uimode', 'night')]
+    assert not mutations if baseline == 'unknown' else mutations[-1][-1] == baseline
+    assert mode[0] == baseline
+
+
+def test_theme_rejects_foreign_activity_that_only_references_own_component():
+    mode = ['auto']
+    def command(*args, **kwargs):
+        action = args[3:]
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        if action == ('dumpsys', 'activity', 'activities'):
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{def u0 other.package/.MainActivity t2}\n'
+                ' reference=org.emulebb.android/.MainActivity\n CurrentConfiguration={ night }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=SECURE}\n  Requested w=100 h=200 mLayoutSeq=1\n')
+        raise AssertionError(action)
+    with pytest.raises(RuntimeError, match='night configuration'):
+        subject._check_system_theme(command, ('-s', SERIAL), lambda: None)
+    assert mode[0] == 'auto'
+
+
+def test_window_appearance_requires_complete_secure_aosp_attributes():
+    attrs = ('  mAttrs={(0,0) sim={state=unchanged} ty=BASE_APPLICATION\n'
+             '    fl=SECURE HARDWARE_ACCELERATED\n'
+             '    apr=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS}\n'
+             '  Requested w=100 h=200 mLayoutSeq=1\n')
+    assert 'LIGHT_STATUS_BARS' in subject._window_bar_appearance(attrs)
+    for malformed in (attrs.replace('SECURE', 'OTHER'), attrs.replace('mLayoutSeq=', 'unknown='),
+                      attrs.replace('LIGHT_NAVIGATION_BARS}', 'LIGHT_NAVIGATION_BARS')):
+        with pytest.raises(RuntimeError):
+            subject._window_bar_appearance(malformed)
+
+
+def test_unknown_theme_window_format_fails_before_mutation():
+    actions = []
+    def command(*args, **kwargs):
+        action = args[3:]
+        actions.append(action)
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: auto'
+        if action == ('dumpsys', 'activity', 'activities'):
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ notnight }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            return 'Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n unknown\n'
+        raise AssertionError(action)
+    with pytest.raises(RuntimeError, match='attributes'):
+        subject._check_system_theme(command, ('-s', SERIAL), lambda: None)
+    assert not any(len(action) == 4 and action[:3] == ('cmd', 'uimode', 'night') for action in actions)
+
+
+def test_theme_forced_light_flag_does_not_count_as_navigation_bar_appearance(monkeypatch):
+    mode = ['auto']
+    clock = [0.0]
+    monkeypatch.setattr(subject.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(subject.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(subject, '_window_bar_appearance', lambda block:
+        'LIGHT_STATUS_BARS FORCE_LIGHT_NAVIGATION_BARS' if mode[0] == 'no' else '')
+    def command(*args, **kwargs):
+        action = args[3:]
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        if action == ('dumpsys', 'activity', 'activities'):
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            return 'Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+        raise AssertionError(action)
+    with pytest.raises(RuntimeError, match='bar appearance'):
+        subject._check_system_theme(command, ('-s', SERIAL), lambda: None)
+    assert mode[0] == 'auto'
+
+
+@pytest.mark.parametrize('timeout', [False, True])
+def test_theme_waits_for_recognized_old_state_and_restores_on_timeout(monkeypatch, timeout):
+    mode, clock, observations = ['auto'], [0.0], {'yes': 0, 'no': 0}
+    monkeypatch.setattr(subject.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(subject.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    def command(*args, **kwargs):
+        action = args[3:]
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        if action == ('dumpsys', 'activity', 'activities'):
+            if mode[0] in observations:
+                observations[mode[0]] += 1
+            old = mode[0] in observations and (timeout or observations[mode[0]] == 1)
+            night = (mode[0] == 'yes') != old if mode[0] != 'auto' else False
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ ' + ('night' if night else 'notnight') + ' }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            flags = '' if mode[0] == 'yes' else '    apr=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS\n'
+            return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=SECURE\n' + flags + '}\n'
+                '  Requested w=100 h=200 mLayoutSeq=1\n')
+        raise AssertionError(action)
+    if timeout:
+        with pytest.raises(RuntimeError, match='not settled'):
+            subject._check_system_theme(command, ('-s', SERIAL), lambda: None)
+        assert clock[0] >= 5
+    else:
+        assert subject._check_system_theme(command, ('-s', SERIAL), lambda: None)['baselineRestored']
+        assert observations['yes'] >= 2 and observations['no'] >= 2
+    assert mode[0] == 'auto'
+
+
 def test_binary_device_reads_preserve_kernel_cmdline_nuls(monkeypatch):
     device = selected_adb(monkeypatch)
     calls = []
@@ -273,7 +511,7 @@ class Phone:
         if args[:3] == ("shell", "am", "start") or args[:3] == ("shell", "input", "keyevent"):
             self.screen = "app"
         if args[:2] == ("shell", "sh"):
-            return self.incoming
+            return "safe" if self.incoming in {"", "absent"} else self.incoming
         if args == ("shell", "wm", "size"):
             return "Physical size: 1080x1920"
         if args[:2] == ("shell", "cat"):
@@ -353,6 +591,78 @@ def run(tmp_path, monkeypatch, phone, *, execute=False, receipt=None, configure=
         expected_cert_sha256="b" * 64,
         report_dir=report_dir, execute=execute, configure_storage=configure, dwell_seconds=15, installation_receipt=receipt,
         installation_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt else None, **kwargs)
+
+
+@pytest.mark.parametrize('fault', [None, 'wrong-old-hash', 'other-user', 'uninstall-fails', 'install-fails', 'theme-fails'])
+def test_reset_journals_one_uninstall_and_bound_new_install(tmp_path, monkeypatch, fault):
+    from emule_test_harness import rust_local_ed2k
+    from emule_test_harness.android_apk_profile import INCOMING, SHARED
+    phone = Phone()
+    old_receipt = run(tmp_path, monkeypatch, phone)
+    candidate = tmp_path / 'candidate.apk'
+    candidate.write_bytes(b'synthetic candidate')
+    candidate_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    target = {**payload(), 'payloadPath': str(candidate), 'apk': {'sha256': candidate_sha}}
+    base_command = phone.command
+    def command(*args, **kwargs):
+        action = args[2:]
+        if action[:1] == ('uninstall',):
+            phone.calls.append(action)
+            assert isinstance(kwargs.get('owned_reset'), subject.OwnedResetApproval)
+            if fault == 'uninstall-fails':
+                raise RuntimeError('synthetic uninstall failure')
+            phone.installed = False
+            return 'Success'
+        if action[:1] == ('install',):
+            if fault == 'install-fails':
+                raise RuntimeError('synthetic install failure')
+            phone.checksum = candidate_sha
+        result = base_command(*args, **kwargs)
+        if fault == 'other-user' and action[:3] == ('shell', 'dumpsys', 'package'):
+            return result + '\n    User 10: installed=true\n'
+        return result
+    phone.command = command
+    if fault == 'wrong-old-hash':
+        phone.checksum = '0' * 64
+    monkeypatch.setattr(rust_local_ed2k, 'request_json', lambda base, method, route, key:
+        {'daemon': {'incomingDir': INCOMING}} if route == '/api/v1/app/settings' else {'roots': [{'path': SHARED}]})
+    if fault == 'theme-fails':
+        def theme_failure(*args):
+            raise RuntimeError('synthetic theme failure')
+        monkeypatch.setattr(subject, '_check_system_theme', theme_failure)
+    phone.calls.clear()
+    kwargs = dict(serial=SERIAL, output_root=tmp_path, report_dir=tmp_path / 'reset', expected_cert_sha256='b' * 64,
+        execute=True, dwell_seconds=15, reset_owned_profile=True, verify_fresh_defaults=True, check_system_theme=fault == 'theme-fails',
+        installation_receipt=old_receipt, installation_receipt_sha256=hashlib.sha256(old_receipt.read_bytes()).hexdigest())
+    if fault:
+        with pytest.raises(RuntimeError):
+            subject.probe_physical_device(phone.command, target, **kwargs)
+    else:
+        subject.probe_physical_device(phone.command, target, **kwargs)
+    receipt = json.loads((tmp_path / 'reset' / 'physical-device.json').read_text())
+    uninstall_count = sum(call[:1] == ('uninstall',) for call in phone.calls)
+    assert uninstall_count == (0 if fault in {'wrong-old-hash', 'other-user'} else 1)
+    if fault == 'uninstall-fails':
+        assert receipt['resetJournal'][-1] == 'uninstall-attempted'
+    elif fault == 'install-fails':
+        assert receipt['resetJournal'][-1] == 'uninstall-verified'
+    elif fault is None:
+        assert receipt['resetJournal'][-1] == 'new-installation-verified'
+        assert receipt['freshDefaults'] == {'incoming': 'canonical', 'sharedRoots': 'canonical'}
+        assert receipt['status'] == 'passed'
+    new_receipt = tmp_path / 'reset' / 'installation-receipt.json'
+    if fault in {'wrong-old-hash', 'other-user', 'uninstall-fails', 'install-fails'}:
+        assert not new_receipt.exists()
+    else:
+        authority = receipt['ownedReset']['newInstallationReceipt']
+        assert authority['path'] == new_receipt.name
+        assert subject._owned_installation(new_receipt, authority['sha256'], payload=target,
+                                           device_hash=hashlib.sha256(SERIAL.encode()).hexdigest())
+        subject._admit_reset(json.loads(new_receipt.read_text()), device_hash=hashlib.sha256(SERIAL.encode()).hexdigest(),
+                             signer='b' * 64)
+        assert json.loads(new_receipt.read_text())['runtimeExecution'] == 'not-run'
+    assert receipt['ownedReset']['status'] == ('failed' if fault else 'passed')
+    assert receipt['ownedReset']['installationReceiptSha256'] == kwargs['installation_receipt_sha256']
 
 
 @pytest.mark.parametrize("abi", ["arm64-v8a", "x86_64"])

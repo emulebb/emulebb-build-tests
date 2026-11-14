@@ -30,6 +30,9 @@ def main():
     parser.add_argument("--dwell-seconds", type=int, default=30)
     parser.add_argument("--render-webui", action="store_true")
     parser.add_argument("--configure-storage", action="store_true")
+    parser.add_argument("--reset-owned-profile", action="store_true")
+    parser.add_argument("--verify-fresh-defaults", action="store_true")
+    parser.add_argument("--check-system-theme", action="store_true")
     parser.add_argument("--allow-owned-compatible-update", action="store_true")
     parser.add_argument("--configuration-receipt", type=Path)
     parser.add_argument("--configuration-receipt-sha256")
@@ -60,6 +63,8 @@ def main():
         output_root=get_workspace_output_root(), report_dir=args.report_dir, execute=args.execute,
         installation_receipt=args.installation_receipt, installation_receipt_sha256=args.installation_receipt_sha256,
         dwell_seconds=args.dwell_seconds, render_webui=args.render_webui, configure_storage=args.configure_storage,
+        reset_owned_profile=args.reset_owned_profile, verify_fresh_defaults=args.verify_fresh_defaults,
+        check_system_theme=args.check_system_theme,
         allow_owned_compatible_update=args.allow_owned_compatible_update,
         configuration_receipt=args.configuration_receipt, configuration_receipt_sha256=args.configuration_receipt_sha256,
         compatibility_receipt=args.compatibility_receipt, compatibility_receipt_sha256=args.compatibility_receipt_sha256,
