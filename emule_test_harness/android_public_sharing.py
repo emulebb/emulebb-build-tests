@@ -649,11 +649,12 @@ def _inspect_copy_tree(phone: Phone, receipt: dict, report: dict, *, family: str
     report["step"] = family + "-tree"
     entries = _guest_entries(phone, root)
     files, directories = _guest_entries(phone, root, "f"), _guest_entries(phone, root, "d")
+    conflicts = (entries - expected_dirs - expected_files) | (files - expected_files) | (directories - expected_dirs)
     counts = {"expectedFiles": len(expected_files), "presentApprovedFiles": len(files & expected_files),
               "missingApprovedFiles": len(expected_files - files),
               "presentApprovedDirectories": len(directories & expected_dirs),
               "missingApprovedDirectories": len(expected_dirs - directories),
-              "unexpectedEntries": len(entries - expected_dirs - expected_files),
+              "unexpectedEntries": len(conflicts),
               "nonRegularEntries": len(entries - files - directories), "sha256VerifiedFiles": 0, "mismatchedFiles": 0}
     report[family] = counts
     report["step"] = family + "-checksums"
@@ -663,6 +664,7 @@ def _inspect_copy_tree(phone: Phone, receipt: dict, report: dict, *, family: str
             continue
         checksum = guest_sha256(phone.device.command, path, prefix=phone.prefix)
         counts["sha256VerifiedFiles" if checksum == row["sha256"] else "mismatchedFiles"] += 1
+    return files, directories
 
 
 def inspect_failed_preparation(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path, digest: str):
@@ -702,6 +704,118 @@ def inspect_failed_preparation(phone: Phone, receipt: dict, *, campaign: Path, o
         finally:
             report["finishedAtUtc"] = utc_now()
             write_json(campaign / ("inspection-" + report["inspectionId"] + ".json"), report)
+    return report
+
+
+def resume_failed_preparation(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path, digest: str):
+    """Publish only missing approved bytes from verified staging, keeping failures.
+
+    No profile, service, network, existing file or failed receipt is changed.
+    Existing regular files must match the approved SHA-256 before being skipped;
+    any partial, conflicting, unknown or redirected entry refuses all writes.
+    """
+    if admit_campaign(campaign, digest, phone.device.serial, failed_preparation=True) != receipt:
+        raise RuntimeError("Failed preparation receipt changed before resume")
+    target = campaign / "campaign.json"
+    if target.exists() or target.is_symlink():
+        raise RuntimeError("Resume cannot overwrite an existing campaign receipt")
+    report = {"schema": SCHEMA, "mode": "resume-failed-preparation", "status": "resuming",
+              "preparationReceiptSha256": digest, "resumeId": uuid4().hex, "step": "installation-identity",
+              "service": "unconfirmed", "createdDirectories": 0, "createdFiles": 0,
+              "skippedVerifiedFiles": 0, "sourceRecopies": 0, "filesDeletedOrOverwritten": 0}
+    with device_lease(output_root, receipt["deviceSerialSha256"], campaign):
+        try:
+            phone.installed()
+            report["step"] = "stopped-service"
+            _stopped_service_flags(phone.ui)
+            report["service"] = "stopped"
+            report["step"] = "canonical-paths"
+            for root in (INCOMING, SHARED, receipt["staging"], receipt["destination"]):
+                if phone.shell("readlink", "-f", root) != root:
+                    raise RuntimeError("Owned preparation path was redirected")
+            report["step"] = "nonce-marker"
+            if phone.shell("cat", receipt["marker"]) != receipt["nonce"]:
+                raise RuntimeError("Guest campaign ownership marker differs")
+            report["step"] = "source-snapshot"
+            source, anchor = Path(receipt["sourcePath"]), Path(receipt["sourceAnchorPath"])
+            identity = _regular(source, directory=True)
+            identity = (identity.st_dev, identity.st_ino)
+            verify_source_anchor(anchor, source, identity)
+            if inventory(source) != receipt["inventory"]:
+                raise RuntimeError("Approved source changed before resume")
+            verify_source_anchor(anchor, source, identity)
+            report["step"] = "shared-scope"
+            if _guest_entries(phone, INCOMING) != {INCOMING}:
+                raise RuntimeError("Incoming must remain empty for an upload-only campaign")
+            destination, staging = receipt["destination"], receipt["staging"]
+            approved_dirs = {SHARED, destination} | {destination + "/" + name for name in receipt["inventory"]["directories"]}
+            approved_files = {destination + "/" + row["path"] for row in receipt["inventory"]["files"]}
+            entries = _guest_entries(phone, SHARED)
+            files, dirs = _guest_entries(phone, SHARED, "f"), _guest_entries(phone, SHARED, "d")
+            if not (entries <= approved_dirs | approved_files and files <= approved_files
+                    and dirs <= approved_dirs and entries == files | dirs):
+                raise RuntimeError("Public Shared contains conflicting or unexpected entries")
+            _inspect_copy_tree(phone, receipt, report, family="staging", root=staging)
+            staged = report["staging"]
+            if any(staged[name] for name in ("missingApprovedFiles", "missingApprovedDirectories", "unexpectedEntries", "nonRegularEntries", "mismatchedFiles")):
+                raise RuntimeError("Private staged bytes or directories differ from the approved source")
+            existing_files, existing_dirs = _inspect_copy_tree(phone, receipt, report, family="destination", root=destination)
+            present = report["destination"]
+            if any(present[name] for name in ("unexpectedEntries", "nonRegularEntries", "mismatchedFiles")):
+                raise RuntimeError("Partial destination contains conflicting bytes or entries")
+            report["skippedVerifiedFiles"] = present["sha256VerifiedFiles"]
+            missing_bytes = sum(row["sizeBytes"] for row in receipt["inventory"]["files"]
+                                if destination + "/" + row["path"] not in existing_files)
+            report["step"] = "publication-preflight"
+            if (_guest_free(phone) < missing_bytes + receipt["limits"]["minimum_free_bytes"]
+                    or shutil.disk_usage(campaign).free < receipt["limits"]["minimum_free_bytes"]):
+                raise RuntimeError("Campaign free-space reserve would be exceeded")
+            _stopped_service_flags(phone.ui)
+            verify_source_anchor(anchor, source, identity)
+            for name in receipt["inventory"]["directories"]:
+                path = destination + "/" + name
+                if path not in existing_dirs:
+                    report["step"] = "destination-directory-create"
+                    phone.shell("mkdir", shlex.quote(path))
+                    report["createdDirectories"] += 1
+            for row in receipt["inventory"]["files"]:
+                path = destination + "/" + row["path"]
+                if path not in existing_files:
+                    report["step"] = "destination-file-create"
+                    phone.script("umask 077; set -C; cat " + shlex.quote(staging + "/" + row["path"])
+                                 + " > " + shlex.quote(path),
+                                 timeout=min(3600, 60 + (row["sizeBytes"] + 1024**2 - 1) // 1024**2))
+                    report["createdFiles"] += 1
+            report["step"] = "completed-tree-verification"
+            guest_scope(phone, receipt, hashes=True)
+            report["step"] = "source-reverification"
+            verify_source_anchor(anchor, source, identity)
+            if inventory(source) != receipt["inventory"]:
+                raise RuntimeError("Approved source changed during resume")
+            verify_source_anchor(anchor, source, identity)
+            _stopped_service_flags(phone.ui)
+            success = {key: value for key, value in receipt.items()
+                       if key not in {"errorType", "failedAdbSafeFailure", "failedRestOperation", "failedRestSafeFailure"}}
+            success.update(status="prepared", stage="complete", preparedAtUtc=utc_now(), sourceUnchanged=True,
+                           guestSha256Verified=True, resumedFromPreparationSha256=digest)
+            report["step"] = "new-campaign-receipt"
+            with target.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(success, indent=2, sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            report.update(status="prepared", step="complete", campaignReceiptSha256=hashlib.sha256(target.read_bytes()).hexdigest())
+        except Exception as error:
+            report.update(status="failed", errorType=type(error).__name__)
+            if isinstance(error, AdbOperationFailure):
+                report["failedAdbSafeFailure"] = {key: error.safe_failure[key]
+                    for key in ("operation", "reason", "exitCode")}
+            try:
+                _stopped_service_flags(phone.ui)
+            except Exception:
+                report["service"] = "stop-unconfirmed"
+        finally:
+            report["finishedAtUtc"] = utc_now()
+            write_json(campaign / ("resume-" + report["resumeId"] + ".json"), report)
     return report
 
 
@@ -1092,9 +1206,9 @@ def spawn_observer(arguments: list[str], *, campaign: Path):
 def main(argv=None):
     """Operator CLI; errors never expose private paths, endpoints or response text."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "start", "observe", "status", "stop", "inspect-failed-prepare"))
+    parser.add_argument("action", choices=("prepare", "start", "observe", "status", "stop", "inspect-failed-prepare", "resume-failed-prepare"))
     parser.add_argument("--campaign-dir", type=Path, required=True)
-    parser.add_argument("--campaign-receipt-sha256", help="Immutable campaign.json SHA-256; preparation.json for failed inspection.")
+    parser.add_argument("--campaign-receipt-sha256", help="Immutable campaign.json SHA-256; preparation.json for failed inspection/resume.")
     parser.add_argument("--adb", type=Path)
     parser.add_argument("--serial")
     parser.add_argument("--server-port", type=int, default=5037)
@@ -1151,7 +1265,7 @@ def main(argv=None):
         if not args.campaign_receipt_sha256:
             raise ValueError("Campaign operations require its immutable receipt SHA-256")
         receipt = admit_campaign(campaign, args.campaign_receipt_sha256, args.serial,
-                                 failed_preparation=args.action == "inspect-failed-prepare")
+                                 failed_preparation=args.action in {"inspect-failed-prepare", "resume-failed-prepare"})
         if args.action == "status":
             print(json.dumps(safe_status(campaign, receipt)))
             return 0
@@ -1169,6 +1283,11 @@ def main(argv=None):
         if args.action == "inspect-failed-prepare":
             result = inspect_failed_preparation(phone, receipt, campaign=campaign, output_root=output_root,
                                                 digest=args.campaign_receipt_sha256)
+            print(json.dumps(result))
+            return 1 if result["status"] == "failed" else 0
+        if args.action == "resume-failed-prepare":
+            result = resume_failed_preparation(phone, receipt, campaign=campaign, output_root=output_root,
+                                               digest=args.campaign_receipt_sha256)
             print(json.dumps(result))
             return 1 if result["status"] == "failed" else 0
         if args.action == "stop":

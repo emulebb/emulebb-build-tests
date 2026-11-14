@@ -2,6 +2,7 @@
 import hashlib
 import json
 from types import SimpleNamespace
+import shlex
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -634,7 +635,8 @@ def test_failed_preparation_inspection_is_read_only_and_preserves_partial_payloa
     assert len(list(tmp_path.glob("inspection-*.json"))) == 1
 
 
-def test_failed_inspection_cli_admits_selected_apk_and_never_launches_observer(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("action", ["inspect-failed-prepare", "resume-failed-prepare"])
+def test_failed_copy_cli_admits_selected_apk_and_never_launches_observer(tmp_path, monkeypatch, capsys, action):
     campaign = tmp_path / "campaign"
     campaign.mkdir()
     value = {**receipt(), "status": "failed", "stage": "staged-publication",
@@ -653,14 +655,150 @@ def test_failed_inspection_cli_admits_selected_apk_and_never_launches_observer(t
     monkeypatch.setattr(subject, "observe", lambda *a, **kw: pytest.fail("inspection launched an observer"))
     def inspect(phone, admitted, **kwargs):
         assert admitted == value and kwargs["digest"] == digest
-        return {"status": "inspected", "mode": "read-only-failed-preparation", "guestMutations": 0}
-    monkeypatch.setattr(subject, "inspect_failed_preparation", inspect)
-    assert subject.main(["inspect-failed-prepare", "--campaign-dir", str(campaign),
+        return {"status": "inspected" if action == "inspect-failed-prepare" else "prepared", "mode": action, "guestMutations": 0}
+    monkeypatch.setattr(subject, "inspect_failed_preparation" if action == "inspect-failed-prepare" else "resume_failed_preparation", inspect)
+    assert subject.main([action, "--campaign-dir", str(campaign),
                          "--campaign-receipt-sha256", digest, "--adb", str(tmp_path / "adb"), "--serial", "synthetic:5555"]) == 0
     assert calls[0][1]["expected_cert_sha256"] == "c" * 64 and calls[0][1]["source_sha"] == "b" * 40
     output = capsys.readouterr().out
     assert "synthetic:5555" not in output and "Sample Audio" not in output
     assert json.loads(output)["guestMutations"] == 0
+
+
+def resume_case(tmp_path, monkeypatch, *, existing=0):
+    """Use real source snapshots and a guest FS model with exclusive creates."""
+    source = tmp_path / "source"
+    (source / "Sample Folder").mkdir(parents=True)
+    (source / "Sample Folder/First Audio.bin").write_bytes(b"data")
+    (source / "Sample Folder/Second Audio.bin").write_bytes(b"more")
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    value = {**receipt(), "status": "failed", "stage": "staged-publication", "errorType": "AdbOperationFailure",
+             "sourcePath": str(source.resolve()), "sourceAnchorPath": str(source), "inventory": subject.inventory(source),
+             "fileCount": 2, "totalBytes": 8}
+    value["inventorySha256"] = subject._digest(value["inventory"])
+    subject.write_json(campaign / "preparation.json", value)
+    digest = hashlib.sha256((campaign / "preparation.json").read_bytes()).hexdigest()
+    stage, destination = value["staging"], value["destination"]
+    phone = FakePhone()
+    phone.writes, phone.nonregular = [], set()
+    phone.dirs = {subject.INCOMING, subject.SHARED, stage, stage + "/Sample Folder", destination}
+    phone.files = {stage + "/" + row["path"]: (source / row["path"]).read_bytes() for row in value["inventory"]["files"]}
+    if existing:
+        phone.dirs.add(destination + "/Sample Folder")
+        for row in value["inventory"]["files"][:existing]:
+            phone.files[destination + "/" + row["path"]] = phone.files[stage + "/" + row["path"]]
+    for name in ("open", "forward", "stop", "cleanup", "request"):
+        setattr(phone, name, lambda *a, **kw: pytest.fail("copy resume attempted UI/network/lifecycle action"))
+    def shell(*args, **kwargs):
+        if args[:2] == ("readlink", "-f"): return args[-1]
+        if args[0] == "cat": return value["nonce"]
+        if args[0] == "mkdir":
+            path = shlex.split(args[-1])[0]
+            if path in phone.dirs or path in phone.files:
+                raise subject.AdbOperationFailure(("shell", "mkdir"), exit_code=1, stderr="File exists")
+            phone.dirs.add(path)
+            phone.writes.append(("mkdir", path))
+            return ""
+        pytest.fail("unexpected resume shell operation")
+    def script(text, **kwargs):
+        tokens = shlex.split(text)
+        assert text.startswith("umask 077; set -C; cat ") and tokens[-2] == ">"
+        source_path, target_path = tokens[-3], tokens[-1]
+        if target_path in phone.files or target_path in phone.dirs:
+            raise subject.AdbOperationFailure(("shell", "sh"), exit_code=1, stderr="File exists")
+        phone.files[target_path] = phone.files[source_path]
+        phone.writes.append(("exclusive-file", target_path))
+    phone.shell, phone.script = shell, script
+    def entries(selected, root, kind=None):
+        inside = lambda path: path == root or path.startswith(root + "/")
+        files = {path for path in phone.files if inside(path)}
+        dirs = {path for path in phone.dirs if inside(path)}
+        other = {path for path in phone.nonregular if inside(path)}
+        return files if kind == "f" else dirs if kind == "d" else files | dirs | other
+    monkeypatch.setattr(subject, "_guest_entries", entries)
+    monkeypatch.setattr(subject, "guest_sha256", lambda command, path, **kw: hashlib.sha256(phone.files[path]).hexdigest())
+    monkeypatch.setattr(subject, "_guest_free", lambda *a: 1024**4)
+    def stopped(ui):
+        assert phone.phase == "Stopped"
+        return {"foreground": False, "startRequested": False}
+    monkeypatch.setattr(subject, "_stopped_service_flags", stopped)
+    return phone, value, source, campaign, digest
+
+
+@pytest.mark.parametrize("existing", [0, 1, 2])
+def test_resume_creates_only_missing_verified_payload_and_new_receipt(tmp_path, monkeypatch, existing):
+    phone, value, source, campaign, digest = resume_case(tmp_path, monkeypatch, existing=existing)
+    staged = {key: data for key, data in phone.files.items() if key.startswith(value["staging"] + "/")}
+    source_before = subject.inventory(source)
+    result = subject.resume_failed_preparation(phone, value, campaign=campaign, output_root=tmp_path, digest=digest)
+    assert result["status"] == "prepared" and result["service"] == "stopped"
+    assert result["createdFiles"] == 2 - existing and result["skippedVerifiedFiles"] == existing
+    assert result["createdDirectories"] == (0 if existing else 1)
+    assert result["sourceRecopies"] == result["filesDeletedOrOverwritten"] == 0
+    assert hashlib.sha256((campaign / "preparation.json").read_bytes()).hexdigest() == digest
+    prepared = subject.admit_campaign(campaign, result["campaignReceiptSha256"], phone.device.serial)
+    assert prepared["resumedFromPreparationSha256"] == digest and "errorType" not in prepared
+    assert subject.inventory(source) == source_before
+    assert all(phone.files[key] == data for key, data in staged.items())
+
+
+@pytest.mark.parametrize("fault", ["partial", "unknown-shared", "unknown-staging", "nonregular", "source-changed"])
+def test_resume_rejects_conflicts_without_writing_or_removing_any_guest_entry(tmp_path, monkeypatch, fault):
+    phone, value, source, campaign, digest = resume_case(tmp_path, monkeypatch, existing=1)
+    first = value["destination"] + "/" + value["inventory"]["files"][0]["path"]
+    if fault == "partial": phone.files[first] = b"partial"
+    if fault == "unknown-shared": phone.files[subject.SHARED + "/Unknown.bin"] = b"keep"
+    if fault == "unknown-staging": phone.files[value["staging"] + "/Unknown.bin"] = b"keep"
+    if fault == "nonregular":
+        phone.files.pop(first)
+        phone.nonregular.add(first)
+    if fault == "source-changed": (source / value["inventory"]["files"][0]["path"]).write_bytes(b"changed")
+    before = (dict(phone.files), set(phone.dirs), set(phone.nonregular))
+    result = subject.resume_failed_preparation(phone, value, campaign=campaign, output_root=tmp_path, digest=digest)
+    assert result["status"] == "failed" and result["service"] == "stopped" and not phone.writes
+    assert (phone.files, phone.dirs, phone.nonregular) == before
+    assert not (campaign / "campaign.json").exists()
+    assert hashlib.sha256((campaign / "preparation.json").read_bytes()).hexdigest() == digest
+
+
+def test_resume_first_directory_failure_retains_closed_adb_cause_and_stopped_state(tmp_path, monkeypatch):
+    phone, value, source, campaign, digest = resume_case(tmp_path, monkeypatch)
+    original_shell = phone.shell
+    def shell(*args, **kwargs):
+        if args[0] == "mkdir":
+            raise subject.AdbOperationFailure(("shell", "mkdir", "private-device-secret"), exit_code=1, stderr="permission denied")
+        return original_shell(*args, **kwargs)
+    phone.shell = shell
+    before = dict(phone.files)
+    result = subject.resume_failed_preparation(phone, value, campaign=campaign, output_root=tmp_path, digest=digest)
+    assert result["status"] == "failed" and result["step"] == "destination-directory-create"
+    assert result["failedAdbSafeFailure"] == {"operation": "shell-mkdir", "reason": "permission-denied", "exitCode": 1}
+    assert phone.files == before and phone.phase == "Stopped" and not phone.writes
+    assert "private-device-secret" not in json.dumps(result)
+
+
+def test_resume_exclusive_create_preserves_a_racing_foreign_file(tmp_path, monkeypatch):
+    phone, value, source, campaign, digest = resume_case(tmp_path, monkeypatch)
+    original_script = phone.script
+    first = value["destination"] + "/" + value["inventory"]["files"][0]["path"]
+    def collision(text, **kwargs):
+        phone.files[first] = b"foreign occupant"
+        return original_script(text, **kwargs)
+    phone.script = collision
+    result = subject.resume_failed_preparation(phone, value, campaign=campaign, output_root=tmp_path, digest=digest)
+    assert result["status"] == "failed" and phone.files[first] == b"foreign occupant"
+    assert result["failedAdbSafeFailure"]["reason"] == "already-exists" and result["createdFiles"] == 0
+    assert not (campaign / "campaign.json").exists()
+
+
+def test_resume_never_overwrites_preexisting_campaign_receipt(tmp_path, monkeypatch):
+    phone, value, source, campaign, digest = resume_case(tmp_path, monkeypatch)
+    target = campaign / "campaign.json"
+    target.write_bytes(b"preserve existing receipt")
+    with pytest.raises(RuntimeError):
+        subject.resume_failed_preparation(phone, value, campaign=campaign, output_root=tmp_path, digest=digest)
+    assert target.read_bytes() == b"preserve existing receipt" and not phone.writes and not phone.calls
 
 
 def test_detached_observer_discards_expired_builder_lock_token(tmp_path, monkeypatch):
