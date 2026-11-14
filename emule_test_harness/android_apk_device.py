@@ -426,7 +426,32 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
         ui.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
         return True
 
+    settings_diagnostic = None
+
+    def settings_snapshot(elements, *, foreground_matched, app_visible, candidates):
+        # Only closed categories and bounded geometry survive the Settings snapshot.
+        ids = {"android:id/switch_widget": "android-switch", "android:id/checkbox": "android-checkbox",
+               "com.android.settings:id/switch_widget": "settings-switch"}
+        classes = {"android.widget.Switch": "switch", "android.widget.CheckBox": "checkbox",
+                   "android.widget.ToggleButton": "toggle", "androidx.appcompat.widget.SwitchCompat": "switch-compat"}
+        def boolean(value):
+            return {"true": True, "false": False}.get(value)
+        def control(node):
+            match = re.fullmatch(r"\[(\d{1,5}),(\d{1,5})\]\[(\d{1,5}),(\d{1,5})\]", node.get("bounds", ""))
+            bounds = [int(part) for part in match.groups()] if match else None
+            if bounds is not None and any(part > 32768 for part in bounds):
+                bounds = None
+            return {"resource": ids.get(node.get("resource-id"), "other"),
+                    "class": classes.get(node.get("class"), "other"), "bounds": bounds,
+                    "checked": boolean(node.get("checked")), "enabled": boolean(node.get("enabled"))}
+        controls = [node for node in elements if node.get("package") == "com.android.settings"
+                    and node.get("checkable") == "true"]
+        return {"foregroundMatched": foreground_matched, "ownAppVisible": app_visible,
+                "candidateCount": min(len(candidates), 9), "controls": [control(node) for node in controls[:8]],
+                "controlsTruncated": len(controls) > 8}
+
     def allow(permission, button, *, settings=False):
+        nonlocal settings_diagnostic
         if granted(permission):
             return True
         ui.click(button)
@@ -438,9 +463,12 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
                 packages = {"com.android.settings"} if settings else {
                     "com.android.permissioncontroller", "com.google.android.permissioncontroller"}
                 active = next((package for package in packages if foreground(package)), None)
-                app_visible = active is not None and any(node.get("package") == active and
+                app_visible = any(node.get("package") in packages and
                     (node.get("text", "").strip() == "eMuleBB" if settings else "eMuleBB" in node.get("text", ""))
                     for node in elements)
+                if not settings:
+                    app_visible = active is not None and any(node.get("package") == active and
+                        "eMuleBB" in node.get("text", "") for node in elements)
                 if active is not None and app_visible:
                     if settings:
                         candidates = [node for node in elements if node.get("package") == active
@@ -449,15 +477,27 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
                         candidates = [node for node in elements if node.get("package") == active
                                       and node.get("enabled") == "true" and node.get("clickable") == "true"
                                       and node.get("resource-id") in {package + ":id/permission_allow_button" for package in packages}]
+                    if settings:
+                        settings_diagnostic = settings_snapshot(elements, foreground_matched=True,
+                                                                app_visible=True, candidates=candidates)
                     break
+                if settings:
+                    settings_diagnostic = settings_snapshot(elements, foreground_matched=active is not None,
+                                                            app_visible=app_visible, candidates=[])
                 if time.monotonic() >= deadline:
+                    if settings:
+                        settings_diagnostic["reason"] = "foreground-or-label-timeout"
                     return False
                 time.sleep(0.5)
             # Never guess between Samsung/stock controls or turn an existing
             # grant off. Ambiguous UI remains an explicit manual setup step.
             if len(candidates) != 1 or settings and candidates[0].get("checked") != "false":
+                if settings:
+                    settings_diagnostic["reason"] = "candidate-count" if len(candidates) != 1 else "checked-state"
                 return False
             if not tap(candidates[0]):
+                if settings:
+                    settings_diagnostic["reason"] = "invalid-bounds"
                 return False
             change = {"permission": permission, "method": "normal-settings-ui" if settings else "normal-permission-dialog",
                       "before": "denied", "after": "unconfirmed"}
@@ -465,9 +505,13 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
             deadline = time.monotonic() + 10
             while not granted(permission):
                 if time.monotonic() >= deadline:
+                    if settings:
+                        settings_diagnostic["reason"] = "grant-timeout"
                     return False
                 time.sleep(0.5)
             change["after"] = "granted"
+            if settings:
+                settings_diagnostic["reason"] = "grant-confirmed"
             return True
         finally:
             ui.shell("input", "keyevent", "KEYCODE_BACK")
@@ -480,10 +524,13 @@ def _normal_permission_setup(ui: ProductionUi, *, api: int, changes: list) -> di
         complete = allow("POST_NOTIFICATIONS", "allow_notifications")
     if complete and api >= 37:
         complete = allow("ACCESS_LOCAL_NETWORK", "allow_local_network")
-    return {"complete": complete, "allFiles": granted("MANAGE_EXTERNAL_STORAGE"),
-            "localNetworkRequired": api >= 37,
-            "localNetwork": granted("ACCESS_LOCAL_NETWORK") if api >= 37 else "not-required",
-            "notifications": granted("POST_NOTIFICATIONS") if api >= 33 else "not-required", "batteryExemption": "not-inspected"}
+    result = {"complete": complete, "allFiles": granted("MANAGE_EXTERNAL_STORAGE"),
+              "localNetworkRequired": api >= 37,
+              "localNetwork": granted("ACCESS_LOCAL_NETWORK") if api >= 37 else "not-required",
+              "notifications": granted("POST_NOTIFICATIONS") if api >= 33 else "not-required", "batteryExemption": "not-inspected"}
+    if not result["allFiles"] and settings_diagnostic is not None:
+        result["setupDiagnostic"] = settings_diagnostic
+    return result
 
 
 def _physical_process_resources(port: int, key: str) -> dict:
