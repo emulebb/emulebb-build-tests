@@ -254,6 +254,25 @@ def test_campaign_failure_carries_only_closed_typed_details():
     assert 'transfer' not in subject._lifecycle_failure(CampaignFailure(failure), 'local-transfer', {})
 
 
+def test_campaign_completion_failure_projects_only_validated_fields_for_await_phase():
+    from emule_test_harness.android_apk_peer import CampaignFailure
+    completion = {"reason": "deadline-exhausted", "samples": [
+        {"sharedLookup": "missing", "transferPresence": "present", "state": "completing", "progress": 1.0,
+         "completedBytes": 262144, "sizeBytes": 262144, "partsObtained": 1, "partsTotal": 1,
+         "deliveryPathPresent": False, "deliveryErrorCategory": "atomic-no-replace-unsupported", "path": "private"},
+        {"sharedLookup": "unavailable", "transferPresence": "ambiguous", "state": "completing", "path": "private"}],
+        "raw": "private"}
+    failure = {"phase": "await-completed-delivery", "code": "await-completed-delivery-failed", "completion": completion}
+    result = subject._lifecycle_failure(CampaignFailure(failure), "local-transfer", {})
+    safe = result["transfer"]["completion"]
+    assert safe["reason"] == "deadline-exhausted" and len(safe["samples"]) == 2
+    assert safe["samples"][0] == {key: value for key, value in completion["samples"][0].items() if key != "path"}
+    assert safe["samples"][1] == {"sharedLookup": "unavailable", "transferPresence": "ambiguous"}
+    assert "private" not in json.dumps(result)
+    failure.update(phase="enqueue-owned-transfer", code="enqueue-owned-transfer-failed")
+    assert "completion" not in subject._lifecycle_failure(CampaignFailure(failure), "local-transfer", {})["transfer"]
+
+
 class Guest:
     """Minimal production UI/ADB peer, with independently observed REST state."""
 

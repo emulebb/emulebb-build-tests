@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -21,6 +22,93 @@ from .android_apk_cleanup import COLLISION_OCCUPANT, OwnedFixtureFailure, remove
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
+TRANSFER_STATES = frozenset({"downloading", "paused", "queued", "checking", "completing", "completed", "error", "missingfiles"})
+DELIVERY_ERROR_CATEGORIES = frozenset({"none", "atomic-no-replace-unsupported", "stage-create", "stage-open-payload",
+    "stage-copy", "install", "verification", "other-present"})
+
+
+def safe_completion_failure(value):
+    """Project bounded completion evidence without content, paths or free-form errors."""
+    if (not isinstance(value, dict) or not isinstance(value.get("reason"), str)
+            or value["reason"] not in {"deadline-exhausted", "lookup-failed"}
+            or not isinstance(value.get("samples"), list) or not 1 <= len(value["samples"]) <= 2):
+        return None
+    samples = []
+    for sample in value["samples"]:
+        if (not isinstance(sample, dict) or not isinstance(sample.get("sharedLookup"), str)
+                or sample["sharedLookup"] not in {"missing", "metadata-mismatch", "unavailable"}
+                or not isinstance(sample.get("transferPresence"), str)
+                or sample["transferPresence"] not in {"present", "absent", "unavailable", "ambiguous"}):
+            return None
+        safe = {name: sample[name] for name in ("sharedLookup", "transferPresence")}
+        if sample["transferPresence"] == "present":
+            if isinstance(sample.get("state"), str) and sample["state"] in TRANSFER_STATES:
+                safe["state"] = sample["state"]
+            progress = sample.get("progress")
+            if type(progress) in {int, float} and 0 <= progress <= 1 and math.isfinite(progress):
+                safe["progress"] = progress
+            for name, maximum in (("completedBytes", 2**64 - 1), ("sizeBytes", 2**64 - 1),
+                                  ("partsObtained", 2**32 - 1), ("partsTotal", 2**32 - 1)):
+                if type(sample.get(name)) is int and 0 <= sample[name] <= maximum:
+                    safe[name] = sample[name]
+            if type(sample.get("deliveryPathPresent")) is bool:
+                safe["deliveryPathPresent"] = sample["deliveryPathPresent"]
+            if isinstance(sample.get("deliveryErrorCategory"), str) and sample["deliveryErrorCategory"] in DELIVERY_ERROR_CATEGORIES:
+                safe["deliveryErrorCategory"] = sample["deliveryErrorCategory"]
+        samples.append(safe)
+    return {"reason": value["reason"], "samples": samples}
+
+
+def _delivery_error_category(value):
+    """Classify only source-owned delivery signatures; never retain the error text."""
+    if value is None or value == "":
+        return "none"
+    if not isinstance(value, str):
+        return None
+    markers = (("filesystem does not support atomic no-replace rename:", "atomic-no-replace-unsupported"),
+        ("failed to create delivery staging file ", "stage-create"),
+        ("failed to open delivery payload ", "stage-open-payload"),
+        ("failed to copy payload ", "stage-copy"),
+        ("failed to install delivery staging file ", "install"),
+        ("delivered file failed verification:", "verification"),
+        ("delivery staging file failed verification:", "verification"),
+        ("published delivery failed verification:", "verification"))
+    for marker, category in markers:
+        if value.startswith(marker) or ": " + marker in value:
+            return category
+    return "other-present"
+
+
+def _completion_sample(request, file_hash, shared_lookup):
+    """Read the owned transfer once; failed diagnostics remain explicitly unavailable."""
+    sample = {"sharedLookup": shared_lookup, "transferPresence": "unavailable"}
+    try:
+        details = request("GET", "/api/v1/transfers/" + file_hash + "/details")
+    except RustRestFailure as error:
+        if error.safe_failure["httpStatus"] == 404:
+            sample["transferPresence"] = "absent"
+        return sample
+    except Exception:
+        return sample
+    transfer = details.get("transfer") if isinstance(details, dict) else None
+    if not isinstance(transfer, dict):
+        if isinstance(transfer, list) and len(transfer) > 1:
+            sample["transferPresence"] = "ambiguous"
+        return sample
+    owned_hash = transfer.get("hash")
+    if not isinstance(owned_hash, str) or re.fullmatch(r"[0-9a-fA-F]{32}", owned_hash) is None:
+        return sample
+    if owned_hash.lower() != file_hash:
+        sample["transferPresence"] = "ambiguous"
+        return sample
+    sample.update({"transferPresence": "present", **{name: transfer[name] for name in (
+        "state", "progress", "completedBytes", "sizeBytes", "partsObtained", "partsTotal") if name in transfer}})
+    if "deliveredPath" in transfer and (transfer["deliveredPath"] is None or isinstance(transfer["deliveredPath"], str)):
+        sample["deliveryPathPresent"] = bool(transfer["deliveredPath"])
+    category = _delivery_error_category(transfer.get("deliveryError"))
+    if category is not None:
+        sample["deliveryErrorCategory"] = category
+    return safe_completion_failure({"reason": "lookup-failed", "samples": [sample]})["samples"][0]
 
 
 class CampaignFailure(RuntimeError):
@@ -564,31 +652,56 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                 request("POST", "/api/v1/transfers", {"link": source_link, "paused": False})
                 deadline = time.monotonic() + 120
                 campaign.mark("await-completed-delivery")
-                while True:
-                    try:
-                        result = request("GET", "/api/v1/shared-files/" + file_hash)
-                    except RustRestFailure as error:
-                        if error.safe_failure["httpStatus"] != 404:
-                            raise
-                        result = None
-                    if result is not None and (result.get("hash", "").lower() != file_hash
-                            or result.get("complete") is not True or result.get("partFile") is not False):
-                        result = None
-                    if result is not None:
-                        path = PurePosixPath(result.get("path", ""))
-                        campaign.mark("verify-delivered-path-and-size")
-                        if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
-                            raise RuntimeError("APK delivered file has invalid size, location or collision handling")
-                        campaign.mark("verify-delivered-bytes")
-                        if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
-                            raise RuntimeError("APK delivered bytes differ from the deterministic peer payload")
-                        campaign.mark("verify-collision-preserved")
-                        if guest_sha256(command, incoming + "/" + name, prefix=prefix) != hashlib.sha256(occupant).hexdigest():
-                            raise RuntimeError("APK delivery replaced the foreign destination occupant")
-                        break
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("APK local transfer did not register a completed delivery within its bound")
-                    time.sleep(1)
+                shared_lookup = "unavailable"
+                deadline_exhausted = False
+                try:
+                    while True:
+                        shared_lookup = "unavailable"
+                        try:
+                            result = request("GET", "/api/v1/shared-files/" + file_hash)
+                        except RustRestFailure as error:
+                            if error.safe_failure["httpStatus"] != 404:
+                                raise
+                            result = None
+                            shared_lookup = "missing"
+                        if result is not None and (result.get("hash", "").lower() != file_hash
+                                or result.get("complete") is not True or result.get("partFile") is not False):
+                            result = None
+                            shared_lookup = "metadata-mismatch"
+                        if result is not None:
+                            path = PurePosixPath(result.get("path", ""))
+                            campaign.mark("verify-delivered-path-and-size")
+                            if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
+                                raise RuntimeError("APK delivered file has invalid size, location or collision handling")
+                            campaign.mark("verify-delivered-bytes")
+                            if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
+                                raise RuntimeError("APK delivered bytes differ from the deterministic peer payload")
+                            campaign.mark("verify-collision-preserved")
+                            if guest_sha256(command, incoming + "/" + name, prefix=prefix) != hashlib.sha256(occupant).hexdigest():
+                                raise RuntimeError("APK delivery replaced the foreign destination occupant")
+                            break
+                        if time.monotonic() >= deadline:
+                            deadline_exhausted = True
+                            raise RuntimeError("APK local transfer did not register a completed delivery within its bound")
+                        time.sleep(1)
+                except Exception as error:
+                    if campaign.value["phase"] == "await-completed-delivery":
+                        # WHY: the catalog alone cannot distinguish downloading
+                        # from failed delivery. Sample only after failure and
+                        # before cleanup, preserving the success-path timing and
+                        # original failure even if diagnostics cannot run.
+                        try:
+                            try:
+                                sample = _completion_sample(request, file_hash, shared_lookup)
+                            except Exception:
+                                sample = {"sharedLookup": shared_lookup, "transferPresence": "unavailable"}
+                            campaign.fail(error)
+                            campaign.value["failure"]["completion"] = {
+                                "reason": "deadline-exhausted" if deadline_exhausted else "lookup-failed", "samples": [sample]}
+                            campaign.save()
+                        except Exception:
+                            pass
+                    raise
         campaign.mark("restart-completed-delivery")
         restart_service()
         campaign.mark("verify-completed-delivery-metadata")

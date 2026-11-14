@@ -12,6 +12,73 @@ from emule_test_harness import android_apk_peer as subject
 IDENTITY = {"sourceRevision": "a" * 40, "version": "0.1.0-test", "channel": "development"}
 
 
+@pytest.mark.parametrize("message,category", [
+    (None, "none"), ("", "none"),
+    ("failed to create delivery staging file /private", "stage-create"),
+    ("failed to open delivery payload /private", "stage-open-payload"),
+    ("failed to copy payload /private", "stage-copy"),
+    ("failed to install delivery staging file /private at /private: permission denied", "install"),
+    ("failed to install delivery staging file /private at /private: filesystem does not support atomic no-replace rename: private", "atomic-no-replace-unsupported"),
+    ("failed to deliver completed transfer private: delivery staging file failed verification: /private", "verification"),
+    ("failed to sync directory /private", "other-present"),
+    ("atomic rename private", "other-present"), ({"private": "value"}, None),
+])
+def test_completion_delivery_error_uses_only_exact_source_markers(message, category):
+    assert subject._delivery_error_category(message) == category
+
+
+@pytest.mark.parametrize("response,presence", [
+    ({"transfer": {"hash": "b" * 32, "state": "completing", "progress": 1.0}}, "present"),
+    ({"transfer": {"hash": "c" * 32, "state": "completing", "progress": 1.0}}, "ambiguous"),
+    ({"transfer": [{"hash": "b" * 32}, {"hash": "b" * 32}]}, "ambiguous"),
+    ({"transfer": {"hash": "private", "state": "completing"}}, "unavailable"),
+    ({"transfer": None}, "unavailable"), ({}, "unavailable"),
+    (subject.RustRestFailure("private", status=404, detail="{}"), "absent"),
+    (RuntimeError("private"), "unavailable"),
+])
+def test_completion_sample_requires_owned_details_transfer(response, presence):
+    def request(method, route):
+        assert method == "GET" and route == "/api/v1/transfers/" + "b" * 32 + "/details"
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    sample = subject._completion_sample(request, "b" * 32, "missing")
+    assert sample["sharedLookup"] == "missing" and sample["transferPresence"] == presence
+    if presence != "present":
+        assert set(sample) == {"sharedLookup", "transferPresence"}
+    assert "hash" not in sample and "private" not in json.dumps(sample)
+
+
+@pytest.mark.parametrize("progress", [False, True, -0.1, 1.1, float("nan"), float("inf"), 10**1000, "private", None])
+def test_completion_projection_rejects_invalid_progress_and_untrusted_fields(progress):
+    sample = {"sharedLookup": "missing", "transferPresence": "present", "state": ["private"], "progress": progress,
+        "completedBytes": True, "sizeBytes": 2**64, "partsObtained": -1, "partsTotal": 2**32,
+        "deliveryPathPresent": "private", "deliveryErrorCategory": "private", "hash": "private", "path": "private"}
+    result = subject.safe_completion_failure({"reason": "deadline-exhausted", "samples": [sample], "private": "private"})
+    assert result == {"reason": "deadline-exhausted", "samples": [{"sharedLookup": "missing", "transferPresence": "present"}]}
+
+
+def test_completion_projection_admits_exact_numeric_boundaries_and_closed_fields():
+    sample = {"sharedLookup": "metadata-mismatch", "transferPresence": "present", "state": "completing", "progress": 1.0,
+        "completedBytes": 0, "sizeBytes": 2**64 - 1, "partsObtained": 0, "partsTotal": 2**32 - 1,
+        "deliveryPathPresent": False, "deliveryErrorCategory": "none"}
+    assert subject.safe_completion_failure({"reason": "lookup-failed", "samples": [sample]}) == {
+        "reason": "lookup-failed", "samples": [sample]}
+    assert subject.safe_completion_failure({"reason": "lookup-failed", "samples": [sample] * 3}) is None
+    assert subject.safe_completion_failure({"reason": [], "samples": []}) is None
+    assert subject.safe_completion_failure({"reason": "lookup-failed", "samples": []}) is None
+
+
+@pytest.mark.parametrize("invalid", [None, {}, {"sharedLookup": []},
+    {"sharedLookup": "missing", "transferPresence": "private"}])
+@pytest.mark.parametrize("position", [0, 1])
+def test_completion_projection_rejects_entire_observation_when_sample_order_is_unproved(invalid, position):
+    samples = [{"sharedLookup": "missing", "transferPresence": "absent"}] * 2
+    samples[position] = invalid
+    assert subject.safe_completion_failure({"reason": "deadline-exhausted", "samples": samples}) is None
+
+
 def fixture(tmp_path, *, identity=IDENTITY):
     binary = tmp_path / "emulebb-rust"
     binary.write_bytes(b"synthetic source-bound CLI")
@@ -185,7 +252,8 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 
 
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
-    "history", "duplicate-accepted", "active-row", "preflight-enqueue", "incomplete-inventory"])
+    "history", "duplicate-accepted", "active-row", "preflight-enqueue", "incomplete-inventory",
+    "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
     from copy import deepcopy
@@ -199,6 +267,10 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
              "created": False, "restarts": 0, "deleted": False}
     servers = {}
     disabled_servers = []
+    detail_reads, shared_reads, clock = [], [], [0]
+    if failure and (failure.startswith("completion-") or failure == "transient-completion"):
+        monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     public_server = {"address": "192.0.2.100", "port": 4661, "name": "Operator server", "enabled": True}
 
     @contextmanager
@@ -280,10 +352,28 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                 return page([{"hash": "b" * 32}] if failure == "known-hash" else [], shared=True)
             pytest.fail("known delivered hash must use its exact endpoint, not a first page")
         if route == "/api/v1/shared-files/" + "b" * 32:
+            shared_reads.append(clock[0])
+            if failure == "transient-completion" and len(shared_reads) == 1:
+                raise subject.RustRestFailure("synthetic-private-error", status=404, detail="{}")
+            if failure in {"completion-missing", "completion-diagnostics"}:
+                raise subject.RustRestFailure("synthetic-private-error", status=404, detail="{}")
+            if failure == "completion-mismatch":
+                return {"hash": "b" * 32, "complete": False, "partFile": True}
+            if failure == "completion-lookup":
+                raise subject.RustRestFailure("synthetic-private-error", status=503, detail="{}")
             state["promoted"] = True
             return {"hash": "b" * 32, "complete": True, "partFile": False,
                               "sizeBytes": len(content),
                               "path": ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2 else state["incoming"]) + "/Android Sample (1).bin"}
+        if route == "/api/v1/transfers/" + "b" * 32 + "/details":
+            assert not state["deleted"] and not disabled_servers
+            detail_reads.append(clock[0])
+            if failure == "completion-diagnostics":
+                raise RuntimeError("synthetic-private-diagnostic-error")
+            return {"transfer": {"hash": "b" * 32, "state": "completing", "progress": 1.0,
+                "completedBytes": len(content), "sizeBytes": len(content), "partsObtained": 1, "partsTotal": 1,
+                "deliveredPath": None, "deliveryError": "failed to install delivery staging file /private at /private: "
+                    "filesystem does not support atomic no-replace rename: private-error"}}
         return {}
 
     def command(*args, **kwargs):
@@ -320,19 +410,39 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     monkeypatch.setattr(subject, "request_json", request)
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
                      report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
-    if failure:
+    if failure and failure != "transient-completion":
         expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
                           "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
                           "known-hash": "peer-shared-file-hash", "server-owner": "app-listener-owned-server-disable-precondition",
                           "restore": "cleanup-restore-original-settings", "history": "verify-completed-download-evidence",
                           "duplicate-accepted": "verify-completed-download-evidence", "active-row": "verify-completed-delivery-metadata",
-                          "preflight-enqueue": "verify-completed-download-evidence", "incomplete-inventory": "admit-prior-downloads-and-roots"}[failure]
+                          "preflight-enqueue": "verify-completed-download-evidence", "incomplete-inventory": "admit-prior-downloads-and-roots",
+                          **{name: "await-completed-delivery" for name in ("completion-missing", "completion-mismatch",
+                              "completion-lookup", "completion-diagnostics")}}[failure]
         with pytest.raises(subject.CampaignFailure) as failed:
             subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert failed.value.failure["phase"] == expected_phase
         receipt = json.loads((tmp_path / "transfer-campaign.json").read_text())
         assert receipt["status"] == "failed" and receipt["failure"]["code"] == expected_phase + "-failed"
+        if failure.startswith("completion-"):
+            completion = failed.value.failure["completion"]
+            assert receipt["failure"]["completion"] == completion
+            assert completion["reason"] == ("lookup-failed" if failure == "completion-lookup" else "deadline-exhausted")
+            assert len(completion["samples"]) == 1
+            assert detail_reads == ([0] if failure == "completion-lookup" else [120])
+            assert clock[0] == (0 if failure == "completion-lookup" else 120)
+            assert all(sample["sharedLookup"] == {"completion-missing": "missing", "completion-diagnostics": "missing",
+                "completion-mismatch": "metadata-mismatch", "completion-lookup": "unavailable"}[failure] for sample in completion["samples"])
+            assert all(sample["transferPresence"] == ("unavailable" if failure == "completion-diagnostics" else "present")
+                       for sample in completion["samples"])
+            if failure != "completion-diagnostics":
+                assert all(sample["deliveryErrorCategory"] == "atomic-no-replace-unsupported" for sample in completion["samples"])
+            assert "private" not in json.dumps(completion)
+            if failure == "completion-lookup":
+                assert receipt["failure"]["rest"]["httpStatus"] == 503
+            else:
+                assert receipt["failure"]["errorType"] == "RuntimeError" and "rest" not in receipt["failure"]
     else:
         result = subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert result["status"] == "passed"
@@ -340,6 +450,9 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         assert result["completedDeliverySurvivesRestart"] is True
         assert result["sha256"] == hashlib.sha256(content).hexdigest()
         assert state["settings"] == original and state["incoming"] == original["daemon"]["incomingDir"]
+        assert not detail_reads, "successful transfer waits must not run diagnostic REST requests"
+        if failure == "transient-completion":
+            assert clock[0] == 1 and shared_reads[:2] == [0, 1]
         assert state["restarts"] == 3 and state["deleted"]
         assert not any(path.startswith("/storage/") for path in guest_files)
         assert len(disabled_servers) == 2

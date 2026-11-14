@@ -233,7 +233,7 @@ def _lifecycle_failure(error: Exception, stage: str, observation: dict) -> dict:
                 code = "control-unsafe-bounds"
     failure = {"stage": stage, "code": code, **observation}
     from .android_adb_failure import AdbOperationFailure
-    from .android_apk_peer import CampaignFailure
+    from .android_apk_peer import CampaignFailure, safe_completion_failure
     if isinstance(error, AdbOperationFailure):
         failure["adb"] = _safe_adb_failure(error.safe_failure)
     if isinstance(error, CampaignFailure):
@@ -258,6 +258,10 @@ def _lifecycle_failure(error: Exception, stage: str, observation: dict) -> dict:
                 safe["ownedFixture"] = {"code": fixture["code"]}
                 if type(fixture.get("filesRemoved")) is int and 0 <= fixture["filesRemoved"] <= 2:
                     safe["ownedFixture"]["filesRemoved"] = fixture["filesRemoved"]
+            if detail["phase"] == "await-completed-delivery":
+                completion = safe_completion_failure(detail.get("completion"))
+                if completion is not None:
+                    safe["completion"] = completion
             failure["transfer"] = safe
     return failure
 
