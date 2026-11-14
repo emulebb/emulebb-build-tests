@@ -5,8 +5,79 @@ import json
 import pytest
 
 from emule_test_harness import android_apk_lifecycle as subject
+from emule_test_harness.android_adb_failure import AdbOperationFailure
 
 SOURCE = "a" * 40
+
+
+def test_wait_state_reinspects_transient_absence_without_acting_on_unknown_ui(monkeypatch):
+    calls = []
+    clock = [0]
+    monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def command(*args):
+        calls.append(args)
+        if args[-2:-1] == ("cat",):
+            if clock[0] == 0:
+                return '<hierarchy><node resource-id="com.android.launcher:id/workspace"/></hierarchy>'
+            return '<hierarchy><node resource-id="org.emulebb.android:id/service_status" text="Stopped"/></hierarchy>'
+        if args[-2:] == ("wm", "size"):
+            return "Physical size: 1080x1920"
+        if args[-3:] == ("dumpsys", "window", "policy"):
+            return "mKeyguardShowing=false"
+        return ""
+
+    ui = subject.ProductionUi(command)
+    ui.wait_state("Stopped", timeout=3)
+    assert clock[0] == 1
+    assert sum(call[-2:-1] == ("cat",) for call in calls) == 3
+    assert not any("input" in call or "am" in call or "pm" in call or "appops" in call for call in calls)
+
+
+def test_wait_state_persistent_absence_keeps_typed_failure_and_deadline(monkeypatch):
+    clock, reads, sleeps = [0], [], []
+    monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    def missing(name):
+        reads.append(clock[0])
+        raise subject.DeviceUiUnavailable("app-not-visible")
+
+    monkeypatch.setattr(subject.time, "sleep", sleep)
+    ui = subject.ProductionUi(lambda *args: pytest.fail("Unexpected UI action"))
+    monkeypatch.setattr(ui, "find", missing)
+    with pytest.raises(subject.DeviceUiUnavailable) as caught:
+        ui.wait_state("Stopped", timeout=2.5)
+    assert caught.value.reason == "app-not-visible"
+    assert subject._lifecycle_failure(caught.value, "wait-stopped", {})["code"] == "app-not-visible"
+    assert reads == [0, 1, 2] and sleeps == [1, 1, 0.5] and clock[0] == 2.5
+
+
+@pytest.mark.parametrize("failure", [subject.DeviceUiUnavailable("device-locked"),
+    AdbOperationFailure(("shell", "dumpsys"), exit_code=1), RuntimeError("Unrelated failure")])
+def test_wait_state_does_not_retry_lock_or_command_errors(monkeypatch, failure):
+    ui = subject.ProductionUi(lambda *args: pytest.fail("Unexpected UI action"))
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: pytest.fail("Unexpected retry"))
+
+    def fail(name):
+        raise failure
+
+    monkeypatch.setattr(ui, "find", fail)
+    with pytest.raises(type(failure)) as caught:
+        ui.wait_state("Stopped")
+    assert caught.value is failure
+
+
+def test_wait_state_failed_service_remains_immediate(monkeypatch):
+    ui = subject.ProductionUi(lambda *args: pytest.fail("Unexpected UI action"))
+    monkeypatch.setattr(ui, "find", lambda name: {"text": "Failed"})
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: pytest.fail("Unexpected retry"))
+    with pytest.raises(RuntimeError, match="APK did not reach expected service state: Stopped"):
+        ui.wait_state("Stopped")
 
 
 def test_initial_app_not_visible_records_original_launch_and_precleanup_facts(tmp_path, monkeypatch):

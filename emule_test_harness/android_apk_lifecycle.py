@@ -594,7 +594,20 @@ class ProductionUi:
     def wait_state(self, expected, timeout=90):
         deadline = time.monotonic() + timeout
         while True:
-            state = self.find("service_status").get("text", "")
+            try:
+                state = self.find("service_status").get("text", "")
+            except DeviceUiUnavailable as failure:
+                if failure.reason != "app-not-visible":
+                    raise
+                # WHY: an owned launch can precede its accessible controls.
+                # Reinspect within this wait's bound without acting on unknown UI.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(1, remaining))
+                if time.monotonic() >= deadline:
+                    raise
+                continue
             if state == expected:
                 return
             if state == "Failed" or time.monotonic() >= deadline:
