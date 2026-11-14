@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from test_profile_import_job import directory_alias as directory_alias
 
 from emule_test_harness import android_public_sharing as subject
 
@@ -190,6 +191,13 @@ class FakePhone:
     def request(self, *args): return {"total": 0, "items": []}
 
 
+def installation_evidence(phone):
+    return {"schema": "emulebb.android.physical-device/1", "status": "passed", "ownedInstallation": True,
+            "freshInstallation": True, "debugBuild": False,
+            "deviceSerialSha256": hashlib.sha256(phone.device.serial.encode()).hexdigest(),
+            "apkSha256": "a" * 64, "signerSha256": "b" * 64, "versionCode": 1, "sourceRevision": "c" * 40}
+
+
 def mock_observer(monkeypatch, *, fail=False):
     monkeypatch.setattr(subject, "guest_scope", lambda *a, **kw: None)
     monkeypatch.setattr(subject, "wifi_default", lambda *a: None)
@@ -250,17 +258,91 @@ def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_pa
     monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
     def settings(*args, **kwargs): phone.calls.append("cap-configured")
     monkeypatch.setattr(subject, "_settings", settings)
-    device_hash = hashlib.sha256(phone.device.serial.encode()).hexdigest()
-    installation = {"schema": "emulebb.android.physical-device/1", "status": "passed", "ownedInstallation": True,
-                    "freshInstallation": True,
-                    "debugBuild": False, "deviceSerialSha256": device_hash, "apkSha256": "a" * 64,
-                    "signerSha256": "b" * 64, "versionCode": 1, "sourceRevision": "c" * 40}
     digest = subject.prepare(phone, campaign=campaign, output_root=tmp_path, source=source, expected_file_count=1,
-                             expected_total_bytes=4, installation=installation, admission={}, limits=subject.Limits(), route="direct-wifi")
+                             expected_total_bytes=4, installation=installation_evidence(phone), admission={}, limits=subject.Limits(), route="direct-wifi")
     push = next(call for call in phone.calls if isinstance(call, tuple) and call[0] == "push")
     assert phone.calls.index("cap-configured") < phone.calls.index("stop") < phone.calls.index(push)
     value = subject.admit_campaign(campaign, digest, phone.device.serial)
     assert value["sourceUnchanged"] and value["guestSha256Verified"] and (source / "Sample.bin").read_bytes() == b"data"
+
+
+@pytest.mark.parametrize("retarget", [False, True])
+def test_prepare_resolves_operator_junction_anchor_once_and_detects_retarget(
+        tmp_path, monkeypatch, directory_alias, retarget):
+    alias, actual = directory_alias
+    source = actual / "library"
+    source.mkdir()
+    (source / "Sample.bin").write_bytes(b"data")
+    selected = alias / "library"
+    canonical = source.resolve(strict=True)
+    campaign = tmp_path / "campaign"
+    phone = FakePhone()
+    mock_observer(monkeypatch)
+    monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
+    inventories = []
+    original_inventory = subject.inventory
+    def inventory(path):
+        inventories.append(path)
+        return original_inventory(path)
+    monkeypatch.setattr(subject, "inventory", inventory)
+    original_command = phone.command
+    def command(*args, **kwargs):
+        original_command(*args, **kwargs)
+        if args[0] == "push" and retarget:
+            replacement = tmp_path / "replacement"
+            (replacement / "library").mkdir(parents=True)
+            (replacement / "library/Sample.bin").write_bytes(b"data")
+            if subject.os.name == "nt":
+                alias.rmdir()  # Removes only the junction, preserving its target.
+                result = subject.subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(replacement)],
+                                                capture_output=True, text=True)
+                assert result.returncode == 0
+            else:
+                alias.unlink()
+                alias.symlink_to(replacement, target_is_directory=True)
+    phone.device.command = command
+    kwargs = dict(phone=phone, campaign=campaign, output_root=tmp_path, source=selected,
+                  expected_file_count=1, expected_total_bytes=4, installation=installation_evidence(phone),
+                  admission={}, limits=subject.Limits(), route="direct-wifi")
+    if retarget:
+        with pytest.raises(RuntimeError):
+            subject.prepare(**kwargs)
+        result = subject._read_json(campaign / "preparation.json")
+        assert result["status"] == "failed" and result["stage"] == "source-reverification"
+        assert not (campaign / "campaign.json").exists()
+    else:
+        digest = subject.prepare(**kwargs)
+        result = subject.admit_campaign(campaign, digest, phone.device.serial)
+        assert result["sourcePath"] == str(canonical) and result["sourceAnchorPath"] == str(selected.absolute())
+        assert result["stage"] == "complete" and len(inventories) == 2
+    assert inventories and all(path == canonical for path in inventories)
+    push = next(call for call in phone.calls if isinstance(call, tuple) and call[0] == "push")
+    assert push[1] == str(canonical) + "/."
+    assert (canonical / "Sample.bin").read_bytes() == b"data"
+
+
+def test_prepare_still_rejects_junction_inside_selected_source_tree(tmp_path, monkeypatch, directory_alias):
+    alias, actual = directory_alias
+    (actual / "Sample.bin").write_bytes(b"data")
+    phone = FakePhone()
+    mock_observer(monkeypatch)
+    with pytest.raises(RuntimeError):
+        subject.prepare(phone, campaign=tmp_path / "campaign", output_root=tmp_path, source=tmp_path,
+                        expected_file_count=1, expected_total_bytes=4, installation=installation_evidence(phone),
+                        admission={}, limits=subject.Limits(), route="direct-wifi")
+    assert not phone.calls and alias.samefile(actual)
+
+
+def test_source_anchor_rejects_replacement_of_canonical_directory(tmp_path):
+    source, preserved = tmp_path / "source", tmp_path / "preserved"
+    source.mkdir()
+    original = source.stat()
+    assert source.resolve().is_relative_to(tmp_path.resolve()) and preserved.absolute().is_relative_to(tmp_path.absolute())
+    source.rename(preserved)
+    source.mkdir()
+    with pytest.raises(RuntimeError):
+        subject.verify_source_anchor(source, source, (original.st_dev, original.st_ino))
+    assert preserved.is_dir()
 
 
 def test_status_does_not_print_inventory_endpoints_or_source(tmp_path):

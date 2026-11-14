@@ -98,6 +98,15 @@ def inventory(source: Path) -> dict:
     return {"directories": sorted(directories), "files": sorted(files, key=lambda row: row["path"])}
 
 
+def verify_source_anchor(anchor: Path, source: Path, identity: tuple[int, int]):
+    """Verify the selected alias and fixed canonical root still name one directory."""
+    canonical = _regular(source, directory=True)
+    selected = anchor.stat()
+    if (not stat.S_ISDIR(selected.st_mode) or (canonical.st_dev, canonical.st_ino) != identity
+            or (selected.st_dev, selected.st_ino) != identity):
+        raise RuntimeError("Approved source directory anchor changed")
+
+
 def _private_root(campaign: Path, output_root: Path, *, fresh=False):
     output_root = output_root.resolve(strict=True)
     campaign = campaign.absolute()
@@ -463,16 +472,25 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
                 "signerSha256": phone.payload["signerSha256"], "versionCode": phone.payload["versionCode"],
                 "sourceRevision": phone.payload["buildIdentity"]["sourceRevision"]}.items())):
         raise RuntimeError("Prepare requires the exact verified owned installation receipt")
+    # WHY: an explicitly selected operator anchor may cross a junction. Resolve
+    # that anchor once; never switch inventory/copy to a newly retargeted alias.
+    source_anchor = source.absolute()
+    source = source_anchor.resolve(strict=True)
+    source_stat = _regular(source, directory=True)
+    source_identity = (source_stat.st_dev, source_stat.st_ino)
+    verify_source_anchor(source_anchor, source, source_identity)
     tree = inventory(source)
+    verify_source_anchor(source_anchor, source, source_identity)
     if len(tree["files"]) != expected_file_count or sum(row["sizeBytes"] for row in tree["files"]) != expected_total_bytes:
         raise RuntimeError("Approved source file count or byte total differs")
     campaign = _private_root(campaign, output_root, fresh=True)
     nonce = uuid4().hex
-    receipt = {"schema": SCHEMA, "status": "preparing", "route": route, "nonce": nonce,
+    receipt = {"schema": SCHEMA, "status": "preparing", "stage": "device-admission", "route": route, "nonce": nonce,
                "deviceSerialSha256": device_hash, "destination": SHARED + "/campaign-" + nonce,
                "marker": "/data/local/tmp/emulebb-public-sharing-" + nonce + ".owner",
                "staging": "/data/local/tmp/emulebb-public-sharing-" + nonce + ".stage",
-               "sourcePath": str(source.absolute()), "inventory": tree, "inventorySha256": _digest(tree),
+               "sourcePath": str(source), "sourceAnchorPath": str(source_anchor),
+               "inventory": tree, "inventorySha256": _digest(tree),
                "fileCount": expected_file_count, "totalBytes": expected_total_bytes,
                "admission": admission, "limits": asdict(limits), "createdAtUtc": utc_now()}
     if len(json.dumps(receipt).encode()) > MAX_RECEIPT_BYTES:
@@ -484,9 +502,11 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             phone.open()
             if phone.state() != "Stopped":
                 raise RuntimeError("Prepare requires a normally stopped owned service")
+            receipt["stage"] = "battery-permission"
             receipt["batteryCondition"] = battery_condition(phone, request_exemption=True)
             if phone.state() != "Stopped":
                 raise RuntimeError("Battery permission setup changed the owned service state")
+            receipt["stage"] = "route-storage-preflight"
             wifi_default(phone.shell("dumpsys", "connectivity"))
             for root in (INCOMING, SHARED):
                 if phone.shell("readlink", "-f", shlex.quote(root)) != root or _guest_entries(phone, root) != {root}:
@@ -496,6 +516,7 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
                 raise RuntimeError("Campaign free-space reserve would be exceeded")
             # WHY: configuring a cap after adding real shared bytes leaves an
             # uncapped startup window. Configure the empty owned service first.
+            receipt["stage"] = "empty-service-configuration"
             phone.forward()
             attempted_start = True
             phone.ui.click("start_service")
@@ -508,16 +529,23 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             receipt["discoveryPreparation"] = configure_public_discovery(phone)
             phone.stop()
             attempted_start = False
+            receipt["stage"] = "staging-copy"
+            verify_source_anchor(source_anchor, source, source_identity)
             phone.script("umask 077; set -C; printf '%s' " + shlex.quote(nonce) + " > " + shlex.quote(receipt["marker"]))
             phone.shell("mkdir", shlex.quote(receipt["destination"]))
             phone.shell("mkdir", "-m", "700", receipt["staging"])
             write_json(campaign / "preparation.json", receipt)
-            phone.device.command(*phone.prefix, "push", str(source.absolute()) + "/.", receipt["staging"], timeout=3600)
+            phone.device.command(*phone.prefix, "push", str(source) + "/.", receipt["staging"], timeout=3600)
+            receipt["stage"] = "staged-publication"
             publish_staged_tree(phone, receipt)
+            receipt["stage"] = "guest-verification"
             guest_scope(phone, receipt, hashes=True)
+            receipt["stage"] = "source-reverification"
+            verify_source_anchor(source_anchor, source, source_identity)
             if inventory(source) != tree:
                 raise RuntimeError("Approved source changed during the copy")
-            receipt.update(status="prepared", preparedAtUtc=utc_now(), sourceUnchanged=True, guestSha256Verified=True)
+            verify_source_anchor(source_anchor, source, source_identity)
+            receipt.update(status="prepared", stage="complete", preparedAtUtc=utc_now(), sourceUnchanged=True, guestSha256Verified=True)
             write_json(campaign / "campaign.json", receipt)
             return hashlib.sha256((campaign / "campaign.json").read_bytes()).hexdigest()
         except Exception as error:
