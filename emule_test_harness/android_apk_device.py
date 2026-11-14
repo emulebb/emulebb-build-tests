@@ -110,15 +110,30 @@ def _window_bar_appearance(block: str) -> str:
     if end is None:
         raise RuntimeError("Owned window attributes are incomplete")
     attrs = block[start:end + 1]
-    flags = re.search(r"(?m)^" + re.escape(match[1]) + r"  fl=([^\n}]*)", attrs)
-    if (re.search(r"\bty=", attrs.partition("\n")[0]) is None or flags is None
-            or "SECURE" not in flags[1].split()
+    flags = re.findall(r"(?m)^" + re.escape(match[1]) + r"  fl=([^\n}]*)", attrs)
+    if (re.search(r"\bty=", attrs.partition("\n")[0]) is None or len(flags) != 1
             or re.match(r"\s*Requested w=\d+ h=\d+ mLayoutSeq=", block[end + 1:]) is None):
+        raise RuntimeError("Owned window attributes are unrecognized")
+    # WHY: Android can dump 32-bit LayoutParams flags as hex; require the
+    # actual FLAG_SECURE bit or its exact symbolic token before changing theme.
+    def decode(value, bits):
+        value = value.strip()
+        if re.fullmatch(r"[0-9a-fA-F]+", value) and len(value) <= 8:
+            number = int(value, 16)
+            return {name for name, bit in bits.items() if number & bit}
+        if (re.fullmatch(r"[A-Z][A-Z_0-9]*(?:\s+[A-Z][A-Z_0-9]*)*", value)
+                and all(re.fullmatch(r"[0-9a-fA-F]+", token) is None for token in value.split())):
+            return set(value.split())
+        raise RuntimeError("Owned window attributes are unrecognized")
+
+    if "SECURE" not in decode(flags[0], {"SECURE": 0x2000}):
         raise RuntimeError("Owned window attributes are unrecognized")
     appearances = re.findall(r"(?m)^" + re.escape(match[1]) + r"  apr=([^\n}]*)", attrs)
     if len(appearances) > 1:
         raise RuntimeError("Owned window appearance is ambiguous")
-    return appearances[0] if appearances else ""
+    return " ".join(sorted(decode(appearances[0], {
+        "LIGHT_STATUS_BARS": 0x8, "LIGHT_NAVIGATION_BARS": 0x10,
+    }))) if appearances else ""
 
 
 def _check_system_theme(command, prefix: tuple, open_main, journal=None) -> dict:

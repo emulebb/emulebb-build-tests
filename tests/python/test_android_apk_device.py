@@ -178,6 +178,69 @@ def test_window_appearance_requires_complete_secure_aosp_attributes():
             subject._window_bar_appearance(malformed)
 
 
+@pytest.mark.parametrize('appearance,expected', [('', set()), ('0', set()), ('8', {'LIGHT_STATUS_BARS'}),
+    ('10', {'LIGHT_NAVIGATION_BARS'}), ('18', {'LIGHT_STATUS_BARS', 'LIGHT_NAVIGATION_BARS'}),
+    ('80000018', {'LIGHT_STATUS_BARS', 'LIGHT_NAVIGATION_BARS'})])
+def test_window_numeric_flags_and_appearance(appearance, expected):
+    attrs = ('  mAttrs={(0,0) sim={adjust=resize} ty=BASE_APPLICATION\n'
+             '    fl=81812100\n' + ('    apr=' + appearance + '\n' if appearance else '') +
+             '  }\n  Requested w=100 h=200 mLayoutSeq=1\n')
+    assert set(subject._window_bar_appearance(attrs).split()) == expected
+
+
+@pytest.mark.parametrize('flags,appearance', [
+    ('81810100', '18'), ('0', '18'), ('NOT_SECURE', '18'), ('818121000', '18'),
+    ('0x81812100', '18'), ('81812100 SECURE', '18'), ('81812100', '100000000'),
+    ('81812100', '0x18'), ('81812100', '18 LIGHT_STATUS_BARS'),
+    ('DEADBEEF SECURE', '18'), ('FFFFFFFFF SECURE', '18'),
+    ('81812100', 'DEAD LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS'),
+    ('81812100', 'FFFFFFFFF LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS'),
+    ('81812100\n    fl=81812100', '18'), ('81812100', '18\n    apr=18'),
+])
+def test_window_rejects_unsafe_or_malformed_flags(flags, appearance):
+    attrs = ('  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=' + flags + '\n    apr=' + appearance +
+             '}\n  Requested w=100 h=200 mLayoutSeq=1\n')
+    with pytest.raises(RuntimeError):
+        subject._window_bar_appearance(attrs)
+
+
+@pytest.mark.parametrize('incorrect', [False, True])
+def test_numeric_theme_checks_both_modes_and_journals_restoration(monkeypatch, incorrect):
+    mode, journal = ['auto'], []
+    clock = [0.0]
+    monkeypatch.setattr(subject.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(subject.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    def command(*args, **kwargs):
+        action = args[3:]
+        if action == ('cmd', 'uimode', 'night'):
+            return 'Night mode: ' + mode[0]
+        if action[:3] == ('cmd', 'uimode', 'night'):
+            mode[0] = action[3]
+            return ''
+        if action == ('dumpsys', 'activity', 'activities'):
+            return ('topResumedActivity=ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                '* Hist #0: ActivityRecord{abc u0 org.emulebb.android/.MainActivity t1}\n'
+                ' CurrentConfiguration={ ' + ('night' if mode[0] == 'yes' else 'notnight') + ' }\n')
+        if action == ('dumpsys', 'window', 'windows'):
+            return ('Window #0 Window{abc u0 org.emulebb.android/org.emulebb.android.MainActivity}:\n'
+                '  mAttrs={(0,0) ty=BASE_APPLICATION\n    fl=81812100\n' +
+                ('    apr=' + ('8' if incorrect else '18') + '\n' if mode[0] == 'no' else '') +
+                '  }\n  Requested w=100 h=200 mLayoutSeq=1\n')
+        raise AssertionError(action)
+    if incorrect:
+        with pytest.raises(RuntimeError, match='bar appearance'):
+            subject._check_system_theme(command, ('-s', SERIAL), lambda: None,
+                                        lambda state: journal.append(state.copy()))
+        assert journal[-1] == {'baseline': 'auto', 'status': 'failed', 'baselineRestored': True}
+    else:
+        result = subject._check_system_theme(command, ('-s', SERIAL), lambda: None,
+                                             lambda state: journal.append(state.copy()))
+        assert result == {'baseline': 'auto', 'status': 'passed', 'baselineRestored': True, 'nightAndDay': 'passed'}
+        assert journal[-1] == result
+    assert journal[0]['status'] == 'in-progress'
+    assert mode[0] == 'auto'
+
+
 def test_unknown_theme_window_format_fails_before_mutation():
     actions = []
     def command(*args, **kwargs):
