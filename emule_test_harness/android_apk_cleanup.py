@@ -60,7 +60,7 @@ def remove_owned_fixture(command, *, prefix, nonce: str, protected_roots: set[st
     admitted, payloads = [], 0
     for entry in entries:
         path_entry = PurePosixPath(entry)
-        if (path_entry.parent != path or re.fullmatch(r"Android Sample(?: \([1-9][0-9]*\))?\.bin", path_entry.name) is None):
+        if path_entry.parent != path or path_entry.name not in {FIXTURE_NAME, "Android Sample_01.bin"}:
             raise OwnedFixtureFailure("unknown-contents")
         try:
             shell("test", "!", "-L", shlex.quote(entry))

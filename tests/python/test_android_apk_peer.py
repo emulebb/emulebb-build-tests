@@ -326,7 +326,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                     return {"ok": True}
                 state["duplicateQueued"] = failure == "preflight-enqueue"
                 conflicts = [{"hash": "b" * 32, "kind": "presentLocalFile", "requestedSizeBytes": len(content),
-                    "recordedSizeBytes": len(content), "currentPaths": [state["incoming"] + "/Android Sample (1).bin"]},
+                    "recordedSizeBytes": len(content), "currentPaths": [state["incoming"] + "/Android Sample_01.bin"]},
                     {"hash": "b" * 32, "kind": "previouslyCompleted", "firstCompletedAtMs": 1,
                      "lastCompletedAtMs": 0 if failure == "history" else 2}]
                 raise subject.RustRestFailure("private conflict details", status=409,
@@ -338,7 +338,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             assert "|sources,192.0.2.20:20029|/" in body["link"]
             assert state["incoming"] == state["settings"]["daemon"]["incomingDir"]
             assert state["restarts"] == 1, "the immutable live incoming destination requires a real restart"
-            guest_files[state["incoming"] + "/Android Sample (1).bin"] = b"corrupt" if failure == "payload" else content
+            guest_files[state["incoming"] + "/Android Sample_01.bin"] = b"corrupt" if failure == "payload" else content
             if failure == "occupant":
                 guest_files[state["incoming"] + "/Android Sample.bin"] = content
             if failure == "server-owner":
@@ -364,7 +364,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             state["promoted"] = True
             return {"hash": "b" * 32, "complete": True, "partFile": False,
                               "sizeBytes": len(content),
-                              "path": ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2 else state["incoming"]) + "/Android Sample (1).bin"}
+                              "path": ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2 else state["incoming"]) + "/Android Sample_01.bin"}
         if route == "/api/v1/transfers/" + "b" * 32 + "/details":
             assert not state["deleted"] and not disabled_servers
             detail_reads.append(clock[0])
