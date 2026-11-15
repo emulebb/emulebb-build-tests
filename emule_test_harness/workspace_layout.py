@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import json
+import sys
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 WORKSPACE_NAME = "workspace"
@@ -76,6 +78,47 @@ def resolve_workspace_repo(workspace_root: Path, repo_key: str) -> Path:
     if repo_path is None:
         raise RuntimeError(f"Workspace manifest does not define workspace.repos.{repo_key}.")
     return (resolved_workspace_root / repo_path).resolve()
+
+
+def resolve_selected_workspace_repo(test_repo_root: Path, repository: str) -> Path:
+    """Resolve a companion through Builder topology and verified registration.
+
+    Validation freezes these sources for one Python process. Cache by explicit
+    workspace, output and caller identity, never by a global repository name.
+    """
+    from .paths import get_required_emule_workspace_root, get_workspace_output_root
+
+    return _selected_workspace_repo(
+        get_required_emule_workspace_root(), get_workspace_output_root(),
+        test_repo_root.resolve(), repository,
+    )
+
+
+@cache
+def _selected_workspace_repo(root: Path, output: Path, caller: Path, repository: str) -> Path:
+    """Use the maintained Builder selector once for each frozen source identity."""
+    builder = resolve_workspace_repo(root / "workspaces" / WORKSPACE_NAME, "build")
+    # WHY: pytest runs from the harness checkout, so the topology-owned Builder
+    # package is not on its import path. Import its API instead of duplicating
+    # registration parsing or invoking another Python interpreter per fixture.
+    sys.path.insert(0, str(builder))
+    try:
+        from emule_workspace import layout as builder_layout, workstreams
+    finally:
+        sys.path.pop(0)
+    for module in (builder_layout, workstreams):
+        if not Path(module.__file__).resolve().is_relative_to(builder):
+            raise RuntimeError("Loaded Builder API differs from workspace topology")
+    selected = builder_layout.load_layout(root, output_root=output)
+    registration = workstreams.resolve_workstream(root, output, repo=caller)
+    if registration is not None:
+        selected = workstreams.apply_workstream_layout(selected, registration)
+    if repository not in workstreams.REPOSITORY_FIELDS:
+        raise ValueError(f"Unsupported workspace repository: {repository}")
+    companion = getattr(selected, workstreams.REPOSITORY_FIELDS[repository])
+    if companion is None:
+        raise RuntimeError(f"Selected workspace does not define {repository}")
+    return Path(companion).resolve()
 
 
 def resolve_workspace_app_root(

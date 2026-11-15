@@ -14,6 +14,7 @@ import pytest
 from emule_test_harness import rust_client
 from emule_test_harness.kad_nodes import BootstrapContact
 from emule_test_harness.paths import get_required_emule_workspace_root
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 
 def test_registered_stage_admission_uses_persisted_source_verifier(monkeypatch, tmp_path):
@@ -71,7 +72,7 @@ def load_rust_live_wire_module():
 
 
 def rust_repo() -> Path:
-    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
+    return resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
 
 
 def metadata_path(profile_dir: Path) -> Path:

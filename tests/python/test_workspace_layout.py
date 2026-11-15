@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from emule_test_harness import workspace_layout
 
 from emule_test_harness.workspace_layout import (
     get_default_workspace_root,
@@ -8,6 +13,56 @@ from emule_test_harness.workspace_layout import (
     resolve_workspace_repo,
     resolve_workspace_app_root,
 )
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_selected_companion_uses_builder_registration(tmp_path, monkeypatch, managed):
+    builder = tmp_path / "repos/emulebb-build"
+    canonical = tmp_path / "repos/emulebb-rust"
+    selected = tmp_path / "workspaces/agents/review/emulebb-rust"
+    for source, version in ((canonical, 69), (selected, 70)):
+        source.mkdir(parents=True)
+        (source / "schema.sql").write_text(f"PRAGMA user_version = {version};", encoding="utf-8")
+    caller = (selected.parent if managed else canonical.parent) / "emulebb-build-tests"
+    calls = []
+
+    def registration(root, output, *, repo):
+        calls.append(repo)
+        return {"id": "review"} if managed else None
+
+    api = SimpleNamespace(
+        __file__=str(builder / "emule_workspace/workstreams.py"),
+        resolve_workstream=registration,
+        apply_workstream_layout=lambda layout, record: SimpleNamespace(rust=selected),
+        REPOSITORY_FIELDS={"emulebb-rust": "rust"},
+    )
+    layout = SimpleNamespace(
+        __file__=str(builder / "emule_workspace/layout.py"),
+        load_layout=lambda root, **kwargs: SimpleNamespace(rust=canonical),
+    )
+    monkeypatch.setattr(workspace_layout, "resolve_workspace_repo", lambda *args: builder)
+    monkeypatch.setitem(__import__("sys").modules, "emule_workspace", SimpleNamespace(layout=layout, workstreams=api))
+    result = workspace_layout._selected_workspace_repo(tmp_path, tmp_path / "output", caller, "emulebb-rust")
+    expected = selected if managed else canonical
+    assert result == expected
+    assert result.joinpath("schema.sql").read_text() == f"PRAGMA user_version = {70 if managed else 69};"
+    assert calls == [caller]
+
+
+def test_selected_companion_never_falls_back_from_invalid_registration(tmp_path, monkeypatch):
+    builder = tmp_path / "repos/emulebb-build"
+
+    def invalid(*args, **kwargs):
+        raise RuntimeError("Workstream branch changed")
+
+    api = SimpleNamespace(__file__=str(builder / "emule_workspace/workstreams.py"), resolve_workstream=invalid)
+    layout = SimpleNamespace(__file__=str(builder / "emule_workspace/layout.py"), load_layout=lambda *args, **kwargs: object())
+    monkeypatch.setattr(workspace_layout, "resolve_workspace_repo", lambda *args: builder)
+    monkeypatch.setitem(__import__("sys").modules, "emule_workspace", SimpleNamespace(layout=layout, workstreams=api))
+    with pytest.raises(RuntimeError, match="Workstream branch changed"):
+        workspace_layout._selected_workspace_repo(
+            tmp_path, tmp_path / "output", tmp_path / "workspaces/agents/review/emulebb-build-tests", "emulebb-rust"
+        )
 
 
 def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) -> None:
