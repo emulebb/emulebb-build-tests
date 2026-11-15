@@ -138,8 +138,8 @@ def _bootstrap_api_key(text: str) -> str:
     if (set(value) != {"rest"} or not isinstance(rest, dict)
             or not {"bind_addr", "api_key"} <= set(rest)
             or set(rest) - {"bind_addr", "api_key", "web_root_dir"}
-            or rest["bind_addr"] != "127.0.0.1:20017"):
-        raise RuntimeError("Android generated bootstrap must use the current loopback snake_case contract")
+            or rest["bind_addr"] != "0.0.0.0:20017"):
+        raise RuntimeError("Android generated bootstrap must use the current snake_case bootstrap contract")
     key = rest["api_key"]
     if not isinstance(key, str) or len(key) < 32 or not all(33 <= ord(char) <= 126 for char in key):
         raise RuntimeError("Android generated bootstrap must provide a valid private API key")
