@@ -106,11 +106,16 @@ def _selected_workspace_repo(root: Path, output: Path, caller: Path, repository:
         from emule_workspace import layout as builder_layout, workstreams
     finally:
         sys.path.pop(0)
-    for module in (builder_layout, workstreams):
-        if not Path(module.__file__).resolve().is_relative_to(builder):
-            raise RuntimeError("Loaded Builder API differs from workspace topology")
-    selected = builder_layout.load_layout(root, output_root=output)
     registration = workstreams.resolve_workstream(root, output, repo=caller)
+    allowed_builders = {builder}
+    if registration is not None:
+        entry = registration.get("repositories", {}).get("emulebb-build")
+        if entry is not None:
+            allowed_builders.add(Path(entry["path"]).resolve())
+    if not any(all(Path(module.__file__).resolve().is_relative_to(candidate)
+                   for module in (builder_layout, workstreams)) for candidate in allowed_builders):
+        raise RuntimeError("Loaded Builder API differs from workspace topology and registration")
+    selected = builder_layout.load_layout(root, output_root=output)
     if registration is not None:
         selected = workstreams.apply_workstream_layout(selected, registration)
     if repository not in workstreams.REPOSITORY_FIELDS:

@@ -65,6 +65,31 @@ def test_selected_companion_never_falls_back_from_invalid_registration(tmp_path,
         )
 
 
+@pytest.mark.parametrize("registered_origin", [True, False])
+def test_loaded_builder_origin_must_match_verified_registration(tmp_path, monkeypatch, registered_origin):
+    canonical = tmp_path / "repos/emulebb-build"
+    selected = tmp_path / "workspaces/agents/review/emulebb-build"
+    loaded = selected if registered_origin else tmp_path / "unregistered-builder"
+    rust = selected.parent / "emulebb-rust"
+    registration = {"id": "review", "repositories": {"emulebb-build": {"path": str(selected)}}}
+    api = SimpleNamespace(
+        __file__=str(loaded / "emule_workspace/workstreams.py"),
+        resolve_workstream=lambda *args, **kwargs: registration,
+        apply_workstream_layout=lambda *args: SimpleNamespace(rust=rust),
+        REPOSITORY_FIELDS={"emulebb-rust": "rust"},
+    )
+    layout = SimpleNamespace(__file__=str(loaded / "emule_workspace/layout.py"),
+                             load_layout=lambda *args, **kwargs: object())
+    monkeypatch.setattr(workspace_layout, "resolve_workspace_repo", lambda *args: canonical)
+    monkeypatch.setitem(__import__("sys").modules, "emule_workspace", SimpleNamespace(layout=layout, workstreams=api))
+    arguments = (tmp_path, tmp_path / "output", selected.parent / "emulebb-build-tests", "emulebb-rust")
+    if registered_origin:
+        assert workspace_layout._selected_workspace_repo(*arguments) == rust
+    else:
+        with pytest.raises(RuntimeError, match="Builder API differs"):
+            workspace_layout._selected_workspace_repo(*arguments)
+
+
 def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"

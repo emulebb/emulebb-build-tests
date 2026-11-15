@@ -9,6 +9,7 @@ import pytest
 
 from emule_test_harness import rust_shared_library_io as subject
 from emule_test_harness import rust_shared_library_storage as storage
+from emule_test_harness import workspace_layout
 
 
 def tiny_spec() -> subject.FixtureSpec:
@@ -39,6 +40,114 @@ def harness_paths(tmp_path: Path) -> subject.HarnessPaths:
         reports_root=tmp_path / "output/reports",
         staged_executable=tmp_path / "output/tools/emulebb-rust/bin/emulebb-rust.exe",
     )
+
+
+@pytest.mark.parametrize("runtime", [False, True])
+def test_registered_paths_isolate_profiles_and_require_owned_runtime(tmp_path, monkeypatch, runtime):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    rust = root / "workspaces/agents/review/emulebb-rust"
+    rust.mkdir(parents=True)
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", lambda *args: rust)
+    admitted = []
+    executable = output / "tools/workstreams/review/emulebb-rust/host/bin/emulebb-rust.exe"
+
+    def verify(source, destination):
+        admitted.append((source, destination))
+        return {"executable": str(executable)}
+
+    monkeypatch.setattr(subject.rust_client, "verified_runtime_stage", verify)
+    paths = subject.resolve_paths(rust_repo=rust, registered_stage=True, require_runtime=runtime)
+    assert paths.rust_repo == rust
+    assert paths.scenario_root == output / "profiles/workstreams/review/emulebb-rust-shared-library-io"
+    assert paths.fixture_root == paths.scenario_root / "fixture/library"
+    assert paths.runs_root == paths.scenario_root / "runs"
+    assert paths.reports_root == output / "reports/workstreams/review/shared-library-io"
+    assert paths.staged_executable == (executable if runtime else None)
+    assert admitted == ([(rust, output)] if runtime else [])
+    assert not output.exists()
+
+
+def test_registered_runtime_failure_never_uses_operator_stage(tmp_path, monkeypatch):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    rust = root / "workspaces/agents/review/emulebb-rust"
+    rust.mkdir(parents=True)
+    operator = subject.rust_client.staged_executable(output)
+    operator.parent.mkdir(parents=True)
+    operator.write_bytes(b"operator runtime")
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", lambda *args: rust)
+
+    def reject(*args):
+        raise RuntimeError("Registered runtime identity mismatch")
+
+    monkeypatch.setattr(subject.rust_client, "verified_runtime_stage", reject)
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        subject.resolve_paths(rust_repo=rust, registered_stage=True, require_runtime=True)
+    with pytest.raises(RuntimeError, match="--registered-stage"):
+        subject.resolve_paths(rust_repo=rust, require_runtime=True)
+
+
+def test_registered_paths_reject_another_workstreams_source(tmp_path, monkeypatch):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    rust = root / "workspaces/agents/other/emulebb-rust"
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo",
+                        lambda *args: root / "workspaces/agents/selected/emulebb-rust")
+    with pytest.raises(RuntimeError, match="registered companion"):
+        subject.resolve_paths(rust_repo=rust, registered_stage=True)
+
+
+def test_unselected_paths_preserve_operator_command_defaults(tmp_path, monkeypatch):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    (root / "repos/emulebb-rust").mkdir(parents=True)
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    paths = subject.resolve_paths()
+    assert paths.scenario_root == output / "profiles/emulebb-rust-shared-library-io"
+    assert paths.staged_executable == subject.rust_client.staged_executable(output)
+
+
+def test_prepare_low_space_fails_before_creating_any_fixture_state(tmp_path, monkeypatch):
+    paths = harness_paths(tmp_path)
+    monkeypatch.setattr(subject, "physical_disk_inventory", lambda: [])
+    monkeypatch.setattr(subject, "target_disk", lambda *args: {"mediaType": "SSD", "mountPath": str(tmp_path)})
+    monkeypatch.setattr(subject.shutil, "disk_usage", lambda *args: SimpleNamespace(free=0))
+    with pytest.raises(RuntimeError, match="Insufficient fixture space"):
+        subject.prepare_fixture(paths, spec=tiny_spec())
+    assert not paths.scenario_root.exists()
+
+
+def test_fixture_space_preflight_only_reserves_remaining_payloads(tmp_path, monkeypatch):
+    paths, spec = harness_paths(tmp_path), tiny_spec()
+    index, first, size = next(iter(subject.iter_fixture_files(paths.fixture_root, spec)))
+    first.parent.mkdir(parents=True)
+    first.write_bytes(subject.deterministic_payload(index, size))
+    target = {"mountPath": str(tmp_path)}
+    required = spec.total_bytes - size + spec.large_size
+    monkeypatch.setattr(subject.shutil, "disk_usage", lambda *args: SimpleNamespace(free=required))
+    result = subject.fixture_space_preflight(paths, spec, target)
+    assert result["remainingPayloadBytes"] == spec.total_bytes - size
+    assert result["requiredFreeBytes"] == required
+
+
+def test_prepare_refuses_unowned_or_invalid_owner_before_writing(tmp_path, monkeypatch):
+    paths = harness_paths(tmp_path)
+    paths.scenario_root.mkdir(parents=True)
+    sentinel = paths.scenario_root / "operator-file"
+    sentinel.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(subject, "physical_disk_inventory", lambda: [])
+    monkeypatch.setattr(subject, "target_disk", lambda *args: {"mediaType": "SSD"})
+    with pytest.raises(RuntimeError, match="unowned"):
+        subject.prepare_fixture(paths, spec=tiny_spec())
+    paths.owner_path.write_text('{"schema":"invalid"}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="ownership marker"):
+        subject.prepare_fixture(paths, spec=tiny_spec())
+    assert sentinel.read_text() == "preserve"
+    assert not paths.manifest_path.exists()
 
 
 @pytest.mark.unit

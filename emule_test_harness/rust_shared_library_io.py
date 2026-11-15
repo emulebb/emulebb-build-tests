@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import sqlite3
+import shutil
 import subprocess
 import sys
 import time
@@ -98,16 +99,41 @@ class HarnessPaths:
     owner_path: Path
     runs_root: Path
     reports_root: Path
-    staged_executable: Path
+    staged_executable: Path | None
 
 
-def resolve_paths() -> HarnessPaths:
+def resolve_paths(*, rust_repo: Path | None = None, registered_stage: bool = False,
+                  require_runtime: bool = False) -> HarnessPaths:
     """Resolve mandatory operator state without mutating environment variables."""
 
     workspace_root = get_required_emule_workspace_root()
     output_root = get_workspace_output_root()
-    rust_repo = workspace_root / "repos" / "emulebb-rust"
+    explicit_source = rust_repo is not None
+    rust_repo = (rust_repo or workspace_root / "repos" / "emulebb-rust").resolve()
     scenario_root = output_root / "profiles" / "emulebb-rust-shared-library-io"
+    reports_root = output_root / "reports" / "emulebb-rust" / "shared-library-io"
+    executable = rust_client.staged_executable(output_root)
+    boundary = workspace_root / "workspaces" / "agents"
+    if registered_stage:
+        if not explicit_source or not rust_repo.is_relative_to(boundary):
+            raise RuntimeError("Registered campaign requires an explicit managed Rust source")
+        from .workspace_layout import resolve_selected_workspace_repo
+
+        selected = resolve_selected_workspace_repo(Path(__file__).parents[1], "emulebb-rust")
+        if rust_repo != selected:
+            raise RuntimeError("Campaign Rust source differs from the registered companion")
+        parts = rust_repo.relative_to(boundary).parts
+        if len(parts) != 2 or parts[1] != "emulebb-rust":
+            raise RuntimeError("Campaign requires a registered Rust repository root")
+        scenario_root = output_root / "profiles" / "workstreams" / parts[0] / "emulebb-rust-shared-library-io"
+        reports_root = output_root / "reports" / "workstreams" / parts[0] / "shared-library-io"
+        # Fixture preparation needs no executable. Runtime admission must never
+        # fall back to the operator stage when the selected receipt is missing.
+        executable = None
+        if require_runtime:
+            executable = Path(rust_client.verified_runtime_stage(rust_repo, output_root)["executable"])
+    elif rust_repo.is_relative_to(boundary):
+        raise RuntimeError("Managed campaign requires --registered-stage")
     if not rust_repo.is_dir():
         raise RuntimeError(
             f"emulebb-rust repository is missing below EMULEBB_WORKSPACE_ROOT: {rust_repo}"
@@ -116,7 +142,6 @@ def resolve_paths() -> HarnessPaths:
         raise RuntimeError(
             "shared-library I/O scenario root escaped EMULEBB_WORKSPACE_OUTPUT_ROOT"
         )
-    executable_name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
     return HarnessPaths(
         workspace_root=workspace_root,
         output_root=output_root,
@@ -126,12 +151,8 @@ def resolve_paths() -> HarnessPaths:
         manifest_path=scenario_root / "fixture-manifest.json",
         owner_path=scenario_root / ".emulebb-rust-shared-library-io-owner.json",
         runs_root=scenario_root / "runs",
-        reports_root=output_root / "reports" / "emulebb-rust" / "shared-library-io",
-        staged_executable=output_root
-        / "tools"
-        / "emulebb-rust"
-        / "bin"
-        / executable_name,
+        reports_root=reports_root,
+        staged_executable=executable,
     )
 
 
@@ -371,6 +392,10 @@ def prepare_fixture(
         raise RuntimeError(
             f"refusing to use unowned scenario directory: {paths.scenario_root}"
         )
+    if paths.owner_path.is_file():
+        owner = json.loads(paths.owner_path.read_text(encoding="utf-8"))
+        if owner.get("schema") != OWNER_SCHEMA:
+            raise RuntimeError("fixture ownership marker is invalid")
     if paths.owner_path.is_file() and paths.manifest_path.is_file():
         existing = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
         if existing.get("schema") != FIXTURE_SCHEMA:
@@ -404,6 +429,7 @@ def prepare_fixture(
                         }
                     ],
                 }
+    space = fixture_space_preflight(paths, spec, target)
     storage.make_directories(paths.scenario_root)
     if not paths.owner_path.exists():
         write_json(
@@ -444,6 +470,7 @@ def prepare_fixture(
         "createdCount": created,
         "reusedCount": reused,
         "prunedCount": pruned,
+        "spacePreflight": space,
         "elapsedSeconds": round(time.monotonic() - started, 3),
         "fixture": validation,
         "targetRoots": [
@@ -460,6 +487,28 @@ def prepare_fixture(
             }
         ],
     }
+
+
+def fixture_space_preflight(paths: HarnessPaths, spec: FixtureSpec,
+                            target: dict[str, object]) -> dict[str, int]:
+    """Admit remaining fixture bytes before changing ownership or payload files."""
+    remaining = 0
+    largest = 0
+    for _index, path, size in iter_fixture_files(paths.fixture_root, spec):
+        if storage.is_file(path) and storage.stat(path).st_size == size:
+            continue
+        remaining += size
+        largest = max(largest, size)
+    probe = Path(str(target.get("mountPath") or paths.output_root))
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    free = shutil.disk_usage(probe).free
+    # WHY: payload replacement retains the previous file until an atomic rename.
+    # Reserve one extra temporary payload, without crediting future pruning.
+    required = remaining + largest
+    if free < required:
+        raise RuntimeError(f"Insufficient fixture space: need {required} bytes, available {free}")
+    return {"remainingPayloadBytes": remaining, "requiredFreeBytes": required, "availableFreeBytes": free}
 
 
 def load_prepared_manifest(paths: HarnessPaths) -> dict[str, object]:
@@ -1069,6 +1118,8 @@ def start_configured_daemon(
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     """Start one already-configured profile and attach REST/resource observers."""
 
+    if paths.staged_executable is None:
+        raise RuntimeError("Campaign runtime bundle was not admitted")
     process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
     client = RestClient(f"http://{rest_address}:{rest_port}/api/v1", API_KEY)
     wait_for_rest(client, process, 60.0)
@@ -1550,7 +1601,7 @@ def run_lan_startup_campaign(
     validation = validate_fixture(paths.fixture_root)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -1938,7 +1989,7 @@ def run_offerfiles_scale_campaign(
     validation = validate_fixture(paths.fixture_root)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -2701,7 +2752,7 @@ def run_campaign(
     validation = validate_fixture(paths.fixture_root)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -3177,7 +3228,7 @@ def run_media_campaign(
             f"multi-HDD run resolved only {len(counter_keys)} physical disks; "
             f"at least {args.minimum_disks} are required"
         )
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -3355,7 +3406,7 @@ def describe_media_roots(
         "targetRoots": [target.sanitized(path_fingerprint) for target in targets],
         "physicalDisks": sanitized_disk_inventory(inventory),
         "reportDirectory": str(reports_root),
-        "stagedExecutable": str(paths.staged_executable),
+        "stagedExecutable": str(paths.staged_executable) if paths.staged_executable else None,
         "commands": {"run": "python scripts/rust-shared-library-io.py media-run"},
     }
 
@@ -3469,13 +3520,26 @@ def inspect_partial_media_run(
 def describe(paths: HarnessPaths) -> dict[str, object]:
     inventory = physical_disk_inventory()
     target = target_disk(paths, inventory)
+    commands = {
+        "prepare": "python scripts/rust-shared-library-io.py prepare",
+        "run": "python scripts/rust-shared-library-io.py run",
+        "lanStartup": "python scripts/rust-shared-library-io.py lan-startup --lan-bind-addr <LAN-IP>",
+        "cleanup": "python scripts/rust-shared-library-io.py cleanup --confirm-delete",
+    }
+    boundary = paths.workspace_root / "workspaces" / "agents"
+    if paths.rust_repo.is_relative_to(boundary):
+        workstream = paths.rust_repo.relative_to(boundary).parts[0]
+        commands = {action: f"python -m emule_workspace test rust-shared-library-io {action} --workstream {workstream}"
+                    for action in ("describe", "prepare", "run")}
     return {
         "schema": REPORT_SCHEMA,
         "command": "describe",
         "fixturePath": str(paths.fixture_root),
         "fixtureFingerprint": path_fingerprint(paths.fixture_root),
         "reportDirectory": str(paths.reports_root),
-        "stagedExecutable": str(paths.staged_executable),
+        "stagedExecutable": str(paths.staged_executable) if paths.staged_executable else None,
+        "rustSource": str(paths.rust_repo),
+        "scenarioRoot": str(paths.scenario_root),
         "fixture": fixture_manifest(
             PRODUCTION_SPEC, status="planned", disk_number=target.get("diskNumber")
         ),
@@ -3494,15 +3558,12 @@ def describe(paths: HarnessPaths) -> dict[str, object]:
             }
         ],
         "physicalDisks": inventory,
-        "commands": {
-            "prepare": "python scripts/rust-shared-library-io.py prepare",
-            "run": "python scripts/rust-shared-library-io.py run",
-            "lanStartup": (
-                "python scripts/rust-shared-library-io.py lan-startup "
-                "--lan-bind-addr <LAN-IP>"
-            ),
-            "cleanup": "python scripts/rust-shared-library-io.py cleanup --confirm-delete",
-        },
+        "preparationState": (
+            {"ownerPresent": paths.owner_path.is_file(),
+             "manifest": json.loads(paths.manifest_path.read_text(encoding="utf-8"))}
+            if paths.manifest_path.is_file() else {"ownerPresent": paths.owner_path.is_file(), "manifest": None}
+        ),
+        "commands": commands,
     }
 
 
@@ -3531,6 +3592,8 @@ def cleanup(paths: HarnessPaths, *, confirmed: bool) -> dict[str, object]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rust-repo", type=Path)
+    parser.add_argument("--registered-stage", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser(
         "describe",
@@ -3629,7 +3692,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        paths = resolve_paths()
+        paths = resolve_paths(rust_repo=args.rust_repo, registered_stage=args.registered_stage,
+                              require_runtime=args.command not in {"describe", "prepare"})
         if args.command == "describe":
             result = describe(paths)
         elif args.command == "prepare":
