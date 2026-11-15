@@ -3,7 +3,13 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+
+import pytest
+
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -109,3 +115,114 @@ def test_main_forwards_registered_stage_selection(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "run_campaign", campaign)
     assert module.main(["--registered-stage", "--rust-repo", str(tmp_path)]) == 0
     assert observed["registered_stage"] is True
+
+
+@pytest.fixture
+def friend_fixture(tmp_path):
+    module = load_module()
+    rust = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    tooling = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-tooling")
+    database = tmp_path / "metadata.db"
+    module.rust_metadata.create_metadata_db(rust, database)
+    document = module.load_openapi_document(tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    return module, database, document
+
+
+@pytest.mark.parametrize("template", ["/uploads/{clientId}", "/upload-queue/{clientId}",
+                                     "/transfers/{hash}/sources/{clientId}"])
+def test_frontdoor_evidence_requires_sql_failure_consistency_and_retry(friend_fixture, template):
+    """Exercise evidence qualification with independent SQLite connections, not live peer coverage."""
+    module, database, document = friend_fixture
+    user_hash = "0123456789abcdef0123456789abcdef"
+    ready_calls = []
+
+    def request(method, path, *, expected=200):
+        if method == "GET":
+            rows = module.friend_database_rows(database)
+            return {"json": {"data": {"items": [{"userHash": row[0]} for row in rows if row[6] is None]}}}
+        try:
+            with closing(sqlite3.connect(database)) as connection:
+                with connection:
+                    if path.endswith("add-friend"):
+                        connection.execute("INSERT INTO friends(user_hash,name,first_seen_at_ms) VALUES (?, 'Peer', 1)",
+                                           (bytes.fromhex(user_hash),))
+                    else:
+                        connection.execute("UPDATE friends SET deleted_at_ms=2 WHERE user_hash=?", (bytes.fromhex(user_hash),))
+        except sqlite3.IntegrityError:
+            assert expected == 500
+            return {"status": 500, "json": {"error": {"code": "PERSISTENCE_FAILED", "message": "Injected write failure", "details": {}}}}
+        assert expected == 200
+        data = {"userHash": user_hash} if path.endswith("add-friend") else {"ok": True}
+        return {"status": 200, "json": {"data": data, "meta": {"apiVersion": "v1"}}}
+
+    result = module.prove_friend_frontdoor(
+        request=request, database=database, prefix="/api/v1/peer-fixture", route_template=template,
+        ready=lambda: ready_calls.append(True), user_hash=user_hash, document=document,
+    )
+    assert len(ready_calls) == 4
+    assert result["retryAddAndRemove"] == "passed"
+    assert len(result["failures"]) == 2
+    assert all(row["code"] == "PERSISTENCE_FAILED" and row["reopenedDatabaseUnchanged"]
+               and row["cacheUnchanged"] for row in result["failures"])
+    assert module.friend_database_rows(database)[0][6] == 2
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'harness_friend_failure_%'").fetchall() == []
+
+
+def test_frontdoor_unexpected_response_still_removes_fixture_faults(friend_fixture):
+    module, database, document = friend_fixture
+
+    def request(method, path, **kwargs):
+        if method == "GET":
+            return {"json": {"data": {"items": []}}}
+        raise RuntimeError("Peer vanished before mutation response")
+
+    with pytest.raises(RuntimeError, match="Peer vanished"):
+        module.prove_friend_frontdoor(
+            request=request, database=database, prefix="/api/v1/uploads/peer", route_template="/uploads/{clientId}",
+            ready=lambda: None, user_hash="0123456789abcdef0123456789abcdef", document=document,
+        )
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'harness_friend_failure_%'").fetchall() == []
+        connection.execute("INSERT INTO friends(user_hash,name,first_seen_at_ms) VALUES (zeroblob(16),'Peer',1)")
+
+
+def test_friend_fault_refuses_missing_database(tmp_path):
+    module = load_module()
+    database = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        module.friend_write_fault(database, enabled=True)
+    assert not database.exists()
+
+
+def test_peer_launch_failure_preserves_report_and_closes_owned_fixture(friend_fixture, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    module, database, document = friend_fixture
+    fixture_root = tmp_path / "peer-phase"
+    stopped = []
+    ports = iter(range(24001, 24020))
+
+    def write_profile(profile, **kwargs):
+        profile.mkdir(parents=True)
+        with closing(sqlite3.connect(database)) as source:
+            with closing(sqlite3.connect(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)) as target:
+                source.backup(target)
+
+    def fail_start(*args):
+        raise RuntimeError("Daemon launch failed")
+
+    package = SimpleNamespace(_available_unique_port=lambda *args, **kwargs: next(ports),
+                              _write_profile=write_profile, _start_daemon=fail_start,
+                              _shutdown_or_stop=lambda base, process: stopped.append(process))
+    monkeypatch.setattr(module, "load_script_module", lambda *args: package)
+    monkeypatch.setattr(module.rust_rest_conformance, "load_rest_smoke_module", lambda *args: None)
+    monkeypatch.setattr(module, "load_openapi_document", lambda *args: document)
+    with pytest.raises(RuntimeError, match="Local friend-peer proof failed"):
+        module.run_friend_peer_phase(executable=tmp_path / "daemon", rust_repo=tmp_path / "rust",
+                                     root=fixture_root, openapi_contract=tmp_path / "contract.yaml")
+    import json
+    report = json.loads((fixture_root / "report.json").read_text())
+    assert report["status"] == "failed" and "Daemon launch failed" in report["error"]
+    assert report["finalDatabases"][0]["reopenedAfterShutdown"]
+    assert stopped == [None]
