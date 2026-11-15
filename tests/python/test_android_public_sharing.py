@@ -821,6 +821,55 @@ def test_missing_publication_counter_is_inconclusive(counter, expected):
     assert subject.counter_claim(counter) == expected
 
 
+@pytest.mark.parametrize("document", [None, [], {"enabled": "true", "gatewayDiscovered": 1},
+    {"mappings": None}, {"mappings": [{}]}, {"mappings": [{"protocol": "private-protocol"}]},
+    {"mappings": [{"protocol": []}]}])
+def test_nat_missing_or_invalid_facts_remain_unknown_and_private_fields_are_excluded(document):
+    assert subject.nat_summary(document) == {"enabled": None, "gatewayDiscovered": None,
+        "mappingCount": None, "tcpMapped": None, "udpMapped": None, "publicReachability": "not-claimed"}
+
+
+@pytest.mark.parametrize("mappings,tcp,udp", [([], False, False),
+    ([{"protocol": "tcp", "externalAddr": "private-address"}], True, False),
+    ([{"protocol": "tcp"}, {"protocol": "udp"}], True, True)])
+def test_nat_projects_only_typed_runtime_mapping_observations(mappings, tcp, udp):
+    result = subject.nat_summary({"enabled": True, "gatewayDiscovered": False, "mappings": mappings,
+        "lastError": "private-response", "gateway": {"controlUrl": "private-endpoint"}})
+    assert result == {"enabled": True, "gatewayDiscovered": False, "mappingCount": len(mappings),
+        "tcpMapped": tcp, "udpMapped": udp, "publicReachability": "not-claimed"}
+
+
+def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_counts(monkeypatch):
+    value = receipt()
+    value.update(fileCount=221, guestSha256Verified=True)
+    calls = []
+    def request(method, path):
+        calls.append((method, path))
+        return {"total": 0, "items": []} if path.startswith("/transfers") else {
+            "items": []} if path == "/uploads" else {"enabled": True, "gatewayDiscovered": True, "mappings": []}
+    phone = SimpleNamespace(identity=lambda: None, shell=lambda *args: "", request=request,
+                            base="http://127.0.0.1:12345", key="private-key")
+    for name in ("wifi_default", "guest_scope", "_settings"):
+        monkeypatch.setattr(subject, name, lambda *a, **kw: None)
+    monkeypatch.setattr(subject, "shared_catalog", lambda *a: ({"status": "not-observed",
+        "approvedFileInstances": 221, "expectedDistinctContents": 220, "matchedDistinctContents": 218,
+        "eligibilityAccounting": "evidence-incomplete"}, []))
+    monkeypatch.setattr(subject, "rust_summary", lambda *a: {"uploadLimitBytesPerSec": value["limits"]["upload_limit_kibps"] * 1024,
+        "ed2kPublishedEntries": 218, "ed2kPendingEntries": 0})
+    monkeypatch.setattr(subject, "compact_progress", lambda *a: {"hashedCount": 218, "skippedIntakeCount": 3})
+    result = subject.sample(phone, value)
+    assert ("GET", "/nat") in calls and ("GET", "/status") not in calls
+    assert result["nat"]["enabled"] is True and result["nat"]["tcpMapped"] is False
+    assert result["catalog"]["expectedDistinctContents"] == 220 and result["catalog"]["matchedDistinctContents"] == 218
+    assert result["fileInstances"]["copiedAndSha256Verified"] == 221
+    assert result["fileInstances"]["runtimeSkippedIntakeCount"] == 3
+    assert result["fileInstances"]["eligibilityAccounting"] == "evidence-incomplete"
+    assert result["claims"]["ed2kPublication"] == "observed"
+    assert result["claims"]["ed2kPublicationScope"] == "current-server-session-offerfiles-sent"
+    assert result["claims"]["perFileServedBytes"] == "evidence-incomplete"
+    assert "private-key" not in json.dumps(result)
+
+
 def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch):
     calls = []
     server_pages = iter([[], [{"enabled": True}]])

@@ -74,6 +74,7 @@ REST_OPERATIONS = {
     ("GET", "/app/settings"): ("settings-read", 10.0),
     ("GET", "/stats"): ("stats-read", 10.0),
     ("GET", "/status"): ("status-read", 10.0),
+    ("GET", "/nat"): ("nat-status-read", 10.0),
     ("GET", "/servers"): ("server-list-read", 10.0),
     ("GET", "/kad"): ("kad-status-read", 10.0),
     ("GET", "/shared-directories"): ("sharing-settings-read", 10.0),
@@ -862,6 +863,8 @@ def shared_catalog(phone: Phone, receipt: dict):
             "approvedFileInstances": len(expected), "duplicateFileInstances": len(expected) - len(groups),
             "matchedDistinctContents": len(group_hashes), "expectedDistinctContents": len(groups),
             "allFileInstancesIndexed": "evidence-incomplete",
+            "comparisonScope": "approved-raw-content-groups",
+            "eligibilityAccounting": "evidence-incomplete",
             "status": ("evidence-incomplete" if not stable else
                        "observed" if set(group_hashes) == groups else "not-observed")}, rows
 
@@ -922,6 +925,22 @@ def configure_public_discovery(phone: Phone):
             "connectionAndPublication": "require-live-observation"}
 
 
+def nat_summary(document):
+    """Project NAT observations without retaining addresses or claiming reachability."""
+    data = document if isinstance(document, dict) else {}
+    mappings = data.get("mappings")
+    protocols = ([row["protocol"] for row in mappings]
+                 if isinstance(mappings, list) and all(isinstance(row, dict)
+                     and isinstance(row.get("protocol"), str) and row["protocol"] in {"tcp", "udp"}
+                     for row in mappings) else None)
+    return {"enabled": data.get("enabled") if type(data.get("enabled")) is bool else None,
+            "gatewayDiscovered": data.get("gatewayDiscovered") if type(data.get("gatewayDiscovered")) is bool else None,
+            "mappingCount": len(protocols) if protocols is not None else None,
+            "tcpMapped": "tcp" in protocols if protocols is not None else None,
+            "udpMapped": "udp" in protocols if protocols is not None else None,
+            "publicReachability": "not-claimed"}
+
+
 def sample(phone: Phone, receipt: dict, previous_uploads=None):
     """Publication, upload activity and verified payload remain separate claims."""
     limits = Limits(**receipt["limits"])
@@ -936,7 +955,7 @@ def sample(phone: Phone, receipt: dict, previous_uploads=None):
     summary = rust_summary(SimpleNamespace(rust_base_url=phone.base + "/api/v1", rust_api_key=phone.key))
     if summary.get("uploadLimitBytesPerSec") != limits.upload_limit_kibps * 1024:
         raise RuntimeError("Runtime upload cap differs from the admitted bound")
-    status = phone.request("GET", "/status")
+    nat = phone.request("GET", "/nat")
     directories = phone.request("GET", "/shared-directories")
     hashing = compact_progress(directories)
     upload_evidence, current_uploads = public_upload_evidence(
@@ -946,14 +965,17 @@ def sample(phone: Phone, receipt: dict, previous_uploads=None):
                               "copiedAndSha256Verified": receipt["fileCount"] if receipt.get("guestSha256Verified") is True else None,
                               "runtimeHashedCount": hashing.get("hashedCount"),
                               "runtimeReusedCount": hashing.get("reusedCount"),
+                              "runtimeSkippedIntakeCount": hashing.get("skippedIntakeCount"),
+                              "eligibilityAccounting": "evidence-incomplete",
                               "allPathsIndexed": "evidence-incomplete"},
-            "runtime": summary, "nat": {key: status.get("nat", {}).get(key) for key in ("enabled", "tcpMapped", "udpMapped")},
+            "runtime": summary, "nat": nat_summary(nat),
             "claims": {"catalog": catalog["status"],
                        "ed2kConnection": ("observed" if summary.get("ed2kConnected") is True else
                                           "not-observed" if summary.get("ed2kConnected") is False else "evidence-incomplete"),
                        "kadConnection": ("observed" if summary.get("kadConnected") is True
                                          and (summary.get("kadContactCount") or 0) > 0 else "not-observed"),
                        "ed2kPublication": counter_claim(summary.get("ed2kPublishedEntries")),
+                       "ed2kPublicationScope": "current-server-session-offerfiles-sent",
                        "kadAcknowledgement": counter_claim(summary.get("kadSourceAckedContactsTotal")),
                        "uploadRequests": upload_evidence["requests"],
                        "publicPeerServedBytes": upload_evidence["bytesVerdict"],
