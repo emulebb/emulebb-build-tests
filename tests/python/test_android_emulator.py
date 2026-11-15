@@ -345,7 +345,7 @@ def test_tls_adb_uses_only_fixed_cases_and_always_removes_owned_guest_directory(
     assert all(call[:2] == ("-s", "emulator-5554") for call in calls)
 
 
-BOOTSTRAP = '[rest]\nbind_addr = "127.0.0.1:20017"\napi_key = "SyntheticAndroidKeyMaterial1234567890"\n'
+BOOTSTRAP = '[rest]\nbind_addr = "0.0.0.0:20017"\napi_key = "SyntheticAndroidKeyMaterial1234567890"\n'
 
 
 @pytest.mark.parametrize("bad", [None, "camel", "short", "space", "listener", "malformed", "extra", "oversize"])
@@ -354,7 +354,7 @@ def test_actual_bootstrap_contract_never_accepts_aliases_or_bad_keys(bad):
     if bad == "camel": text = text.replace("bind_addr", "bindAddr")
     if bad == "short": text = text.replace("SyntheticAndroidKeyMaterial1234567890", "short")
     if bad == "space": text = text.replace("SyntheticAndroidKeyMaterial1234567890", " SyntheticAndroidKeyMaterial1234567890")
-    if bad == "listener": text = text.replace("127.0.0.1", "0.0.0.0")
+    if bad == "listener": text = text.replace("0.0.0.0", "127.0.0.1")
     if bad == "malformed": text += "invalid[[["
     if bad == "extra": text += 'legacy_key = "unsupported"\n'
     if bad == "oversize": text += "#" * 65537
@@ -364,6 +364,13 @@ def test_actual_bootstrap_contract_never_accepts_aliases_or_bad_keys(bad):
         with pytest.raises(RuntimeError) as error:
             subject._bootstrap_api_key(text)
         assert "SyntheticAndroidKeyMaterial" not in str(error.value)
+
+
+@pytest.mark.parametrize("listener", ["127.0.0.1:20017", "0.0.0.0:20018", "192.0.2.1:20017", "[::]:20017"])
+def test_actual_bootstrap_requires_exact_current_default_listener(listener):
+    with pytest.raises(RuntimeError) as error:
+        subject._bootstrap_api_key(BOOTSTRAP.replace("0.0.0.0:20017", listener))
+    assert str(error.value) == "Android generated bootstrap must use the current snake_case bootstrap contract"
 
 
 @pytest.mark.parametrize("bad", [None, "exe", "hash", "cwd", "argv", "stat", "pid"])
