@@ -241,7 +241,7 @@ def mock_observer(monkeypatch, *, fail=False):
     monkeypatch.setattr(subject, "publish_staged_tree", lambda *a: None)
     monkeypatch.setattr(subject, "battery_condition", lambda *a, **kw: {"continuousOperationGuarantee": "not-claimed"})
     monkeypatch.setattr(subject, "_guest_free", lambda *a: 1024**4)
-    def sample(*args):
+    def sample(*args, **kwargs):
         if fail: raise RuntimeError("private-response-must-not-escape")
         return {"privateCatalog": [], "privateUploads": {}, "claims": {"publicPeerServedBytes": "not-observed"}}
     monkeypatch.setattr(subject, "sample", sample)
@@ -265,6 +265,82 @@ def test_resume_failure_stops_owned_service_and_sanitizes_exception(tmp_path, mo
     session = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
     assert session["status"] == "failed" and session["service"] == "stopped-after-failure"
     assert "stop" in phone.calls and "private-response" not in (tmp_path / "session.json").read_text()
+    assert session["failurePhase"] == "sample" and session["failureReason"] == "unclassified"
+
+
+@pytest.mark.parametrize("message,reason", [
+    ("Runtime upload cap differs from the admitted bound", "upload-cap-mismatch"),
+    ("Runtime upload cap differs from the admitted bound: private-path", "unclassified"),
+    ("synthetic-private-endpoint-and-key", "unclassified"),
+])
+def test_observer_preserves_primary_closed_failure_through_stop_and_cleanup_errors(
+        tmp_path, monkeypatch, message, reason):
+    mock_observer(monkeypatch)
+    phone = FakePhone("Running")
+    def sample(*args, phase):
+        phase("sample-runtime-summary")
+        raise RuntimeError(message)
+    stop_error = subject.AdbOperationFailure(("shell", "input", "tap", "private-coordinate"),
+        exit_code=1, stderr="permission denied: synthetic-private-device")
+    cleanup_error = subject.RustRestFailure("synthetic-private-response", status=400,
+        detail=json.dumps({"error": {"code": "BAD_REQUEST",
+            "message": "failed to bind eD2k TCP listener: synthetic-private-address"}}))
+    def stop():
+        phone.failed_rest_operation = "settings-update"
+        raise stop_error
+    def cleanup():
+        raise cleanup_error
+    monkeypatch.setattr(subject, "sample", sample)
+    phone.stop, phone.cleanup = stop, cleanup
+    result = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
+    assert result["errorType"] == "RuntimeError" and result["failurePhase"] == "sample-runtime-summary"
+    assert result["failureReason"] == reason and result["service"] == "stop-unconfirmed"
+    assert "failedRestOperation" not in result and "failedAdbSafeFailure" not in result
+    assert result["stopFailure"]["failurePhase"] == "failure-stop"
+    assert result["stopFailure"]["failedAdbSafeFailure"] == stop_error.safe_failure
+    assert "failedRestOperation" not in result["stopFailure"]
+    assert result["cleanupFailure"]["failurePhase"] == "control-cleanup"
+    assert result["cleanupFailure"]["failedRestSafeFailure"] == cleanup_error.safe_failure
+    raw = (tmp_path / "session.json").read_text()
+    assert "private-" not in raw and "synthetic-private" not in raw
+
+
+def test_cleanup_only_failure_has_its_own_phase_and_preserves_expiry_service_disposition(tmp_path, monkeypatch):
+    mock_observer(monkeypatch)
+    phone = FakePhone("Running")
+    ticks = iter([0, 2])
+    monkeypatch.setattr(subject.time, "monotonic", lambda: next(ticks))
+    def cleanup():
+        raise RuntimeError("synthetic-private-cleanup-path")
+    phone.cleanup = cleanup
+    result = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
+    assert result["status"] == "failed" and result["service"] == "left-running"
+    assert result["errorType"] == "RuntimeError" and result["failurePhase"] == "control-cleanup"
+    assert result["failureReason"] == "unclassified" and "stop" not in phone.calls
+    assert "synthetic-private" not in (tmp_path / "session.json").read_text()
+
+
+def test_actual_sampler_queue_guard_retains_its_phase_and_exact_safe_reason(tmp_path, monkeypatch):
+    actual_sample = subject.sample
+    mock_observer(monkeypatch)
+    monkeypatch.setattr(subject, "sample", actual_sample)
+    phone = FakePhone("Running")
+    calls = []
+    def request(method, path):
+        calls.append((method, path))
+        return {"total": 1, "items": [{"path": "private-foreign-download"}]}
+    phone.request = request
+    result = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
+    assert result["failurePhase"] == "sample-transfer-queue"
+    assert result["failureReason"] == "download-queue-not-empty" and result["service"] == "stopped-after-failure"
+    assert calls == [("GET", "/transfers?limit=1")]
+    assert "private-foreign" not in (tmp_path / "session.json").read_text()
+
+
+@pytest.mark.parametrize("phase,operation", [("private-phase", "private-route"), ([], {})])
+def test_observer_projection_suppresses_unknown_phase_operation_and_exception_text(phase, operation):
+    assert subject._observer_failure(RuntimeError("private-response"), phase, operation) == {
+        "errorType": "RuntimeError", "failurePhase": "unclassified", "failureReason": "unclassified"}
 
 
 def test_resume_never_restarts_stopped_service(tmp_path, monkeypatch):
@@ -457,7 +533,7 @@ def test_safe_failure_reason_matches_exact_runtime_literals_only():
     ("POST", "/kad/operations/import-nodes-url", 60.0),
     ("POST", "/servers/operations/connect", 60.0),
     ("PATCH", "/app/settings", 60.0),
-    ("GET", "/app/settings", 10.0), ("GET", "/stats", 10.0),
+    ("GET", "/app/settings", 10.0), ("GET", "/stats", 10.0), ("GET", "/nat", 10.0),
     ("GET", "/shared-files?limit=200&cursor=opaque", 10.0),
 ])
 def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline(monkeypatch, method, path, timeout):
@@ -857,7 +933,8 @@ def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_c
     monkeypatch.setattr(subject, "rust_summary", lambda *a: {"uploadLimitBytesPerSec": value["limits"]["upload_limit_kibps"] * 1024,
         "ed2kPublishedEntries": 218, "ed2kPendingEntries": 0})
     monkeypatch.setattr(subject, "compact_progress", lambda *a: {"hashedCount": 218, "skippedIntakeCount": 3})
-    result = subject.sample(phone, value)
+    phases = []
+    result = subject.sample(phone, value, phase=phases.append)
     assert ("GET", "/nat") in calls and ("GET", "/status") not in calls
     assert result["nat"]["enabled"] is True and result["nat"]["tcpMapped"] is False
     assert result["catalog"]["expectedDistinctContents"] == 220 and result["catalog"]["matchedDistinctContents"] == 218
@@ -868,6 +945,8 @@ def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_c
     assert result["claims"]["ed2kPublicationScope"] == "current-server-session-offerfiles-sent"
     assert result["claims"]["perFileServedBytes"] == "evidence-incomplete"
     assert "private-key" not in json.dumps(result)
+    assert phases == ["sample-app-identity", "sample-direct-route", "sample-guest-scope", "sample-settings",
+        "sample-transfer-queue", "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads"]
 
 
 def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch):

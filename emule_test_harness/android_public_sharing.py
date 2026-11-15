@@ -45,6 +45,13 @@ MAX_RECEIPT_BYTES = 4 * 1024**2
 PREFLIGHT_STAGES = frozenset({"output-root", "payload-admission", "installation-receipt", "adb-owner",
                               "installation-scope", "source-resolution", "source-inventory", "campaign-directory",
                               "campaign-operation"})
+OBSERVER_PHASES = frozenset({"installation-admission", "campaign-ownership", "service-inspection",
+    "guest-scope", "direct-wifi-route", "service-state-admission", "battery-condition", "rest-forward",
+    "service-start", "app-identity", "settings-bound", "public-discovery", "background-transition",
+    "stop-request-admission", "explicit-stop", "space-reserve", "sample", "sample-app-identity",
+    "sample-direct-route", "sample-guest-scope", "sample-settings", "sample-transfer-queue",
+    "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads",
+    "history-write", "session-write", "failure-stop", "control-cleanup"})
 SAFE_FAILURE_REASONS = {
     "APK receipt must be a bounded regular file": "apk-receipt-bound",
     "APK receipt hash differs": "apk-receipt-hash-mismatch",
@@ -63,6 +70,13 @@ SAFE_FAILURE_REASONS = {
     "Approved source changed while inventorying": "source-changed-during-inventory",
     "Approved source file count or byte total differs": "source-shape-mismatch",
     "Campaign evidence must stay below the configured output root": "campaign-outside-output-root",
+    "Campaign free-space reserve was exceeded": "free-space-reserve-exceeded",
+    "Active Android route is unavailable": "active-route-unavailable",
+    "Campaign requires the direct Wi-Fi default route": "direct-wifi-route-required",
+    "Upload-only campaign observed a download queue": "download-queue-not-empty",
+    "Runtime upload cap differs from the admitted bound": "upload-cap-mismatch",
+    "Shared catalog contains an unapproved file": "unapproved-catalog-entry",
+    "Observation exceeds its evidence storage bound": "observation-storage-bound",
 }
 REST_OPERATIONS = {
     ("POST", "/servers/operations/import-met-url"): ("server-metadata-import", 60.0),
@@ -89,6 +103,24 @@ def safe_failure_reason(error: Exception):
     """Map exact reviewed literals only; unknown response/path text never escapes."""
     message = error.args[0] if isinstance(error, RuntimeError) and len(error.args) == 1 else None
     return SAFE_FAILURE_REASONS.get(message, "unclassified") if isinstance(message, str) else "unclassified"
+
+
+def _observer_failure(error, phase, operation=None):
+    """Capture closed primary/cleanup evidence before another operation changes it."""
+    facts = {"errorType": type(error).__name__,
+             "failurePhase": phase if isinstance(phase, str) and phase in OBSERVER_PHASES else "unclassified",
+             "failureReason": safe_failure_reason(error)}
+    if isinstance(operation, str) and operation in REST_OPERATION_NAMES:
+        facts["failedRestOperation"] = operation
+    if isinstance(error, RustRestFailure):
+        status = error.safe_failure.get("httpStatus")
+        if type(status) is int and 100 <= status <= 599:
+            facts["failedRestSafeFailure"] = {key: error.safe_failure[key]
+                for key in ("httpStatus", "apiCode", "coreContext")}
+    if isinstance(error, AdbOperationFailure):
+        facts["failedAdbSafeFailure"] = {key: error.safe_failure[key]
+            for key in ("operation", "reason", "exitCode")}
+    return facts
 
 
 @dataclass(frozen=True)
@@ -941,23 +973,34 @@ def nat_summary(document):
             "publicReachability": "not-claimed"}
 
 
-def sample(phone: Phone, receipt: dict, previous_uploads=None):
+def sample(phone: Phone, receipt: dict, previous_uploads=None, *, phase=None):
     """Publication, upload activity and verified payload remain separate claims."""
     limits = Limits(**receipt["limits"])
+    phase = phase or (lambda value: None)
+    phase("sample-app-identity")
     phone.identity()
+    phase("sample-direct-route")
     wifi_default(phone.shell("dumpsys", "connectivity"))
+    phase("sample-guest-scope")
     guest_scope(phone, receipt)
+    phase("sample-settings")
     _settings(phone, limits)
+    phase("sample-transfer-queue")
     transfers = phone.request("GET", "/transfers?limit=1")
     if transfers.get("total") != 0 or transfers.get("items") != []:
         raise RuntimeError("Upload-only campaign observed a download queue")
+    phase("sample-catalog")
     catalog, rows = shared_catalog(phone, receipt)
+    phase("sample-runtime-summary")
     summary = rust_summary(SimpleNamespace(rust_base_url=phone.base + "/api/v1", rust_api_key=phone.key))
     if summary.get("uploadLimitBytesPerSec") != limits.upload_limit_kibps * 1024:
         raise RuntimeError("Runtime upload cap differs from the admitted bound")
+    phase("sample-nat")
     nat = phone.request("GET", "/nat")
+    phase("sample-hashing")
     directories = phone.request("GET", "/shared-directories")
     hashing = compact_progress(directories)
+    phase("sample-uploads")
     upload_evidence, current_uploads = public_upload_evidence(
         phone.request("GET", "/uploads"), rows, previous_uploads or {})
     return {"observedAtUtc": utc_now(), "catalog": catalog, "hashing": hashing,
@@ -1051,82 +1094,97 @@ def observe(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path,
                "service": "unconfirmed", "observations": 0, "stopRequested": False,
                "publicUploadRequestObserved": False, "observedPublicPayloadBytes": 0}
     attempted_start = False
+    failure_phase = "installation-admission"
+    def phase(value):
+        nonlocal failure_phase
+        if value not in OBSERVER_PHASES:
+            raise ValueError("Observer phase is invalid")
+        failure_phase = value
     with device_lease(output_root, receipt["deviceSerialSha256"], campaign, recover=recover):
         write_json(campaign / "session.json", session)
         try:
             phone.installed()
             # A receipt for this APK alone does not own another campaign's
             # running service. Admit the private nonce before cleanup may Stop.
+            phase("campaign-ownership")
             if phone.shell("cat", receipt["marker"]) != receipt["nonce"]:
                 raise RuntimeError("Guest campaign ownership marker differs")
+            phase("service-inspection")
             phone.open()
             state = phone.state()
             if not start and state == "Running":
                 session["service"] = "running"
+            phase("guest-scope")
             guest_scope(phone, receipt, hashes=True)
+            phase("direct-wifi-route")
             wifi_default(phone.shell("dumpsys", "connectivity"))
+            phase("service-state-admission")
             if start:
                 if state != "Stopped":
                     raise RuntimeError("Start requires the prepared owned service to be stopped")
             elif state != "Running":
                 raise RuntimeError("Resume never restarts a stopped or failed service")
+            phase("battery-condition")
             session["batteryCondition"] = battery_condition(phone, request_exemption=True)
             if phone.state() != state:
                 raise RuntimeError("Battery permission setup changed the owned service state")
+            phase("rest-forward")
             phone.forward()
             if start:
+                phase("service-start")
                 attempted_start = True
                 phone.ui.click("start_service")
                 phone.ui.wait_state("Running")
+            phase("app-identity")
             phone.identity()
+            phase("settings-bound")
             _settings(phone, limits)
+            phase("public-discovery")
             session["discoveryPreparation"] = configure_public_discovery(phone)
+            phase("background-transition")
             phone.shell("input", "keyevent", "KEYCODE_HOME")
             deadline = time.monotonic() + limits.duration_seconds
             # A previous stop request must be explicitly consumed by a successful
             # new monitor only after exact receipt/build admission above.
             stop = campaign / "stop-request.json"
+            phase("stop-request-admission")
             if stop.exists():
                 raise RuntimeError("Campaign has a stop request; prepare a new campaign to restart")
             previous_uploads = {}
             while True:
                 if stop.exists():
+                    phase("stop-request-admission")
                     request = _read_json(stop)
                     if request.get("nonce") != receipt["nonce"]:
                         raise RuntimeError("Stop request ownership differs")
+                    phase("explicit-stop")
                     phone.stop()
                     session.update(status="stopped", service="stopped", stopRequested=True)
                     break
+                phase("space-reserve")
                 if (shutil.disk_usage(campaign).free < limits.minimum_free_bytes
                         or _guest_free(phone) < limits.minimum_free_bytes):
                     raise RuntimeError("Campaign free-space reserve was exceeded")
-                record = sample(phone, receipt, previous_uploads)
+                phase("sample")
+                record = sample(phone, receipt, previous_uploads, phase=phase)
                 previous_uploads = record.pop("privateUploads", {})
                 evidence = record.get("uploadEvidence", {})
                 session["publicUploadRequestObserved"] |= evidence.get("requests") == "observed"
                 session["observedPublicPayloadBytes"] += evidence.get("observedPayloadBytesDelta", 0)
+                phase("history-write")
                 _append_history(campaign, record, limits.history_max_bytes)
                 record.pop("privateCatalog", None)
                 session.update(status="observing", service="running", heartbeatAtUtc=utc_now(),
                                observations=session["observations"] + 1, latest=record)
+                phase("session-write")
                 write_json(campaign / "session.json", session)
                 if time.monotonic() >= deadline:
                     session.update(status="observation-complete", service="left-running")
                     break
                 time.sleep(min(limits.interval_seconds, max(0, deadline - time.monotonic())))
         except Exception as error:
-            session.update(status="failed", errorType=type(error).__name__)
-            operation = getattr(phone, "failed_rest_operation", None)
-            if operation in REST_OPERATION_NAMES:
-                session["failedRestOperation"] = operation
-            if isinstance(error, RustRestFailure):
-                status = error.safe_failure.get("httpStatus")
-                if type(status) is int and 100 <= status <= 599:
-                    session["failedRestSafeFailure"] = {key: error.safe_failure[key]
-                        for key in ("httpStatus", "apiCode", "coreContext")}
-            if isinstance(error, AdbOperationFailure):
-                session["failedAdbSafeFailure"] = {key: error.safe_failure[key]
-                    for key in ("operation", "reason", "exitCode")}
+            session["status"] = "failed"
+            session.update(_observer_failure(error, failure_phase, getattr(phone, "failed_rest_operation", None)))
             # WHY: loss of scope/route/cap evidence must not silently leave an
             # owned upload service active. Never stop an unverified installation.
             if attempted_start or session["service"] == "running":
@@ -1135,11 +1193,15 @@ def observe(phone: Phone, receipt: dict, *, campaign: Path, output_root: Path,
                     session["service"] = "stopped-after-failure"
                 except Exception as stop_error:
                     session.update(service="stop-unconfirmed", stopErrorType=type(stop_error).__name__)
+                    session["stopFailure"] = _observer_failure(stop_error, "failure-stop")
         finally:
             try:
                 phone.cleanup()
             except Exception as error:
                 session.update(status="failed", cleanupErrorType=type(error).__name__)
+                session["cleanupFailure"] = _observer_failure(error, "control-cleanup")
+                if "errorType" not in session:
+                    session.update(session["cleanupFailure"])
             session["finishedAtUtc"] = utc_now()
             write_json(campaign / "session.json", session)
     return session
