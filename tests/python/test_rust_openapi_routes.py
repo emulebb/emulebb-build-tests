@@ -2,6 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import jsonschema
+import pytest
+
+from emule_test_harness.rust_openapi_responses import (
+    load_openapi_document,
+    openapi_operation_response,
+    openapi_schema_component,
+    response_json_schema,
+    validate_openapi_schema,
+)
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
 from emule_test_harness.rust_openapi_routes import (
     AuthDrift,
     BodyFieldDrift,
@@ -13,6 +25,7 @@ from emule_test_harness.rust_openapi_routes import (
     ParameterMetadataDrift,
     ParameterRefDrift,
     PathParameterDrift,
+    PRIVATE_DIAGNOSTICS_ROUTES,
     QueryParameterDrift,
     Route,
     RequestBodyMetadataDrift,
@@ -52,6 +65,85 @@ from emule_test_harness.rust_openapi_routes import (
     rust_query_parameter_inventory,
     rust_route_inventory,
 )
+
+
+@pytest.fixture(scope="module")
+def selected_rust_openapi():
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    path = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    return path, load_openapi_document(path)
+
+
+PERSISTENCE_ERROR_STATUSES = {
+    "PERSISTENCE_BUSY": 503,
+    "PERSISTENCE_CLOSING": 503,
+    "PERSISTENCE_TOO_LARGE": 413,
+    "PERSISTENCE_FAILED": 500,
+    "PERSISTENCE_UNAVAILABLE": 503,
+    "PERSISTENCE_COMMITTED": 503,
+}
+
+
+@pytest.mark.parametrize("code", PERSISTENCE_ERROR_STATUSES)
+def test_selected_error_envelope_accepts_persistence_failure_fields(selected_rust_openapi, code):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "ErrorEnvelope")
+    details = {"committed": True} if code == "PERSISTENCE_COMMITTED" else {}
+    payload = {"error": {"code": code, "message": "Persistence operation outcome", "details": details}}
+    validate_openapi_schema(document, schema, payload)
+    # The optional flag on other outcomes cannot imply that missing means rollback.
+    if code != "PERSISTENCE_COMMITTED":
+        for committed in (False, True):
+            payload["error"]["details"] = {"committed": committed}
+            validate_openapi_schema(document, schema, payload)
+
+
+@pytest.mark.parametrize("details", [{}, {"committed": False}])
+def test_selected_committed_error_requires_true_commit_flag(selected_rust_openapi, details):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "ErrorEnvelope")
+    payload = {"error": {"code": "PERSISTENCE_COMMITTED", "message": "Mutation committed", "details": details}}
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, schema, payload)
+
+
+def test_selected_friend_frontdoors_document_current_persistence_errors(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "ErrorEnvelope")
+    codes = schema["properties"]["error"]["properties"]["code"]["enum"]
+    assert {code for code in codes if code.startswith("PERSISTENCE_")} == set(PERSISTENCE_ERROR_STATUSES)
+    mutations = [("post", "/friends"), ("delete", "/friends/{userHash}")]
+    for prefix in ("/transfers/{hash}/sources/{clientId}", "/uploads/{clientId}", "/upload-queue/{clientId}"):
+        mutations.extend(("post", f"{prefix}/operations/{operation}")
+                         for operation in ("add-friend", "remove-friend"))
+    assert len(mutations) == 8
+    for method, path in mutations:
+        operation = document["paths"][path][method]
+        for code, status in PERSISTENCE_ERROR_STATUSES.items():
+            assert code in operation["responses"][str(status)]["description"], (method, path, status, code)
+            response = openapi_operation_response(document, method, path, status)
+            details = {"committed": True} if code == "PERSISTENCE_COMMITTED" else {}
+            validate_openapi_schema(document, response_json_schema(response, f"{method} {path} {status}"),
+                                    {"error": {"code": code, "message": "Persistence outcome", "details": details}})
+    # Listing is the ninth frontdoor: its read maps failure to unavailable,
+    # whereas admission/payload/storage mutation errors belong to writers above.
+    listing = document["paths"]["/friends"]["get"]
+    assert "PERSISTENCE_UNAVAILABLE" in listing["responses"]["503"]["description"]
+    response = openapi_operation_response(document, "get", "/friends", 503)
+    validate_openapi_schema(document, response_json_schema(response, "GET /friends 503"),
+                            {"error": {"code": "PERSISTENCE_UNAVAILABLE", "message": "Friend read unavailable", "details": {}}})
+
+
+def test_selected_rust_route_contract_matches_selected_openapi(selected_rust_openapi):
+    openapi, _ = selected_rust_openapi
+    rust = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    rest = rust / "crates/emulebb-rest/src"
+    report = compare_route_contract(
+        rest / "routes.rs", rest / "route_metadata.rs", rest / "route_body_metadata.rs", openapi,
+        rest / "responses.rs", rust / "crates/emulebb-settings/src/surface.rs",
+        private_routes=PRIVATE_DIAGNOSTICS_ROUTES,
+    )
+    assert report.ok, report.as_json_dict()
 
 
 def write(path: Path, text: str) -> Path:
