@@ -9,6 +9,53 @@ import pytest
 from emule_test_harness import upload_parity_monitor
 
 
+@pytest.fixture
+def monitor_config(tmp_path: Path):
+    return upload_parity_monitor.MonitorConfig(
+        rust_base_url="http://127.0.0.1:12345/api/v1", rust_api_key="synthetic-private-key",
+        rust_diag_dir=None, mfc_upload_log=tmp_path / "missing.log", output_dir=tmp_path / "monitor")
+
+
+@pytest.mark.parametrize("current,expected", [
+    ({"offerFilesPublishedEntries": 218, "offerFilesPendingEntries": 0}, (218, 0)),
+    (None, (None, None)), ({}, (None, None)), ("synthetic-private", (None, None)),
+    ({"offerFilesPublishedEntries": True, "offerFilesPendingEntries": -1}, (None, None)),
+    ({"offerFilesPublishedEntries": "218", "offerFilesPendingEntries": 2**64}, (None, None)),
+])
+def test_rust_summary_uses_only_current_session_offers_and_separates_worker_snapshot(
+        monkeypatch, monitor_config, current, expected):
+    calls = []
+    payloads = {"/stats": {}, "/uploads": {"items": []}, "/status": {
+        "servers": {"currentServer": current}, "runtimeDiagnostics": {"ed2kPublish": {
+            "publishedEntries": 86, "pendingEntries": 0, "queuedCount": 308, "phase": "idle",
+            "lastError": "synthetic-private-response"}}}}
+    def fetch(base, path, **kwargs):
+        calls.append(path)
+        return {"data": payloads[path]}
+    monkeypatch.setattr(upload_parity_monitor, "fetch_json", fetch)
+    result = upload_parity_monitor.rust_summary(monitor_config)
+    assert (result["ed2kPublishedEntries"], result["ed2kPendingEntries"]) == expected
+    assert result["ed2kPublicationScope"] == "current-server-session-offerfiles-sent"
+    assert result["ed2kWorker"] == {"phase": "idle", "snapshotPublishedEntries": 86,
+        "snapshotPendingEntries": 0, "cumulativeQueueEvents": 308}
+    assert calls == ["/stats", "/status", "/uploads"]
+    assert "synthetic-private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("published,pending", [(218, None), (None, 0), (True, 0), (218, -1), ("218", 0)])
+def test_missing_or_invalid_session_counters_cannot_prove_publication_complete(
+        monkeypatch, monitor_config, published, pending):
+    monkeypatch.setattr(upload_parity_monitor, "rust_summary", lambda config: {
+        "uploadSpeedKiBps": 0, "ed2kPublishedEntries": published, "ed2kPendingEntries": pending})
+    monkeypatch.setattr(upload_parity_monitor, "rust_sched_summary", lambda *a, **kw: {})
+    monkeypatch.setattr(upload_parity_monitor, "mfc_upload_summary", lambda *a, **kw: {
+        "sumRateKiBps": 0, "summaryPresent": True})
+    result = upload_parity_monitor.build_record(monitor_config)
+    assert result["action"]["rustEd2kPublishComplete"] is None
+    assert result["action"]["rustEd2kPublishScope"] == "current-server-session-offerfiles-sent"
+    assert result["action"]["postVisibilityDemandGap"] is False
+
+
 def test_mfc_upload_summary_keeps_only_aggregate_slot_counters(tmp_path: Path) -> None:
     log = tmp_path / "emulebb-diagnostics-upload-slot.log"
     log.write_text(

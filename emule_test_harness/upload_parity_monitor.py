@@ -347,6 +347,11 @@ def fetch_json(base_url: str, path: str, *, api_key: str, timeout_seconds: float
         return json.loads(response.read().decode("utf-8"))
 
 
+def _counter(value: object) -> int | None:
+    """Accept an actual unsigned REST counter, never booleans or coerced text."""
+    return value if type(value) is int and 0 <= value <= 2**64 - 1 else None
+
+
 def rust_summary(config: MonitorConfig) -> dict[str, object]:
     """Summarizes Rust upload and publishing counters from REST."""
 
@@ -361,6 +366,11 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
     kad = status.get("kad", {})  # type: ignore[union-attr]
     ed2k_publish = runtime.get("ed2kPublish", {}) or {}
     kad_publish = runtime.get("kadPublish", {}) or {}
+    ed2k_publish = ed2k_publish if isinstance(ed2k_publish, dict) else {}
+    servers = status.get("servers")
+    current = servers.get("currentServer") if isinstance(servers, dict) else None
+    current = current if isinstance(current, dict) else {}
+    worker_phase = ed2k_publish.get("phase")
 
     return {
         "restOk": True,
@@ -385,10 +395,19 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
         "kadIndexedKeywords": kad.get("indexedKeywords") if isinstance(kad, dict) else None,
         "knownFileCount": runtime.get("knownFileCount"),
         "sharedFileCount": runtime.get("sharedFileCount"),
-        "ed2kPublishedEntries": ed2k_publish.get("publishedEntries"),
-        "ed2kPendingEntries": ed2k_publish.get("pendingEntries"),
-        "ed2kPublishQueuedCount": ed2k_publish.get("queuedCount"),
-        "ed2kPublishPhase": ed2k_publish.get("phase"),
+        # WHY: the session pump advances independently of the last worker
+        # snapshot. Only current-server counters describe its OFFERFILES sends.
+        "ed2kPublishedEntries": _counter(current.get("offerFilesPublishedEntries")),
+        "ed2kPendingEntries": _counter(current.get("offerFilesPendingEntries")),
+        "ed2kPublicationScope": "current-server-session-offerfiles-sent",
+        "ed2kWorker": {
+            "phase": worker_phase if isinstance(worker_phase, str) and worker_phase in {
+                "idle", "queued", "debouncing", "waitingInterval", "publishing", "published",
+                "noNetwork", "notConnected", "failed"} else None,
+            "snapshotPublishedEntries": _counter(ed2k_publish.get("publishedEntries")),
+            "snapshotPendingEntries": _counter(ed2k_publish.get("pendingEntries")),
+            "cumulativeQueueEvents": _counter(ed2k_publish.get("queuedCount")),
+        },
         "kadSourcePublishedTotal": kad_publish.get("sourcePublishedTotal"),
         "kadSourceAttemptedContactsTotal": kad_publish.get("sourceAttemptedContactsTotal"),
         "kadSourceAckedContactsTotal": kad_publish.get("sourceAckedContactsTotal"),
@@ -421,8 +440,10 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     mfc_kibps = float(mfc.get("summaryRateKiBps") or mfc["sumRateKiBps"])
     throughput_gap_kibps = round(max(0.0, mfc_kibps - rust_kibps), 2)
     rust_mfc_ratio = round(rust_kibps / mfc_kibps, 4) if mfc_kibps > 0.0 else None
-    rust_ed2k_pending = int(rust.get("ed2kPendingEntries") or 0)
-    rust_ed2k_total = int(rust.get("ed2kPublishedEntries") or 0) + rust_ed2k_pending
+    rust_ed2k_pending = _counter(rust.get("ed2kPendingEntries"))
+    rust_ed2k_published = _counter(rust.get("ed2kPublishedEntries"))
+    rust_ed2k_complete = (rust_ed2k_published > 0 and rust_ed2k_pending == 0
+                         if rust_ed2k_published is not None and rust_ed2k_pending is not None else None)
     mfc_ed2k_pending = int(mfc.get("ed2kPendingFiles") or 0)
     rust_waiting = int(rust.get("waitingUploads") or 0)
     mfc_waiting = int(mfc.get("waiting") or 0)
@@ -440,9 +461,10 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
         "rustUnderfilled": rust_kibps < config.rust_underfill_kibps,
         "rustDemandStarved": rust_waiting == 0 and rust_kibps < config.rust_underfill_kibps,
         "mfcSaturating": mfc_diagnostics_fresh and mfc_kibps > config.mfc_saturated_kibps,
-        "rustEd2kPublishComplete": rust_ed2k_total > 0 and rust_ed2k_pending == 0,
+        "rustEd2kPublishComplete": rust_ed2k_complete,
+        "rustEd2kPublishScope": "current-server-session-offerfiles-sent",
         "mfcEd2kPublishComplete": mfc_diagnostics_fresh and mfc.get("summaryPresent") is True and mfc_ed2k_pending == 0,
-        "rustVisibilityMaturing": rust_ed2k_pending > 0,
+        "rustVisibilityMaturing": rust_ed2k_pending > 0 if rust_ed2k_pending is not None else None,
         "rustWaitingDemand": rust_waiting,
         "mfcWaitingDemand": mfc_waiting,
     }
@@ -455,7 +477,7 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     action["parityGap"] = action["mfcSaturating"] and (action["rustUnderfilled"] or relative_gap)
     action["postVisibilityDemandGap"] = (
         action["parityGap"]
-        and action["rustEd2kPublishComplete"]
+        and action["rustEd2kPublishComplete"] is True
         and action["mfcEd2kPublishComplete"]
         and rust_waiting == 0
         and mfc_waiting > 0
