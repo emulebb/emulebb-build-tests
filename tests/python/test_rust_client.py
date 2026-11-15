@@ -293,12 +293,16 @@ def test_explicit_server_fixture_claims_only_server_bootstrap(tmp_path, explicit
     profile_dir = tmp_path / "profile"
     options = {
         "endpoint": {"server_endpoint": "192.0.2.10:4661"},
-        "entry": {"server_entry": {"host": "192.0.2.20", "port": 4661}},
+        "entry": {
+            "server_endpoint": "192.0.2.20:4661",
+            "server_entry": {"host": "192.0.2.20", "port": 4661},
+        },
         "empty": {"replace_servers": True},
     }[explicit]
     rust_client.write_rust_profile(
         profile_dir, rust_repo=rust_repo(), rest_addr="127.0.0.1", rest_port=4711,
-        api_key="key", local_only_discovery=False, **options,
+        api_key="key", local_only_discovery=False,
+        p2p_bind_ip="127.0.0.1", ed2k_port=24662, kad_port=24672, **options,
     )
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
