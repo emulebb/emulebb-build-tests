@@ -20,7 +20,7 @@ def test_local_discovery_initializes_both_current_schema_domains(tmp_path):
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
             ("kad", "pending"), ("servers", "pending")
         ]
-    rust_metadata.initialize_local_discovery(database)
+    rust_metadata.initialize_local_discovery(rust_repo(), database)
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
             ("kad", "initialized"), ("servers", "initialized")
@@ -33,7 +33,7 @@ def test_local_discovery_missing_domain_rolls_back_without_repair(tmp_path):
     with sqlite3.connect(database) as conn:
         conn.execute("DELETE FROM discovery_initialization WHERE domain = 'kad'")
     with pytest.raises(RuntimeError, match="both canonical initialization rows"):
-        rust_metadata.initialize_local_discovery(database)
+        rust_metadata.initialize_local_discovery(rust_repo(), database)
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization").fetchall() == [("servers", "pending")]
 
@@ -41,8 +41,50 @@ def test_local_discovery_missing_domain_rolls_back_without_repair(tmp_path):
 def test_local_discovery_missing_database_is_not_created(tmp_path):
     database = tmp_path / "missing.db"
     with pytest.raises(sqlite3.OperationalError):
-        rust_metadata.initialize_local_discovery(database)
+        rust_metadata.initialize_local_discovery(rust_repo(), database)
     assert not database.exists()
+
+
+def test_local_discovery_wrong_current_marker_does_not_mutate(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    with sqlite3.connect(database) as conn:
+        conn.execute("UPDATE metadata_schema SET schema_version = schema_version + 1")
+    with pytest.raises(RuntimeError, match="current metadata schema marker"):
+        rust_metadata.initialize_local_discovery(rust_repo(), database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "pending"), ("servers", "pending")
+        ]
+
+
+@pytest.mark.parametrize("operation", ["seed", "clear"])
+def test_server_fixture_mutation_rolls_back_when_initialization_row_missing(tmp_path, operation):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    rust_metadata.seed_server(database, {"host": "192.0.2.10", "port": 4661})
+    with sqlite3.connect(database) as conn:
+        conn.execute("DELETE FROM discovery_initialization WHERE domain = 'servers'")
+        before = conn.execute("SELECT address, port FROM servers").fetchall()
+    with pytest.raises(RuntimeError, match="canonical initialization row"):
+        if operation == "seed":
+            rust_metadata.seed_server(database, {"host": "192.0.2.20", "port": 4661})
+        else:
+            rust_metadata.clear_servers(database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT address, port FROM servers").fetchall() == before
+
+
+def test_failed_server_seed_does_not_complete_initialization(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    with pytest.raises(sqlite3.IntegrityError):
+        rust_metadata.seed_server(database, {
+            "host": "192.0.2.10", "port": 4661, "serverPriority": "invalid"
+        })
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT status FROM discovery_initialization WHERE domain = 'servers'").fetchone() == ("pending",)
+        assert conn.execute("SELECT count(*) FROM servers").fetchone() == (0,)
 
 
 class _TrackedConnection:

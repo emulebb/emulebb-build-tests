@@ -322,7 +322,7 @@ def write_rust_profile(
         },
     )
     if local_only_discovery:
-        rust_metadata.initialize_local_discovery(metadata_path)
+        rust_metadata.initialize_local_discovery(rust_repo, metadata_path)
 
 
 def server_from_endpoint(endpoint: str) -> dict[str, object]:

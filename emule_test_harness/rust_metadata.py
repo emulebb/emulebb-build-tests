@@ -86,14 +86,19 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
         conn.commit()
 
 
-def initialize_local_discovery(db_path: Path) -> None:
+def initialize_local_discovery(rust_repo: Path, db_path: Path) -> None:
     """Mark both discovery domains initialized after staging a local fixture.
 
     Deliberately empty local lists are complete too. Require an existing current
     database and both canonical rows; never create or repair fixture state.
     """
+    expected_marker = _schema_marker(rust_repo)
     with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as conn:
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            markers = conn.execute("SELECT schema_id, schema_version FROM metadata_schema").fetchall()
+            if markers != [expected_marker]:
+                raise RuntimeError("local discovery requires the current metadata schema marker")
             changed = conn.execute(
                 "UPDATE discovery_initialization SET status = 'initialized' "
                 "WHERE domain IN ('servers', 'kad')"
@@ -255,6 +260,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
         raise ValueError("Rust server seed requires host/address and port.")
     now = _now_ms()
     with closing(sqlite3.connect(db_path)) as conn:
+        _initialize_server_discovery(conn)
         conn.execute(
             """
             INSERT INTO servers(
@@ -294,11 +300,21 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
 
 
 def clear_servers(db_path: Path) -> None:
-    """Remove persisted ED2K server rows from a Rust SQLite profile."""
+    """Deliberately empty the server list and prevent first-run repopulation."""
 
     with closing(sqlite3.connect(db_path)) as conn:
+        _initialize_server_discovery(conn)
         conn.execute("DELETE FROM servers")
         conn.commit()
+
+
+def _initialize_server_discovery(conn: sqlite3.Connection) -> None:
+    """Claim fixture-owned server state in the caller's mutation transaction."""
+    changed = conn.execute(
+        "UPDATE discovery_initialization SET status = 'initialized' WHERE domain = 'servers'"
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("server fixture requires its canonical initialization row")
 
 
 def _optional_int(value: object) -> int | None:

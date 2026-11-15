@@ -288,15 +288,34 @@ def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_p
         ]
 
 
+@pytest.mark.parametrize("explicit", ["endpoint", "entry", "empty"])
+def test_explicit_server_fixture_claims_only_server_bootstrap(tmp_path, explicit):
+    profile_dir = tmp_path / "profile"
+    options = {
+        "endpoint": {"server_endpoint": "192.0.2.10:4661"},
+        "entry": {"server_entry": {"host": "192.0.2.20", "port": 4661}},
+        "empty": {"replace_servers": True},
+    }[explicit]
+    rust_client.write_rust_profile(
+        profile_dir, rust_repo=rust_repo(), rest_addr="127.0.0.1", rest_port=4711,
+        api_key="key", local_only_discovery=False, **options,
+    )
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "pending"), ("servers", "initialized")
+        ]
+        assert conn.execute("SELECT count(*) FROM servers").fetchone() == (0 if explicit == "empty" else 1,)
+
+
 def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Path, monkeypatch) -> None:
     profile_dir = tmp_path / "profile"
     initialize = rust_client.rust_metadata.initialize_local_discovery
     initialized = []
 
-    def initialize_after_local_data(database):
+    def initialize_after_local_data(source, database):
         with sqlite3.connect(database) as conn:
             assert conn.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchall() == [("127.0.0.1:24672",)]
-        initialize(database)
+        initialize(source, database)
         initialized.append(database)
 
     monkeypatch.setattr(rust_client.rust_metadata, "initialize_local_discovery", initialize_after_local_data)
