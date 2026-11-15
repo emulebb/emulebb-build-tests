@@ -86,6 +86,22 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
         conn.commit()
 
 
+def initialize_local_discovery(db_path: Path) -> None:
+    """Mark both discovery domains initialized after staging a local fixture.
+
+    Deliberately empty local lists are complete too. Require an existing current
+    database and both canonical rows; never create or repair fixture state.
+    """
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as conn:
+        with conn:
+            changed = conn.execute(
+                "UPDATE discovery_initialization SET status = 'initialized' "
+                "WHERE domain IN ('servers', 'kad')"
+            ).rowcount
+            if changed != 2:
+                raise RuntimeError("local discovery requires both canonical initialization rows")
+
+
 def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
     """Require a complete database matching the current Rust profile schema."""
 

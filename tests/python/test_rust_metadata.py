@@ -13,6 +13,38 @@ def rust_repo() -> Path:
     return resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
 
 
+def test_local_discovery_initializes_both_current_schema_domains(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "pending"), ("servers", "pending")
+        ]
+    rust_metadata.initialize_local_discovery(database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "initialized"), ("servers", "initialized")
+        ]
+
+
+def test_local_discovery_missing_domain_rolls_back_without_repair(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    with sqlite3.connect(database) as conn:
+        conn.execute("DELETE FROM discovery_initialization WHERE domain = 'kad'")
+    with pytest.raises(RuntimeError, match="both canonical initialization rows"):
+        rust_metadata.initialize_local_discovery(database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization").fetchall() == [("servers", "pending")]
+
+
+def test_local_discovery_missing_database_is_not_created(tmp_path):
+    database = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        rust_metadata.initialize_local_discovery(database)
+    assert not database.exists()
+
+
 class _TrackedConnection:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection

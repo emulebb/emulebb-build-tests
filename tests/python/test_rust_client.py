@@ -13,7 +13,6 @@ import pytest
 
 from emule_test_harness import rust_client
 from emule_test_harness.kad_nodes import BootstrapContact
-from emule_test_harness.paths import get_required_emule_workspace_root
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 
@@ -145,6 +144,9 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     assert setting_value(profile_dir, "core", "autoConnect") is False
     assert setting_value(profile_dir, "nat", "enabled") is False
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "pending"), ("servers", "pending")
+        ]
         keepalive = conn.execute(
             "SELECT value_json FROM settings WHERE section = 'ed2k' AND key = 'serverKeepaliveMinutes'"
         ).fetchone()
@@ -280,10 +282,24 @@ def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_p
     assert len(nodes) == 12
     assert nodes != b""
     assert setting_value(profile_dir, "core", "networkKademlia") is False
+    with sqlite3.connect(metadata_path(profile_dir)) as conn:
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "initialized"), ("servers", "initialized")
+        ]
 
 
-def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Path) -> None:
+def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Path, monkeypatch) -> None:
     profile_dir = tmp_path / "profile"
+    initialize = rust_client.rust_metadata.initialize_local_discovery
+    initialized = []
+
+    def initialize_after_local_data(database):
+        with sqlite3.connect(database) as conn:
+            assert conn.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchall() == [("127.0.0.1:24672",)]
+        initialize(database)
+        initialized.append(database)
+
+    monkeypatch.setattr(rust_client.rust_metadata, "initialize_local_discovery", initialize_after_local_data)
 
     rust_client.write_rust_profile(
         profile_dir,
@@ -301,7 +317,11 @@ def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Pat
         assert conn.execute(
             "SELECT endpoint FROM kad_bootstrap_endpoints ORDER BY position"
         ).fetchall() == [("127.0.0.1:24672",)]
+        assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
+            ("kad", "initialized"), ("servers", "initialized")
+        ]
     assert setting_value(profile_dir, "core", "networkKademlia") is True
+    assert initialized == [metadata_path(profile_dir)]
 
 
 def test_write_rust_profile_rejects_implicit_local_kad_enablement(tmp_path: Path) -> None:

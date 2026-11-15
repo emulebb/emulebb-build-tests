@@ -321,6 +321,8 @@ def write_rust_profile(
             "allowedPublicIpCidrs": vpn_guard_allowed_public_ip_cidrs or "",
         },
     )
+    if local_only_discovery:
+        rust_metadata.initialize_local_discovery(metadata_path)
 
 
 def server_from_endpoint(endpoint: str) -> dict[str, object]:
