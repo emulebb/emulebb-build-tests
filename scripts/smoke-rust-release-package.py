@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke two daemons, local transfer, and embedded WebUI from each native artifact.
+"""Smoke two daemons, a local download job, and embedded WebUI from each native artifact.
 
 This uses fresh, local-only, non-autoconnecting profiles on the native runner.
 It never installs a package into the runner's system directories or launches
@@ -52,7 +52,7 @@ TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
 PARTIAL_DOWNLOAD_LIMIT_KIBPS = 512
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
-    "transfers": "/api/v1/transfers",
+    "downloads": "/api/v1/downloads",
     "search": "/api/v1/searches",
     "sharing": "/api/v1/shared-directories",
     "shared-files": "/api/v1/shared-files",
@@ -255,48 +255,52 @@ def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES) -
     }
 
 
-def _partial_snapshot(details: dict, *, transfer_hash: str, expected_size: int) -> dict | None:
-    """Describe verified parts only while the original transfer remains incomplete."""
-    transfer, parts = details.get("transfer"), details.get("parts")
-    if (not isinstance(transfer, dict) or not isinstance(parts, list)
-            or str(transfer.get("hash", "")).lower() != transfer_hash.lower()
-            or transfer.get("sizeBytes") != expected_size or transfer.get("partsTotal") != len(parts)):
-        raise RuntimeError("Packaged transfer details do not match the expected file")
-    completed = transfer.get("completedBytes")
-    if type(completed) is not int or not 0 <= completed <= expected_size:
-        raise RuntimeError("Packaged transfer has an invalid completed byte count")
-    markers = transfer.get("partsProgressText")
-    if (not isinstance(markers, str) or len(markers) != len(parts)
-            or set(markers) - {"#", "0"}):
-        raise RuntimeError("Packaged transfer has invalid verified part markers")
-    verified, seen = {}, set()
+def _partial_snapshot(details: dict, *, download_id: str, expected_hash: str, expected_size: int) -> dict | None:
+    """Describe independently verified parts of the same unfinished job."""
+    download, parts = details.get("download"), details.get("parts")
+    if (not isinstance(download, dict) or not isinstance(parts, list) or not parts
+            or download.get("id") != download_id or download.get("hash") != expected_hash
+            or download.get("sizeBytes") != expected_size):
+        raise RuntimeError("Packaged download details do not match the admitted job")
+    verified, seen, geometry = {}, set(), []
     for part in parts:
         if (not isinstance(part, dict) or type(part.get("index")) is not int
                 or not 0 <= part["index"] < len(parts) or part["index"] in seen
-                or type(part.get("size")) is not int or part["size"] <= 0):
-            raise RuntimeError("Packaged transfer has invalid part geometry")
+                or type(part.get("size")) is not int or part["size"] <= 0
+                or type(part.get("start")) is not int or type(part.get("end")) is not int
+                or part["start"] < 0 or part["end"] < part["start"]
+                or part["end"] - part["start"] + 1 != part["size"]):
+            raise RuntimeError("Packaged download has invalid part geometry")
         seen.add(part["index"])
-        # WHY: fully received bytes can precede hash verification. Bind the
-        # persisted checkpoint to the exact verified indices in this snapshot.
-        if (markers[part["index"]] == "#" and part.get("complete") is True and part.get("corrupted") is False
+        geometry.append((part["index"], part["start"], part["end"]))
+        # Fully received bytes can precede hash verification. The native
+        # DownloadPart contract defines complete as the verification verdict.
+        if (part.get("complete") is True and part.get("corrupted") is False
                 and part.get("completedBytes") == part["size"] and part.get("gapBytes") == 0):
             verified[part["index"]] = part["size"]
+    ordered = sorted(geometry)
+    if (seen != set(range(len(parts))) or ordered[0][1] != 0
+            or ordered[-1][2] != expected_size - 1
+            or any(current[1] != previous[2] + 1 for previous, current in zip(ordered, ordered[1:]))):
+        raise RuntimeError("Packaged download has incomplete part geometry")
     verified_bytes = sum(verified.values())
-    if (not verified or type(transfer.get("partsObtained")) is not int
-            or transfer["partsObtained"] != markers.count("#") or markers.count("#") != len(verified)
-            or not 0 < verified_bytes <= completed < expected_size):
+    if (not verified or not 0 < verified_bytes < expected_size
+            or download.get("completedAt") is not None or download.get("payloadVerified") is not False):
         return None
     return {"partsTotal": len(parts), "verifiedPartIndices": sorted(verified), "verifiedBytes": verified_bytes,
-            "completedBytes": completed, "state": transfer.get("state")}
+            "state": download.get("state"), "intent": download.get("intent")}
 
 
-def _wait_for_verified_partial(base_url: str, transfer_hash: str, expected_size: int, *, paused: bool = False) -> dict:
+def _wait_for_verified_partial(base_url: str, download_id: str, expected_hash: str,
+                               expected_size: int, *, stopped: bool = False) -> dict:
     def probe():
-        details = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY)
-        snapshot = _partial_snapshot(details, transfer_hash=transfer_hash, expected_size=expected_size)
-        return snapshot if snapshot and (not paused or snapshot["state"] == "paused") else None
+        details = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}/details", API_KEY)
+        snapshot = _partial_snapshot(details, download_id=download_id, expected_hash=expected_hash,
+                                     expected_size=expected_size)
+        return snapshot if snapshot and (not stopped or (snapshot["intent"] == "stopped"
+                                              and snapshot["state"] == "stopped")) else None
     return wait_for(probe, timeout_seconds=90.0, interval_seconds=0.1,
-                    description="packaged verified partial transfer" + (" pause" if paused else ""))
+                    description="packaged verified partial download" + (" stop" if stopped else ""))
 
 
 def _app_metadata(app: dict, expected_identity: dict[str, str] | None = None) -> dict:
@@ -324,9 +328,10 @@ def _verify_cli_identity(binary: Path, expected_identity: dict[str, str]) -> str
     return result.stdout.strip()
 
 
-def _wait_for_transfer_delivery(
+def _wait_for_download_delivery(
     base_url: str,
-    transfer_hash: str,
+    download_id: str,
+    expected_hash: str,
     *,
     incoming: Path,
     expected_size: int,
@@ -335,9 +340,22 @@ def _wait_for_transfer_delivery(
     observations: list[dict[str, object]] = []
 
     def probe() -> dict[str, object] | None:
-        # WHY: successful promotion removes the active transfer. The completed
-        # shared-file registration and its exact delivered bytes are durable evidence.
-        shared = request_json(base_url, "GET", f"/api/v1/shared-files/{transfer_hash}", API_KEY)
+        # Completion remains a durable job; its delivery path and the complete
+        # shared-file registration must agree on the actual delivered bytes.
+        download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", API_KEY)
+        delivery = download.get("delivery")
+        if (download.get("id") != download_id or download.get("hash") != expected_hash):
+            raise RuntimeError("Packaged download identity changed before delivery")
+        if (download.get("state") != "completed" or download.get("payloadVerified") is not True
+                or not isinstance(download.get("completedAt"), int)
+                or not isinstance(delivery, dict) or delivery.get("state") != "delivered"):
+            return None
+        try:
+            shared = request_json(base_url, "GET", f"/api/v1/shared-files/{expected_hash}", API_KEY)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
         observations.append(
             {
                 "complete": shared.get("complete"),
@@ -345,12 +363,14 @@ def _wait_for_transfer_delivery(
                 "deliveredPathPresent": bool(shared.get("path")),
             }
         )
-        delivered_value = shared.get("path")
+        delivered_value = delivery.get("path")
         if (
-            str(shared.get("hash") or "").lower() != transfer_hash.lower()
+            str(shared.get("hash") or "").lower() != expected_hash
             or shared.get("complete") is not True
             or shared.get("partFile") is not False
             or int(shared.get("sizeBytes") or 0) != expected_size
+            or delivery.get("ownership") != "owned"
+            or shared.get("path") != delivered_value
         ):
             return None
         if not delivered_value:
@@ -359,12 +379,13 @@ def _wait_for_transfer_delivery(
         if not delivered.is_file():
             return None
         if delivered.resolve().parent != incoming.resolve():
-            raise RuntimeError(f"packaged transfer was delivered outside the configured incoming directory: {delivered}")
+            raise RuntimeError(f"packaged download was delivered outside the configured incoming directory: {delivered}")
         delivered_sha256 = file_sha256(delivered)
         if delivered.stat().st_size != expected_size or delivered_sha256 != expected_sha256:
-            raise RuntimeError("packaged transfer delivered bytes do not match the shared payload")
+            raise RuntimeError("packaged download delivered bytes do not match the shared payload")
         return {
-            "hash": transfer_hash,
+            "id": download_id,
+            "hash": expected_hash,
             "state": "completed",
             "completedBytes": expected_size,
             "sharedFileRegistered": True,
@@ -378,15 +399,15 @@ def _wait_for_transfer_delivery(
             probe,
             timeout_seconds=120.0,
             interval_seconds=0.5,
-            description=f"packaged local transfer {transfer_hash} delivery",
+            description=f"packaged local download {download_id} delivery",
         )
     except RuntimeError as error:
         try:
-            transfers = request_json(base_url, "GET", "/api/v1/transfers", API_KEY)
-            detail = json.dumps(transfers, sort_keys=True)[-16000:]
+            downloads = _download_page(base_url, "/api/v1/downloads?view=all")
+            detail = json.dumps(downloads, sort_keys=True)[-16000:]
         except Exception as snapshot_error:
             detail = str(snapshot_error)
-        raise RuntimeError(f"{error}; final transfer state: {detail}") from error
+        raise RuntimeError(f"{error}; final download state: {detail}") from error
 
 
 def _request(
@@ -395,6 +416,7 @@ def _request(
     api_key: str | None = None,
     method: str = "GET",
     json_body: dict[str, object] | None = None,
+    expected_statuses: tuple[int, ...] | None = None,
 ) -> bytes:
     headers = {"X-API-Key": api_key} if api_key else {}
     body = None
@@ -403,18 +425,44 @@ def _request(
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=3) as response:
-        if response.status not in ((200,) if method == "GET" else (200, 201, 202)):
+        accepted = expected_statuses or ((200,) if method == "GET" else (200, 201, 202))
+        if response.status not in accepted:
             raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
         return response.read()
 
 
-def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None) -> dict:
+def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
+                 *, expected_statuses: tuple[int, ...] | None = None) -> dict:
     """Use this smoke's HTTP transport and require the current REST envelope."""
-    document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body))
+    document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body,
+                                   expected_statuses=expected_statuses))
     if (not isinstance(document, dict) or not isinstance(document.get("data"), dict)
             or not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"):
         raise RuntimeError("Packaged REST must return the current v1 data/meta envelope")
     return document["data"]
+
+
+def _download_page(base_url: str, path: str) -> list[dict]:
+    document = json.loads(_request(base_url + path, api_key=API_KEY))
+    rows, meta = document.get("data"), document.get("meta")
+    if (not isinstance(rows, list) or not isinstance(meta, dict) or meta.get("apiVersion") != "v1"
+            or meta.get("hasMore") is not False or meta.get("nextCursor") is not None):
+        raise RuntimeError("Packaged download page did not settle")
+    return rows
+
+
+def _download_action(base_url: str, operation: str, download_id: str) -> str:
+    document = json.loads(_request(base_url + f"/api/v1/downloads/{operation}", method="POST",
+                                   api_key=API_KEY, json_body={"ids": [download_id]},
+                                   expected_statuses=(207,)))
+    rows = document.get("data")
+    if (not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"
+            or not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or rows[0].get("id") != download_id or rows[0].get("status") not in ("accepted", "unchanged")
+            or rows[0].get("httpStatus") not in (200, 202) or "error" in rows[0]
+            or (rows[0]["status"] == "unchanged" and rows[0]["httpStatus"] != 200)):
+        raise RuntimeError(f"Packaged download {operation} failed for job {download_id}: {document}")
+    return rows[0]["status"]
 
 
 def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
@@ -604,16 +652,23 @@ def _smoke_binary(
             raise RuntimeError("Packaged REST returned an invalid download limit")
         request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY,
                      {"core": {"downloadLimitKiBps": PARTIAL_DOWNLOAD_LIMIT_KIBPS}})
-        transfer_create = request_json(
+        created = request_json(
             leecher_base_url,
             "POST",
-            "/api/v1/transfers",
+            "/api/v1/downloads",
             API_KEY,
-            {"link": direct_link, "paused": False},
+            {"source": {"type": "ed2k-link", "link": direct_link}, "intent": "started"},
+            expected_statuses=(201,),
         )
-        _wait_for_verified_partial(leecher_base_url, transfer_hash, int(payload["sizeBytes"]))
-        request_json(leecher_base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/pause", API_KEY)
-        before = _wait_for_verified_partial(leecher_base_url, transfer_hash, int(payload["sizeBytes"]), paused=True)
+        download_id = created.get("id")
+        if (not isinstance(download_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", download_id)
+                or int(download_id) > 9223372036854775807 or created.get("hash") != transfer_hash):
+            raise RuntimeError(f"Packaged download admission returned invalid job identity: {created}")
+        _wait_for_verified_partial(leecher_base_url, download_id, transfer_hash, int(payload["sizeBytes"]))
+        if _download_action(leecher_base_url, "stop", download_id) != "accepted":
+            raise RuntimeError("Packaged download did not accept stop")
+        before = _wait_for_verified_partial(leecher_base_url, download_id, transfer_hash,
+                                            int(payload["sizeBytes"]), stopped=True)
         _graceful_shutdown(leecher_base_url, leecher_process)
         leecher_process = None
         leecher_log.close()
@@ -621,11 +676,12 @@ def _smoke_binary(
         log_handles.append(leecher_log)
         if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path), expected_identity) != app:
             raise RuntimeError("Restarted packaged daemon has a different release identity")
-        # Read durable progress before reconnecting or resuming; a new transfer
-        # or newly downloaded parts must not conceal missing persisted state.
-        after = _partial_snapshot(request_json(leecher_base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY),
-                                  transfer_hash=transfer_hash, expected_size=int(payload["sizeBytes"]))
-        if (after is None or after["state"] != "paused"
+        # Read durable progress before reconnecting or restarting the job; new
+        # downloaded parts must not conceal a missing persisted checkpoint.
+        after = _partial_snapshot(request_json(leecher_base_url, "GET", f"/api/v1/downloads/{download_id}/details", API_KEY),
+                                  download_id=download_id, expected_hash=transfer_hash,
+                                  expected_size=int(payload["sizeBytes"]))
+        if (after is None or after["intent"] != "stopped" or after["state"] != "stopped"
                 or after["partsTotal"] != before["partsTotal"]
                 or not set(before["verifiedPartIndices"]).issubset(after["verifiedPartIndices"])
                 or after["verifiedBytes"] < before["verifiedBytes"]):
@@ -635,14 +691,22 @@ def _smoke_binary(
             raise RuntimeError("Packaged restart did not preserve the download setting")
         request_json(leecher_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
         request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY, {"core": {"downloadLimitKiBps": previous_limit}})
-        request_json(leecher_base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/resume", API_KEY)
-        transfer_delivery = _wait_for_transfer_delivery(
+        if _download_action(leecher_base_url, "start", download_id) != "accepted":
+            raise RuntimeError("Packaged download did not accept restart")
+        download_delivery = _wait_for_download_delivery(
             leecher_base_url,
+            download_id,
             transfer_hash,
             incoming=leecher_incoming,
             expected_size=int(payload["sizeBytes"]),
             expected_sha256=str(payload["sha256"]),
         )
+        completed_page = _download_page(leecher_base_url, "/api/v1/downloads?view=completed&limit=2")
+        if [row.get("id") for row in completed_page] != [download_id]:
+            raise RuntimeError("Completed download job was not retained in history")
+        counts = request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY)["downloads"]
+        if counts != {"unfinished": 0, "completed": 1}:
+            raise RuntimeError(f"Packaged download snapshot counts differ: {counts}")
 
         _graceful_shutdown(leecher_base_url, leecher_process)
         _graceful_shutdown(seeder_base_url, seeder_process)
@@ -669,7 +733,7 @@ def _smoke_binary(
             "renderedWebui": bool(rendered_webui),
             **({"publicWebuiCapture": rendered_webui["checks"]["publicCapture"]}
                if public_capture_path is not None else {}),
-            "localTransfer": {
+            "localDownload": {
                 "payload": {
                     "name": payload["name"],
                     "sizeBytes": payload["sizeBytes"],
@@ -680,12 +744,14 @@ def _smoke_binary(
                     "name": matched.get("name"),
                     "sizeBytes": matched.get("sizeBytes"),
                 },
-                "transferAccepted": bool(transfer_create),
-                "delivery": transfer_delivery,
+                "jobId": download_id,
+                "delivery": download_delivery,
+                "retainedCompletedJob": True,
+                "snapshotCounts": counts,
                 "sourceDiscovery": "ed2k-link-direct-source",
                 "publicDiscoveryDisabled": True,
                 "partialRestart": {"before": before, "after": after, "sameProfile": True, "sameBinary": True,
-                                   "resumeRequested": True, "downloadLimitRestored": True},
+                                   "startRequested": True, "downloadLimitRestored": True},
                 "gracefulShutdowns": 3,
             },
         }

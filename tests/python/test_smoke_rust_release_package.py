@@ -210,13 +210,13 @@ def test_linux_capability_probe_reports_missing_emulated_socket_option(monkeypat
     assert caught.value.__cause__.errno == errno.ENOPROTOOPT
 
 
-def test_failed_delivery_retains_transfer_error_context(monkeypatch, tmp_path):
+def test_failed_delivery_retains_download_error_context(monkeypatch, tmp_path):
     def fail(*args, **kwargs):
         raise RuntimeError("delivery timed out")
     monkeypatch.setattr(smoke, "wait_for", fail)
-    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": [{"error": "synthetic publication failure"}]})
+    monkeypatch.setattr(smoke, "_download_page", lambda *args: [{"error": "synthetic publication failure"}])
     with pytest.raises(RuntimeError, match="synthetic publication failure"):
-        smoke._wait_for_transfer_delivery("http://127.0.0.1:4711", "a" * 32,
+        smoke._wait_for_download_delivery("http://127.0.0.1:4711", "7", "a" * 32,
                                           incoming=tmp_path, expected_size=1, expected_sha256="b" * 64)
 
 
@@ -287,7 +287,7 @@ def test_transfer_payload_is_deterministic(tmp_path) -> None:
     assert (tmp_path / "first.bin").read_bytes() == (tmp_path / "second.bin").read_bytes()
 
 
-def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -> None:
+def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -> None:
     incoming = tmp_path / "incoming"
     incoming.mkdir()
     delivered = incoming / "payload.bin"
@@ -298,6 +298,9 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
 
     def completed_shared_file(_base_url, method, path, _api_key):
         requests.append((method, path))
+        if path == "/api/v1/downloads/7":
+            return {"id": "7", "hash": transfer_hash, "state": "completed", "payloadVerified": True,
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "owned"}}
         return {
             "hash": transfer_hash,
             "complete": True,
@@ -312,8 +315,9 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
         completed_shared_file,
     )
 
-    report = smoke._wait_for_transfer_delivery(
+    report = smoke._wait_for_download_delivery(
         "http://127.0.0.1:4711",
+        "7",
         transfer_hash,
         incoming=incoming,
         expected_size=delivered.stat().st_size,
@@ -322,7 +326,7 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
 
     assert report["deliveredPathWithinIncoming"] is True
     assert report["sharedFileRegistered"] is True
-    assert requests == [("GET", f"/api/v1/shared-files/{transfer_hash}")]
+    assert requests == [("GET", "/api/v1/downloads/7"), ("GET", f"/api/v1/shared-files/{transfer_hash}")]
     assert str(tmp_path) not in json.dumps(report)
 
 
@@ -330,7 +334,7 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
     "field,value",
     [("hash", "ff" * 16), ("complete", False), ("partFile", True), ("sizeBytes", 99)],
 )
-def test_transfer_delivery_rejects_wrong_or_incomplete_shared_content(
+def test_download_delivery_rejects_wrong_or_incomplete_shared_content(
     monkeypatch, tmp_path, field, value,
 ) -> None:
     delivered = tmp_path / "payload.bin"
@@ -344,12 +348,18 @@ def test_transfer_delivery_rejects_wrong_or_incomplete_shared_content(
         "path": str(delivered),
     }
     shared[field] = value
-    monkeypatch.setattr(smoke, "request_json", lambda *_args: shared)
+    def response(_base, _method, path, _key):
+        if path == "/api/v1/downloads/7":
+            return {"id": "7", "hash": transfer_hash, "state": "completed", "payloadVerified": True,
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "owned"}}
+        return shared
+    monkeypatch.setattr(smoke, "request_json", response)
     monkeypatch.setattr(smoke, "wait_for", lambda probe, **_kwargs: probe())
 
     assert (
-        smoke._wait_for_transfer_delivery(
+        smoke._wait_for_download_delivery(
             "http://127.0.0.1:4711",
+            "7",
             transfer_hash,
             incoming=tmp_path,
             expected_size=7,
@@ -390,20 +400,22 @@ def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> Non
     assert chmod_calls == [(asset, asset.stat().st_mode | stat.S_IXUSR)]
 
 
-def partial_details(*, size=12, verified=True, state="paused", completed=None):
+def partial_details(*, size=12, verified=True, state="stopped", intent="stopped"):
     first = size * 2 // 3
-    return {"transfer": {"hash": "a" * 32, "sizeBytes": size, "completedBytes": first if completed is None else completed,
-                         "partsTotal": 2, "partsObtained": 1 if verified else 0,
-                         "partsProgressText": "#0" if verified else "00", "state": state},
-            "parts": [{"index": 0, "size": first, "completedBytes": first if verified else 0,
+    return {"download": {"id": "7", "hash": "a" * 32, "sizeBytes": size,
+                         "completedAt": None, "payloadVerified": False, "intent": intent, "state": state},
+            "parts": [{"index": 0, "start": 0, "end": first - 1, "size": first, "completedBytes": first if verified else 0,
                        "gapBytes": 0 if verified else first, "complete": verified, "corrupted": False},
-                      {"index": 1, "size": size - first, "completedBytes": 0, "gapBytes": size - first,
+                      {"index": 1, "start": first, "end": size - 1, "size": size - first,
+                       "completedBytes": 0, "gapBytes": size - first,
                        "complete": False, "corrupted": False}]}
 
 
 def test_partial_checkpoint_accepts_verified_part_zero_and_omits_paths():
-    result = smoke._partial_snapshot(partial_details(), transfer_hash="a" * 32, expected_size=12)
-    assert result == {"partsTotal": 2, "verifiedPartIndices": [0], "verifiedBytes": 8, "completedBytes": 8, "state": "paused"}
+    result = smoke._partial_snapshot(partial_details(), download_id="7", expected_hash="a" * 32,
+                                     expected_size=12)
+    assert result == {"partsTotal": 2, "verifiedPartIndices": [0], "verifiedBytes": 8,
+                      "state": "stopped", "intent": "stopped"}
 
 
 def test_verified_partial_reads_the_details_resource(monkeypatch):
@@ -411,38 +423,56 @@ def test_verified_partial_reads_the_details_resource(monkeypatch):
     detail = partial_details()
     def api(base_url, method, path, key):
         paths.append(path)
-        return detail if path.endswith("/details") else detail["transfer"]
+        return detail
     monkeypatch.setattr(smoke, "request_json", api)
     monkeypatch.setattr(smoke, "wait_for", lambda probe, **kwargs: probe())
-    result = smoke._wait_for_verified_partial("http://127.0.0.1:4711", "a" * 32, 12)
+    result = smoke._wait_for_verified_partial("http://127.0.0.1:4711", "7", "a" * 32, 12)
     assert result["verifiedPartIndices"] == [0]
-    assert paths == ["/api/v1/transfers/" + "a" * 32 + "/details"]
+    assert paths == ["/api/v1/downloads/7/details"]
 
 
-@pytest.mark.parametrize("markers,count", [("00", 0), ("0#", 1), ("#0", True)])
-def test_received_bytes_without_matching_verified_markers_are_not_a_checkpoint(markers, count):
+@pytest.mark.parametrize("completed,complete", [(8, False), (7, True), (True, True)])
+def test_received_bytes_without_verified_part_are_not_a_checkpoint(completed, complete):
     detail = partial_details()
-    detail["transfer"].update(partsProgressText=markers, partsObtained=count)
-    assert smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12) is None
+    detail["parts"][0].update(completedBytes=completed, complete=complete)
+    assert smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
+                                   expected_size=12) is None
 
 
-@pytest.mark.parametrize("fault", ["unverified", "corrupted", "zero-progress", "already-complete", "boolean-index", "duplicate-index"])
+@pytest.mark.parametrize("fault", ["unverified", "corrupted", "already-complete", "boolean-index", "duplicate-index"])
 def test_partial_checkpoint_cannot_be_satisfied_by_invalid_or_nonpartial_state(fault):
     detail = partial_details()
     if fault == "unverified":
-        detail["transfer"]["partsObtained"] = 0
+        detail["parts"][0]["complete"] = False
     elif fault == "corrupted":
         detail["parts"][0]["corrupted"] = True
-    elif fault == "zero-progress":
-        detail["transfer"]["completedBytes"] = 0
     elif fault == "already-complete":
-        detail["transfer"]["completedBytes"] = 12
+        detail["download"].update(completedAt=100, payloadVerified=True)
     else:
         detail["parts"][0 if fault == "boolean-index" else 1]["index"] = False if fault == "boolean-index" else 0
         with pytest.raises(RuntimeError, match="part geometry"):
-            smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12)
+            smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
+                                    expected_size=12)
         return
-    assert smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12) is None
+    assert smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
+                                   expected_size=12) is None
+
+
+@pytest.mark.parametrize("fault", ["truncated-page", "missing-first", "gap", "overlap", "wrong-inclusive-size"])
+def test_partial_checkpoint_requires_complete_inclusive_part_geometry(fault):
+    detail = partial_details()
+    if fault == "truncated-page":
+        detail["parts"].pop()
+    elif fault == "missing-first":
+        detail["parts"].pop(0)
+    elif fault == "gap":
+        detail["parts"][1].update(start=9, size=3, gapBytes=3)
+    elif fault == "overlap":
+        detail["parts"][1].update(start=7, size=5, gapBytes=5)
+    else:
+        detail["parts"][1]["size"] += 1
+    with pytest.raises(RuntimeError, match="part geometry"):
+        smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32, expected_size=12)
 
 
 @pytest.mark.parametrize("document,valid", [({"data": {"ok": True}, "meta": {"apiVersion": "v1"}}, True),
@@ -456,15 +486,47 @@ def test_package_rest_requires_the_current_envelope(monkeypatch, document, valid
             smoke.request_json("http://127.0.0.1:4711", "GET", "/api/v1/app", smoke.API_KEY)
 
 
+def test_download_action_requires_exact_successful_207_item(monkeypatch):
+    payload = {"data": [{"id": "7", "status": "accepted", "httpStatus": 202}],
+               "meta": {"apiVersion": "v1"}}
+    calls = []
+    def request(url, **kwargs):
+        calls.append((url, kwargs))
+        return json.dumps(payload).encode()
+    monkeypatch.setattr(smoke, "_request", request)
+    assert smoke._download_action("http://127.0.0.1:4711", "stop", "7") == "accepted"
+    assert calls[0][0].endswith("/api/v1/downloads/stop")
+    assert calls[0][1]["expected_statuses"] == (207,)
+    assert calls[0][1]["json_body"] == {"ids": ["7"]}
+    for item in ({"id": "8", "status": "accepted", "httpStatus": 202},
+                 {"id": "7", "status": "failed", "httpStatus": 404,
+                  "error": {"code": "NOT_FOUND", "message": "Missing", "details": {}}},
+                 {"id": "7", "status": "accepted", "httpStatus": 202, "error": {}},
+                 {"id": "7", "status": "unchanged", "httpStatus": 202}):
+        payload["data"] = [item]
+        with pytest.raises(RuntimeError, match="failed for job 7"):
+            smoke._download_action("http://127.0.0.1:4711", "stop", "7")
+
+
+def test_download_page_requires_settled_bounded_envelope(monkeypatch):
+    page = {"data": [{"id": "7"}],
+            "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
+    monkeypatch.setattr(smoke, "_request", lambda *args, **kwargs: json.dumps(page).encode())
+    assert smoke._download_page("http://127.0.0.1:4711", "/api/v1/downloads?view=completed") == [{"id": "7"}]
+    page["meta"] = {"apiVersion": "v1", "hasMore": True, "nextCursor": "later"}
+    with pytest.raises(RuntimeError, match="did not settle"):
+        smoke._download_page("http://127.0.0.1:4711", "/api/v1/downloads?view=completed")
+
+
 @pytest.mark.parametrize("fault", [None, "lost-parts", "lost-setting", "changed-part-count"])
-def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(monkeypatch, tmp_path, fault):
+def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monkeypatch, tmp_path, fault):
     binary = tmp_path / "emulebb-rust"
     binary.write_bytes(b"synthetic binary")
     webui = tmp_path / "webui"
     webui.mkdir()
     (webui / "index.html").write_text("SPA")
     processes, starts, operations, closed = [], [], [], []
-    state = {"paused": False, "limit": 12207, "leecherStarts": 0}
+    state = {"stopped": False, "limit": 12207, "leecherStarts": 0}
     def write_profile(profile, **kwargs):
         profile.mkdir()
         (profile / "emulebb-rust-metadata.db").write_bytes(b"synthetic metadata")
@@ -482,34 +544,47 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
     def shutdown(base_url, process):
         closed.append(process.ordinal)
         process.returncode = 0
-    def api(base_url, method, path, key, body=None):
+    def api(base_url, method, path, key, body=None, **kwargs):
         operations.append((method, path, body))
         if path == "/api/v1/app/settings":
             if method == "PATCH":
                 state["limit"] = body["core"]["downloadLimitKiBps"]
             return {"core": {"downloadLimitKiBps": state["limit"]}}
-        if path == "/api/v1/transfers" and method == "POST":
-            return {"accepted": True}
-        if path.endswith("/operations/pause"):
-            state["paused"] = True
-            return {"ok": True}
-        if path.endswith("/operations/resume"):
-            state["paused"] = False
-            return {"ok": True}
-        if path == "/api/v1/transfers/" + "a" * 32 + "/details":
+        if path == "/api/v1/downloads" and method == "POST":
+            assert kwargs["expected_statuses"] == (201,)
+            assert body == {"source": {"type": "ed2k-link", "link": body["source"]["link"]},
+                            "intent": "started"}
+            return {"id": "7", "hash": "a" * 32}
+        if path == "/api/v1/downloads/7/details":
             details = partial_details(size=smoke.TRANSFER_SIZE_BYTES,
                                    verified=not (fault == "lost-parts" and state["leecherStarts"] == 2),
-                                   state="paused" if state["paused"] else "downloading")
+                                   state="stopped" if state["stopped"] else "downloading",
+                                   intent="stopped" if state["stopped"] else "started")
             if fault == "changed-part-count" and state["leecherStarts"] == 2:
-                details["parts"][1]["size"] //= 2
-                details["parts"][1]["gapBytes"] = details["parts"][1]["size"]
-                details["parts"].append({**details["parts"][1], "index": 2})
-                details["transfer"].update(partsTotal=3, partsProgressText="#00")
+                second = details["parts"][1]
+                original_end = second["end"]
+                second["size"] //= 2
+                second["end"] = second["start"] + second["size"] - 1
+                second["gapBytes"] = second["size"]
+                details["parts"].append({**second, "index": 2, "start": second["end"] + 1,
+                                         "end": original_end, "size": original_end - second["end"],
+                                         "gapBytes": original_end - second["end"]})
             return details
-        if path == "/api/v1/transfers/" + "a" * 32:
-            return partial_details(size=smoke.TRANSFER_SIZE_BYTES)["transfer"]
+        if path == "/api/v1/snapshot":
+            return {"downloads": {"unfinished": 0, "completed": 1}}
         return {"ok": True}
     def request(url, **kwargs):
+        if url.endswith("/api/v1/downloads/stop") or url.endswith("/api/v1/downloads/start"):
+            operation = url.rsplit("/", 1)[-1]
+            assert kwargs["expected_statuses"] == (207,)
+            assert kwargs["json_body"] == {"ids": ["7"]}
+            state["stopped"] = operation == "stop"
+            operations.append(("POST", f"/api/v1/downloads/{operation}", kwargs["json_body"]))
+            return json.dumps({"data": [{"id": "7", "status": "accepted", "httpStatus": 202}],
+                               "meta": {"apiVersion": "v1"}}).encode()
+        if "/api/v1/downloads?view=completed" in url:
+            return json.dumps({"data": [{"id": "7", "hash": "a" * 32}],
+                               "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
         if url.endswith("/"):
             return b'<title>eMuleBB WebUI</title><div id="app"></div><script src="/assets/app.js"></script>'
         if "/assets/" in url:
@@ -530,18 +605,24 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
     monkeypatch.setattr(smoke, "publish_shared_tree", lambda *args, **kwargs: {"sharedFiles": {"matched": {
         "hash": "a" * 32, "name": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
         "ed2kLink": "ed2k://|file|Sample.Payload.bin|12582912|" + "a" * 32 + "|/"}}})
-    monkeypatch.setattr(smoke, "_wait_for_transfer_delivery", lambda *args, **kwargs: {"state": "completed", "deliveredSha256": kwargs["expected_sha256"]})
+    monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda *args, **kwargs: {
+        "id": args[1], "state": "completed", "deliveredSha256": kwargs["expected_sha256"]})
     if fault:
         with pytest.raises(RuntimeError, match="did not survive|did not preserve"):
             smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
     else:
         result = smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
-        assert result["localTransfer"]["gracefulShutdowns"] == 3
-        assert result["localTransfer"]["partialRestart"]["after"]["verifiedPartIndices"] == [0]
+        assert result["localDownload"]["gracefulShutdowns"] == 3
+        assert result["localDownload"]["jobId"] == "7"
+        assert result["localDownload"]["retainedCompletedJob"] is True
+        assert result["localDownload"]["partialRestart"]["after"]["verifiedPartIndices"] == [0]
         assert closed == [2, 3, 1] and state["limit"] == 12207
     assert len(starts) == 3 and starts[1] == starts[2]
-    assert len([item for item in operations if item[:2] == ("POST", "/api/v1/transfers")]) == 1
-    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/transfers/" + "a" * 32 + "/details")]) == 3
+    assert len([item for item in operations if item[:2] == ("POST", "/api/v1/downloads")]) == 1
+    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/downloads/7/details")]) == 3
+    assert [item[1] for item in operations if item[1] in ("/api/v1/downloads/stop", "/api/v1/downloads/start")] == (
+        ["/api/v1/downloads/stop"] if fault else ["/api/v1/downloads/stop", "/api/v1/downloads/start"]
+    )
     assert all(process.poll() == 0 for process in processes)
 
 
