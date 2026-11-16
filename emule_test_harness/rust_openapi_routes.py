@@ -23,7 +23,7 @@ API_KEY_SECURITY_SCHEME = "ApiKeyAuth"
 API_KEY_HEADER = "X-API-Key"
 ERROR_RESPONSE_REF = "#/components/responses/ErrorResponse"
 ERROR_ENVELOPE_REF = "#/components/schemas/ErrorEnvelope"
-ERROR_RESPONSE_STATUSES = ("400", "401", "404", "default")
+ERROR_RESPONSE_STATUSES = ("400", "401", "default")
 METHOD_NOT_ALLOWED_RESPONSE_REF = "#/components/responses/MethodNotAllowedResponse"
 CONTRACT_VERSION_HEADER_REF = "#/components/headers/ContractVersionHeader"
 EVENT_STREAM_RESPONSE_COMPONENT = "EventStreamResponse"
@@ -3401,7 +3401,7 @@ def openapi_response_component_drift(openapi_yaml: Path) -> tuple[ResponseCompon
 
 
 def openapi_success_response_drift(openapi_yaml: Path) -> tuple[SuccessResponseDrift, ...]:
-    """Returns success responses that are absent, ambiguous, inline, or schema-less."""
+    """Returns absent, inline, or schema-less declared success responses."""
 
     document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8")) or {}
     component_responses = document.get("components", {}).get("responses", {}) or {}
@@ -3422,15 +3422,6 @@ def openapi_success_response_drift(openapi_yaml: Path) -> tuple[SuccessResponseD
                     )
                 )
                 continue
-            if len(success_statuses) > 1:
-                drift.append(
-                    SuccessResponseDrift(
-                        method=method.upper(),
-                        path=path,
-                        status=",".join(success_statuses),
-                        issue="must document exactly one 2xx response",
-                    )
-                )
             for status in success_statuses:
                 response = responses.get(status)
                 reference = response.get("$ref") if isinstance(response, dict) else None
@@ -3582,7 +3573,8 @@ def openapi_error_response_drift(openapi_yaml: Path) -> tuple[ErrorResponseDrift
             if method not in HTTP_METHODS:
                 continue
             responses = operation.get("responses", {}) or {}
-            for status in ERROR_RESPONSE_STATUSES:
+            required_statuses = ERROR_RESPONSE_STATUSES + (("404",) if re.search(r"\{[^{}]+\}", path) else ())
+            for status in required_statuses:
                 response = responses.get(status)
                 if not isinstance(response, dict):
                     drift.append(
@@ -3604,7 +3596,7 @@ def openapi_error_response_drift(openapi_yaml: Path) -> tuple[ErrorResponseDrift
                     )
             for status, response in responses.items():
                 status_text = str(status)
-                if status_text in ERROR_RESPONSE_STATUSES or status_text == "405" or is_success_status(status_text):
+                if status_text in required_statuses or status_text == "405" or is_success_status(status_text):
                     continue
                 if status_text == "409" and isinstance(response, dict):
                     schema = (response.get("content", {}).get("application/json", {})

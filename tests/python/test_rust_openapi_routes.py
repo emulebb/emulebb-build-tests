@@ -3718,7 +3718,7 @@ components:
     )
 
 
-def test_openapi_success_response_drift_requires_single_shared_schema_response(tmp_path: Path) -> None:
+def test_openapi_success_response_drift_validates_every_declared_success(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -3737,8 +3737,15 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/OkResponse"
-        "202":
+        "201":
           $ref: "#/components/responses/AcceptedResponse"
+  /multiple-bad:
+    post:
+      responses:
+        "200":
+          $ref: "#/components/responses/OkResponse"
+        "201":
+          $ref: "#/components/responses/NoSchemaResponse"
   /schema-less:
     get:
       responses:
@@ -3777,9 +3784,9 @@ components:
         ),
         SuccessResponseDrift(
             method="POST",
-            path="/multiple",
-            status="200,202",
-            issue="must document exactly one 2xx response",
+            path="/multiple-bad",
+            status="201",
+            issue="response component NoSchemaResponse must define a media schema",
         ),
         SuccessResponseDrift(
             method="GET",
@@ -3913,7 +3920,7 @@ components:
             method="GET",
             path="/app",
             status="404",
-            issue="must reference ErrorResponse",
+            issue="documented non-success responses must reference ErrorResponse",
         ),
         ErrorResponseDrift(
             method="GET",
@@ -3922,6 +3929,54 @@ components:
             issue="documented non-success responses must reference ErrorResponse",
         ),
     )
+
+
+def test_openapi_error_response_drift_requires_404_for_resource_paths_only(tmp_path: Path) -> None:
+    openapi_yaml = write(
+        tmp_path / "REST-API-OPENAPI.yaml",
+        """
+paths:
+  /downloads:
+    get:
+      responses:
+        "200": { $ref: "#/components/responses/OkResponse" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        default: { $ref: "#/components/responses/ErrorResponse" }
+  /downloads/start:
+    post:
+      responses:
+        "207": { $ref: "#/components/responses/BatchResponse" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        default: { $ref: "#/components/responses/ErrorResponse" }
+  /downloads/{id}:
+    get:
+      responses:
+        "200": { $ref: "#/components/responses/OkResponse" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        default: { $ref: "#/components/responses/ErrorResponse" }
+components:
+  responses:
+    ErrorResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+""",
+    )
+
+    assert openapi_error_response_drift(openapi_yaml) == (
+        ErrorResponseDrift(method="GET", path="/downloads/{id}", status="404",
+                           issue="missing error response"),
+    )
+    document = yaml.safe_load(openapi_yaml.read_text(encoding="utf-8"))
+    document["paths"]["/downloads/{id}"]["get"]["responses"]["404"] = {
+        "$ref": "#/components/responses/ErrorResponse"
+    }
+    openapi_yaml.write_text(yaml.safe_dump(document), encoding="utf-8")
+    assert openapi_error_response_drift(openapi_yaml) == ()
 
 
 def test_openapi_method_not_allowed_drift_requires_405_ref_and_allow_header(tmp_path: Path) -> None:
