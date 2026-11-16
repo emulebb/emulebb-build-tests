@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import socket
 import sqlite3
 import struct
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +45,28 @@ FRIEND_PEER_BUDGET_SECONDS = 180.0
 KAD_IMPORT_BUDGET_SECONDS = 90.0
 CATEGORY_BUDGET_SECONDS = 120.0
 FRIEND_FAULT_TRIGGERS = tuple(f"harness_friend_failure_{operation}" for operation in ("insert", "update", "delete"))
+
+
+def require_download_id(row: dict[str, Any], *, hash_value: str) -> str:
+    """Keep the allocated job identity separate from the protocol content hash."""
+    job_id = row.get("id")
+    if (not isinstance(job_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", job_id)
+            or int(job_id) > 9223372036854775807 or row.get("hash") != hash_value):
+        raise RuntimeError(f"Download admission returned invalid job identity: {row}")
+    return job_id
+
+
+def require_download_action_result(response: dict[str, Any], job_id: str) -> str:
+    """An admitted one-job action succeeds only when its exact item succeeds."""
+    payload = response.get("raw_json")
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if (response.get("status") != 207 or not isinstance(items, list) or len(items) != 1
+            or not isinstance(items[0], dict) or items[0].get("id") != job_id
+            or items[0].get("status") not in ("accepted", "unchanged")
+            or items[0].get("httpStatus") not in (200, 202) or "error" in items[0]
+            or (items[0]["status"] == "unchanged" and items[0]["httpStatus"] != 200)):
+        raise RuntimeError(f"Download action did not succeed for job {job_id}: {response}")
+    return items[0]["status"]
 
 
 def kad_node_id_display(wire_hex: str) -> str:
@@ -269,8 +293,9 @@ def run_kad_persistence_phase(*, executable: Path, rust_repo: Path, root: Path,
 
 
 def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: Path) -> dict[str, object]:
-    """Prove category identity, nullable assignment and complete sharing across restart."""
+    """Prove category assignment, job identity and complete sharing across restart."""
     package = load_script_module("package_helpers_for_category_contract", "smoke-rust-release-package.py")
+    smoke = rust_rest_conformance.load_rest_smoke_module()
     root.mkdir(parents=True, exist_ok=False)
     profile = root / "profile"
     incoming = profile / "incoming"
@@ -332,21 +357,62 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         if row != expected:
             raise RuntimeError(f"Category contract differs: expected {expected}, got {row}")
 
-    def transfer(hash_value: str) -> dict[str, Any]:
-        return request("GET", f"/api/v1/transfers/{hash_value}")
+    def download(job_id: str) -> dict[str, Any]:
+        return request("GET", f"/api/v1/downloads/{job_id}")
 
     def assignments() -> list[object]:
-        return [transfer(hash_value).get("category") for hash_value in hashes]
+        return [download(job_id).get("category") for job_id in job_ids]
 
-    def add_transfer(hash_value: str, name: str, *, category: str | None = None) -> None:
-        link = f"ed2k://|file|{name}|4096|{hash_value}|/"
-        body: dict[str, Any] = {"link": link, "paused": True}
+    def add_download(hash_value: str, name: str, *, category: str | None = None) -> str:
+        body: dict[str, Any] = {"source": {"type": "content", "hash": hash_value,
+                                         "name": name, "sizeBytes": 4096}, "intent": "stopped"}
         if category is not None:
             body["category"] = category
-        request("POST", "/api/v1/transfers", body=body)
+        result = smoke.http_request(base_url, "/api/v1/downloads", method="POST", api_key=API_KEY,
+                                    json_body=body, request_timeout_seconds=min(5.0, remaining()))
+        if result["status"] != 201:
+            raise RuntimeError(f"Fresh download admission expected 201: {result}")
+        row = result["raw_json"]["data"]
+        job_id = require_download_id(row, hash_value=hash_value)
+        if (row.get("name"), row.get("category"), row.get("sizeBytes"), row.get("intent")) != (
+                name, category.title() if category is not None else None, 4096, "stopped"):
+            raise RuntimeError(f"Download admission changed requested fields: {row}")
+        return job_id
+
+    def download_action(operation: str, job_id: str) -> str:
+        result = smoke.http_request(base_url, f"/api/v1/downloads/{operation}", method="POST",
+                                    api_key=API_KEY, json_body={"ids": [job_id]},
+                                    request_timeout_seconds=min(5.0, remaining()))
+        return require_download_action_result(result, job_id)
+
+    def download_page(path: str) -> list[dict[str, Any]]:
+        result = http_json(base_url, path, api_key=API_KEY,
+                           timeout_seconds=min(5.0, remaining()))
+        rows, meta = result.get("data"), result.get("meta")
+        if (not isinstance(rows, list) or not isinstance(meta, dict)
+                or meta.get("hasMore") is not False or meta.get("nextCursor") is not None):
+            raise RuntimeError(f"Small download page did not settle: {result}")
+        return rows
+
+    def durable_jobs() -> list[tuple[Any, ...]]:
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            if connection.execute("SELECT schema_id,schema_version FROM metadata_schema").fetchall() != [
+                    rust_metadata._schema_marker(rust_repo)]:
+                raise RuntimeError("Download evidence requires the selected current metadata schema")
+            return connection.execute(
+                "SELECT j.id,lower(hex(k.ed2k_hash)),c.name,j.intent,"
+                "temp.display_path,storage.display_path,j.storage_directory_marker_id,"
+                "j.storage_directory_identity FROM download_jobs j "
+                "JOIN known_files k ON k.id=j.known_file_id "
+                "LEFT JOIN categories c ON c.id=j.category_id "
+                "LEFT JOIN local_paths temp ON temp.id=j.selected_temp_path_id "
+                "LEFT JOIN local_paths storage ON storage.id=j.storage_path_id "
+                "WHERE j.removed_at_s IS NULL ORDER BY j.id"
+            ).fetchall()
 
     hashes = ("00112233445566778899aabbccddeeff", "102132435465768798a9babcbddceeff",
               "2031425364758697a8b9cadbecfd0e1f")
+    job_ids: list[str] = []
     try:
         rust_client.write_rust_profile(
             profile, rust_repo=rust_repo, incoming_dir=incoming, rest_addr=REST_ADDR,
@@ -401,21 +467,47 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         patched = request("PATCH", "/api/v1/categories/alpha", body={"tempDir": None})
         require_category(patched, name="Alpha",
                          temp_dir=None, destination_dir=str(destination), comment="Edited")
+        patched = request("PATCH", "/api/v1/categories/Alpha", body={"tempDir": str(temp_override)})
+        require_category(patched, name="Alpha",
+                         temp_dir=str(temp_override), destination_dir=str(destination), comment="Edited")
 
-        add_transfer(hashes[0], "Alpha.bin", category="alpha")
-        add_transfer(hashes[1], "Beta.bin", category="second-2")
-        add_transfer(hashes[2], "Gamma.bin")
+        job_ids.append(add_download(hashes[0], "Alpha.bin", category="alpha"))
+        job_ids.append(add_download(hashes[1], "Beta.bin", category="second-2"))
+        job_ids.append(add_download(hashes[2], "Gamma.bin"))
+        if len(set(job_ids)) != 3 or list(map(int, job_ids)) != sorted(map(int, job_ids)):
+            raise RuntimeError("Distinct downloads did not receive ordered job IDs")
         if assignments() != ["Alpha", "Second-2", None]:
-            raise RuntimeError("Transfer category assignment differs before deletion")
-        filtered = request("GET", "/api/v1/transfers?category=ALPHA")["items"]
-        if {row["hash"] for row in filtered} != {hashes[0]}:
-            raise RuntimeError("Case-insensitive category filter did not select the assigned transfer")
-        request("PATCH", f"/api/v1/transfers/{hashes[2]}", body={"category": "ALPHA"})
+            raise RuntimeError("Download category assignment differs before deletion")
+        filtered = download_page("/api/v1/downloads?view=all&category=ALPHA")
+        if [row["id"] for row in filtered] != [job_ids[0]] or filtered[0]["hash"] != hashes[0]:
+            raise RuntimeError("Case-insensitive category filter did not select the assigned job")
+        all_rows = download_page("/api/v1/downloads?view=all&limit=3")
+        if [row["id"] for row in all_rows] != list(reversed(job_ids)):
+            raise RuntimeError("Thin download page did not retain descending job identity")
+        counts = request("GET", "/api/v1/snapshot")["downloads"]
+        if counts != {"unfinished": 3, "completed": 0}:
+            raise RuntimeError(f"Download snapshot counts differ: {counts}")
+        if download_action("start", job_ids[0]) != "accepted":
+            raise RuntimeError("Stopped download was not started")
+        def allocated_storage() -> tuple[Any, ...] | None:
+            row = durable_jobs()[0]
+            return row if row[5] is not None and row[6] is not None and row[7] is not None else None
+
+        started_row = wait_until("download storage allocation", remaining(), allocated_storage)
+        marker = started_row[6]
+        storage_path = Path(started_row[5])
+        if (str(uuid.UUID(marker)) != marker or started_row[4] != str(temp_override)
+                or storage_path.parent.resolve() != temp_override.resolve()
+                or storage_path.name != f"{job_ids[0]}-{marker}" or not storage_path.is_dir()):
+            raise RuntimeError(f"Download did not persist its allocated UUID storage path: {started_row[:7]}")
+        if download_action("stop", job_ids[0]) != "accepted":
+            raise RuntimeError("Started download was not stopped")
+        request("PATCH", f"/api/v1/downloads/{job_ids[2]}", body={"category": "ALPHA"})
         if assignments() != ["Alpha", "Second-2", "Alpha"]:
-            raise RuntimeError("Transfer category patch did not return canonical saved spelling")
-        request("PATCH", f"/api/v1/transfers/{hashes[2]}", body={"category": None})
+            raise RuntimeError("Download category patch did not return canonical saved spelling")
+        request("PATCH", f"/api/v1/downloads/{job_ids[2]}", body={"category": None})
         if assignments() != ["Alpha", "Second-2", None]:
-            raise RuntimeError("Null transfer category patch did not clear assignment")
+            raise RuntimeError("Null download category patch did not clear assignment")
 
         category_only = destination / "CategoryOnly.txt"
         category_only_bytes = b"category-only complete share\n"
@@ -487,7 +579,12 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         require_category(surviving[0], name="Second-2",
                          temp_dir=None, destination_dir=None, comment="Keep")
         if assignments() != [None, "Second-2", None]:
-            raise RuntimeError("Transfer assignments changed on profile reopen")
+            raise RuntimeError("Download assignments changed on profile reopen")
+        rows = durable_jobs()
+        if ([(str(row[0]), row[1], row[2]) for row in rows]
+                != list(zip(job_ids, hashes, (None, "Second-2", None)))
+                or rows[0][4:8] != started_row[4:8]):
+            raise RuntimeError("Job identity, selective category clearing or storage changed on reopen")
         recreated = request("POST", "/api/v1/categories", body={"name": "ALPHA"})
         require_category(recreated, name="ALPHA", temp_dir=None, destination_dir=None, comment="")
         if assignments() != [None, "Second-2", None]:
@@ -499,6 +596,9 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Category restart changed complete-share files")
         report["categoryNames"] = {"deleted": "Alpha", "survivor": "Second-2", "recreated": "ALPHA"}
         report["assignmentsAfterReopen"] = [None, "Second-2", None]
+        report["downloadIds"] = job_ids
+        report["storage"] = {"jobId": job_ids[0], "path": str(storage_path), "markerId": marker,
+                             "persistedAcrossReopen": True}
         report["sharing"] = {"withdrawnHash": only_hash, "survivingHash": duplicate_hash,
                              "categoryOnlyWithdrawn": True, "independentCompleteCopyRetained": True,
                              "fixtureBytesUnchanged": True}
@@ -673,7 +773,10 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         file_hash = content["hash"]
         link = rust_local_ed2k.ed2k_link_with_source(content["ed2kLink"], REST_ADDR, seeder["tcp"])
         for peer in peers[1:]:
-            request(peer, "POST", "/api/v1/transfers", body={"link": link, "paused": False})
+            admitted = request(peer, "POST", "/api/v1/downloads", expected=201, body={
+                "source": {"type": "ed2k-link", "link": link}, "intent": "started",
+            })["json"]["data"]
+            peer["downloadId"] = require_download_id(admitted, hash_value=file_hash)
 
         def populated():
             active = data(seeder, "GET", "/api/v1/uploads")["items"]
@@ -702,9 +805,9 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
                 route_template=f"/{collection}/{{clientId}}", ready=ready,
                 user_hash=row["userHash"], document=document))
         leecher = peers[1]
-        source_path = f"/api/v1/transfers/{file_hash}/sources"
+        source_path = f"/api/v1/downloads/{leecher['downloadId']}/sources"
         source = poll("real local transfer source identity", lambda: next((row for row in data(
-            leecher, "GET", source_path)["items"] if row.get("clientId") and row.get("userHash")), None))
+            leecher, "GET", source_path) if row.get("clientId") and row.get("userHash")), None))
         source_prefix = f"{source_path}/{source['clientId']}"
         def source_ready():
             observed = data(leecher, "GET", source_prefix)
@@ -713,7 +816,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         report["frontdoors"].append(prove_friend_frontdoor(
             request=lambda method, path, **kwargs: request(leecher, method, path, **kwargs),
             database=leecher["database"], prefix=source_prefix,
-            route_template="/transfers/{hash}/sources/{clientId}", ready=source_ready,
+            route_template="/downloads/{id}/sources/{clientId}", ready=source_ready,
             user_hash=source["userHash"], document=document))
         report["requiredRoutes"] = 6
         report["provenRoutes"] = sum(len(frontdoor["failures"]) for frontdoor in report["frontdoors"])

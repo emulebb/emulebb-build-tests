@@ -129,6 +129,40 @@ def test_fresh_category_fixture_allocates_stable_nonzero_ids_across_reopen(tmp_p
         ]
 
 
+def test_download_admission_keeps_allocated_job_id_separate_from_content_hash():
+    module = load_module()
+    hash_value = "00112233445566778899aabbccddeeff"
+    assert module.require_download_id({"id": "27", "hash": hash_value}, hash_value=hash_value) == "27"
+    for row in ({"id": 27, "hash": hash_value}, {"id": "0", "hash": hash_value},
+                {"id": "027", "hash": hash_value}, {"id": "9223372036854775808", "hash": hash_value},
+                {"id": "27", "hash": "f" * 32}):
+        with pytest.raises(RuntimeError, match="invalid job identity"):
+            module.require_download_id(row, hash_value=hash_value)
+
+
+def test_download_action_requires_exact_successful_207_item():
+    module = load_module()
+    success = {"status": 207, "raw_json": {"data": [
+        {"id": "27", "status": "accepted", "httpStatus": 202}]}}
+    assert module.require_download_action_result(success, "27") == "accepted"
+    unchanged = {"status": 207, "raw_json": {"data": [
+        {"id": "27", "status": "unchanged", "httpStatus": 200}]}}
+    assert module.require_download_action_result(unchanged, "27") == "unchanged"
+    for response in (
+        {"status": 200, "raw_json": success["raw_json"]},
+        {"status": 207, "raw_json": {"data": [{"id": "28", "status": "accepted", "httpStatus": 202}]}},
+        {"status": 207, "raw_json": {"data": [
+            {"id": "27", "status": "failed", "httpStatus": 404,
+             "error": {"code": "NOT_FOUND", "message": "Missing", "details": {}}}]}},
+        {"status": 207, "raw_json": {"data": [
+            {"id": "27", "status": "accepted", "httpStatus": 202, "error": {}}]}},
+        {"status": 207, "raw_json": {"data": [
+            {"id": "27", "status": "unchanged", "httpStatus": 202}]}},
+    ):
+        with pytest.raises(RuntimeError, match="did not succeed"):
+            module.require_download_action_result(response, "27")
+
+
 def test_main_forwards_registered_stage_selection(tmp_path, monkeypatch):
     module = load_module()
     observed = {}
@@ -154,7 +188,7 @@ def friend_fixture(tmp_path):
 
 
 @pytest.mark.parametrize("template", ["/uploads/{clientId}", "/upload-queue/{clientId}",
-                                     "/transfers/{hash}/sources/{clientId}"])
+                                     "/downloads/{id}/sources/{clientId}"])
 def test_frontdoor_evidence_requires_sql_failure_consistency_and_retry(friend_fixture, template):
     """Exercise evidence qualification with independent SQLite connections, not live peer coverage."""
     module, database, document = friend_fixture
