@@ -278,9 +278,7 @@ def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_p
         api_key="key", local_only_discovery=True,
     )
 
-    nodes = (profile_dir / "nodes.dat").read_bytes()
-    assert len(nodes) == 12
-    assert nodes != b""
+    assert not (profile_dir / "nodes.dat").exists()
     assert setting_value(profile_dir, "core", "networkKademlia") is False
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
@@ -335,7 +333,7 @@ def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Pat
         local_kad_seed=BootstrapContact("127.0.0.1", 24672, 24662),
     )
 
-    assert len((profile_dir / "nodes.dat").read_bytes()) == 12
+    assert not (profile_dir / "nodes.dat").exists()
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         assert conn.execute(
             "SELECT endpoint FROM kad_bootstrap_endpoints ORDER BY position"

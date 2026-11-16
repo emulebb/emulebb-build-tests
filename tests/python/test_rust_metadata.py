@@ -45,6 +45,63 @@ def test_local_discovery_missing_database_is_not_created(tmp_path):
     assert not database.exists()
 
 
+def test_discovery_snapshot_reads_current_initialization_and_counts(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    rust_metadata.seed_server(database, {"host": "127.0.0.1", "port": 24661})
+    rust_metadata.replace_kad_bootstrap_endpoints(database, ["127.0.0.1:24672"])
+    rust_metadata.initialize_local_discovery(rust_repo(), database)
+    snapshot = rust_metadata.read_discovery_snapshot(rust_repo(), database)
+    assert snapshot == {
+        "servers": {"status": "initialized", "count": 1},
+        "kad": {"status": "initialized", "revision": 0, "contactCount": 0, "bootstrapEndpointCount": 1},
+    }
+
+
+def test_discovery_snapshot_missing_database_is_not_created(tmp_path):
+    database = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        rust_metadata.read_discovery_snapshot(rust_repo(), database)
+    assert not database.exists()
+
+
+def test_discovery_snapshot_rejects_inconsistent_current_marker_without_writes(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE metadata_schema SET schema_version=schema_version+1")
+    before = database.read_bytes()
+    with pytest.raises(RuntimeError, match="current metadata schema marker"):
+        rust_metadata.read_discovery_snapshot(rust_repo(), database)
+    assert database.read_bytes() == before
+
+
+def test_discovery_snapshot_does_not_mix_a_concurrent_initialization(tmp_path, monkeypatch):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    original_connect = sqlite3.connect
+    with original_connect(database) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    seeded = []
+
+    class SnapshotConnection(_TrackedConnection):
+        def execute(self, sql, *args):
+            cursor = self._connection.execute(sql, *args)
+            if sql.startswith("SELECT schema_id") and not seeded:
+                seeded.append(True)
+                rust_metadata.seed_server(database, {"host": "127.0.0.1", "port": 24661})
+            return cursor
+
+    monkeypatch.setattr(rust_metadata.sqlite3, "connect", lambda *args, **kwargs:
+                        SnapshotConnection(original_connect(*args, **kwargs)))
+    snapshot = rust_metadata.read_discovery_snapshot(rust_repo(), database)
+    assert seeded == [True]
+    assert snapshot["servers"] == {"status": "pending", "count": 0}
+    with original_connect(database) as connection:
+        assert connection.execute("SELECT status FROM discovery_initialization WHERE domain='servers'").fetchone() == ("initialized",)
+        assert connection.execute("SELECT count(*) FROM servers").fetchone() == (1,)
+
+
 def test_local_discovery_wrong_current_marker_does_not_mutate(tmp_path):
     database = tmp_path / "metadata.db"
     rust_metadata.create_metadata_db(rust_repo(), database)

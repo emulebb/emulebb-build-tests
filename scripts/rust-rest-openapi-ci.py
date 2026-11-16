@@ -2,8 +2,8 @@
 
 This is the CI-owned counterpart to ``check-rust-rest-openapi-responses.py``.
 It creates a fresh external profile with networking disabled for response/SSE
-conformance, then exercises real friend controls with separate loopback-only
-peers. Every daemon is stopped and machine-readable evidence is retained.
+conformance, then exercises real friend controls and Kad persistence with
+separate loopback-only peers. Every daemon is stopped and evidence is retained.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import sqlite3
+import struct
 import subprocess
 import sys
 import time
@@ -39,7 +40,231 @@ from emule_test_harness.rust_openapi_responses import (  # noqa: E402
 API_KEY = "rust-rest-openapi-ci-secret-0001"
 REST_ADDR = "127.0.0.1"
 FRIEND_PEER_BUDGET_SECONDS = 180.0
+KAD_IMPORT_BUDGET_SECONDS = 90.0
 FRIEND_FAULT_TRIGGERS = tuple(f"harness_friend_failure_{operation}" for operation in ("insert", "update", "delete"))
+
+
+def kad_node_id_display(wire_hex: str) -> str:
+    """Match NodeId Display: four little-endian CUInt128 words, in word order."""
+    return "".join(f"{word:08x}" for word in struct.unpack("<4I", bytes.fromhex(wire_hex)))
+
+
+def kad_contact_display_ids(snapshot: dict) -> list[str]:
+    """Translate SQLite wire identities before comparing REST contact membership."""
+    return sorted(kad_node_id_display(row[0]) for row in snapshot["contacts"])
+
+
+def kad_database_snapshot(rust_repo: Path, database: Path) -> dict[str, object]:
+    """Capture current-schema identity and routing evidence from one read-only transaction."""
+    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+        with connection:
+            connection.execute("BEGIN")
+            if connection.execute("SELECT schema_id,schema_version FROM metadata_schema").fetchall() != [rust_metadata._schema_marker(rust_repo)]:
+                raise RuntimeError("Kad evidence requires the selected current metadata schema")
+            identity = connection.execute(
+                "SELECT lower(hex(public_identity)) FROM local_identities WHERE identity_kind='kad-node-id'"
+            ).fetchone()
+            return {
+                "identity": identity[0] if identity else None,
+                "initialization": connection.execute(
+                    "SELECT status FROM discovery_initialization WHERE domain='kad'").fetchone()[0],
+                "revision": connection.execute("SELECT revision FROM kad_routing_revision WHERE id=1").fetchone()[0],
+                "contacts": [[value.hex() if isinstance(value, bytes) else value for value in row]
+                             for row in connection.execute("SELECT * FROM kad_routing_contacts ORDER BY node_id")],
+            }
+
+
+def kad_import_fault(database: Path, *, enabled: bool) -> None:
+    """Make the owned routing transaction abort at its real revision update."""
+    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=rw", uri=True)) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if enabled:
+                connection.execute("CREATE TRIGGER harness_kad_revision_failure BEFORE UPDATE ON kad_routing_revision "
+                                   "BEGIN SELECT RAISE(ABORT, 'harness Kad revision failure'); END")
+            else:
+                connection.execute("DROP TRIGGER IF EXISTS harness_kad_revision_failure")
+
+
+def prove_kad_import(*, request, rust_repo: Path, database: Path, url: str,
+                     expected_node_id_wire_hex: str, document: dict) -> dict[str, object]:
+    """Prove actual SQL failure rolls back the import before a successful retry."""
+    route = "/kad/operations/import-nodes-url"
+    before = kad_database_snapshot(rust_repo, database)
+    cache_before = request("GET", "/api/v1/kad/nodes")["json"]["data"]
+    try:
+        kad_import_fault(database, enabled=True)
+        response = request("POST", f"/api/v1{route}", expected=500, body={"url": url})
+        payload = response["json"]
+        if payload.get("error", {}).get("code") != "PERSISTENCE_FAILED":
+            raise RuntimeError("Kad revision fault did not return PERSISTENCE_FAILED")
+        schema = response_json_schema(openapi_operation_response(document, "POST", route, 500), route)
+        validate_openapi_schema(document, schema, payload)
+        if kad_database_snapshot(rust_repo, database) != before:
+            raise RuntimeError("Failed Kad import changed durable identity/routing state")
+        if request("GET", "/api/v1/kad/nodes")["json"]["data"] != cache_before:
+            raise RuntimeError("Failed Kad import changed the live contact collection")
+    finally:
+        kad_import_fault(database, enabled=False)
+    response = request("POST", f"/api/v1{route}", body={"url": url})
+    schema = response_json_schema(openapi_operation_response(document, "POST", route, 200), route)
+    validate_openapi_schema(document, schema, response["json"])
+    if response["json"]["data"].get("imported") is not True:
+        raise RuntimeError("Kad import retry did not import its local input")
+    after = kad_database_snapshot(rust_repo, database)
+    ids = [row[0] for row in after["contacts"]]
+    cache = request("GET", "/api/v1/kad/nodes")["json"]["data"]
+    if (ids != [expected_node_id_wire_hex] or after["initialization"] != "initialized"
+            or after["revision"] <= before["revision"]
+            or sorted(row["nodeId"] for row in cache["items"]) != kad_contact_display_ids(after)):
+        raise RuntimeError("Kad import retry lacks one coherent unique durable/live contact")
+    return {"route": route, "failure": {"status": 500, "code": "PERSISTENCE_FAILED",
+            "routingSnapshotUnchanged": True, "liveContactsUnchanged": True},
+            "retry": "passed", "nodeIdWireHex": expected_node_id_wire_hex,
+            "nodeIdDisplay": kad_node_id_display(expected_node_id_wire_hex),
+            "before": before, "after": after}
+
+
+def run_kad_persistence_phase(*, executable: Path, rust_repo: Path, root: Path,
+                              openapi_contract: Path) -> dict[str, object]:
+    """Import, roll back, retry and reopen one local-only Kad profile."""
+    from emule_test_harness.local_kad_peer import LocalKadPeer
+
+    package = load_script_module("package_helpers_for_kad_contract", "smoke-rust-release-package.py")
+    smoke = rust_rest_conformance.load_rest_smoke_module(openapi_contract)
+    document = load_openapi_document(openapi_contract)
+    report: dict[str, Any] = {"status": "failed", "networkMode": "loopback-direct-local-only",
+                              "budgetSeconds": KAD_IMPORT_BUDGET_SECONDS}
+    deadline = time.monotonic() + KAD_IMPORT_BUDGET_SECONDS
+    root.mkdir(parents=True, exist_ok=False)
+    profile = root / "profile"
+    database = profile / rust_metadata.RUST_PROFILE_METADATA_FILE
+    process = handle = fixture = None
+    base_url = ""
+
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise RuntimeError("Kad persistence phase exceeded its runtime budget")
+        return value
+
+    def request(method, path, *, expected=200, body=None):
+        response = smoke.http_request(base_url, path, method=method, api_key=API_KEY, json_body=body,
+                                      request_timeout_seconds=min(5.0, remaining()))
+        if response["status"] != expected:
+            raise RuntimeError(f"Kad phase {method} {path} expected {expected}: {response}")
+        return {"status": response["status"], "json": response["raw_json"]}
+
+    def ready():
+        if process.poll() is not None:
+            raise RuntimeError("Kad persistence daemon exited before readiness")
+        return request("GET", "/api/v1/status")
+
+    try:
+        fixture = LocalKadPeer(REST_ADDR, {REST_ADDR})
+        fixture.start()
+        ports: set[int] = set()
+        rest_port = package._available_unique_port(ports)
+        base_url = f"http://127.0.0.1:{rest_port}"
+        rust_client.write_rust_profile(
+            profile, rust_repo=rust_repo, rest_addr=REST_ADDR, rest_port=rest_port, api_key=API_KEY,
+            network_kademlia=True, p2p_bind_ip=REST_ADDR,
+            ed2k_port=package._available_unique_port(ports),
+            kad_port=package._available_unique_port(ports, socket_type=socket.SOCK_DGRAM),
+            server_endpoint=f"127.0.0.1:{package._available_unique_port(ports)}",
+            local_only_discovery=True, local_kad_seed=rust_client.kad_nodes.BootstrapContact(
+                REST_ADDR, fixture.udp_port, fixture.tcp_port),
+            kad_bootstrap_min_routing_contacts=1, nat_enabled=False,
+            obfuscation_enabled=False, initial_shared_directory_reload=False,
+        )
+        process, handle = package._start_daemon(executable, profile, root / "daemon.log")
+        wait_until("Kad persistence REST readiness", remaining(), ready)
+        request("POST", "/api/v1/kad/operations/stop")
+        if request("GET", "/api/v1/kad")["json"]["data"]["running"]:
+            raise RuntimeError("Kad import rollback proof requires a stopped runtime")
+        # The existing runtime is created through server connect; the only
+        # configured server and Kad bootstrap endpoint are loopback fixtures.
+        request("POST", "/api/v1/servers/operations/connect")
+        request("POST", "/api/v1/kad/operations/start")
+        request("POST", "/api/v1/kad/operations/bootstrap",
+                body={"address": REST_ADDR, "port": fixture.udp_port})
+
+        def connected_local_peer():
+            status = request("GET", "/api/v1/kad")["json"]["data"]
+            evidence = fixture.evidence()
+            return evidence if status.get("running") and int(evidence.get("routingReplies", 0)) > 0 else None
+
+        report["localPeer"] = wait_until("real loopback Kad routing reply", remaining(), connected_local_peer)
+        report["localPeer"]["nodeIdWireHex"] = fixture.node_id.hex()
+        report["localPeer"]["nodeIdDisplay"] = kad_node_id_display(fixture.node_id.hex())
+        request("POST", "/api/v1/kad/operations/stop")
+        if not kad_database_snapshot(rust_repo, database)["identity"]:
+            raise RuntimeError("Kad fault baseline requires its established runtime identity")
+        report["import"] = prove_kad_import(
+            request=request, rust_repo=rust_repo, database=database, url=fixture.nodes_url,
+            expected_node_id_wire_hex=fixture.node_id.hex(), document=document)
+        settled = kad_database_snapshot(rust_repo, database)
+        if not settled["identity"] or not settled["contacts"]:
+            raise RuntimeError("Kad stop did not retain its durable identity and local contact")
+        request("POST", "/api/v1/app/shutdown", body={"confirmShutdown": True})
+        process.wait(timeout=min(20.0, remaining()))
+        if process.returncode != 0:
+            raise RuntimeError("Kad persistence daemon did not stop gracefully")
+        handle.close()
+        handle = None
+        reopened = kad_database_snapshot(rust_repo, database)
+        if (reopened["identity"] != settled["identity"] or reopened["initialization"] != settled["initialization"]
+                or [row[:4] for row in reopened["contacts"]] != [row[:4] for row in settled["contacts"]]):
+            raise RuntimeError("Kad durable identity/contact membership changed after graceful daemon exit")
+        process, handle = package._start_daemon(executable, profile, root / "restart.log")
+        wait_until("restarted Kad persistence REST readiness", remaining(), ready)
+        restarted = kad_database_snapshot(rust_repo, database)
+        if restarted != reopened:
+            raise RuntimeError("Same-profile restart changed durable Kad identity or contacts")
+        request("POST", "/api/v1/servers/operations/connect")
+        request("POST", "/api/v1/kad/operations/stop")
+        cached_ids = [row["nodeId"] for row in request("GET", "/api/v1/kad/nodes")["json"]["data"]["items"]]
+        if sorted(cached_ids) != kad_contact_display_ids(reopened):
+            raise RuntimeError("Same-profile restart did not retain Kad identity and contacts")
+        if (profile / "nodes.dat").exists():
+            raise RuntimeError("Kad runtime created a profile cache file outside SQLite")
+        report["reopen"] = {"identityStable": True, "contactsStable": True, "afterRestart": restarted}
+        report["status"] = "passed"
+    except Exception as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        try:
+            if database.is_file():
+                kad_import_fault(database, enabled=False)
+        except Exception as error:
+            report["status"] = "failed"
+            report["faultCleanupError"] = str(error)
+        try:
+            if process is not None and process.poll() is None:
+                http_json(base_url, "/api/v1/app/shutdown", api_key=API_KEY, method="POST",
+                          body={"confirmShutdown": True}, timeout_seconds=5.0)
+                process.wait(timeout=20.0)
+            if process is not None and process.poll() != 0:
+                raise RuntimeError("Kad persistence daemon did not stop gracefully")
+            report["teardown"] = "graceful"
+        except Exception as error:
+            report["status"] = "failed"
+            report["teardown"] = f"forced: {error}"
+            if process is not None:
+                rust_client.stop_process_tree(process)
+        finally:
+            if handle is not None:
+                handle.close()
+            if fixture is not None:
+                try:
+                    fixture.close()
+                except Exception as error:
+                    report["status"] = "failed"
+                    report["fixtureCleanupError"] = str(error)
+        write_report(root / "report.json", report)
+    if report["status"] != "passed":
+        raise RuntimeError(f"Kad persistence proof failed; evidence: {root / 'report.json'}")
+    return report
 
 
 def friend_database_rows(database: Path) -> list[tuple]:
@@ -417,6 +642,10 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
                 os.environ["EMULEBB_REST_CONTRACT_SHARED_ROOT"] = previous_contract_shared_root
         report["friendPeerPhase"] = run_friend_peer_phase(
             executable=executable, rust_repo=rust_repo, root=profile_dir / "friend-peer-phase",
+            openapi_contract=openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH,
+        )
+        report["kadPersistencePhase"] = run_kad_persistence_phase(
+            executable=executable, rust_repo=rust_repo, root=profile_dir / "kad-persistence-phase",
             openapi_contract=openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH,
         )
         report["status"] = "passed"

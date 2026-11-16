@@ -38,6 +38,7 @@ from emule_test_harness import (
     diag_event_runs,
     nat_live_matrix,
     rust_client,
+    rust_metadata,
     server_failure_accounting,
 )
 from emule_test_harness.diag_event_schema import DIAG_EVENT_SCHEMA
@@ -811,11 +812,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not server_rows:
             raise RuntimeError("fresh Rust profile did not import any trusted server.met entries")
-        nodes_dat = profile_dir / "nodes.dat"
+        discovery = rust_metadata.read_discovery_snapshot(
+            rust_repo, profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE)
+        if discovery["kad"]["status"] != "initialized" or discovery["kad"]["contactCount"] == 0:
+            raise RuntimeError("fresh Rust profile did not initialize trusted Kad contacts in SQLite")
         report["bootstrap"] = {
             "mode": "product-first-run",
             "serverCount": len(server_rows),
-            "nodesDatBytes": nodes_dat.stat().st_size if nodes_dat.is_file() else 0,
+            "discovery": discovery,
         }
         if args.enable_upnp:
             nat = nat_status(base_url)

@@ -226,3 +226,112 @@ def test_peer_launch_failure_preserves_report_and_closes_owned_fixture(friend_fi
     assert report["status"] == "failed" and "Daemon launch failed" in report["error"]
     assert report["finalDatabases"][0]["reopenedAfterShutdown"]
     assert stopped == [None]
+
+
+@pytest.mark.parametrize("initialization", ["pending", "initialized"])
+def test_kad_import_evidence_requires_real_sql_rollback_and_retry(friend_fixture, initialization):
+    """Qualify campaign evidence with real SQL; this is not live daemon coverage."""
+    module, database, document = friend_fixture
+    rust = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    node_id = "0123456789abcdef0123456789abcdef"
+    display_id = "67452301efcdab8967452301efcdab89"
+    assert display_id != node_id
+    with closing(sqlite3.connect(database)) as connection:
+        with connection:
+            connection.execute("UPDATE discovery_initialization SET status=? WHERE domain='kad'", (initialization,))
+
+    def request(method, path, *, expected=200, body=None):
+        if method == "GET":
+            rows = module.kad_database_snapshot(rust, database)["contacts"]
+            return {"json": {"data": {"items": [{"nodeId": display_id} for row in rows]}}}
+        try:
+            with closing(sqlite3.connect(database)) as connection:
+                with connection:
+                    connection.execute(
+                        "INSERT INTO kad_routing_contacts VALUES (?,?,24001,24002,9,0,NULL,NULL,"
+                        "0,0,0,0,1,'active',0,1,NULL,NULL,1,1)",
+                        (bytes.fromhex(node_id), 2130706433))
+                    connection.execute("UPDATE discovery_initialization SET status='initialized' WHERE domain='kad'")
+                    connection.execute("UPDATE kad_routing_revision SET revision=revision+1 WHERE id=1")
+        except sqlite3.IntegrityError:
+            assert expected == 500
+            return {"json": {"error": {"code": "PERSISTENCE_FAILED", "message": "Routing transaction failed", "details": {}}}}
+        assert expected == 200
+        return {"json": {"data": {"ok": True, "imported": True}, "meta": {"apiVersion": "v1"}}}
+
+    evidence = module.prove_kad_import(
+        request=request, rust_repo=rust, database=database, url="http://127.0.0.1:24003/nodes.dat",
+        expected_node_id_wire_hex=node_id, document=document)
+    assert evidence["before"]["initialization"] == initialization
+    assert evidence["failure"]["routingSnapshotUnchanged"]
+    assert evidence["failure"]["liveContactsUnchanged"]
+    assert evidence["retry"] == "passed"
+    assert len(evidence["after"]["contacts"]) == 1
+    assert evidence["nodeIdWireHex"] == node_id
+    assert evidence["nodeIdDisplay"] == display_id
+    # The restart gate uses the same translation on its independently reopened DB.
+    reopened = module.kad_database_snapshot(rust, database)
+    assert module.kad_contact_display_ids(reopened) == [display_id]
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name='harness_kad_revision_failure'").fetchall() == []
+
+
+def test_kad_import_unexpected_response_removes_sql_fault(friend_fixture):
+    module, database, document = friend_fixture
+    rust = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+
+    def request(method, path, **kwargs):
+        if method == "GET":
+            return {"json": {"data": {"items": []}}}
+        raise RuntimeError("Import response transport failed")
+
+    with pytest.raises(RuntimeError, match="transport failed"):
+        module.prove_kad_import(request=request, rust_repo=rust, database=database,
+                                url="http://127.0.0.1:24003/nodes.dat", expected_node_id_wire_hex="01" * 16,
+                                document=document)
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name='harness_kad_revision_failure'").fetchall() == []
+        connection.execute("UPDATE kad_routing_revision SET revision=revision+1 WHERE id=1")
+
+
+def test_kad_fault_refuses_missing_database(tmp_path):
+    module = load_module()
+    database = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        module.kad_import_fault(database, enabled=True)
+    assert not database.exists()
+
+
+def test_kad_launch_failure_retains_report_and_closes_local_peer(friend_fixture, tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from emule_test_harness import local_kad_peer
+
+    module, database, document = friend_fixture
+    closed = []
+    ports = iter(range(24001, 24020))
+    fixture = SimpleNamespace(udp_port=24030, tcp_port=24031, start=lambda: None,
+                              close=lambda: closed.append(True))
+    monkeypatch.setattr(local_kad_peer, "LocalKadPeer", lambda *args: fixture)
+
+    def write_profile(profile, **kwargs):
+        profile.mkdir(parents=True)
+        with closing(sqlite3.connect(database)) as source:
+            with closing(sqlite3.connect(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)) as target:
+                source.backup(target)
+
+    def fail_start(*args):
+        raise RuntimeError("Kad daemon launch failed")
+
+    package = SimpleNamespace(_available_unique_port=lambda *args, **kwargs: next(ports), _start_daemon=fail_start)
+    monkeypatch.setattr(module, "load_script_module", lambda *args: package)
+    monkeypatch.setattr(module.rust_client, "write_rust_profile", write_profile)
+    monkeypatch.setattr(module.rust_rest_conformance, "load_rest_smoke_module", lambda *args: None)
+    monkeypatch.setattr(module, "load_openapi_document", lambda *args: document)
+    root = tmp_path / "kad-phase"
+    with pytest.raises(RuntimeError, match="Kad persistence proof failed"):
+        module.run_kad_persistence_phase(executable=tmp_path / "daemon", rust_repo=tmp_path / "rust",
+                                         root=root, openapi_contract=tmp_path / "contract.yaml")
+    report = json.loads((root / "report.json").read_text())
+    assert report["status"] == "failed" and "Kad daemon launch failed" in report["error"]
+    assert closed == [True]

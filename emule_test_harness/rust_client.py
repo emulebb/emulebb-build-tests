@@ -169,8 +169,8 @@ def write_rust_profile(
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     if local_only_discovery:
-        # WHY: first-run discovery imports public nodes.dat when this file is
-        # absent. Local-only harnesses must never silently bootstrap public Kad.
+        # Local-only discovery is completed explicitly in SQLite after staging
+        # fixture data, so an intentionally empty list cannot fetch public seeds.
         if local_kad_seed is not None:
             if network_kademlia is not True:
                 raise ValueError(
@@ -178,11 +178,10 @@ def write_rust_profile(
                 )
             if kad_bootstrap_nodes:
                 raise ValueError("Choose a local Kad seed or explicit bootstrap endpoints")
-            # An endpoint is not a known routing identity. Invented node IDs in
-            # nodes.dat prevent the real responder from joining under the
+            # An endpoint is not a known routing identity. Invented node IDs
+            # prevent the real responder from joining under the
             # one-node-per-IP routing rule and make later REQ recipients wrong.
             kad_bootstrap_nodes = [local_kad_seed.endpoint]
-        kad_nodes.write_nodes_dat(profile_dir / "nodes.dat", [])
     settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
     metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_path.exists():
@@ -214,8 +213,8 @@ def write_rust_profile(
     if network_kademlia is not None:
         core_settings["networkKademlia"] = network_kademlia
     if local_only_discovery and local_kad_seed is None:
-        # An empty nodes.dat suppresses first-run URL import, but the DHT still
-        # has built-in public fallback contacts. ED2K-only lanes disable Kad.
+        # ED2K-only lanes disable Kad; a supplied local seed explicitly enables
+        # its isolated protocol lane without public bootstrap discovery.
         core_settings["networkKademlia"] = False
     if core_settings:
         rust_metadata.replace_settings_section(metadata_path, "core", core_settings)

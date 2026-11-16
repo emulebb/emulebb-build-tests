@@ -20,6 +20,8 @@ from urllib.request import Request, urlopen
 
 from .live_dependencies import safe_extract_zip
 from .paths import get_workspace_output_root
+from . import rust_metadata
+from .workspace_layout import resolve_selected_workspace_repo
 from .rust_webui_live_proof import (
     ConsumerNetworkWorkflow,
     ConsumerSharedFixture,
@@ -651,10 +653,10 @@ def run_consumer_live(
         server_count = len(server_list.get("items", [])) if isinstance(server_list, dict) else 0
         if server_count == 0:
             raise RuntimeError("fresh consumer profile did not download and import server.met")
-        nodes_dat_path = profile_dir / "nodes.dat"
-        nodes_dat_bytes = nodes_dat_path.stat().st_size if nodes_dat_path.is_file() else 0
-        if nodes_dat_bytes == 0:
-            raise RuntimeError("fresh consumer profile did not download nodes.dat")
+        discovery = rust_metadata.read_discovery_snapshot(
+            resolve_selected_workspace_repo(Path(__file__).parents[1], "emulebb-rust"), metadata_path)
+        if discovery["kad"]["status"] != "initialized" or discovery["kad"]["contactCount"] == 0:
+            raise RuntimeError("fresh consumer profile did not initialize Kad contacts in SQLite")
         _wait_for_p2p_ports(process, log_path, min(60.0, network_timeout_seconds))
         report["checks"]["firstRun"] = {
             "freshProfile": metadata_path.is_file(),
@@ -668,8 +670,7 @@ def run_consumer_live(
             "upnpBestEffort": True,
             "serverMetDownloadedAndImported": True,
             "serverCount": server_count,
-            "nodesDatDownloaded": True,
-            "nodesDatBytes": nodes_dat_bytes,
+            "discovery": discovery,
         }
 
         workflow = ConsumerNetworkWorkflow(

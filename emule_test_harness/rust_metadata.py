@@ -107,6 +107,29 @@ def initialize_local_discovery(rust_repo: Path, db_path: Path) -> None:
                 raise RuntimeError("local discovery requires both canonical initialization rows")
 
 
+def read_discovery_snapshot(rust_repo: Path, db_path: Path) -> dict[str, object]:
+    """Read current-schema discovery state/counts coherently without creating files."""
+    expected = _schema_marker(rust_repo)
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        with conn:
+            conn.execute("BEGIN")
+            if conn.execute("SELECT schema_id, schema_version FROM metadata_schema").fetchall() != [expected]:
+                raise RuntimeError("discovery snapshot requires the current metadata schema marker")
+            states = dict(conn.execute("SELECT domain, status FROM discovery_initialization"))
+            if set(states) != {"servers", "kad"} or any(status not in {"pending", "initialized"} for status in states.values()):
+                raise RuntimeError("discovery snapshot requires both canonical initialization states")
+            revision = conn.execute("SELECT revision FROM kad_routing_revision WHERE id=1").fetchone()
+            if revision is None:
+                raise RuntimeError("discovery snapshot requires the Kad routing revision singleton")
+            return {
+                "servers": {"status": states["servers"], "count": conn.execute(
+                    "SELECT count(*) FROM servers WHERE deleted_at_ms IS NULL").fetchone()[0]},
+                "kad": {"status": states["kad"], "revision": revision[0], "contactCount": conn.execute(
+                    "SELECT count(*) FROM kad_routing_contacts").fetchone()[0], "bootstrapEndpointCount": conn.execute(
+                    "SELECT count(*) FROM kad_bootstrap_endpoints").fetchone()[0]},
+            }
+
+
 def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
     """Require a complete database matching the current Rust profile schema."""
 

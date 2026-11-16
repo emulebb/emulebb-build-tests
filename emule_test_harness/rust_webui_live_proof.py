@@ -707,7 +707,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         return kad if kad.get("connected") and int(kad.get("contactCount") or 0) > 0 else None
 
     kad_status = _wait_for_api(
-        "automatic first-run Kad connection from downloaded nodes.dat",
+        "automatic first-run Kad connection from imported SQLite contacts",
         options.network_timeout_seconds,
         connected_kad,
     )

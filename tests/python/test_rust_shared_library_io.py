@@ -111,6 +111,26 @@ def test_unselected_paths_preserve_operator_command_defaults(tmp_path, monkeypat
     assert paths.staged_executable == subject.rust_client.staged_executable(output)
 
 
+def test_lan_startup_profile_seeds_only_local_sqlite_endpoints(tmp_path):
+    from dataclasses import replace
+
+    paths = replace(harness_paths(tmp_path), rust_repo=workspace_layout.resolve_selected_workspace_repo(
+        Path(__file__).parents[2], "emulebb-rust"))
+    own = SimpleNamespace(rest_port=24660, tcp_port=24662, udp_port=24672)
+    peer = SimpleNamespace(tcp_port=24663, udp_port=24673)
+    profile = tmp_path / "lan-profile"
+    report = subject._configure_lan_startup_profile(
+        paths=paths, profile_dir=profile, spec=own, peer_spec=peer, lan_bind_addr="127.0.0.1",
+        server_endpoint="127.0.0.1:24661", initial_reload=False, shared_root=None,
+    )
+    assert report["discovery"]["kad"] == {"status": "initialized", "revision": 0,
+                                           "contactCount": 0, "bootstrapEndpointCount": 1}
+    with sqlite3.connect(profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE) as connection:
+        assert connection.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchall() == [("127.0.0.1:24673",)]
+        assert connection.execute("SELECT value_json FROM settings WHERE section='core' AND key='networkKademlia'").fetchone() == ("true",)
+    assert not (profile / "nodes.dat").exists()
+
+
 def test_prepare_low_space_fails_before_creating_any_fixture_state(tmp_path, monkeypatch):
     paths = harness_paths(tmp_path)
     monkeypatch.setattr(subject, "physical_disk_inventory", lambda: [])

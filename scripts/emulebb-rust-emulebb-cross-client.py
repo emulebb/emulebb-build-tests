@@ -23,6 +23,7 @@ from emule_test_harness import packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness import kad_nodes  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -1561,18 +1562,13 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_nickname=rust_spec.nick,
             kad_port=rust_kad_port,
             server_endpoint=server_endpoint,
-            # nodes.dat is the sole local bootstrap source. A parallel text
-            # endpoint defaults to v9 and can re-enable NodeID encryption
-            # against the synthetic fixture ID before the real ID is learned.
-            kad_bootstrap_nodes=None,
+            local_only_discovery=True,
+            local_kad_seed=kad_nodes.BootstrapContact(client_p2p_address, mfc_spec.udp_port, mfc_spec.tcp_port)
+            if args.rust_kad_enabled else None,
             kad_bootstrap_min_routing_contacts=1 if args.rust_kad_enabled else 10,
         )
-        report["checks"]["rust_local_nodes_fixture"] = local_kad.write_nodes_dat(
-            rust_profile / "nodes.dat", owner=rust_spec, peers=[mfc_spec, rust_spec], peer_address=client_p2p_address,
-        )
-        report["checks"]["rust_local_nodes_preflight"] = local_kad.validate_local_nodes_dat(
-            rust_profile / "nodes.dat", peer_address=client_p2p_address, expected_udp_ports={mfc_spec.udp_port},
-        )
+        report["checks"]["rust_local_discovery"] = rust_metadata.read_discovery_snapshot(
+            rust_repo, rust_profile / rust_metadata.RUST_PROFILE_METADATA_FILE)
         current_phase = "launch_rust"
         os.environ["RUST_LOG"] = "info,emulebb_core=debug,emulebb_kad_net=debug,emulebb_kad_dht=debug"
         output_root = get_workspace_output_root()

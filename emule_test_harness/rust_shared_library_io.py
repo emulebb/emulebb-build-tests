@@ -21,6 +21,7 @@ from typing import Callable
 
 from . import (
     ed2k_server as ed2k_harness,
+    kad_nodes,
     rust_client,
     rust_local_ed2k,
     rust_metadata,
@@ -1172,7 +1173,8 @@ def _configure_lan_startup_profile(
         ed2k_port=spec.tcp_port,
         kad_port=spec.udp_port,
         server_endpoint=server_endpoint,
-        kad_bootstrap_nodes=None,
+        network_kademlia=True,
+        local_kad_seed=kad_nodes.BootstrapContact(lan_bind_addr, peer_spec.udp_port, peer_spec.tcp_port),
         kad_bootstrap_min_routing_contacts=1,
         nat_enabled=False,
         initial_shared_directory_reload=initial_reload,
@@ -1201,27 +1203,14 @@ def _configure_lan_startup_profile(
                 }
             ],
         )
-    nodes = local_kad.write_nodes_dat(
-        profile_dir / "nodes.dat",
-        owner=spec,
-        peers=[spec, peer_spec],
-        peer_address=lan_bind_addr,
-    )
-    preflight = local_kad.validate_local_nodes_dat(
-        profile_dir / "nodes.dat",
-        peer_address=lan_bind_addr,
-        expected_udp_ports={peer_spec.udp_port},
-    )
+    discovery = rust_metadata.read_discovery_snapshot(paths.rust_repo, metadata_path)
     return {
         "profileFingerprint": path_fingerprint(profile_dir),
         "initialSharedDirectoryReload": initial_reload,
         "sharedRootFingerprint": (
             path_fingerprint(shared_root) if shared_root is not None else None
         ),
-        "nodes": {
-            "contactCount": nodes["contact_count"],
-            "validated": preflight["validated"],
-        },
+        "discovery": discovery,
     }
 
 
