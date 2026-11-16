@@ -385,6 +385,7 @@ def rust_diagnostics_child_env(diagnostics_dir: Path) -> dict[str, str]:
 
 def collect_transfer_diagnostics(
     *,
+    download_id: str,
     file_hash: str,
     expected_file_name: str,
     expected_file_size: int,
@@ -423,7 +424,13 @@ def collect_transfer_diagnostics(
         process_id=mfc_process_id,
         allow_incomplete_active_tail=True,
     )
-    manifest = rust_metadata.read_transfer_manifest(rust_metadata_path, file_hash)
+    manifest = rust_metadata.read_download_job_manifest(rust_metadata_path, download_id)
+    if (not isinstance(manifest, dict) or manifest.get("job_id") != download_id
+            or manifest.get("file_hash") != file_hash.lower()
+            or manifest.get("file_size") != expected_file_size):
+        raise RuntimeError("Rust diagnostic metadata lost the captured job identity or size.")
+    verified_content = (manifest.get("verified_local_content")
+                        if manifest.get("internal_storage_retired") is True else None)
     evidence = transfer_diagnostic_evidence.build_transfer_diagnostic_evidence(
         file_hash=file_hash,
         expected_file_name=expected_file_name,
@@ -431,6 +438,7 @@ def collect_transfer_diagnostics(
         expected_transport_mode=expected_transport_mode,
         expected_payload_encoding=expected_payload_encoding,
         rust_manifest=manifest,
+        rust_verified_content=verified_content,
         rust_records=rust_capture.records,
         mfc_records=mfc_capture.records,
         metadata_recovery_required=metadata_recovery_required,
@@ -5376,6 +5384,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             current_phase = "collect_transfer_diagnostics"
             diagnostics = collect_transfer_diagnostics(
+                download_id=download_id,
                 file_hash=transfer_hash,
                 expected_file_name=fixture_file.name,
                 expected_file_size=int(link_info["size"]),

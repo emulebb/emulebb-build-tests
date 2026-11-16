@@ -149,19 +149,18 @@ def write_remembered_source_manifest(
     size_bytes: int,
     source_host: str,
     source_port: int,
-) -> None:
+) -> str:
     repo = workspace_root() / "repos" / "emulebb-rust"
     metadata_path = rust_metadata_path(profile_dir)
     if not metadata_path.exists():
         rust_metadata.create_metadata_db(repo, metadata_path)
-    rust_metadata.seed_remembered_source_transfer(
+    return rust_metadata.seed_download_job(
         metadata_path,
         ed2k_hash=file_hash,
         name=name,
         size_bytes=size_bytes,
         piece_size=ED2K_PART_SIZE,
-        source_ip=source_host,
-        source_tcp_port=source_port,
+        sources=[{"ip": source_host, "tcp_port": source_port}],
     )
 
 

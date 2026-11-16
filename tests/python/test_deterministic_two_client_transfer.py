@@ -32,6 +32,47 @@ def load_suite_module():
     return module
 
 
+def test_transfer_diagnostics_preserves_retired_hashset_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_suite_module()
+    verified = {"known_file_id": 5, "md4_hashset": ["22" * 16]}
+    manifest = {
+        "job_id": "17", "file_hash": "11" * 16, "file_size": 9_728_001,
+        "internal_storage_retired": True, "md4_hashset": [],
+        "verified_local_content": verified,
+    }
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(module.rust_metadata, "read_download_job_manifest",
+                        lambda path, job_id: manifest if job_id == "17" else None)
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture",
+                        lambda *args, **kwargs: SimpleNamespace(records=[], selected_segments=[]))
+
+    def build(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(module.transfer_diagnostic_evidence,
+                        "build_transfer_diagnostic_evidence", build)
+    result = module.collect_transfer_diagnostics(
+        download_id="17", file_hash="11" * 16, expected_file_name="fixture.bin",
+        expected_file_size=9_728_001, expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed", rust_metadata_path=tmp_path / "metadata.db",
+        metadata_recovery_required=False, expected_source_host="192.0.2.44",
+        expected_source_port=4662, expected_source_user_hash="33" * 16,
+        buddy_callback_evidence=None, direct_callback_evidence=None,
+        relayed_reask_evidence=None, server_callback_evidence=None,
+        server_login_evidence=None, server_search_evidence=None,
+        server_source_evidence=None, server_tcp_metadata_evidence=None,
+        server_udp_metadata_evidence=None, rust_diagnostics_dir=tmp_path / "rust",
+        rust_process_id=101, mfc_diagnostics_dir=tmp_path / "mfc", mfc_process_id=202,
+    )
+    assert captured["rust_manifest"] is manifest
+    assert captured["rust_verified_content"] is verified
+    assert manifest["md4_hashset"] == []
+    assert result["captures"]["rust"]["processId"] == 101
+
+
 def load_script_module(filename: str, module_name: str):
     """Loads one hyphenated script by filename for unit tests."""
 

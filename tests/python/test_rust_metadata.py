@@ -220,27 +220,31 @@ def test_seed_indexed_file_persists_explicit_origin_metadata(tmp_path: Path) -> 
 
 
 @pytest.mark.unit
-def test_download_seed_owns_flags_hashsets_and_ranges(tmp_path: Path) -> None:
+def test_download_seed_owns_job_identity_hashsets_and_ranges(tmp_path: Path) -> None:
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_metadata.create_metadata_db(rust_repo(), metadata_db)
     ed2k_hash = "00112233445566778899aabbccddeeff"
-    rust_metadata.seed_transfer_manifest(
+    job_id = rust_metadata.seed_download_job(
         metadata_db, ed2k_hash=ed2k_hash, name="Download.bin",
         size_bytes=8, piece_size=8, completed=True,
         md4_hashset_acquired=True, md4_hashset=["11" * 16],
         aich_hashset_acquired=True, aich_root="22" * 20,
-        aich_root_origin="operator_link",
-        aich_hashset=["33" * 20],
+        aich_root_origin="operator_link", aich_hashset=["33" * 20],
     )
-    manifest = rust_metadata.read_transfer_manifest(metadata_db, ed2k_hash)
+    manifest = rust_metadata.read_download_job_manifest(metadata_db, job_id)
     assert manifest is not None
+    assert manifest["job_id"] == job_id and manifest["file_hash"] == ed2k_hash
     assert manifest["completed"] is True
     assert manifest["md4_hashset"] == ["11" * 16]
     assert manifest["aich_hashset"] == ["33" * 20]
-    assert manifest["aich_root"] == "22" * 20
-    assert manifest["aich_root_origin"] == "operator_link"
-    assert manifest["aich_trust_generation"] == 1
-    assert "source_path" not in manifest
+    assert (manifest["aich_root"], manifest["aich_root_origin"], manifest["aich_trust_generation"]) == (
+        "22" * 20, "operator_link", 1,
+    )
+    assert (manifest["execution_generation"], manifest["selected_temp_path_id"],
+            manifest["storage_path_id"], manifest["storage_directory_marker_id"],
+            manifest["terminal_completed_at_s"], manifest["completion_history"]) == (
+        0, None, None, None, None, None,
+    )
     rust_metadata.require_current_profile_database(rust_repo(), metadata_db)
     with sqlite3.connect(metadata_db) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -249,11 +253,14 @@ def test_download_seed_owns_flags_hashsets_and_ranges(tmp_path: Path) -> None:
         assert conn.execute("SELECT lower(hex(aich_root)), aich_root_origin FROM known_files").fetchone() == (
             "22" * 20, "operator_link",
         )
-        conn.execute("DELETE FROM transfers")
-        for table in ("transfer_md4_part_hashes", "transfer_aich_part_hashes", "verified_ranges", "transfer_name_state"):
+        assert conn.execute("SELECT latest_download_job_id FROM known_files").fetchone() == (int(job_id),)
+        conn.execute("UPDATE known_files SET latest_download_job_id = NULL")
+        conn.execute("DELETE FROM download_jobs")
+        for table in ("download_job_md4_part_hashes", "download_job_aich_part_hashes",
+                      "download_job_verified_ranges", "download_job_pieces"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM known_files").fetchone() == (1,)
-    assert rust_metadata.read_transfer_manifest(metadata_db, ed2k_hash) is None
+    assert rust_metadata.read_download_job_manifest(metadata_db, job_id) is None
 
 
 @pytest.mark.unit
@@ -262,27 +269,28 @@ def test_download_seed_requires_explicit_operator_link_provenance(tmp_path: Path
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_metadata.create_metadata_db(rust_repo(), metadata_db)
     with pytest.raises(ValueError, match="explicit operator_link"):
-        rust_metadata.seed_transfer_manifest(
+        rust_metadata.seed_download_job(
             metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
             aich_root="22" * 20, aich_root_origin=origin,
         )
     with sqlite3.connect(metadata_db) as conn:
         assert conn.execute("SELECT count(*) FROM known_files").fetchone() == (0,)
-        assert conn.execute("SELECT count(*) FROM transfers").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM download_jobs").fetchone() == (0,)
 
 
 @pytest.mark.unit
 def test_download_seed_without_root_preserves_no_aich_authority(tmp_path: Path) -> None:
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_metadata.create_metadata_db(rust_repo(), metadata_db)
-    rust_metadata.seed_remembered_source_transfer(
+    job_id = rust_metadata.seed_download_job(
         metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
-        source_ip="192.0.2.44", source_tcp_port=4662,
+        sources=[{"ip": "192.0.2.44", "tcp_port": 4662}],
     )
-    manifest = rust_metadata.read_transfer_manifest(metadata_db, "11" * 16)
+    manifest = rust_metadata.read_download_job_manifest(metadata_db, job_id)
     assert (manifest["aich_root"], manifest["aich_root_origin"], manifest["aich_trust_generation"]) == (None, None, 0)
+    assert manifest["sources"] == [{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": None}]
     with pytest.raises(ValueError, match="require an accepted root"):
-        rust_metadata.seed_transfer_manifest(
+        rust_metadata.seed_download_job(
             metadata_db, ed2k_hash="33" * 16, name="Invalid.bin", size_bytes=8, piece_size=8,
             aich_hashset_acquired=True,
         )
@@ -301,16 +309,15 @@ def test_download_seed_inherits_stronger_accepted_identity_without_local_rows(tm
             "first_seen_at_ms,last_seen_at_ms,updated_at_ms) VALUES (?,8,'Accepted.bin',?,?,0,0,0)",
             (bytes.fromhex("11" * 16), bytes.fromhex("22" * 20), origin),
         )
-    rust_metadata.seed_transfer_manifest(
+    job_id = rust_metadata.seed_download_job(
         metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
         aich_root="22" * 20, aich_root_origin="operator_link",
     )
-    manifest = rust_metadata.read_transfer_manifest(metadata_db, "11" * 16)
+    manifest = rust_metadata.read_download_job_manifest(metadata_db, job_id)
     assert (manifest["aich_root"], manifest["aich_root_origin"], manifest["aich_trust_generation"]) == ("22" * 20, origin, 1)
     with sqlite3.connect(metadata_db) as conn:
-        assert conn.execute("SELECT aich_root_origin FROM known_files").fetchone() == (origin,)
+        assert conn.execute("SELECT aich_root_origin,display_name FROM known_files").fetchone() == (origin, "Accepted.bin")
         assert conn.execute("SELECT count(*) FROM verified_local_content").fetchone() == (0,)
-        assert conn.execute("SELECT count(*) FROM local_file_instances").fetchone() == (0,)
 
 
 @pytest.mark.unit
@@ -325,7 +332,7 @@ def test_download_seed_rejects_accepted_identity_conflicts_before_mutation(tmp_p
             (bytes.fromhex("11" * 16), bytes.fromhex("22" * 20)),
         )
     with pytest.raises(ValueError, match="conflicts with accepted"):
-        rust_metadata.seed_transfer_manifest(
+        rust_metadata.seed_download_job(
             metadata_db, ed2k_hash="11" * 16, name="Changed.bin", size_bytes=9 if conflict == "size" else 8,
             piece_size=8, aich_root="33" * 20 if conflict == "root" else "22" * 20,
             aich_root_origin="operator_link", completed=True,
@@ -334,14 +341,14 @@ def test_download_seed_rejects_accepted_identity_conflicts_before_mutation(tmp_p
         assert conn.execute("SELECT size_bytes,display_name,aich_root_origin FROM known_files").fetchone() == (
             8, "Accepted.bin", "stock_import",
         )
-        assert conn.execute("SELECT count(*) FROM transfers").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM download_jobs").fetchone() == (0,)
 
 
 @pytest.mark.unit
-def test_download_seed_rejects_authority_reseed_without_losing_progress(tmp_path: Path) -> None:
+def test_download_seed_rejects_active_job_reseed_without_losing_progress(tmp_path: Path) -> None:
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_metadata.create_metadata_db(rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
+    first_id = rust_metadata.seed_download_job(
         metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
         aich_root="22" * 20, aich_root_origin="operator_link", completed=True,
         md4_hashset_acquired=True, md4_hashset=["33" * 16],
@@ -349,18 +356,19 @@ def test_download_seed_rejects_authority_reseed_without_losing_progress(tmp_path
     with sqlite3.connect(metadata_db) as conn:
         before = list(conn.iterdump())
     with pytest.raises(ValueError, match="cannot reseed established"):
-        rust_metadata.seed_transfer_manifest(
+        rust_metadata.seed_download_job(
             metadata_db, ed2k_hash="11" * 16, name="Changed.bin", size_bytes=8, piece_size=8,
         )
     with sqlite3.connect(metadata_db) as conn:
         assert list(conn.iterdump()) == before
+    assert rust_metadata.read_download_job_manifest(metadata_db, first_id)["md4_hashset"] == ["33" * 16]
 
 
 @pytest.mark.unit
-def test_download_manifest_reads_transfer_identity_without_known_identity_fallback(tmp_path: Path) -> None:
+def test_download_manifest_reads_job_identity_without_known_identity_fallback(tmp_path: Path) -> None:
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_metadata.create_metadata_db(rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
+    job_id = rust_metadata.seed_download_job(
         metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
     )
     with sqlite3.connect(metadata_db) as conn:
@@ -368,14 +376,14 @@ def test_download_manifest_reads_transfer_identity_without_known_identity_fallba
             "UPDATE known_files SET aich_root=?,aich_root_origin='operator_link'",
             (bytes.fromhex("22" * 20),),
         )
-    manifest = rust_metadata.read_transfer_manifest(metadata_db, "11" * 16)
+    manifest = rust_metadata.read_download_job_manifest(metadata_db, job_id)
     assert (manifest["aich_root"], manifest["aich_root_origin"], manifest["aich_trust_generation"]) == (None, None, 0)
     with sqlite3.connect(metadata_db) as conn:
         conn.execute(
-            "UPDATE transfers SET aich_root=?,aich_root_origin='network_consensus',aich_trust_generation=7",
+            "UPDATE download_jobs SET aich_root=?,aich_root_origin='network_consensus',aich_trust_generation=7",
             (bytes.fromhex("33" * 20),),
         )
-    manifest = rust_metadata.read_transfer_manifest(metadata_db, "11" * 16)
+    manifest = rust_metadata.read_download_job_manifest(metadata_db, job_id)
     assert (manifest["aich_root"], manifest["aich_root_origin"], manifest["aich_trust_generation"]) == (
         "33" * 20, "network_consensus", 7,
     )
@@ -389,7 +397,7 @@ def test_download_seed_preserves_completed_history_authority(tmp_path: Path, con
     with sqlite3.connect(metadata_db) as conn:
         conn.execute(
             "INSERT INTO download_history(ed2k_hash,size_bytes,display_name,aich_root,"
-            "first_completed_at_ms,last_completed_at_ms) VALUES (?,8,'History.bin',?,0,0)",
+            "first_completed_at_s,last_completed_at_s) VALUES (?,8,'History.bin',?,0,0)",
             (bytes.fromhex("11" * 16), bytes.fromhex("22" * 20)),
         )
         if conflict == "inherited-root":
@@ -401,7 +409,7 @@ def test_download_seed_preserves_completed_history_authority(tmp_path: Path, con
         before = list(conn.iterdump())
     supplied_root = None if conflict == "inherited-root" else ("33" * 20 if conflict == "root" else "22" * 20)
     with pytest.raises(ValueError, match="conflicts with accepted download history"):
-        rust_metadata.seed_transfer_manifest(
+        rust_metadata.seed_download_job(
             metadata_db, ed2k_hash="11" * 16, name="Changed.bin", size_bytes=9 if conflict == "size" else 8,
             piece_size=8, aich_root=supplied_root,
             aich_root_origin="operator_link" if supplied_root is not None else None,
@@ -411,19 +419,77 @@ def test_download_seed_preserves_completed_history_authority(tmp_path: Path, con
 
 
 @pytest.mark.unit
-def test_download_seed_rolls_back_late_failure_without_losing_md4_progress(tmp_path: Path) -> None:
+def test_download_seed_rolls_back_late_failure_and_does_not_reuse_job_id(tmp_path: Path) -> None:
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_metadata.create_metadata_db(rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
+    first_id = rust_metadata.seed_download_job(
         metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
         completed=True, md4_hashset_acquired=True, md4_hashset=["22" * 16],
     )
     with sqlite3.connect(metadata_db) as conn:
         before = list(conn.iterdump())
     with pytest.raises(ValueError, match="fromhex"):
-        rust_metadata.seed_transfer_manifest(
-            metadata_db, ed2k_hash="11" * 16, name="Changed.bin", size_bytes=8, piece_size=8,
+        rust_metadata.seed_download_job(
+            metadata_db, ed2k_hash="33" * 16, name="Changed.bin", size_bytes=8, piece_size=8,
             md4_hashset=["invalid-hash"],
         )
     with sqlite3.connect(metadata_db) as conn:
         assert list(conn.iterdump()) == before
+        conn.execute("UPDATE known_files SET latest_download_job_id = NULL")
+        conn.execute("DELETE FROM download_jobs WHERE id = ?", (int(first_id),))
+    second_id = rust_metadata.seed_download_job(
+        metadata_db, ed2k_hash="44" * 16, name="New.bin", size_bytes=8, piece_size=8,
+    )
+    assert int(second_id) > int(first_id)
+    assert rust_metadata.read_download_job_manifest(metadata_db, first_id) is None
+
+
+@pytest.mark.unit
+def test_current_profile_preflight_requires_current_job_tables(tmp_path: Path) -> None:
+    metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.create_metadata_db(rust_repo(), metadata_db)
+    with sqlite3.connect(metadata_db) as conn:
+        conn.execute("DROP TABLE download_job_sources")
+    with pytest.raises(RuntimeError, match="download_job_sources"):
+        rust_metadata.require_current_profile_database(rust_repo(), metadata_db)
+
+
+@pytest.mark.unit
+def test_download_manifest_read_holds_one_snapshot_across_retirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.create_metadata_db(rust_repo(), metadata_db)
+    job_id = rust_metadata.seed_download_job(
+        metadata_db, ed2k_hash="11" * 16, name="Download.bin", size_bytes=8, piece_size=8,
+        md4_hashset_acquired=True, md4_hashset=["22" * 16],
+        sources=[{"ip": "192.0.2.44", "tcp_port": 4662}],
+    )
+    with sqlite3.connect(metadata_db) as conn:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+    real_connect = sqlite3.connect
+    retired = False
+
+    class SnapshotConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=(), /):
+            nonlocal retired
+            if "FROM download_job_sources WHERE job_id" in sql and not retired:
+                retired = True
+                with real_connect(metadata_db) as writer:
+                    writer.execute("DELETE FROM download_job_sources WHERE job_id = ?", (int(job_id),))
+                    writer.execute("DELETE FROM download_job_md4_part_hashes WHERE job_id = ?", (int(job_id),))
+            return super().execute(sql, parameters)
+
+    def connection_with_interleaved_retirement(database, *args, **kwargs):
+        if "mode=ro" in str(database):
+            kwargs["factory"] = SnapshotConnection
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(rust_metadata.sqlite3, "connect", connection_with_interleaved_retirement)
+    manifest = rust_metadata.read_download_job_manifest(metadata_db, job_id)
+    assert retired is True
+    assert manifest["sources"] == [{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": None}]
+    assert manifest["md4_hashset"] == ["22" * 16]
+    with real_connect(metadata_db) as conn:
+        assert conn.execute("SELECT count(*) FROM download_job_sources").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM download_job_md4_part_hashes").fetchone() == (0,)

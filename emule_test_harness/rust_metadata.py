@@ -131,16 +131,16 @@ def read_discovery_snapshot(rust_repo: Path, db_path: Path) -> dict[str, object]
 
 
 def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
-    """Require a complete database matching the current Rust profile schema."""
+    """Check the selected marker, profile row, required job tables, and foreign keys.
+
+    The Rust metadata opener remains the authority for full schema semantics.
+    """
 
     schema_id, schema_version = _schema_marker(rust_repo)
     try:
-        with closing(sqlite3.connect(db_path)) as conn:
-            marker = conn.execute(
-                "SELECT schema_version FROM metadata_schema WHERE schema_id = ?",
-                (schema_id,),
-            ).fetchone()
-            if marker != (schema_version,):
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            marker = conn.execute("SELECT schema_id, schema_version FROM metadata_schema").fetchall()
+            if marker != [(schema_id, schema_version)]:
                 raise RuntimeError(
                     f"metadata schema marker must be {schema_id}@{schema_version}, got {marker!r}"
                 )
@@ -149,34 +149,16 @@ def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
             ).fetchone()[0]
             if profile_count != 1:
                 raise RuntimeError("metadata profile singleton row is missing")
-            missing_name_state = conn.execute(
-                """
-                SELECT count(*)
-                FROM transfers
-                LEFT JOIN transfer_name_state
-                  ON transfer_name_state.transfer_id = transfers.id
-                WHERE transfer_name_state.transfer_id IS NULL
-                """
-            ).fetchone()[0]
-            if missing_name_state:
-                raise RuntimeError(
-                    f"metadata has {missing_name_state} transfer row(s) without transfer_name_state"
-                )
+            for table in (
+                "known_files", "download_history", "download_jobs", "download_job_pieces",
+                "download_job_md4_part_hashes", "download_job_aich_part_hashes",
+                "download_job_verified_ranges", "download_job_sources",
+            ):
+                conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("metadata profile contains broken foreign-key references")
     except sqlite3.DatabaseError as exc:
         raise RuntimeError(f"invalid current Rust profile database {db_path}: {exc}") from exc
-
-
-def _replace_transfer_name_state(conn: sqlite3.Connection, transfer_id: int) -> None:
-    conn.execute("DELETE FROM transfer_name_state WHERE transfer_id = ?", (transfer_id,))
-    conn.execute(
-        """
-        INSERT INTO transfer_name_state(
-            transfer_id, display_name_pinned, follow_majority_filename
-        )
-        VALUES (?, 0, 0)
-        """,
-        (transfer_id,),
-    )
 
 
 def put_setting_json(db_path: Path, section: str, key: str, value: object) -> None:
@@ -440,7 +422,7 @@ def seed_indexed_file(
         conn.commit()
 
 
-def seed_transfer_manifest(
+def seed_download_job(
     db_path: Path,
     *,
     ed2k_hash: str,
@@ -455,7 +437,6 @@ def seed_transfer_manifest(
     aich_root_origin: str | None = None,
     aich_hashset: list[str] | None = None,
     sources: list[dict] | None = None,
-    control_state: str | None = None,
     upload_priority: str = "normal",
     auto_upload_priority: bool = False,
     all_time_uploaded_bytes: int = 0,
@@ -464,192 +445,128 @@ def seed_transfer_manifest(
     last_upload_request_ms: int = 0,
     comment: str = "",
     rating: int = 0,
-) -> None:
-    """Seed an ED2K download fixture with explicit operator-link AICH authority.
+) -> str:
+    """Seed one fresh, ID-keyed download job without granting filesystem authority.
 
-    ``sources`` items are dicts with ``ip``, ``tcp_port`` and optional ``user_hash`` (hex).
-    ``md4_hashset``/``aich_hashset`` are lists of lowercase hex part hashes.
-    A supplied root requires ``aich_root_origin="operator_link"``; it proves no
-    local payload or network consensus. Existing accepted identity is retained.
-    Replacing established transfer AICH authority requires the product writer,
-    not this fixture seed; no live trust-reconciliation algorithm is duplicated.
+    A supplied AICH root is an operator-link claim. Existing accepted known-file,
+    local-content, and completion-history facts remain authoritative. Completed
+    fixture pieces have no delivered path or terminal completion claim.
     """
-
-    md4_hashset = md4_hashset or []
-    aich_hashset = aich_hashset or []
-    sources = sources or []
     hash_blob = bytes.fromhex(ed2k_hash)
+    if len(hash_blob) != 16 or size_bytes <= 0 or piece_size <= 0:
+        raise ValueError("fixture requires a 16-byte hash and positive size and piece size")
     if (aich_root is None) != (aich_root_origin is None) or aich_root_origin not in (None, "operator_link"):
         raise ValueError("a supplied fixture AICH root requires explicit operator_link origin")
     root_blob = bytes.fromhex(aich_root) if aich_root is not None else None
     if root_blob is not None and len(root_blob) != 20:
         raise ValueError("fixture AICH root must contain 20 bytes")
-    piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
-    if completed:
-        visible_state = "completed"
-    elif control_state is not None:
-        visible_state = "queued"
-    else:
-        visible_state = "queued"
-    now = _now_ms()
+    md4_hashset = md4_hashset or []
+    aich_hashset = aich_hashset or []
+    sources = sources or []
+    piece_count = (size_bytes + piece_size - 1) // piece_size
+    now_ms = _now_ms()
+    now_s = now_ms // 1000
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        # WHY: seed admission and writes share the writer slot. A failed fixture
-        # must not partially replace identity, progress or acquired hashsets.
         conn.execute("BEGIN IMMEDIATE")
         history = conn.execute(
-            "SELECT size_bytes, aich_root FROM download_history WHERE ed2k_hash = ?",
-            (hash_blob,),
+            "SELECT size_bytes, aich_root FROM download_history WHERE ed2k_hash = ?", (hash_blob,)
         ).fetchone()
         existing = conn.execute(
             "SELECT id, size_bytes, aich_root, aich_root_origin FROM known_files WHERE ed2k_hash = ?",
             (hash_blob,),
         ).fetchone()
         if existing is not None:
-            transfer = conn.execute(
-                "SELECT aich_root, aich_trust_generation FROM transfers WHERE known_file_id = ?",
+            active = conn.execute(
+                """SELECT 1 FROM download_jobs WHERE known_file_id = ?
+                   AND removed_at_s IS NULL AND terminal_completed_at_s IS NULL""",
                 (existing[0],),
             ).fetchone()
-            if transfer is not None and (transfer[0] is not None or transfer[1] != 0):
-                raise ValueError("cannot reseed established transfer AICH authority")
+            if active is not None:
+                raise ValueError("cannot reseed established download job")
             local = conn.execute(
-                "SELECT aich_root FROM verified_local_content WHERE known_file_id = ?",
-                (existing[0],),
+                "SELECT aich_root FROM verified_local_content WHERE known_file_id = ?", (existing[0],)
             ).fetchone()
             if local is not None and local[0] is not None and local[0] != existing[2]:
                 raise ValueError("fixture requires coherent accepted local AICH identity")
-            accepted = existing[3] is not None or local is not None or conn.execute(
-                "SELECT 1 FROM transfers WHERE known_file_id = ? AND completed = 1 AND final_rehash_pending = 0",
-                (existing[0],),
-            ).fetchone() is not None
-            if accepted and existing[1] != size_bytes:
+            if existing[1] is not None and existing[1] != size_bytes:
                 raise ValueError("fixture conflicts with accepted file size")
             if existing[2] is not None:
                 if root_blob is not None and root_blob != existing[2]:
                     raise ValueError("fixture conflicts with accepted AICH root")
                 root_blob, aich_root_origin = existing[2], existing[3]
-        if history is not None and (history[0] != size_bytes or (
-                history[1] is not None and root_blob is not None and history[1] != root_blob)):
+        if history is not None and (
+            history[0] != size_bytes
+            or (history[1] is not None and root_blob is not None and history[1] != root_blob)
+        ):
             raise ValueError("fixture conflicts with accepted download history")
         if aich_hashset_acquired and root_blob is None:
             raise ValueError("acquired AICH part hashes require an accepted root")
-        generation = 1 if root_blob is not None else 0
-        conn.execute(
-            """
-            INSERT INTO known_files(
-                ed2k_hash, size_bytes, display_name, aich_root, aich_root_origin, all_time_uploaded_bytes,
-                all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_ms,
-                first_seen_at_ms, last_seen_at_ms, updated_at_ms
+        if existing is None:
+            conn.execute(
+                """INSERT INTO known_files(
+                   ed2k_hash, display_name, aich_root, aich_root_origin,
+                   all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
+                   last_upload_requested_at_ms, first_seen_at_ms, last_seen_at_ms, updated_at_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (hash_blob, name, root_blob, aich_root_origin, all_time_uploaded_bytes,
+                 all_time_upload_requests, all_time_upload_accepts, last_upload_request_ms,
+                 now_ms, now_ms, now_ms),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(ed2k_hash) DO UPDATE SET
-                size_bytes = excluded.size_bytes,
-                display_name = excluded.display_name,
-                aich_root = excluded.aich_root,
-                aich_root_origin = excluded.aich_root_origin,
-                all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
-                all_time_upload_requests = excluded.all_time_upload_requests,
-                all_time_upload_accepts = excluded.all_time_upload_accepts,
-                last_upload_requested_at_ms = excluded.last_upload_requested_at_ms,
-                last_seen_at_ms = excluded.last_seen_at_ms,
-                updated_at_ms = excluded.updated_at_ms
-            """,
-            (hash_blob, size_bytes, name, root_blob, aich_root_origin,
-             all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
-             last_upload_request_ms, now, now, now),
-        )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
         ).fetchone()[0]
+        job_id = conn.execute(
+            """INSERT INTO download_jobs(
+               known_file_id, expected_size_bytes, display_name, part_size_bytes, part_count,
+               upload_priority, auto_upload_priority, comment, rating, completed,
+               md4_hashset_acquired, aich_hashset_acquired, aich_root, aich_root_origin,
+               aich_trust_generation, visible_state, delivery_state, created_at_s,
+               updated_at_s, completed_at_s)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+            (known_file_id, size_bytes, name, piece_size, piece_count, upload_priority,
+             int(auto_upload_priority), comment, rating, int(completed), int(md4_hashset_acquired),
+             int(aich_hashset_acquired), root_blob, aich_root_origin,
+             1 if root_blob is not None else 0, "completed" if completed else "queued",
+             now_s, now_s, now_s if completed else None),
+        ).lastrowid
         conn.execute(
-            """
-            INSERT INTO transfers(
-                known_file_id, completed, md4_hashset_acquired, aich_hashset_acquired,
-                visible_state, control_state, display_name, part_size_bytes, part_count,
-                upload_priority, auto_upload_priority, comment, rating,
-                delivery_state, delivery_ownership, created_at_ms, updated_at_ms, completed_at_ms,
-                aich_root, aich_root_origin, aich_trust_generation
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'none', ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(known_file_id) DO UPDATE SET
-                completed = excluded.completed,
-                md4_hashset_acquired = excluded.md4_hashset_acquired,
-                aich_hashset_acquired = excluded.aich_hashset_acquired,
-                aich_root = excluded.aich_root,
-                aich_root_origin = excluded.aich_root_origin,
-                aich_trust_generation = excluded.aich_trust_generation,
-                visible_state = excluded.visible_state,
-                control_state = excluded.control_state,
-                display_name = excluded.display_name,
-                part_size_bytes = excluded.part_size_bytes,
-                part_count = excluded.part_count,
-                upload_priority = excluded.upload_priority,
-                auto_upload_priority = excluded.auto_upload_priority,
-                comment = excluded.comment,
-                rating = excluded.rating,
-                updated_at_ms = excluded.updated_at_ms,
-                completed_at_ms = excluded.completed_at_ms
-            """,
-            (known_file_id, int(completed), int(md4_hashset_acquired), int(aich_hashset_acquired),
-             visible_state, control_state, name, piece_size, piece_count, upload_priority,
-             int(auto_upload_priority), comment, rating, now, now, now if completed else None,
-             root_blob, aich_root_origin, generation),
+            "UPDATE known_files SET latest_download_job_id = ? WHERE id = ?", (job_id, known_file_id)
         )
-        transfer_id = conn.execute(
-            "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
-        ).fetchone()[0]
-        _replace_transfer_name_state(conn, transfer_id)
-        conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM transfer_md4_part_hashes WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM transfer_aich_part_hashes WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM verified_ranges WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM transfer_sources WHERE transfer_id = ?", (transfer_id,))
         for piece_index in range(piece_count):
-            state = "Verified" if completed else "Missing"
-            written = expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0
             conn.execute(
-                """
-                INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (transfer_id, piece_index, state, written, now),
+                """INSERT INTO download_job_pieces(job_id, piece_index, state, bytes_written, updated_at_s)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (job_id, piece_index, "Verified" if completed else "Missing",
+                 expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0, now_s),
             )
         for index, part_hash in enumerate(md4_hashset):
             conn.execute(
-                "INSERT INTO transfer_md4_part_hashes(transfer_id, part_index, md4_hash) VALUES (?, ?, ?)",
-                (transfer_id, index, bytes.fromhex(part_hash)),
+                "INSERT INTO download_job_md4_part_hashes(job_id, part_index, md4_hash) VALUES (?, ?, ?)",
+                (job_id, index, bytes.fromhex(part_hash)),
             )
         for index, part_hash in enumerate(aich_hashset):
             conn.execute(
-                "INSERT INTO transfer_aich_part_hashes(transfer_id, part_index, aich_hash) VALUES (?, ?, ?)",
-                (transfer_id, index, bytes.fromhex(part_hash)),
+                "INSERT INTO download_job_aich_part_hashes(job_id, part_index, aich_hash) VALUES (?, ?, ?)",
+                (job_id, index, bytes.fromhex(part_hash)),
             )
         for source in sources:
             user_hash = source.get("user_hash")
             conn.execute(
-                """
-                INSERT INTO transfer_sources(transfer_id, ip, tcp_port, user_hash, first_seen_at_ms, last_seen_at_ms)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    transfer_id,
-                    source["ip"],
-                    source["tcp_port"],
-                    bytes.fromhex(user_hash) if user_hash else None,
-                    now,
-                    now,
-                ),
+                """INSERT INTO download_job_sources(
+                   job_id, ip, tcp_port, user_hash, first_seen_at_s, last_seen_at_s)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (job_id, source["ip"], source["tcp_port"],
+                 bytes.fromhex(user_hash) if user_hash else None, now_s, now_s),
             )
         if completed:
             conn.execute(
-                """
-                INSERT INTO verified_ranges(transfer_id, start_offset, end_offset, created_at_ms)
-                VALUES (?, 0, ?, ?)
-                """,
-                (transfer_id, size_bytes, now),
+                """INSERT INTO download_job_verified_ranges(job_id, start_offset, end_offset, created_at_s)
+                   VALUES (?, 0, ?, ?)""",
+                (job_id, size_bytes, now_s),
             )
         conn.commit()
-
+        return str(job_id)
 
 
 def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> None:
@@ -701,118 +618,107 @@ def expected_piece_length(file_size: int, piece_size: int, piece_index: int) -> 
     return max(0, min(start + piece_size, file_size) - start)
 
 
-def seed_remembered_source_transfer(
-    db_path: Path,
-    *,
-    ed2k_hash: str,
-    name: str,
-    size_bytes: int,
-    piece_size: int,
-    source_ip: str,
-    source_tcp_port: int,
-    source_user_hash: str | None = None,
-) -> None:
-    """Seed an incomplete transfer with a single remembered source."""
-
-    seed_transfer_manifest(
-        db_path,
-        ed2k_hash=ed2k_hash,
-        name=name,
-        size_bytes=size_bytes,
-        piece_size=piece_size,
-        sources=[{"ip": source_ip, "tcp_port": source_tcp_port, "user_hash": source_user_hash}],
-    )
-
-
-def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
-    """Read a persisted ED2K transfer manifest from the Rust profile metadata DB.
-
-    Inspect internal download hashsets and sources without fabricating a local
-    shared-file transfer. Return ``None`` when no download exists for the hash.
-    """
-
-    hash_blob = bytes.fromhex(ed2k_hash)
-    with closing(sqlite3.connect(db_path)) as conn:
+def read_download_job_manifest(db_path: Path, job_id: str) -> dict | None:
+    """Read the captured job's persisted protocol manifest and identity facts."""
+    if (not isinstance(job_id, str) or not job_id.isascii() or not job_id.isdecimal()
+            or len(job_id) > 19
+            or str(int(job_id)) != job_id or not 0 < int(job_id) <= 9223372036854775807):
+        raise ValueError("job ID must be a positive canonical decimal i64 string")
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        # A single snapshot keeps retirement of child rows from mixing with
+        # an earlier job/header read during live two-client diagnostics.
+        conn.execute("BEGIN")
         row = conn.execute(
-            """
-            SELECT known_files.id, transfers.id, transfers.control_state,
-                   transfers.display_name, known_files.size_bytes,
-                   coalesce(transfers.part_size_bytes, 0),
-                   transfers.completed, transfers.md4_hashset_acquired,
-                   transfers.aich_hashset_acquired,
-                   CASE WHEN transfers.aich_root IS NULL THEN NULL
-                        ELSE lower(hex(transfers.aich_root)) END,
-                   transfers.upload_priority, transfers.comment, transfers.rating,
-                   transfers.auto_upload_priority, known_files.all_time_uploaded_bytes,
-                   known_files.all_time_upload_requests,
-                   known_files.all_time_upload_accepts,
-                   known_files.last_upload_requested_at_ms,
-                   transfers.source_fingerprint, transfers.aich_root_origin,
-                   transfers.aich_trust_generation
-            FROM known_files
-            JOIN transfers ON transfers.known_file_id = known_files.id
-            WHERE known_files.ed2k_hash = ?
-            """,
-            (hash_blob,),
+            """SELECT jobs.id, lower(hex(known.ed2k_hash)), jobs.display_name,
+                      jobs.expected_size_bytes, jobs.part_size_bytes, jobs.completed,
+                      jobs.md4_hashset_acquired, jobs.aich_hashset_acquired,
+                      CASE WHEN jobs.aich_root IS NULL THEN NULL ELSE lower(hex(jobs.aich_root)) END,
+                      jobs.aich_root_origin, jobs.aich_trust_generation,
+                      jobs.upload_priority, jobs.comment, jobs.rating, jobs.auto_upload_priority,
+                      known.all_time_uploaded_bytes, known.all_time_upload_requests,
+                      known.all_time_upload_accepts, known.last_upload_requested_at_ms,
+                      jobs.execution_generation, jobs.selected_temp_path_id, jobs.storage_path_id,
+                      jobs.storage_directory_marker_id, jobs.terminal_completed_at_s,
+                      jobs.internal_storage_retired, jobs.visible_state, jobs.intent,
+                      jobs.known_file_id
+               FROM download_jobs AS jobs
+               JOIN known_files AS known ON known.id = jobs.known_file_id
+               WHERE jobs.id = ?""",
+            (int(job_id),),
         ).fetchone()
         if row is None:
             return None
-        transfer_id = row[1]
-        sources = []
-        if transfer_id is not None:
-            sources = [
-                {
-                    "ip": src[0],
-                    "tcp_port": src[1],
-                    "user_hash": src[2],
-                }
-                for src in conn.execute(
-                    """
-                    SELECT ip, tcp_port,
-                           CASE WHEN user_hash IS NULL THEN NULL ELSE lower(hex(user_hash)) END
-                    FROM transfer_sources WHERE transfer_id = ?
-                    ORDER BY id
-                    """,
-                    (transfer_id,),
-                )
-            ]
+        sources = [
+            {"ip": src[0], "tcp_port": src[1], "user_hash": src[2]}
+            for src in conn.execute(
+                """SELECT ip, tcp_port,
+                          CASE WHEN user_hash IS NULL THEN NULL ELSE lower(hex(user_hash)) END
+                   FROM download_job_sources WHERE job_id = ? ORDER BY id""",
+                (int(job_id),),
+            )
+        ]
         md4_hashset = [
-            r[0]
-            for r in conn.execute(
-                "SELECT lower(hex(md4_hash)) FROM transfer_md4_part_hashes WHERE transfer_id = ? ORDER BY part_index",
-                (transfer_id,),
+            part[0] for part in conn.execute(
+                "SELECT lower(hex(md4_hash)) FROM download_job_md4_part_hashes WHERE job_id = ? ORDER BY part_index",
+                (int(job_id),),
             )
         ]
         aich_hashset = [
-            r[0]
-            for r in conn.execute(
-                "SELECT lower(hex(aich_hash)) FROM transfer_aich_part_hashes WHERE transfer_id = ? ORDER BY part_index",
-                (transfer_id,),
+            part[0] for part in conn.execute(
+                "SELECT lower(hex(aich_hash)) FROM download_job_aich_part_hashes WHERE job_id = ? ORDER BY part_index",
+                (int(job_id),),
             )
         ]
+        history = conn.execute(
+            """SELECT size_bytes,
+                      CASE WHEN aich_root IS NULL THEN NULL ELSE lower(hex(aich_root)) END,
+                      first_completed_at_s, last_completed_at_s
+               FROM download_history WHERE ed2k_hash = ?""",
+            (bytes.fromhex(row[1]),),
+        ).fetchone()
+        verified = conn.execute(
+            """SELECT content.display_name, content.part_size_bytes, content.part_count,
+                      CASE WHEN content.aich_root IS NULL THEN NULL ELSE lower(hex(content.aich_root)) END,
+                      content.known_file_id
+               FROM verified_local_content AS content
+               JOIN download_jobs AS jobs ON jobs.known_file_id = content.known_file_id
+               WHERE jobs.id = ?""",
+            (int(job_id),),
+        ).fetchone()
+        verified_md4 = [part[0] for part in conn.execute(
+            """SELECT lower(hex(parts.md4_hash)) FROM verified_local_md4_hashes AS parts
+               JOIN download_jobs AS jobs ON jobs.known_file_id = parts.known_file_id
+               WHERE jobs.id = ? ORDER BY parts.part_index""", (int(job_id),)
+        )]
+        verified_aich = [part[0] for part in conn.execute(
+            """SELECT lower(hex(parts.aich_hash)) FROM verified_local_aich_hashes AS parts
+               JOIN download_jobs AS jobs ON jobs.known_file_id = parts.known_file_id
+               WHERE jobs.id = ? ORDER BY parts.part_index""", (int(job_id),)
+        )]
     return {
-        "file_hash": ed2k_hash.lower(),
-        "control_state": row[2],
-        "canonical_name": row[3],
-        "file_size": row[4],
-        "piece_size": row[5],
-        "completed": bool(row[6]),
-        "md4_hashset_acquired": bool(row[7]),
-        "aich_hashset_acquired": bool(row[8]),
-        "aich_root": row[9],
-        "aich_root_origin": row[19],
-        "aich_trust_generation": row[20],
-        "upload_priority": row[10],
-        "comment": row[11],
-        "rating": row[12],
-        "auto_upload_priority": bool(row[13]),
-        "all_time_uploaded_bytes": row[14],
-        "all_time_upload_requests": row[15],
-        "all_time_upload_accepts": row[16],
-        "last_upload_request_ms": row[17],
-        "md4_hashset": md4_hashset,
-        "aich_hashset": aich_hashset,
-        "sources": sources,
+        "job_id": str(row[0]), "file_hash": row[1], "canonical_name": row[2],
+        "file_size": row[3], "piece_size": row[4], "completed": bool(row[5]),
+        "md4_hashset_acquired": bool(row[6]), "aich_hashset_acquired": bool(row[7]),
+        "aich_root": row[8], "aich_root_origin": row[9], "aich_trust_generation": row[10],
+        "upload_priority": row[11], "comment": row[12], "rating": row[13],
+        "auto_upload_priority": bool(row[14]), "all_time_uploaded_bytes": row[15],
+        "all_time_upload_requests": row[16], "all_time_upload_accepts": row[17],
+        "last_upload_request_ms": row[18], "execution_generation": row[19],
+        "selected_temp_path_id": row[20], "storage_path_id": row[21],
+        "storage_directory_marker_id": row[22], "terminal_completed_at_s": row[23],
+        "internal_storage_retired": bool(row[24]), "visible_state": row[25], "intent": row[26],
+        "known_file_id": row[27],
+        "md4_hashset": md4_hashset, "aich_hashset": aich_hashset, "sources": sources,
+        "completion_history": None if history is None else {
+            "size_bytes": history[0], "aich_root": history[1],
+            "first_completed_at_s": history[2], "last_completed_at_s": history[3],
+        },
+        "verified_local_content": None if verified is None else {
+            "display_name": verified[0], "part_size_bytes": verified[1],
+            "part_count": verified[2], "aich_root": verified[3],
+            "known_file_id": verified[4],
+            "md4_hashset": verified_md4, "aich_hashset": verified_aich,
+        },
     }
 
 

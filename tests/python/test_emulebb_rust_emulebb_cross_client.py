@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from emule_test_harness.paths import get_required_emule_workspace_root
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +22,7 @@ from emule_test_harness import rust_metadata
 
 
 def _rust_repo() -> Path:
-    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
+    return resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
 
 
 def load_suite_module():
@@ -106,6 +106,13 @@ def test_cross_client_disables_rust_kad_by_default() -> None:
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.rust_kad_enabled is False
+
+
+def test_cross_client_requires_source_identity_diagnostics_before_launch() -> None:
+    module = load_suite_module()
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    with pytest.raises(ValueError, match="source identity proof requires --diagnostics"):
+        module.validate_optional_soak_args(args)
 
 
 def test_cross_client_source_lifecycle_arguments_are_opt_in() -> None:
@@ -1004,6 +1011,7 @@ def test_cross_client_validate_optional_soak_args_accepts_upload_limits() -> Non
     args = SimpleNamespace(
         rust_upload_limit_kibps=64,
         emulebb_upload_limit_kibps=64,
+        diagnostics=True,
     )
 
     module.validate_optional_soak_args(args)
@@ -1228,10 +1236,11 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
     transfer_hash = "00112233445566778899aabbccddeeff"
     metadata_db = tmp_path / "emulebb-rust-metadata.db"
     rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
+    job_id = rust_metadata.seed_download_job(
         metadata_db,
         ed2k_hash=transfer_hash,
         name="emulebb-to-emulebb-rust.bin",
+        completed=True,
         size_bytes=module.ED2K_PART_SIZE_BYTES + 1,
         piece_size=module.ED2K_PART_SIZE_BYTES,
         md4_hashset_acquired=True,
@@ -1251,10 +1260,15 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
 
     metadata = module.require_rust_download_manifest_metadata(
         tmp_path,
+        download_id=job_id,
         transfer_hash=transfer_hash,
         expected_name="emulebb-to-emulebb-rust.bin",
         expected_size=module.ED2K_PART_SIZE_BYTES + 1,
         require_aich_hashset=True,
+        expected_source_endpoint="192.0.2.44:4662",
+        expected_source_user_hash="31719b50f40e503c1d533d9af3ef6fb8",
+        rust_diagnostics_dir=tmp_path,
+        rust_process_id=123,
     )
 
     assert metadata["expectedPartCount"] == 2
@@ -1263,6 +1277,227 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
     assert metadata["aichHashsetAcquired"] is True
     assert metadata["aichHashsetCount"] == 2
     assert metadata["sourceUserHashCount"] == 1
+    assert metadata["downloadId"] == job_id
+    assert metadata["hashsetEvidence"] == "job_manifest"
+
+
+def test_rust_download_completion_uses_captured_job_and_delivered_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_suite_module()
+    delivered = tmp_path / "delivered.bin"
+    delivered.write_bytes(b"verified payload")
+    expected_sha256 = module.dtt.file_sha256(delivered)
+    calls: list[str] = []
+
+    def fake_request_json(_base_url, method, path, _api_key, body=None, **kwargs):
+        assert method == "GET" and body is None and kwargs == {}
+        calls.append(path)
+        return {
+            "id": "17", "hash": "11" * 16, "state": "completed",
+            "completedAt": 123, "payloadVerified": True,
+            "sizeBytes": delivered.stat().st_size,
+            "delivery": {"path": str(delivered), "state": "delivered", "ownership": "unowned"},
+        }
+
+    monkeypatch.setattr(module, "request_json", fake_request_json)
+    result = module.wait_for_rust_download_completed(
+        "http://127.0.0.1:4711", "key", "17", "11" * 16,
+        expected_size=delivered.stat().st_size, expected_sha256=expected_sha256,
+        timeout_seconds=1.0,
+    )
+    assert calls == ["/api/v1/downloads/17"]
+    assert result["deliveryOwnership"] == "unowned"
+
+
+def test_retired_cross_client_metadata_uses_content_identity_across_different_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_suite_module()
+    file_hash = "11" * 16
+    root = "22" * 20
+    manifest = {
+        "job_id": "17", "known_file_id": 5, "file_hash": file_hash,
+        "canonical_name": "chosen-job.bin", "file_size": module.ED2K_PART_SIZE_BYTES,
+        "completed": True, "internal_storage_retired": True,
+        "terminal_completed_at_s": 101, "piece_size": module.ED2K_PART_SIZE_BYTES,
+        "md4_hashset_acquired": True, "aich_hashset_acquired": True,
+        "aich_root": root, "md4_hashset": [], "aich_hashset": [],
+        "completion_history": {
+            "size_bytes": module.ED2K_PART_SIZE_BYTES, "aich_root": root,
+            "first_completed_at_s": 100, "last_completed_at_s": 101,
+        },
+        "verified_local_content": {
+            "known_file_id": 5, "display_name": "independent-copy.bin",
+            "part_size_bytes": module.ED2K_PART_SIZE_BYTES, "part_count": 1,
+            "aich_root": root, "md4_hashset": [], "aich_hashset": [],
+        },
+        "sources": [],
+    }
+    monkeypatch.setattr(module.rust_metadata, "read_download_job_manifest",
+                        lambda _path, job_id: manifest if job_id == "17" else None)
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture",
+                        lambda *_args, **_kwargs: SimpleNamespace(
+                            selected_segments=[tmp_path / "emulebb-rust-diag-123-run-a-000001.jsonl"],
+                            records=[{
+                                "schema": "diag_event_v2", "processId": 123, "runId": "run-a",
+                                "seq": 12, "family": "sched", "event": "source_identity",
+                                "keys": {"downloadId": "17", "fileHash": file_hash,
+                                         "peer": "192.0.2.44:4662",
+                                         "peerHash": "31719b50f40e503c1d533d9af3ef6fb8"},
+                                "body": {"outcome": "observed"},
+                            }],
+                        ))
+    result = module.require_rust_download_manifest_metadata(
+        tmp_path, download_id="17", transfer_hash=file_hash,
+        expected_name="chosen-job.bin", expected_size=module.ED2K_PART_SIZE_BYTES,
+        require_aich_hashset=True,
+        expected_source_endpoint="192.0.2.44:4662",
+        expected_source_user_hash="31719b50f40e503c1d533d9af3ef6fb8",
+        rust_diagnostics_dir=tmp_path,
+        rust_process_id=123,
+    )
+    assert result["hashsetEvidence"] == "verified_local_content"
+    assert result["downloadId"] == "17"
+    assert result["sourceEvidence"]["provenance"] == "current_run_source_identity"
+
+
+@pytest.mark.parametrize(
+    "wrong_field",
+    ["downloadId", "fileHash", "peer", "peerHash", "runId", "missing-peerHash", "no-event"],
+)
+def test_retired_source_identity_requires_exact_current_run_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_field: str,
+) -> None:
+    module = load_suite_module()
+    keys = {
+        "downloadId": "17", "fileHash": "11" * 16,
+        "peer": "192.0.2.44:4662", "peerHash": "33" * 16,
+    }
+    record = {
+        "schema": "diag_event_v2", "processId": 123, "runId": "run-a",
+        "seq": 12, "family": "sched", "event": "source_identity",
+        "keys": keys, "body": {"outcome": "observed"},
+    }
+    if wrong_field == "runId":
+        record["runId"] = "another-run"
+    elif wrong_field == "missing-peerHash":
+        del keys["peerHash"]
+    elif wrong_field == "no-event":
+        record["event"] = "source_engaged"
+    else:
+        keys[wrong_field] = "wrong"
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture",
+                        lambda *_args, **_kwargs: SimpleNamespace(
+                            selected_segments=[tmp_path / "emulebb-rust-diag-123-run-a-000001.jsonl"],
+                            records=[record],
+                        ))
+    with pytest.raises(RuntimeError, match="source identity diagnostics"):
+        module.require_rust_observed_source_identity(
+            tmp_path, process_id=123, download_id="17", transfer_hash="11" * 16,
+            source_endpoint="192.0.2.44:4662", source_user_hash="33" * 16,
+        )
+
+
+@pytest.mark.parametrize(
+    ("process_id", "run_id"),
+    [(0, "run-a"), (False, "run-a"), (-1, "run-a"), ("123", "run-a"), (123, "   ")],
+)
+def test_retired_source_identity_rejects_invalid_process_or_blank_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_id: object, run_id: str,
+) -> None:
+    module = load_suite_module()
+    record = {
+        "schema": "diag_event_v2", "processId": process_id, "runId": run_id,
+        "seq": 12, "family": "sched", "event": "source_identity",
+        "keys": {"downloadId": "17", "fileHash": "11" * 16,
+                 "peer": "192.0.2.44:4662", "peerHash": "33" * 16},
+        "body": {"outcome": "observed"},
+    }
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture",
+                        lambda *_args, **_kwargs: SimpleNamespace(
+                            selected_segments=[tmp_path / f"emulebb-rust-diag-123-{run_id}-000001.jsonl"],
+                            records=[record],
+                        ))
+    with pytest.raises(RuntimeError, match="source identity diagnostics"):
+        module.require_rust_observed_source_identity(
+            tmp_path, process_id=process_id, download_id="17", transfer_hash="11" * 16,
+            source_endpoint="192.0.2.44:4662", source_user_hash="33" * 16,
+        )
+
+
+@pytest.mark.parametrize(
+    ("intent", "batch_item", "accepted"),
+    [
+        ("started", None, True),
+        ("stopped", {"id": "29", "status": "accepted", "httpStatus": 202}, True),
+        ("stopped", {"id": "29", "status": "accepted", "httpStatus": 200}, True),
+        ("stopped", {"id": "29", "status": "unchanged", "httpStatus": 200}, True),
+        ("stopped", {"id": "29", "status": "unchanged", "httpStatus": 202}, False),
+        ("stopped", {"id": "29", "status": "accepted", "httpStatus": 202, "error": {}}, False),
+    ],
+)
+def test_cross_client_rust_download_captures_search_job_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, intent: str,
+    batch_item: dict[str, object] | None, accepted: bool,
+) -> None:
+    module = load_suite_module()
+    fixture = tmp_path / "fixture.bin"
+    fixture.write_bytes(b"payload")
+    file_hash = "11" * 16
+    monkeypatch.setattr(module.dtt, "add_emule_shared_file", lambda *args: {})
+    monkeypatch.setattr(module.dtt, "reload_emule_shared_files", lambda *args: {})
+    monkeypatch.setattr(module.dtt, "wait_for_emule_shared_file_link", lambda *args, **kwargs: {
+        "link": "ed2k://|file|fixture.bin|7|" + file_hash + "|/",
+    })
+    monkeypatch.setattr(module.dtt, "parse_ed2k_file_link", lambda link: {
+        "hash": file_hash, "size": 7, "name": "fixture.bin",
+    })
+    monkeypatch.setattr(module.ed2k_harness, "wait_for_server_file", lambda *args: {})
+    monkeypatch.setattr(module.rust_local_ed2k, "wait_for_server_search_result",
+                        lambda *args, **kwargs: {"search": {"id": "search-1"}})
+    monkeypatch.setattr(module, "decoded_ed2k_link_name", lambda info: "fixture.bin")
+    calls: list[tuple[str, int]] = []
+
+    def fake_request(_base, method, path, _key, body=None, *, expected_status=200):
+        calls.append((path, expected_status))
+        assert method == "POST"
+        if path == "/api/v1/downloads/start":
+            assert body == {"ids": ["29"]} and expected_status == 207
+            return {"data": [batch_item]}
+        assert body == {"intent": "started"} and expected_status == 201
+        return {"id": "29", "hash": file_hash, "sizeBytes": 7, "intent": intent}
+
+    monkeypatch.setattr(module, "request_json", fake_request)
+    monkeypatch.setattr(module, "wait_for_rust_download_completed",
+                        lambda _base, _key, job_id, hash_value, **kwargs: {"id": job_id, "hash": hash_value})
+    monkeypatch.setattr(module, "require_rust_download_manifest_metadata",
+                        lambda _profile, **kwargs: {"downloadId": kwargs["download_id"]})
+    def run():
+        return module.download_emulebb_fixture_to_rust(
+            emulebb_base_url="http://127.0.0.1:4711", rust_base_url="http://127.0.0.1:4712",
+            admin_base_url="http://127.0.0.1:4713", api_key="key", fixture_path=fixture,
+            fixture_sha256="sha256", rust_profile=tmp_path,
+            rust_diagnostics_dir=tmp_path, rust_process_id=123,
+            expected_source_endpoint="192.0.2.44:4662",
+            expected_source_user_hash="31719b50f40e503c1d533d9af3ef6fb8",
+            link_export_timeout_seconds=1.0,
+            server_publish_timeout_seconds=1.0, transfer_completion_timeout_seconds=1.0,
+        )
+    if accepted:
+        result = run()
+    else:
+        with pytest.raises(RuntimeError, match="did not accept the captured job"):
+            run()
+    expected_calls = [(f"/api/v1/searches/search-1/results/{file_hash}/operations/download", 201)]
+    if intent == "stopped":
+        expected_calls.append(("/api/v1/downloads/start", 207))
+    assert calls == expected_calls
+    if not accepted:
+        return
+    assert result["downloadId"] == "29"
+    assert result["manifestMetadata"] == {"downloadId": "29"}
+    assert (result["start"] is None) == (intent == "started")
 
 
 def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: Path) -> None:
@@ -1270,10 +1505,11 @@ def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: 
     transfer_hash = "00112233445566778899aabbccddeeff"
     metadata_db = tmp_path / "emulebb-rust-metadata.db"
     rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
+    job_id = rust_metadata.seed_download_job(
         metadata_db,
         ed2k_hash=transfer_hash,
         name="emulebb-to-emulebb-rust.bin",
+        completed=True,
         size_bytes=module.ED2K_PART_SIZE_BYTES,
         piece_size=module.ED2K_PART_SIZE_BYTES,
         md4_hashset_acquired=True,
@@ -1286,10 +1522,15 @@ def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: 
     with pytest.raises(RuntimeError, match="AICH hashset"):
         module.require_rust_download_manifest_metadata(
             tmp_path,
+            download_id=job_id,
             transfer_hash=transfer_hash,
             expected_name="emulebb-to-emulebb-rust.bin",
             expected_size=module.ED2K_PART_SIZE_BYTES,
             require_aich_hashset=True,
+            expected_source_endpoint="192.0.2.44:4662",
+            expected_source_user_hash="31719b50f40e503c1d533d9af3ef6fb8",
+            rust_diagnostics_dir=tmp_path,
+            rust_process_id=123,
         )
 
 
@@ -1298,10 +1539,11 @@ def test_rust_emulebb_manifest_metadata_accepts_empty_single_part_hashsets(tmp_p
     transfer_hash = "00112233445566778899aabbccddeeff"
     metadata_db = tmp_path / "emulebb-rust-metadata.db"
     rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
+    job_id = rust_metadata.seed_download_job(
         metadata_db,
         ed2k_hash=transfer_hash,
         name="emulebb-to-emulebb-rust.bin",
+        completed=True,
         size_bytes=module.ED2K_PART_SIZE_BYTES,
         piece_size=module.ED2K_PART_SIZE_BYTES,
         md4_hashset_acquired=True,
@@ -1315,10 +1557,15 @@ def test_rust_emulebb_manifest_metadata_accepts_empty_single_part_hashsets(tmp_p
 
     metadata = module.require_rust_download_manifest_metadata(
         tmp_path,
+        download_id=job_id,
         transfer_hash=transfer_hash,
         expected_name="emulebb-to-emulebb-rust.bin",
         expected_size=module.ED2K_PART_SIZE_BYTES,
         require_aich_hashset=True,
+        expected_source_endpoint="192.0.2.44:4662",
+        expected_source_user_hash="31719b50f40e503c1d533d9af3ef6fb8",
+        rust_diagnostics_dir=tmp_path,
+        rust_process_id=123,
     )
 
     assert metadata["expectedPartCount"] == 1
@@ -1398,6 +1645,7 @@ def test_cross_client_uses_shared_ed2k_harness_launcher_and_stops_it_on_failure(
         [
             "--lan-bind-addr",
             "192.0.2.10",
+            "--diagnostics",
             "--p2p-bind-interface-address",
             "198.51.100.20",
         ]

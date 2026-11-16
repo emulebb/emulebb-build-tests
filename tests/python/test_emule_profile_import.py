@@ -6,7 +6,7 @@ import sqlite3
 import struct
 from pathlib import Path
 
-from emule_test_harness.paths import get_required_emule_workspace_root
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 import pytest
 
@@ -14,7 +14,7 @@ from emule_test_harness import mfc_known_met, mfc_profile_import, rust_client, r
 
 
 def _rust_repo() -> Path:
-    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
+    return resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
 
 
 def _tag_string(name_id: int, value: str) -> bytes:
@@ -160,19 +160,10 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
             FROM known_files f JOIN local_file_instances i ON i.known_file_id=f.id
             """
         ).fetchall()
-        downloads = conn.execute("SELECT count(*) FROM transfers").fetchone()[0]
+        downloads = conn.execute("SELECT count(*) FROM download_jobs").fetchone()[0]
         local_instances = conn.execute("SELECT count(*) FROM local_file_instances").fetchone()[0]
         profile = conn.execute(
             "SELECT id, created_by FROM profile"
-        ).fetchall()
-        transfer_name_states = conn.execute(
-            """
-            SELECT transfer_name_state.display_name_pinned,
-                   transfer_name_state.follow_majority_filename
-            FROM transfers
-            JOIN transfer_name_state
-              ON transfer_name_state.transfer_id = transfers.id
-            """
         ).fetchall()
     assert roots == 1
     assert servers == [("45.82.80.155", 5687, "Local")]
@@ -197,7 +188,6 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     assert downloads == 0
     assert local_instances == 1
     assert profile == [(1, "emulebb-rust")]
-    assert transfer_name_states == []
     rust_metadata.require_current_profile_database(_rust_repo(), db_path)
 
 
@@ -235,7 +225,7 @@ def test_upsert_stock_mfc_profile_hashes_reuses_existing_profile(
         rust_profile_dir=rust_profile,
     )
     metadata_db = rust_profile / rust_metadata.RUST_PROFILE_METADATA_FILE
-    rust_metadata.seed_transfer_manifest(
+    rust_metadata.seed_download_job(
         metadata_db, ed2k_hash="00112233445566778899aabbccddeeff",
         name=payload.name, size_bytes=payload.stat().st_size, piece_size=9_728_000,
     )
@@ -367,31 +357,6 @@ def test_ensure_persisted_rust_profile_reuses_valid_nonempty_target(
     assert result["mode"] == "reused-persisted"
     assert result["imported"] is False
 
-
-def test_ensure_persisted_rust_profile_rejects_missing_transfer_name_state(
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "EMULE_RUST_PROFILE_PERSISTED"
-    target.mkdir()
-    (target / rust_client.RUST_PROFILE_SETTINGS_FILE).write_text("settings", encoding="utf-8")
-    metadata_db = target / rust_metadata.RUST_PROFILE_METADATA_FILE
-    rust_metadata.create_metadata_db(_rust_repo(), metadata_db)
-    rust_metadata.seed_transfer_manifest(
-        metadata_db,
-        ed2k_hash="00112233445566778899aabbccddeeff",
-        name="missing-state.bin",
-        size_bytes=1,
-        piece_size=1,
-    )
-    with sqlite3.connect(metadata_db) as connection:
-        connection.execute("DELETE FROM transfer_name_state")
-
-    with pytest.raises(RuntimeError, match="without transfer_name_state"):
-        mfc_profile_import.ensure_persisted_rust_profile(
-            rust_repo=_rust_repo(),
-            mfc_profile_dir=None,
-            rust_profile_dir=target,
-        )
 
 
 def test_ensure_persisted_rust_profile_rejects_invalid_nonempty_target(tmp_path: Path) -> None:

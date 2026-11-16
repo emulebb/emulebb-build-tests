@@ -19,6 +19,8 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
 from emule_test_harness import diag_event_diff  # noqa: E402
+from emule_test_harness import diag_event_runs  # noqa: E402
+from emule_test_harness import mfc_profile_import  # noqa: E402
 from emule_test_harness import packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
@@ -55,7 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument(
         "--diagnostics", action="store_true",
-        help="Capture converged packet dumps on both clients for upload-path parity: run the staged Rust "
+        help="Capture required current-run source identity and converged packet evidence: run the staged Rust "
         "diagnostics exe with EMULEBB_RUST_LOG_DIR, and use the MFC diagnostics exe "
         "(pass --app-exe pointing at emulebb-diagnostics.exe).",
     )
@@ -111,6 +113,8 @@ def validate_optional_soak_args(args: argparse.Namespace) -> None:
         value = getattr(args, name)
         if value is not None and value <= 0:
             raise ValueError(f"--{name.replace('_', '-')} must be greater than zero.")
+    if not getattr(args, "diagnostics", False):
+        raise ValueError("Cross-client source identity proof requires --diagnostics before launch.")
 
 
 def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = False) -> int:
@@ -119,7 +123,8 @@ def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = F
     return candidate
 
 
-def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None) -> dict[str, object]:
+def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None,
+                 *, expected_status: int = 200) -> dict[str, object]:
     result = dtt.retry_rest_request(
         base_url,
         path,
@@ -128,9 +133,15 @@ def request_json(base_url: str, method: str, path: str, api_key: str, body: dict
         json_body=body,
         timeout_seconds=30.0,
     )
-    if int(result.get("status", 0)) != 200:
+    if int(result.get("status", 0)) != expected_status:
         raise RuntimeError(f"REST request failed: {method} {path} {dtt.rest_smoke.compact_http_result(result)!r}")
-    return dtt.rest_smoke.require_json_object(result, 200)
+    if expected_status == 207:
+        dtt.rest_smoke.require_success_envelope(result)
+        envelope = result.get("raw_json")
+        if not isinstance(envelope, dict):
+            raise RuntimeError(f"REST request lost its batch envelope: {method} {path}")
+        return envelope
+    return dtt.rest_smoke.require_json_object(result, expected_status)
 
 
 def kad_request(base_url: str, method: str, path: str, api_key: str,
@@ -613,44 +624,55 @@ def wait_for_rust_ed2k_connected(base_url: str, api_key: str, timeout_seconds: f
     return live_common.wait_for(resolve, timeout_seconds, 0.5, "emulebb-rust ED2K connected")
 
 
-def wait_for_rust_transfer_completed(
+def wait_for_rust_download_completed(
     base_url: str,
     api_key: str,
+    download_id: str,
     transfer_hash: str,
-    runtime_dir: Path,
     *,
     expected_size: int,
     expected_sha256: str,
     timeout_seconds: float,
     snapshot_callback=None,
 ) -> dict[str, object]:
-    """Waits until Rust completes one transfer and verifies the persisted bytes."""
+    """Require one retained job's verified, delivered payload bytes."""
 
     observations: list[dict[str, object]] = []
-    pieces_path = runtime_dir / "transfers" / transfer_hash.lower() / "pieces.bin"
-
     def resolve():
-        data = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", api_key)
+        data = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", api_key)
         row = dict(data) if isinstance(data, dict) else {"payload": data}
         row["observed_at"] = round(time.time(), 3)
-        row["pieces_file"] = dtt.snapshot_file(pieces_path, hash_limit_bytes=expected_size)
+        delivery = data.get("delivery") if isinstance(data, dict) else None
+        delivered_path = (Path(delivery["path"]) if isinstance(delivery, dict)
+                          and isinstance(delivery.get("path"), str) else None)
+        row["delivered_file"] = (dtt.snapshot_file(delivered_path, hash_limit_bytes=expected_size)
+                                 if delivered_path is not None else None)
         if snapshot_callback is not None:
             row["snapshot"] = snapshot_callback()
         observations.append(row)
         if (
             isinstance(data, dict)
+            and data.get("id") == download_id
+            and data.get("hash") == transfer_hash.lower()
             and data.get("state") == "completed"
-            and int(data.get("completedBytes") or 0) == expected_size
-            and pieces_path.is_file()
-            and pieces_path.stat().st_size == expected_size
-            and dtt.file_sha256(pieces_path) == expected_sha256
+            and type(data.get("completedAt")) is int
+            and data.get("payloadVerified") is True
+            and data.get("sizeBytes") == expected_size
+            and isinstance(delivery, dict)
+            and delivery.get("state") == "delivered"
+            and delivery.get("ownership") in ("owned", "unowned")
+            and delivered_path is not None and delivered_path.is_absolute()
+            and delivered_path.is_file()
+            and delivered_path.stat().st_size == expected_size
+            and dtt.file_sha256(delivered_path) == expected_sha256
         ):
             result = dict(row)
             result["observations"] = observations[-20:]
+            result["deliveryOwnership"] = delivery["ownership"]
             return result
         return None
 
-    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust transfer {transfer_hash} completion")
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust download {download_id} completion")
 
 
 def download_emulebb_fixture_to_rust(
@@ -662,6 +684,10 @@ def download_emulebb_fixture_to_rust(
     fixture_path: Path,
     fixture_sha256: str,
     rust_profile: Path,
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
+    expected_source_endpoint: str,
+    expected_source_user_hash: str,
     link_export_timeout_seconds: float,
     server_publish_timeout_seconds: float,
     transfer_completion_timeout_seconds: float,
@@ -698,29 +724,55 @@ def download_emulebb_fixture_to_rust(
         "POST",
         f"/api/v1/searches/{search_payload['id']}/results/{transfer_hash}/operations/download",
         api_key,
-        {"paused": False},
+        {"intent": "started"},
+        expected_status=201,
     )
-    resume = request_json(
+    download_id = download.get("id")
+    if (not isinstance(download_id, str) or not download_id.isascii()
+            or not download_id.isdecimal() or len(download_id) > 19
+            or str(int(download_id)) != download_id
+            or not 0 < int(download_id) <= 9223372036854775807
+            or download.get("hash") != transfer_hash.lower()
+            or download.get("sizeBytes") != int(link_info["size"])):
+        raise RuntimeError("Rust search download did not return the created job identity.")
+    start = None
+    if download.get("intent") == "stopped":
+        start = request_json(
+            rust_base_url, "POST", "/api/v1/downloads/start", api_key,
+            {"ids": [download_id]}, expected_status=207,
+        )
+        items = start.get("data") if isinstance(start, dict) else None
+        if (not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict)
+                or items[0].get("id") != download_id or "error" in items[0]
+                or not ((items[0].get("status") == "accepted"
+                         and type(items[0].get("httpStatus")) is int
+                         and items[0]["httpStatus"] in (200, 202))
+                        or (items[0].get("status") == "unchanged"
+                            and type(items[0].get("httpStatus")) is int
+                            and items[0]["httpStatus"] == 200))):
+            raise RuntimeError("Rust download start did not accept the captured job.")
+    elif download.get("intent") != "started":
+        raise RuntimeError("Rust search download returned an unknown intent.")
+    completed_file = wait_for_rust_download_completed(
         rust_base_url,
-        "POST",
-        f"/api/v1/transfers/{transfer_hash}/operations/resume",
         api_key,
-    )
-    completed_file = wait_for_rust_transfer_completed(
-        rust_base_url,
-        api_key,
+        download_id,
         transfer_hash,
-        rust_profile,
         expected_size=int(link_info["size"]),
         expected_sha256=fixture_sha256,
         timeout_seconds=transfer_completion_timeout_seconds,
     )
     manifest_metadata = require_rust_download_manifest_metadata(
         rust_profile,
+        download_id=download_id,
         transfer_hash=transfer_hash,
         expected_name=decoded_ed2k_link_name(link_info),
         expected_size=int(link_info["size"]),
         require_aich_hashset=True,
+        expected_source_endpoint=expected_source_endpoint,
+        expected_source_user_hash=expected_source_user_hash,
+        rust_diagnostics_dir=rust_diagnostics_dir,
+        rust_process_id=rust_process_id,
     )
     return {
         "transferHash": transfer_hash,
@@ -731,30 +783,104 @@ def download_emulebb_fixture_to_rust(
         "serverFile": server_file,
         "search": search,
         "download": download,
-        "resume": resume,
+        "downloadId": download_id,
+        "start": start,
         "completedFile": completed_file,
         "manifestMetadata": manifest_metadata,
     }
 
 
+def require_rust_observed_source_identity(
+    diagnostics_dir: Path,
+    *,
+    process_id: int,
+    download_id: str,
+    transfer_hash: str,
+    source_endpoint: str,
+    source_user_hash: str,
+) -> dict[str, object]:
+    """Require a current-run, job-bound peer identity after source retirement."""
+
+    if type(process_id) is not int or process_id <= 0:
+        raise RuntimeError("Rust source identity diagnostics require a positive process ID.")
+    try:
+        capture = converged_live_wire.load_current_diag_capture(
+            diagnostics_dir, side="rust", process_id=process_id,
+        )
+    except diag_event_runs.DiagnosticTraceError as exc:
+        raise RuntimeError(f"Rust source identity diagnostics are incomplete: {exc}") from exc
+    if not capture.selected_segments:
+        raise RuntimeError("Rust source identity diagnostics have no selected current run.")
+    identity = diag_event_runs.diag_segment_identity(capture.selected_segments[0], client="rust")
+    if (identity is None or identity[0] != process_id
+            or not isinstance(identity[1], str) or not identity[1].strip()):
+        raise RuntimeError("Rust source identity diagnostics selected the wrong process run.")
+    run_id = identity[1]
+    for record in capture.records:
+        if record.get("processId") != process_id or record.get("runId") != run_id:
+            raise RuntimeError("Rust source identity diagnostics contain a different process run.")
+        if record.get("family") != "sched" or record.get("event") != "source_identity":
+            continue
+        keys = record.get("keys")
+        if (isinstance(keys, dict) and keys.get("downloadId") == download_id
+                and keys.get("fileHash") == transfer_hash.lower()
+                and keys.get("peer") == source_endpoint
+                and keys.get("peerHash") == source_user_hash.lower()
+                and type(record.get("seq")) is int and record["seq"] >= 0):
+            return {
+                "provenance": "current_run_source_identity",
+                "processId": process_id, "runId": run_id,
+                "selectedSegments": [str(path) for path in capture.selected_segments],
+                "event": _compact_diag_event(record),
+            }
+    raise RuntimeError(
+        "Rust source identity diagnostics lack the captured job, file, endpoint, and peer hash."
+    )
+
+
 def require_rust_download_manifest_metadata(
     profile_dir: Path,
     *,
+    download_id: str,
     transfer_hash: str,
     expected_name: str,
     expected_size: int,
     require_aich_hashset: bool,
+    expected_source_endpoint: str,
+    expected_source_user_hash: str,
+    rust_diagnostics_dir: Path,
+    rust_process_id: int,
 ) -> dict[str, object]:
     """Requires Rust to persist stock metadata learned from a cross-client source."""
 
     metadata_path = profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
-    manifest = rust_metadata.read_transfer_manifest(metadata_path, transfer_hash)
+    manifest = rust_metadata.read_download_job_manifest(metadata_path, download_id)
     if manifest is None:
-        raise RuntimeError(f"Rust cross-client manifest is missing for {transfer_hash}.")
+        raise RuntimeError(f"Rust cross-client manifest is missing for job {download_id}.")
+    if manifest.get("job_id") != download_id or manifest.get("completed") is not True:
+        raise RuntimeError("Rust cross-client metadata lost the captured completed job.")
     expected_part_count = max(1, (expected_size + ED2K_PART_SIZE_BYTES - 1) // ED2K_PART_SIZE_BYTES)
     expected_hashset_count = expected_part_count if expected_part_count > 1 else 0
     md4_hashset = manifest.get("md4_hashset")
     aich_hashset = manifest.get("aich_hashset")
+    hashset_evidence = "job_manifest"
+    if manifest.get("internal_storage_retired"):
+        verified = manifest.get("verified_local_content")
+        history = manifest.get("completion_history")
+        if (not isinstance(verified, dict) or not isinstance(history, dict)
+                or type(manifest.get("terminal_completed_at_s")) is not int
+                or manifest["terminal_completed_at_s"] < 0
+                or type(manifest.get("known_file_id")) is not int
+                or verified.get("known_file_id") != manifest["known_file_id"]
+                or verified.get("part_size_bytes") != ED2K_PART_SIZE_BYTES
+                or verified.get("part_count") != expected_part_count
+                or history.get("size_bytes") != expected_size
+                or verified.get("aich_root") != manifest.get("aich_root")
+                or history.get("aich_root") != manifest.get("aich_root")):
+            raise RuntimeError("Rust retired job lacks coherent verified content and completion history.")
+        md4_hashset = verified.get("md4_hashset")
+        aich_hashset = verified.get("aich_hashset")
+        hashset_evidence = "verified_local_content"
     sources = manifest.get("sources")
     if str(manifest.get("file_hash") or "").lower() != transfer_hash.lower():
         raise RuntimeError("Rust cross-client manifest has the wrong file hash.")
@@ -790,17 +916,39 @@ def require_rust_download_manifest_metadata(
             raise RuntimeError(
                 f"Rust acquired {len(aich_hashset)} AICH parts for a single-part file, expected 0 or 1."
             )
-    if not isinstance(sources, list) or not sources:
-        raise RuntimeError("Rust cross-client manifest did not persist any transfer source.")
-    source_user_hashes = [
-        str(source.get("user_hash") or "")
-        for source in sources
-        if isinstance(source, dict) and is_lower_hex_32(str(source.get("user_hash") or ""))
-    ]
-    if not source_user_hashes:
-        raise RuntimeError("Rust cross-client manifest did not persist the peer user hash.")
+    if not is_lower_hex_32(expected_source_user_hash.lower()):
+        raise ValueError("Expected MFC source user hash must contain 16 bytes.")
+    if manifest.get("internal_storage_retired"):
+        source_evidence = require_rust_observed_source_identity(
+            rust_diagnostics_dir, process_id=rust_process_id,
+            download_id=download_id, transfer_hash=transfer_hash,
+            source_endpoint=expected_source_endpoint,
+            source_user_hash=expected_source_user_hash,
+        )
+        source_count = 1
+        source_hash_count = 1
+    else:
+        if not isinstance(sources, list):
+            raise RuntimeError("Rust cross-client job sources are missing.")
+        matching = [
+            source for source in sources
+            if isinstance(source, dict)
+            and f"{source.get('ip')}:{source.get('tcp_port')}" == expected_source_endpoint
+            and source.get("user_hash") == expected_source_user_hash.lower()
+        ]
+        if not matching:
+            raise RuntimeError("Rust cross-client job did not persist the expected source identity.")
+        source_evidence = {
+            "provenance": "job_source_rows", "downloadId": download_id,
+            "fileHash": transfer_hash.lower(), "peer": expected_source_endpoint,
+            "peerHash": expected_source_user_hash.lower(),
+        }
+        source_count = len(sources)
+        source_hash_count = len(matching)
     return {
         "metadataPath": str(metadata_path),
+        "downloadId": download_id,
+        "hashsetEvidence": hashset_evidence,
         "fileHash": str(manifest.get("file_hash") or "").lower(),
         "canonicalName": manifest.get("canonical_name"),
         "fileSize": int(manifest.get("file_size") or 0),
@@ -811,8 +959,9 @@ def require_rust_download_manifest_metadata(
         "aichRoot": str(manifest.get("aich_root") or ""),
         "aichHashsetAcquired": bool(manifest.get("aich_hashset_acquired")),
         "aichHashsetCount": len(aich_hashset) if isinstance(aich_hashset, list) else 0,
-        "sourceCount": len(sources),
-        "sourceUserHashCount": len(source_user_hashes),
+        "sourceCount": source_count,
+        "sourceUserHashCount": source_hash_count,
+        "sourceEvidence": source_evidence,
     }
 
 
@@ -1426,7 +1575,7 @@ def require_cross_client_requirements(report: dict[str, object]) -> dict[str, ob
     if manifest_metadata.get("canonicalName") != emulebb_fixture_name:
         raise RuntimeError("Rust/eMuleBB cross-client manifest did not preserve the Unicode canonical name.")
     if int(manifest_metadata.get("sourceUserHashCount") or 0) < 1:
-        raise RuntimeError("Rust/eMuleBB cross-client manifest did not persist source userHash metadata.")
+        raise RuntimeError("Rust/eMuleBB cross-client run did not prove the source user hash identity.")
     expected_hashset_count = int(manifest_metadata.get("expectedHashsetCount") or 0)
     if (
         manifest_metadata.get("md4HashsetAcquired") is not True
@@ -1844,6 +1993,12 @@ def main(argv: list[str] | None = None) -> int:
             fixture_path=emulebb_fixture_path,
             fixture_sha256=emulebb_fixture_sha256,
             rust_profile=rust_profile,
+            rust_diagnostics_dir=rust_packet_dir,
+            rust_process_id=rust_process.pid,
+            expected_source_endpoint=f"{client_p2p_address}:{ports['client1_tcp']}",
+            expected_source_user_hash=mfc_profile_import.read_preferences_dat_user_hash(
+                Path(emulebb["config_dir"]) / "preferences.dat"
+            ).hex(),
             link_export_timeout_seconds=args.link_export_timeout_seconds,
             server_publish_timeout_seconds=args.server_publish_timeout_seconds,
             transfer_completion_timeout_seconds=args.transfer_completion_timeout_seconds,
@@ -1855,7 +2010,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["emulebb_server_file"] = reverse_transfer["serverFile"]
         report["checks"]["rust_reverse_search"] = reverse_transfer["search"]
         report["checks"]["rust_reverse_download"] = reverse_transfer["download"]
-        report["checks"]["rust_reverse_resume"] = reverse_transfer["resume"]
+        report["checks"]["rust_reverse_start"] = reverse_transfer["start"]
         report["checks"]["rust_completed_reverse_file"] = reverse_transfer["completedFile"]
         report["checks"]["rust_emulebb_manifest_metadata"] = reverse_transfer["manifestMetadata"]
         if args.verify_completed_download_release:
@@ -1884,6 +2039,12 @@ def main(argv: list[str] | None = None) -> int:
                 fixture_path=reuse_fixture_path,
                 fixture_sha256=reuse_fixture_sha256,
                 rust_profile=rust_profile,
+                rust_diagnostics_dir=rust_packet_dir,
+                rust_process_id=rust_process.pid,
+                expected_source_endpoint=f"{client_p2p_address}:{ports['client1_tcp']}",
+                expected_source_user_hash=mfc_profile_import.read_preferences_dat_user_hash(
+                    Path(emulebb["config_dir"]) / "preferences.dat"
+                ).hex(),
                 link_export_timeout_seconds=args.link_export_timeout_seconds,
                 server_publish_timeout_seconds=args.server_publish_timeout_seconds,
                 transfer_completion_timeout_seconds=args.transfer_completion_timeout_seconds,

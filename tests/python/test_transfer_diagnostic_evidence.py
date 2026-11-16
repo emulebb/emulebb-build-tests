@@ -332,6 +332,92 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
     evidence.require_transfer_diagnostic_evidence(report)
 
 
+def test_retired_completed_job_uses_explicit_verified_content_hashsets() -> None:
+    rust, mfc = complete_records()
+    manifest = complete_manifest()
+    manifest.update({
+        "job_id": "17", "known_file_id": 3, "piece_size": evidence.ED2K_PART_SIZE,
+        "internal_storage_retired": True, "terminal_completed_at_s": 101,
+        "completion_history": {
+            "size_bytes": FILE_SIZE, "aich_root": AICH_ROOT.hex(),
+            "first_completed_at_s": 100, "last_completed_at_s": 101,
+        },
+        "md4_hashset": [], "aich_hashset": [],
+    })
+    verified = {
+        "known_file_id": 3, "display_name": "independent-copy-name.bin",
+        "part_size_bytes": evidence.ED2K_PART_SIZE, "part_count": 2,
+        "aich_root": AICH_ROOT.hex(),
+        "md4_hashset": ["11" * 16, "22" * 16],
+        "aich_hashset": ["55" * 20, "66" * 20],
+    }
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH, expected_file_name=FILE_NAME, expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext", expected_payload_encoding="uncompressed",
+        rust_manifest=manifest, rust_verified_content=verified,
+        rust_records=rust, mfc_records=mfc,
+    )
+    persisted = report["startupChecks"]["persistedManifest"]
+    assert report["ok"] is True
+    assert persisted["hashsetEvidence"] == "verified_local_content"
+    assert persisted["checks"]["canonicalIdentity"] is True
+    evidence.require_transfer_diagnostic_evidence(report)
+
+
+def test_nonretired_job_does_not_substitute_verified_content_for_missing_rows() -> None:
+    rust, mfc = complete_records()
+    manifest = complete_manifest()
+    manifest["md4_hashset"] = []
+    verified = {"md4_hashset": ["11" * 16, "22" * 16], "aich_hashset": ["55" * 20, "66" * 20]}
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH, expected_file_name=FILE_NAME, expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext", expected_payload_encoding="uncompressed",
+        rust_manifest=manifest, rust_verified_content=verified,
+        rust_records=rust, mfc_records=mfc,
+    )
+    persisted = report["startupChecks"]["persistedManifest"]
+    assert report["ok"] is False
+    assert persisted["hashsetEvidence"] == "job_rows"
+    assert persisted["checks"]["md4Hashset"] is False
+
+
+@pytest.mark.parametrize("mismatch", ["known-file", "size", "hash"])
+def test_retired_job_rejects_mismatched_verified_content_identity(mismatch: str) -> None:
+    rust, mfc = complete_records()
+    manifest = complete_manifest()
+    manifest.update({
+        "job_id": "17", "known_file_id": 3, "piece_size": evidence.ED2K_PART_SIZE,
+        "internal_storage_retired": True, "terminal_completed_at_s": 101,
+        "completion_history": {
+            "size_bytes": FILE_SIZE + (1 if mismatch == "size" else 0),
+            "aich_root": AICH_ROOT.hex(),
+            "first_completed_at_s": 100, "last_completed_at_s": 101,
+        },
+        "md4_hashset": [], "aich_hashset": [],
+    })
+    verified = {
+        "known_file_id": 4 if mismatch == "known-file" else 3,
+        "display_name": FILE_NAME,
+        "part_size_bytes": evidence.ED2K_PART_SIZE, "part_count": 2,
+        "aich_root": AICH_ROOT.hex(),
+        "md4_hashset": ["11" * 16, "22" * 16],
+        "aich_hashset": ["55" * 20, "66" * 20],
+    }
+    if mismatch == "hash":
+        manifest["file_hash"] = "33" * 16
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH, expected_file_name=FILE_NAME, expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext", expected_payload_encoding="uncompressed",
+        rust_manifest=manifest, rust_verified_content=verified,
+        rust_records=rust, mfc_records=mfc,
+    )
+    persisted = report["startupChecks"]["persistedManifest"]
+    assert report["ok"] is False
+    assert persisted["hashsetEvidence"] == "verified_local_content"
+    assert persisted["checks"]["canonicalIdentity"] is (mismatch == "hash")
+    assert persisted["checks"]["fileHash"] is (mismatch != "hash")
+
+
 def test_build_transfer_diagnostic_evidence_claims_hash_only_metadata_recovery() -> None:
     rust, mfc = complete_records()
     use_hash_only_request_identifiers(rust, mfc)
