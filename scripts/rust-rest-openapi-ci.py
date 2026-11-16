@@ -29,7 +29,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import rust_client, rust_metadata, rust_rest_conformance  # noqa: E402
+from emule_test_harness import rust_client, rust_local_ed2k, rust_metadata, rust_rest_conformance  # noqa: E402
 from emule_test_harness.paths import get_required_emule_workspace_root, get_workspace_output_root  # noqa: E402
 from emule_test_harness.vm_guest_profiles import http_json, wait_until  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -41,6 +41,7 @@ API_KEY = "rust-rest-openapi-ci-secret-0001"
 REST_ADDR = "127.0.0.1"
 FRIEND_PEER_BUDGET_SECONDS = 180.0
 KAD_IMPORT_BUDGET_SECONDS = 90.0
+CATEGORY_BUDGET_SECONDS = 120.0
 FRIEND_FAULT_TRIGGERS = tuple(f"harness_friend_failure_{operation}" for operation in ("insert", "update", "delete"))
 
 
@@ -264,6 +265,266 @@ def run_kad_persistence_phase(*, executable: Path, rust_repo: Path, root: Path,
         write_report(root / "report.json", report)
     if report["status"] != "passed":
         raise RuntimeError(f"Kad persistence proof failed; evidence: {root / 'report.json'}")
+    return report
+
+
+def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: Path) -> dict[str, object]:
+    """Prove category identity, nullable assignment and complete sharing across restart."""
+    package = load_script_module("package_helpers_for_category_contract", "smoke-rust-release-package.py")
+    root.mkdir(parents=True, exist_ok=False)
+    profile = root / "profile"
+    incoming = profile / "incoming"
+    temp_override = profile / "category-temp"
+    destination = profile / "category-destination"
+    independent_root = profile / "independent-shared-root"
+    for directory in (incoming, temp_override, destination, independent_root):
+        directory.mkdir(parents=True, exist_ok=True)
+    report: dict[str, Any] = {"status": "failed", "networkMode": "local-disabled",
+                              "budgetSeconds": CATEGORY_BUDGET_SECONDS}
+    deadline = time.monotonic() + CATEGORY_BUDGET_SECONDS
+    process = handle = None
+    port = choose_loopback_port()
+    base_url = f"http://{REST_ADDR}:{port}"
+    database = profile / rust_metadata.RUST_PROFILE_METADATA_FILE
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise RuntimeError("Category persistence phase exceeded its runtime budget")
+        return value
+
+    def request(method: str, path: str, *, body: dict[str, Any] | None = None) -> Any:
+        return http_json(base_url, path, api_key=API_KEY, method=method, body=body,
+                         timeout_seconds=min(5.0, remaining()))["data"]
+
+    def ready() -> object:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError("Category persistence daemon exited before readiness")
+        return request("GET", "/api/v1/status")
+
+    def categories() -> list[dict[str, Any]]:
+        return request("GET", "/api/v1/categories")["items"]
+
+    def shared_files() -> dict[str, Any]:
+        return request("GET", "/api/v1/shared-files")
+
+    def shared_file_or_none(hash_value: str) -> dict[str, Any] | None:
+        try:
+            return request("GET", f"/api/v1/shared-files/{hash_value}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+
+    def reload_settled() -> object | None:
+        directories = request("GET", "/api/v1/shared-directories")
+        progress = directories.get("reloadProgress")
+        if (isinstance(progress, dict) and progress.get("running") is False
+                and progress.get("pending") is False and directories.get("hashingCount") == 0):
+            return progress
+        return None
+
+    def require_category(row: dict[str, Any], *, name: str,
+                         temp_dir: str | None, destination_dir: str | None,
+                         comment: str) -> None:
+        expected = {"name": name, "tempDir": temp_dir,
+                    "destinationDir": destination_dir, "comment": comment}
+        if row != expected:
+            raise RuntimeError(f"Category contract differs: expected {expected}, got {row}")
+
+    def transfer(hash_value: str) -> dict[str, Any]:
+        return request("GET", f"/api/v1/transfers/{hash_value}")
+
+    def assignments() -> list[object]:
+        return [transfer(hash_value).get("category") for hash_value in hashes]
+
+    def add_transfer(hash_value: str, name: str, *, category: str | None = None) -> None:
+        link = f"ed2k://|file|{name}|4096|{hash_value}|/"
+        body: dict[str, Any] = {"link": link, "paused": True}
+        if category is not None:
+            body["category"] = category
+        request("POST", "/api/v1/transfers", body=body)
+
+    hashes = ("00112233445566778899aabbccddeeff", "102132435465768798a9babcbddceeff",
+              "2031425364758697a8b9cadbecfd0e1f")
+    try:
+        rust_client.write_rust_profile(
+            profile, rust_repo=rust_repo, incoming_dir=incoming, rest_addr=REST_ADDR,
+            rest_port=port, api_key=API_KEY, nat_enabled=False,
+            initial_shared_directory_reload=False, local_only_discovery=True,
+            vpn_guard_mode="off",
+        )
+        for section, settings in rust_client.rust_network_settings_patch(
+            auto_connect=False, reconnect_enabled=False, network_ed2k=False,
+            network_kademlia=False,
+        ).items():
+            rust_metadata.replace_settings_section(database, section, settings)
+        process, handle = package._start_daemon(executable, profile, root / "daemon.log")
+        wait_until("category REST readiness", remaining(), ready)
+        if categories():
+            raise RuntimeError("Fresh profile exposed a synthetic category")
+
+        first = request("POST", "/api/v1/categories", body={
+            "name": "Alpha", "tempDir": str(temp_override),
+            "destinationDir": str(destination), "comment": "First category",
+        })
+        require_category(first, name="Alpha",
+                         temp_dir=str(temp_override), destination_dir=str(destination),
+                         comment="First category")
+        second = request("POST", "/api/v1/categories", body={"name": "Second-2", "comment": "Keep"})
+        require_category(second, name="Second-2",
+                         temp_dir=None, destination_dir=None, comment="Keep")
+        require_category(request("GET", "/api/v1/categories/alpha"), name="Alpha",
+                         temp_dir=str(temp_override), destination_dir=str(destination),
+                         comment="First category")
+        try:
+            request("POST", "/api/v1/categories", body={"name": "ALPHA"})
+        except urllib.error.HTTPError as error:
+            payload = json.load(error)
+            if error.code != 409 or payload.get("error", {}).get("code") != "CATEGORY_NAME_CONFLICT":
+                raise RuntimeError(f"Category name collision returned {error.code}: {payload}") from error
+        else:
+            raise RuntimeError("ASCII case-insensitive duplicate category name was accepted")
+        for invalid_name in (" Alpha", "Alpha Beta", "Alpha.Beta", "Alpha_Beta", "-Alpha", "é", "Alpha\n", "A" * 65):
+            try:
+                request("POST", "/api/v1/categories", body={"name": invalid_name})
+            except urllib.error.HTTPError as error:
+                if error.code != 400:
+                    raise RuntimeError(f"Invalid category name returned HTTP {error.code}") from error
+            else:
+                raise RuntimeError(f"Invalid category name was accepted: {invalid_name!r}")
+
+        patched = request("PATCH", "/api/v1/categories/ALPHA", body={"comment": "Edited"})
+        require_category(patched, name="Alpha",
+                         temp_dir=str(temp_override), destination_dir=str(destination),
+                         comment="Edited")
+        patched = request("PATCH", "/api/v1/categories/alpha", body={"tempDir": None})
+        require_category(patched, name="Alpha",
+                         temp_dir=None, destination_dir=str(destination), comment="Edited")
+
+        add_transfer(hashes[0], "Alpha.bin", category="alpha")
+        add_transfer(hashes[1], "Beta.bin", category="second-2")
+        add_transfer(hashes[2], "Gamma.bin")
+        if assignments() != ["Alpha", "Second-2", None]:
+            raise RuntimeError("Transfer category assignment differs before deletion")
+        filtered = request("GET", "/api/v1/transfers?category=ALPHA")["items"]
+        if {row["hash"] for row in filtered} != {hashes[0]}:
+            raise RuntimeError("Case-insensitive category filter did not select the assigned transfer")
+        request("PATCH", f"/api/v1/transfers/{hashes[2]}", body={"category": "ALPHA"})
+        if assignments() != ["Alpha", "Second-2", "Alpha"]:
+            raise RuntimeError("Transfer category patch did not return canonical saved spelling")
+        request("PATCH", f"/api/v1/transfers/{hashes[2]}", body={"category": None})
+        if assignments() != ["Alpha", "Second-2", None]:
+            raise RuntimeError("Null transfer category patch did not clear assignment")
+
+        category_only = destination / "CategoryOnly.txt"
+        category_only_bytes = b"category-only complete share\n"
+        duplicate_name = "DuplicateCopy.txt"
+        duplicate_bytes = b"same complete content in two eligible roots\n"
+        category_copy = destination / duplicate_name
+        independent_copy = independent_root / duplicate_name
+        category_only.write_bytes(category_only_bytes)
+        category_copy.write_bytes(duplicate_bytes)
+        independent_copy.write_bytes(duplicate_bytes)
+        request("POST", "/api/v1/shared-directories/operations/reload")
+        wait_until("category root reload", remaining(), reload_settled)
+
+        def category_shares_ready() -> tuple[dict[str, Any], dict[str, Any]] | None:
+            rows = shared_files()
+            try:
+                only = rust_local_ed2k.require_shared_file_item(rows, category_only.name)
+                duplicate = rust_local_ed2k.require_shared_file_item(rows, duplicate_name)
+            except RuntimeError:
+                return None
+            if all(row.get("complete") is True and row.get("partFile") is False
+                   for row in (only, duplicate)):
+                return only, duplicate
+            return None
+
+        only_row, duplicate_row = wait_until("category complete shares", remaining(), category_shares_ready)
+        only_hash, duplicate_hash = only_row["hash"], duplicate_row["hash"]
+        if only_hash == duplicate_hash or Path(duplicate_row["path"]).resolve() != category_copy.resolve():
+            raise RuntimeError("Category root did not own the initial complete shares")
+        request("PATCH", "/api/v1/shared-directories", body={
+            "roots": [{"path": str(independent_root)}], "confirmReplaceRoots": True,
+        })
+        request("POST", "/api/v1/shared-directories/operations/reload")
+        wait_until("independent root reload", remaining(), reload_settled)
+        if independent_copy.read_bytes() != duplicate_bytes:
+            raise RuntimeError("Independent complete copy changed before category deletion")
+
+        request("DELETE", "/api/v1/categories/ALPHA")
+        if assignments() != [None, "Second-2", None]:
+            raise RuntimeError("Category deletion did not clear only matching assignments")
+
+        def category_share_withdrawal() -> dict[str, Any] | None:
+            survivor = shared_file_or_none(duplicate_hash)
+            if (shared_file_or_none(only_hash) is None and survivor is not None
+                    and survivor.get("complete") is True and survivor.get("partFile") is False
+                    and Path(survivor["path"]).resolve() == independent_copy.resolve()
+                    and shared_files().get("total") == 1):
+                return survivor
+            return None
+
+        wait_until("category share withdrawal and independent copy", remaining(), category_share_withdrawal)
+        if (category_only.read_bytes(), category_copy.read_bytes(), independent_copy.read_bytes()) != (
+            category_only_bytes, duplicate_bytes, duplicate_bytes
+        ):
+            raise RuntimeError("Category deletion changed complete-share files")
+        request("POST", "/api/v1/app/shutdown", body={"confirmShutdown": True})
+        process.wait(timeout=min(20.0, remaining()))
+        if process.returncode != 0:
+            raise RuntimeError("Category persistence daemon did not stop gracefully")
+        handle.close()
+        handle = None
+        process, handle = package._start_daemon(executable, profile, root / "restart.log")
+        wait_until("restarted category REST readiness", remaining(), ready)
+        request("POST", "/api/v1/shared-directories/operations/reload")
+        wait_until("restarted category root reload", remaining(), reload_settled)
+        surviving = categories()
+        if len(surviving) != 1:
+            raise RuntimeError("Surviving category membership changed on profile reopen")
+        require_category(surviving[0], name="Second-2",
+                         temp_dir=None, destination_dir=None, comment="Keep")
+        if assignments() != [None, "Second-2", None]:
+            raise RuntimeError("Transfer assignments changed on profile reopen")
+        recreated = request("POST", "/api/v1/categories", body={"name": "ALPHA"})
+        require_category(recreated, name="ALPHA", temp_dir=None, destination_dir=None, comment="")
+        if assignments() != [None, "Second-2", None]:
+            raise RuntimeError("Reusing a deleted name changed transfer assignments")
+        wait_until("restarted independent complete share", remaining(), category_share_withdrawal)
+        if (category_only.read_bytes(), category_copy.read_bytes(), independent_copy.read_bytes()) != (
+            category_only_bytes, duplicate_bytes, duplicate_bytes
+        ):
+            raise RuntimeError("Category restart changed complete-share files")
+        report["categoryNames"] = {"deleted": "Alpha", "survivor": "Second-2", "recreated": "ALPHA"}
+        report["assignmentsAfterReopen"] = [None, "Second-2", None]
+        report["sharing"] = {"withdrawnHash": only_hash, "survivingHash": duplicate_hash,
+                             "categoryOnlyWithdrawn": True, "independentCompleteCopyRetained": True,
+                             "fixtureBytesUnchanged": True}
+        report["status"] = "passed"
+    except Exception as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        try:
+            if process is not None and process.poll() is None:
+                http_json(base_url, "/api/v1/app/shutdown", api_key=API_KEY, method="POST",
+                          body={"confirmShutdown": True}, timeout_seconds=5.0)
+                process.wait(timeout=20.0)
+            if process is not None and process.poll() != 0:
+                raise RuntimeError("Category persistence daemon did not stop gracefully")
+            report["teardown"] = "graceful"
+        except Exception as error:
+            report["status"] = "failed"
+            report["teardown"] = f"forced: {error}"
+            if process is not None:
+                rust_client.stop_process_tree(process)
+        finally:
+            if handle is not None:
+                handle.close()
+        write_report(root / "report.json", report)
+    if report["status"] != "passed":
+        raise RuntimeError(f"Category persistence proof failed; evidence: {root / 'report.json'}")
     return report
 
 
@@ -647,6 +908,9 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
         report["kadPersistencePhase"] = run_kad_persistence_phase(
             executable=executable, rust_repo=rust_repo, root=profile_dir / "kad-persistence-phase",
             openapi_contract=openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH,
+        )
+        report["categoryPersistencePhase"] = run_category_persistence_phase(
+            executable=executable, rust_repo=rust_repo, root=profile_dir / "category-persistence-phase",
         )
         report["status"] = "passed"
     except rust_rest_conformance.RestConformanceError as exc:

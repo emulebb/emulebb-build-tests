@@ -31,13 +31,11 @@ QUERY_NUMERIC_PARAMETER_SCHEMAS = {
     "Limit": ("limit", 1, 1000),
     "LogsLimit": ("limit", 1, 1000),
     "Offset": ("offset", 0, 2_147_483_647),
-    "TransferCategoryIdFilter": ("categoryId", 0, 4_294_967_295),
 }
 QUERY_DEFAULT_PARAMETER_SCHEMAS = {
     "LogsLimit": ("limit", 200),
 }
 PATH_NUMERIC_PARAMETER_SCHEMAS = {
-    "CategoryId": ("categoryId", 0, 4_294_967_295),
     "SearchId": ("searchId", 0, 4_294_967_295),
 }
 PATH_LOWERCASE_MD4_PARAMETER_SCHEMAS = {
@@ -90,8 +88,7 @@ TRANSFER_PATCH_COMPONENT = "TransferPatch"
 TRANSFER_PATCH_MUTATION_FAMILIES = (
     "priority",
     "displayName",
-    "categoryId",
-    "categoryName",
+    "category",
 )
 TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
 SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
@@ -134,8 +131,10 @@ KAD_BOOTSTRAP_REQUEST_COMPONENT = "KadBootstrapRequest"
 FRIEND_CREATE_REQUEST_COMPONENT = "FriendCreateRequest"
 CONTROL_FREE_TEXT_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
 FRIEND_USER_HASH_PATTERN = r"^[0-9a-f]{32}$"
-CATEGORY_PRIORITY_INPUT_COMPONENT = "CategoryPriorityInput"
-CATEGORY_PRIORITY_VALUES = ("verylow", "low", "normal", "high", "veryhigh")
+CATEGORY_NAME_COMPONENT = "CategoryName"
+NULLABLE_CATEGORY_COMPONENT = "NullableCategory"
+CATEGORY_RESPONSE_COMPONENT = "Category"
+CATEGORY_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}(?![\s\S])"
 CATEGORY_CREATE_REQUEST_COMPONENT = "CategoryCreateRequest"
 CATEGORY_PATCH_COMPONENT = "CategoryPatch"
 SHARED_DIRECTORY_ROOT_INPUT_COMPONENT = "SharedDirectoryRootInput"
@@ -1104,6 +1103,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
             append_query_default_parameter_schema_drift(drift, name, source, parameter)
             append_path_numeric_parameter_schema_drift(drift, name, source, parameter)
+            append_category_name_parameter_schema_drift(drift, name, source, parameter)
             append_path_lowercase_md4_parameter_schema_drift(drift, name, source, parameter)
             append_path_token_parameter_schema_drift(drift, name, source, parameter)
             append_query_boolean_parameter_schema_drift(drift, name, source, parameter)
@@ -1298,11 +1298,9 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             "KadBootstrapRequest.properties.address",
             "KadBootstrapRequest.properties.port",
         )
-    if CATEGORY_PRIORITY_INPUT_COMPONENT in schemas:
-        assert_category_priority_input_schema(
-            drift,
-            schemas.get(CATEGORY_PRIORITY_INPUT_COMPONENT),
-        )
+    append_category_name_component_schema_drift(drift, schemas)
+    append_category_response_schema_drift(drift, schemas)
+    append_transfer_category_response_schema_drift(drift, schemas)
     if FRIEND_CREATE_REQUEST_COMPONENT in schemas:
         append_friend_create_schema_drift(drift, schemas)
     if CATEGORY_CREATE_REQUEST_COMPONENT in schemas:
@@ -1394,21 +1392,7 @@ def append_transfer_create_schema_drift(
         "TransferCreateRequest.properties.links.items",
         links.get("items"),
     )
-    assert_category_selector_name_schema(
-        drift,
-        "TransferCreateRequest.properties.categoryName",
-        properties.get("categoryName"),
-    )
-    assert_category_selector_id_schema(
-        drift,
-        "TransferCreateRequest.properties.categoryId",
-        properties.get("categoryId"),
-    )
-    assert_category_selector_exclusion_schema(
-        drift,
-        TRANSFER_CREATE_REQUEST_COMPONENT,
-        schema,
-    )
+    assert_nullable_category_ref_schema(drift, "TransferCreateRequest.properties.category", properties.get("category"))
     assert_paused_boolean_schema(
         drift,
         "TransferCreateRequest.properties.paused",
@@ -1592,16 +1576,7 @@ def append_transfer_patch_schema_drift(
         "#/components/schemas/TransferPriority",
         "transfer patch priority",
     )
-    assert_category_selector_id_schema(
-        drift,
-        "TransferPatch.properties.categoryId",
-        properties.get("categoryId"),
-    )
-    assert_category_selector_name_schema(
-        drift,
-        "TransferPatch.properties.categoryName",
-        properties.get("categoryName"),
-    )
+    assert_nullable_category_ref_schema(drift, "TransferPatch.properties.category", properties.get("category"))
 
 
 def assert_transfer_patch_mutation_family_schema(
@@ -2159,21 +2134,7 @@ def append_search_result_download_schema_drift(
             )
         )
         return
-    assert_category_selector_name_schema(
-        drift,
-        "SearchResultDownloadRequest.properties.categoryName",
-        properties.get("categoryName"),
-    )
-    assert_category_selector_id_schema(
-        drift,
-        "SearchResultDownloadRequest.properties.categoryId",
-        properties.get("categoryId"),
-    )
-    assert_category_selector_exclusion_schema(
-        drift,
-        SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
-        schema,
-    )
+    assert_nullable_category_ref_schema(drift, "SearchResultDownloadRequest.properties.category", properties.get("category"))
     assert_paused_boolean_schema(
         drift,
         "SearchResultDownloadRequest.properties.paused",
@@ -2203,18 +2164,16 @@ def assert_paused_boolean_schema(
         )
 
 
-def assert_category_selector_name_schema(
+def assert_category_name_schema(
     drift: list[SchemaComponentDrift],
     component: str,
     schema: object,
 ) -> None:
-    if schema is None:
-        return
     if not isinstance(schema, dict):
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="category selector name schema must be an object",
+                issue="category name schema must be an object",
             )
         )
         return
@@ -2222,119 +2181,113 @@ def assert_category_selector_name_schema(
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="category selector name type must be string",
+                issue="category name type must be string",
             )
         )
     if schema.get("minLength") != 1:
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="category selector name minLength must be 1",
+                issue="category name minLength must be 1",
             )
         )
-    if schema.get("pattern") != NON_EMPTY_AFTER_TRIM_PATTERN:
+    if schema.get("maxLength") != 64:
+        drift.append(SchemaComponentDrift(
+            component=component,
+            issue="category name maxLength must be 64",
+        ))
+    if schema.get("pattern") != CATEGORY_NAME_PATTERN:
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="category selector name pattern must require at least one non-whitespace character",
+                issue="category name must use the tag-name ASCII grammar",
             )
         )
 
 
-def assert_category_selector_id_schema(
+def assert_nullable_category_ref_schema(
     drift: list[SchemaComponentDrift],
     component: str,
     schema: object,
 ) -> None:
     if schema is None:
         return
-    if not isinstance(schema, dict):
+    if (not isinstance(schema, dict)
+            or schema.get("$ref") != "#/components/schemas/NullableCategory"
+            or set(schema) - {"$ref", "description", "default"}
+            or ("default" in schema and schema["default"] is not None)):
         drift.append(
             SchemaComponentDrift(
                 component=component,
-                issue="category selector id schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != "integer":
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category selector id type must be integer",
-            )
-        )
-    if schema.get("minimum") != 0 or schema.get("maximum") != 4294967295:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category selector id range must be 0..4294967295",
+                issue="category must reference NullableCategory",
             )
         )
 
 
-def assert_category_selector_exclusion_schema(
-    drift: list[SchemaComponentDrift],
-    component: str,
-    schema: dict[str, object],
+def append_category_name_component_schema_drift(
+    drift: list[SchemaComponentDrift], schemas: dict[str, object]
 ) -> None:
-    not_schema = schema.get("not")
-    if not isinstance(not_schema, dict) or not_schema.get("required") != ["categoryId", "categoryName"]:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category selector schema must reject categoryId and categoryName together",
-            )
-        )
+    if not any(name in schemas for name in (
+        CATEGORY_NAME_COMPONENT, NULLABLE_CATEGORY_COMPONENT, CATEGORY_RESPONSE_COMPONENT
+    )):
+        return
+    assert_category_name_schema(drift, CATEGORY_NAME_COMPONENT, schemas.get(CATEGORY_NAME_COMPONENT))
+    nullable = schemas.get(NULLABLE_CATEGORY_COMPONENT)
+    if not isinstance(nullable, dict) or nullable.get("oneOf") != [
+        {"$ref": "#/components/schemas/CategoryName"}, {"type": "null"}
+    ]:
+        drift.append(SchemaComponentDrift(
+            component=NULLABLE_CATEGORY_COMPONENT,
+            issue="nullable category must allow CategoryName or null",
+        ))
 
 
-def assert_category_priority_input_schema(
-    drift: list[SchemaComponentDrift],
-    schema: object,
+def append_category_response_schema_drift(
+    drift: list[SchemaComponentDrift], schemas: dict[str, object]
 ) -> None:
-    component = CATEGORY_PRIORITY_INPUT_COMPONENT
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category priority input schema must be an object",
-            )
-        )
+    schema = schemas.get(CATEGORY_RESPONSE_COMPONENT)
+    if schema is None:
         return
-    variants = schema.get("oneOf")
-    if not isinstance(variants, list) or len(variants) != 2:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category priority input must be oneOf string enum or u32 integer",
-            )
-        )
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    expected = {"name", "tempDir", "destinationDir", "comment"}
+    if (not isinstance(schema, dict) or schema.get("type") != "object"
+            or schema.get("additionalProperties") is not False
+            or schema.get("required") != ["name", "tempDir", "destinationDir", "comment"]
+            or not isinstance(properties, dict) or set(properties) != expected):
+        drift.append(SchemaComponentDrift(
+            component=CATEGORY_RESPONSE_COMPONENT,
+            issue="category response must require exactly name, tempDir, destinationDir and comment",
+        ))
         return
-    string_variant = next(
-        (variant for variant in variants if isinstance(variant, dict) and variant.get("type") == "string"),
-        None,
-    )
-    integer_variant = next(
-        (variant for variant in variants if isinstance(variant, dict) and variant.get("type") == "integer"),
-        None,
-    )
-    if not isinstance(string_variant, dict) or string_variant.get("enum") != list(CATEGORY_PRIORITY_VALUES):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue=f"category priority string enum must be {', '.join(CATEGORY_PRIORITY_VALUES)}",
-            )
-        )
-    if (
-        not isinstance(integer_variant, dict)
-        or integer_variant.get("minimum") != 0
-        or integer_variant.get("maximum") != 4294967295
-    ):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category priority integer range must be 0..4294967295",
-            )
-        )
+    if properties["name"] != {"$ref": "#/components/schemas/CategoryName"}:
+        drift.append(SchemaComponentDrift(component="Category.properties.name",
+                                          issue="category name must reference CategoryName"))
+    for name in ("tempDir", "destinationDir"):
+        if properties[name].get("type") != ["string", "null"]:
+            drift.append(SchemaComponentDrift(component=f"Category.properties.{name}",
+                                              issue="category path must be string or null"))
+    if properties["comment"].get("type") != "string":
+        drift.append(SchemaComponentDrift(component="Category.properties.comment",
+                                          issue="category comment must be a string"))
+
+
+def append_transfer_category_response_schema_drift(
+    drift: list[SchemaComponentDrift], schemas: dict[str, object]
+) -> None:
+    transfer = schemas.get("Transfer")
+    if transfer is None:
+        return
+    if not isinstance(transfer, dict):
+        drift.append(SchemaComponentDrift(component="Transfer", issue="transfer schema must be an object"))
+        return
+    properties = transfer.get("properties")
+    required = transfer.get("required")
+    if (not isinstance(properties, dict) or not isinstance(required, list)
+            or "category" not in required
+            or properties.get("category") != {"$ref": "#/components/schemas/NullableCategory"}):
+        drift.append(SchemaComponentDrift(
+            component="Transfer", issue="transfer must require nullable category",
+        ))
 
 
 def append_url_import_schema_drift(
@@ -2669,36 +2622,31 @@ def append_category_mutation_schema_drift(
             )
         )
         return
+    expected = ({"name", "tempDir", "destinationDir", "comment"}
+                if component == CATEGORY_CREATE_REQUEST_COMPONENT else {"tempDir", "destinationDir", "comment"})
+    if set(properties) != expected:
+        drift.append(SchemaComponentDrift(
+            component=component,
+            issue=f"category mutation fields must be {', '.join(sorted(expected))}",
+        ))
     if component == CATEGORY_CREATE_REQUEST_COMPONENT:
         assert_category_create_required_fields_schema(drift, schema)
-    assert_trim_non_empty_text_schema(
-        drift,
-        f"{component}.properties.name",
-        properties.get("name"),
-        nullable=False,
-    )
-    assert_trim_non_empty_text_schema(
-        drift,
-        f"{component}.properties.path",
-        properties.get("path"),
-        nullable=True,
-    )
+        if properties.get("name") != {"$ref": "#/components/schemas/CategoryName"}:
+            drift.append(SchemaComponentDrift(
+                component=f"{component}.properties.name",
+                issue="category name must reference CategoryName",
+            ))
+    for path_field in ("tempDir", "destinationDir"):
+        assert_trim_non_empty_text_schema(
+            drift,
+            f"{component}.properties.{path_field}",
+            properties.get(path_field),
+            nullable=True,
+        )
     assert_category_comment_schema(
         drift,
         f"{component}.properties.comment",
         properties.get("comment"),
-    )
-    assert_category_color_schema(
-        drift,
-        f"{component}.properties.color",
-        properties.get("color"),
-    )
-    assert_priority_ref_schema(
-        drift,
-        f"{component}.properties.priority",
-        properties.get("priority"),
-        "#/components/schemas/CategoryPriorityInput",
-        "category priority",
     )
 
 
@@ -2734,37 +2682,6 @@ def assert_category_comment_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="category comment type must be string",
-            )
-        )
-
-
-def assert_category_color_schema(
-    drift: list[SchemaComponentDrift],
-    component: str,
-    schema: object,
-) -> None:
-    if schema is None:
-        return
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category color schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != ["integer", "null"]:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category color type must be ['integer', 'null']",
-            )
-        )
-    if schema.get("minimum") != 0 or schema.get("maximum") != 16777215:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="category color range must be 0..16777215",
             )
         )
 
@@ -3263,6 +3180,27 @@ def append_path_numeric_parameter_schema_drift(
         )
 
 
+def append_category_name_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift],
+    component_name: str,
+    source: str,
+    parameter: object,
+) -> None:
+    if component_name not in {"CategoryName", "TransferCategoryFilter"} or not isinstance(parameter, dict):
+        return
+    expected_name = "categoryName" if component_name == "CategoryName" else "category"
+    if parameter.get("name") != expected_name:
+        drift.append(ParameterMetadataDrift(
+            source=f"{source}.name",
+            issue=f"category parameter name must be {expected_name}",
+        ))
+    if parameter.get("schema") != {"$ref": "#/components/schemas/CategoryName"}:
+        drift.append(ParameterMetadataDrift(
+            source=f"{source}.schema",
+            issue="category name parameter must reference CategoryName",
+        ))
+
+
 def append_path_lowercase_md4_parameter_schema_drift(
     drift: list[ParameterMetadataDrift],
     component_name: str,
@@ -3531,7 +3469,7 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
             "/shared-directories/ignores/defaults/{ruleKey}",
         ),
         (r'\("PATCH",\s*\["servers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/servers/{serverId}"),
-        (r'\("PATCH",\s*\["categories", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/categories/{categoryId}"),
+        (r'\("PATCH",\s*\["categories", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/categories/{categoryName}"),
         (
             r'\("POST",\s*\["searches", _, "results", _, "operations", "download"\]\)\s*=>\s*\{\s*Some\((\w+)\)',
             "POST",
@@ -3938,6 +3876,11 @@ def openapi_error_response_drift(openapi_yaml: Path) -> tuple[ErrorResponseDrift
                 status_text = str(status)
                 if status_text in ERROR_RESPONSE_STATUSES or status_text == "405" or is_success_status(status_text):
                     continue
+                if status_text == "409" and isinstance(response, dict):
+                    schema = (response.get("content", {}).get("application/json", {})
+                              .get("schema", {}))
+                    if isinstance(schema, dict) and schema.get("$ref") == ERROR_ENVELOPE_REF:
+                        continue
                 if not isinstance(response, dict) or response.get("$ref") != ERROR_RESPONSE_REF:
                     drift.append(
                         ErrorResponseDrift(

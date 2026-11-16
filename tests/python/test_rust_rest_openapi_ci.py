@@ -104,6 +104,31 @@ def test_registered_stage_failure_precedes_profile_creation_and_launch(tmp_path,
     assert not output.exists()
 
 
+def test_fresh_category_fixture_allocates_stable_nonzero_ids_across_reopen(tmp_path):
+    module = load_module()
+    rust = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    database = tmp_path / "metadata.db"
+    module.rust_metadata.create_metadata_db(rust, database)
+    with closing(sqlite3.connect(database)) as connection:
+        with connection:
+            first = connection.execute(
+                "INSERT INTO categories(name,comment) VALUES ('First','')"
+            ).lastrowid
+            survivor = connection.execute(
+                "INSERT INTO categories(name,comment) VALUES ('Second','')"
+            ).lastrowid
+            connection.execute("DELETE FROM categories WHERE id=?", (first,))
+    with closing(sqlite3.connect(database)) as connection:
+        with connection:
+            after_reopen = connection.execute(
+                "INSERT INTO categories(name,comment) VALUES ('Third','')"
+            ).lastrowid
+        assert 0 < first < survivor < after_reopen
+        assert connection.execute("SELECT id FROM categories ORDER BY id").fetchall() == [
+            (survivor,), (after_reopen,)
+        ]
+
+
 def test_main_forwards_registered_stage_selection(tmp_path, monkeypatch):
     module = load_module()
     observed = {}
