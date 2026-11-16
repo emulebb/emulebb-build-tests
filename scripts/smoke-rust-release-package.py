@@ -348,7 +348,8 @@ def _wait_for_download_delivery(
             raise RuntimeError("Packaged download identity changed before delivery")
         if (download.get("state") != "completed" or download.get("payloadVerified") is not True
                 or not isinstance(download.get("completedAt"), int)
-                or not isinstance(delivery, dict) or delivery.get("state") != "delivered"):
+                or not isinstance(delivery, dict) or delivery.get("state") != "delivered"
+                or delivery.get("ownership") not in ("owned", "unowned")):
             return None
         try:
             shared = request_json(base_url, "GET", f"/api/v1/shared-files/{expected_hash}", API_KEY)
@@ -369,7 +370,6 @@ def _wait_for_download_delivery(
             or shared.get("complete") is not True
             or shared.get("partFile") is not False
             or int(shared.get("sizeBytes") or 0) != expected_size
-            or delivery.get("ownership") != "owned"
             or shared.get("path") != delivered_value
         ):
             return None
@@ -391,6 +391,7 @@ def _wait_for_download_delivery(
             "sharedFileRegistered": True,
             "deliveredPathWithinIncoming": True,
             "deliveredSha256": delivered_sha256,
+            "deliveryOwnership": delivery["ownership"],
             "observations": observations[-20:],
         }
 

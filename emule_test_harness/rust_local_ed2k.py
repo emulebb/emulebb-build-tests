@@ -479,43 +479,56 @@ def ed2k_link_with_source(
     return f"{link[:-2]}|sources,{source}|/"
 
 
-def wait_for_transfer_completed(
+def wait_for_download_completed(
     base_url: str,
     api_key: str,
-    transfer_hash: str,
-    profile_dir: Path,
+    download_id: str,
     *,
+    expected_hash: str,
     expected_size: int,
     expected_sha256: str,
+    expected_delivery_path: Path,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Waits until Rust completes a transfer and verifies the stored bytes."""
+    """Require retained terminal completion and exact delivered bytes for one job."""
 
     observations: list[dict[str, object]] = []
-    pieces_path = profile_dir / "transfers" / transfer_hash.lower() / "pieces.bin"
 
     def probe() -> dict[str, object] | None:
-        data = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", api_key)
+        data = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", api_key)
         row = dict(data)
         row["observed_at"] = round(time.time(), 3)
-        row["pieces_file_exists"] = pieces_path.is_file()
-        row["pieces_file_size"] = pieces_path.stat().st_size if pieces_path.is_file() else 0
+        delivery = data.get("delivery")
+        delivered_path = (Path(delivery["path"]) if isinstance(delivery, dict)
+                          and isinstance(delivery.get("path"), str) else None)
+        row["delivered_file_exists"] = delivered_path.is_file() if delivered_path else False
+        row["delivered_file_size"] = delivered_path.stat().st_size if delivered_path and delivered_path.is_file() else 0
         observations.append(row)
         if (
-            data.get("state") == "completed"
-            and int(data.get("completedBytes") or 0) == expected_size
-            and pieces_path.is_file()
-            and pieces_path.stat().st_size == expected_size
-            and file_sha256(pieces_path) == expected_sha256
+            data.get("id") == download_id
+            and data.get("hash") == expected_hash.lower()
+            and data.get("state") == "completed"
+            and type(data.get("completedAt")) is int
+            and data["completedAt"] >= 0
+            and data.get("payloadVerified") is True
+            and data.get("sizeBytes") == expected_size
+            and isinstance(delivery, dict)
+            and delivery.get("state") == "delivered"
+            and delivery.get("ownership") in ("owned", "unowned")
+            and delivered_path is not None
+            and delivered_path.resolve() == expected_delivery_path.resolve()
+            and delivered_path.is_file()
+            and delivered_path.stat().st_size == expected_size
+            and file_sha256(delivered_path) == expected_sha256
         ):
-            return {**row, "observations": observations[-20:]}
+            return {**row, "deliveryOwnership": delivery["ownership"], "observations": observations[-20:]}
         return None
 
     return wait_for(
         probe,
         timeout_seconds=timeout_seconds,
         interval_seconds=1.0,
-        description=f"emulebb-rust transfer {transfer_hash} completion",
+        description=f"emulebb-rust download {download_id} completion",
     )
 
 

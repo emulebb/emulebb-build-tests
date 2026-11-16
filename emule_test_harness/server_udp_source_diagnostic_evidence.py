@@ -359,7 +359,7 @@ def _rest_evidence(
     expected_size: int,
 ) -> dict[str, Any]:
     value = row if isinstance(row, dict) else {}
-    name_field = "displayName" if client == "rust" else "name"
+    name_field = "name"
     sources = _positive_int(value.get("sources"))
     ok = bool(
         str(value.get("hash") or "").casefold() == expected_hash

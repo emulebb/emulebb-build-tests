@@ -268,7 +268,7 @@ def _build(*, source_request_version: int = 1, **overrides):
         "transfer_rows": {
             "rust": {
                 "hash": FILE_HASH,
-                "displayName": FILE_NAME,
+                "name": FILE_NAME,
                 "sizeBytes": FILE_SIZE,
                 "sources": 1,
             },

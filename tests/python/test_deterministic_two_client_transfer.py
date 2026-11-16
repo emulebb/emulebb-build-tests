@@ -1674,7 +1674,7 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
         == 2
     )
     assert 'current_phase = "stop_mfc_for_diagnostics"' in script_text
-    assert "rust_local_ed2k.wait_for_transfer_completed(" in script_text
+    assert "rust_local_ed2k.wait_for_download_completed(" in script_text
 
 
 def test_server_search_variants_share_one_bilateral_neutral_fixture_lane() -> None:
@@ -1738,7 +1738,8 @@ def test_server_tcp_source_uses_isolated_high_id_fixture_and_causal_bilateral_ga
     assert "if len(source_transport_plan) != 1:" in script_text
     assert "expected_transport_mode=source_server_transport_mode" in script_text
     assert '"mode": "source-free-ed2k-link"' in script_text
-    assert script_text.count("wait_for_transfer_sources(") == 5
+    assert script_text.count("wait_for_transfer_sources(") == 3
+    assert script_text.count("wait_for_download_sources(") == 3
     assert "collect_server_source_diagnostics(" in script_text
     assert (
         "server_source_diagnostic_evidence.require_server_source_diagnostic_evidence("
@@ -3487,6 +3488,52 @@ def test_add_transfer_accepts_bulk_items_response_without_contract_gate(
     ]
 
 
+@pytest.mark.parametrize("status", [200, 201])
+def test_add_download_captures_allocated_job_id_from_current_response(monkeypatch, status):
+    module = load_suite_module()
+    file_hash = "9eced47df2edfbd72f29f93447d60b7b"
+    calls = []
+    def request(_base, path, **kwargs):
+        calls.append((path, kwargs["json_body"]))
+        return {"status": status, "raw_json": {"data": {"id": "17", "hash": file_hash},
+                                                "meta": {"apiVersion": "v1"}}}
+    monkeypatch.setattr(module.rest_smoke, "http_request", request)
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    receipt = module.add_download("http://127.0.0.1:4711", "key", "ed2k://|file|a|1|" + file_hash + "|/",
+                                  file_hash)
+    assert receipt["jobId"] == "17"
+    assert calls == [("/api/v1/downloads", {"source": {"type": "ed2k-link",
+                    "link": "ed2k://|file|a|1|" + file_hash + "|/"}, "intent": "started"})]
+
+
+def test_rust_source_wait_uses_captured_job_id_and_paged_source_rows(monkeypatch):
+    module = load_suite_module()
+    file_hash = module.SERVER_SOURCE_FILE_HASH.hex()
+    paths = []
+    source_pages = [[], [{"clientId": "peer-1"}]]
+    def request(_base, path, **_kwargs):
+        paths.append(path)
+        if path.endswith("/sources"):
+            rows = source_pages.pop(0)
+            return {"status": 200, "raw_json": {"data": rows,
+                    "meta": {"apiVersion": "v1", "nextCursor": None, "hasMore": False}}}
+        return {"status": 200, "raw_json": {"data": {"id": "17", "hash": file_hash,
+                "name": module.SERVER_SOURCE_FILE_NAME, "sizeBytes": module.SERVER_SOURCE_FILE_SIZE},
+                "meta": {"apiVersion": "v1"}}}
+    def wait(probe, *_args):
+        assert probe() is None
+        return probe()
+    monkeypatch.setattr(module.rest_smoke, "http_request", request)
+    monkeypatch.setattr(module.live_common, "wait_for", wait)
+    result = module.wait_for_download_sources(
+        "http://127.0.0.1:4711", "key", download_id="17", expected_hash=file_hash,
+        expected_name=module.SERVER_SOURCE_FILE_NAME, expected_size=module.SERVER_SOURCE_FILE_SIZE,
+        timeout_seconds=2.0,
+    )
+    assert result["sources"] == 1
+    assert paths == ["/api/v1/downloads/17", "/api/v1/downloads/17/sources"] * 2
+
+
 def test_install_queued_lowid_source_requires_exact_normalized_receipt(
     monkeypatch,
 ) -> None:
@@ -3807,7 +3854,7 @@ def test_wait_for_completed_file_timeout_carries_diagnostic_observations(
         raise AssertionError("Expected TransferCompletionTimeout")
 
 
-def test_collect_client1_transfer_snapshot_records_rest_and_workspace_files(
+def test_collect_client1_download_snapshot_records_rest_and_workspace_files(
     monkeypatch, tmp_path: Path
 ) -> None:
     module = load_suite_module()
@@ -3829,19 +3876,19 @@ def test_collect_client1_transfer_snapshot_records_rest_and_workspace_files(
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
 
-    snapshot = module.collect_client1_transfer_snapshot(
+    snapshot = module.collect_client1_download_snapshot(
         base_url="http://127.0.0.1:4711",
         api_key="key",
-        transfer_hash="a" * 32,
+        download_id="7",
         incoming_path=incoming_dir / "fixture.bin",
         temp_dir=temp_dir,
         hash_limit_bytes=10,
     )
 
     assert requested_paths == [
-        "/api/v1/transfers/" + "a" * 32,
-        "/api/v1/transfers/" + "a" * 32 + "/details",
-        "/api/v1/transfers/" + "a" * 32 + "/sources",
+        "/api/v1/downloads/7",
+        "/api/v1/downloads/7/details",
+        "/api/v1/downloads/7/sources",
     ]
     assert snapshot["incoming_file"]["exists"] is False
     assert snapshot["temp_dir"][0]["sha256"] == module.file_sha256(part_file)

@@ -1946,16 +1946,16 @@ def snapshot_directory(path: Path, *, hash_limit_bytes: int) -> list[dict[str, o
     return rows
 
 
-def collect_client1_transfer_snapshot(
+def collect_client1_download_snapshot(
     *,
     base_url: str,
     api_key: str,
-    transfer_hash: str,
+    download_id: str,
     incoming_path: Path,
     temp_dir: Path,
     hash_limit_bytes: int,
 ) -> dict[str, object]:
-    """Collects REST and filesystem state for a live client1 transfer."""
+    """Collects REST and filesystem state for one Rust download job."""
 
     snapshot: dict[str, object] = {
         "observed_at": round(time.time(), 3),
@@ -1968,9 +1968,9 @@ def collect_client1_transfer_snapshot(
         "temp_dir": snapshot_directory(temp_dir, hash_limit_bytes=hash_limit_bytes),
     }
     endpoints = {
-        "transfer": f"/api/v1/transfers/{transfer_hash}",
-        "details": f"/api/v1/transfers/{transfer_hash}/details",
-        "sources": f"/api/v1/transfers/{transfer_hash}/sources",
+        "download": f"/api/v1/downloads/{download_id}",
+        "details": f"/api/v1/downloads/{download_id}/details",
+        "sources": f"/api/v1/downloads/{download_id}/sources",
     }
     for name, endpoint in endpoints.items():
         try:
@@ -2532,7 +2532,7 @@ def wait_for_emule_server_connected(
 def add_transfer(
     base_url: str, api_key: str, link: str, transfer_hash: str
 ) -> dict[str, object]:
-    """Queues the exported eD2K link in client1 through REST."""
+    """Queue an eD2K link through the MFC transfer REST surface."""
 
     result = rest_smoke.http_request(
         base_url,
@@ -2561,6 +2561,79 @@ def add_transfer(
     return {"response": summary, "item": item}
 
 
+def add_download(base_url: str, api_key: str, link: str, expected_hash: str) -> dict[str, object]:
+    """Admit one Rust job and retain the allocated ID returned by the daemon."""
+    result = rest_smoke.http_request(
+        base_url, "/api/v1/downloads", method="POST", api_key=api_key,
+        json_body={"source": {"type": "ed2k-link", "link": link}, "intent": "started"},
+        request_timeout_seconds=30.0,
+    )
+    status = result.get("status")
+    if status not in (200, 201):
+        raise AssertionError(rest_smoke.compact_http_result(result))
+    item = response_payload(result, status)
+    job_id = item.get("id") if isinstance(item, dict) else None
+    if (not isinstance(job_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", job_id)
+            or int(job_id) > 9223372036854775807
+            or item.get("hash") != expected_hash.lower()):
+        raise AssertionError(rest_smoke.compact_http_result(result))
+    return {"response": rest_smoke.compact_http_result(result), "item": item, "jobId": job_id}
+
+
+def wait_for_download(base_url: str, api_key: str, *, download_id: str,
+                      expected_hash: str, expected_name: str, expected_size: int,
+                      timeout_seconds: float) -> dict[str, object]:
+    """Require one exact Rust job by its allocated identity."""
+    observations: list[dict[str, object]] = []
+
+    def resolve() -> dict[str, object] | None:
+        result = rest_smoke.http_request(base_url, f"/api/v1/downloads/{download_id}",
+                                         api_key=api_key, request_timeout_seconds=10.0)
+        row = response_payload(result, 200)
+        if not isinstance(row, dict):
+            raise AssertionError(rest_smoke.compact_http_result(result))
+        observations.append({**row, "observed_at": round(time.time(), 3)})
+        if (row.get("id") == download_id and row.get("hash") == expected_hash.lower()
+                and row.get("name") == expected_name and row.get("sizeBytes") == expected_size):
+            return {**row, "observations": observations[-20:]}
+        return None
+
+    return live_common.wait_for(resolve, timeout_seconds, 0.25, f"Rust download {download_id}")
+
+
+def wait_for_download_sources(base_url: str, api_key: str, *, download_id: str,
+                              expected_hash: str, expected_name: str, expected_size: int,
+                              timeout_seconds: float) -> dict[str, object]:
+    """Require an applied source on the exact Rust job and bounded source page."""
+    observations: list[dict[str, object]] = []
+
+    def resolve() -> dict[str, object] | None:
+        job_result = rest_smoke.http_request(base_url, f"/api/v1/downloads/{download_id}",
+                                             api_key=api_key, request_timeout_seconds=10.0)
+        job = response_payload(job_result, 200)
+        if (not isinstance(job, dict) or job.get("id") != download_id
+                or job.get("hash") != expected_hash.lower() or job.get("name") != expected_name
+                or job.get("sizeBytes") != expected_size):
+            return None
+        result = rest_smoke.http_request(base_url, f"/api/v1/downloads/{download_id}/sources",
+                                         api_key=api_key, request_timeout_seconds=10.0)
+        raw = result.get("raw_json")
+        rows = raw.get("data") if isinstance(raw, dict) else None
+        meta = raw.get("meta") if isinstance(raw, dict) else None
+        if (result.get("status") != 200 or not isinstance(rows, list) or not isinstance(meta, dict)
+                or meta.get("apiVersion") != "v1"
+                or meta.get("hasMore") not in (True, False)
+                or (meta["hasMore"] is False and meta.get("nextCursor") is not None)
+                or (meta["hasMore"] is True and not isinstance(meta.get("nextCursor"), str))):
+            raise AssertionError(rest_smoke.compact_http_result(result))
+        observations.append({"sourceCount": len(rows), "observed_at": round(time.time(), 3)})
+        if any(isinstance(row, dict) and row.get("clientId") for row in rows):
+            return {**job, "sources": len(rows), "observations": observations[-20:]}
+        return None
+
+    return live_common.wait_for(resolve, timeout_seconds, 0.25, f"Rust download {download_id} source")
+
+
 def wait_for_transfer(
     base_url: str,
     api_key: str,
@@ -2570,7 +2643,7 @@ def wait_for_transfer(
     expected_size: int,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Waits for one exact queued transfer without requiring discovered sources."""
+    """Wait for one exact MFC transfer without requiring discovered sources."""
 
     observations: list[dict[str, object]] = []
 
@@ -2705,7 +2778,7 @@ def wait_for_transfer_sources(
     expected_size: int,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Waits for one exact transfer to expose at least one applied source."""
+    """Wait for one exact MFC transfer to expose an applied source."""
 
     observations: list[dict[str, object]] = []
 
@@ -3773,6 +3846,8 @@ def main(argv: list[str] | None = None) -> int:
             get_workspace_output_root()
         )
         rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
+        rust_incoming = rust_profile / "incoming"
+        rust_incoming.mkdir(parents=True, exist_ok=True)
         rust_output = paths.source_artifacts_dir / "rust-client.out"
         rust_diagnostics_dir = paths.source_artifacts_dir / "diagnostics" / "rust"
         rust_diagnostics_env = rust_diagnostics_child_env(rust_diagnostics_dir)
@@ -3800,6 +3875,7 @@ def main(argv: list[str] | None = None) -> int:
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,
+            incoming_dir=rust_incoming,
             rest_addr=args.lan_bind_addr,
             rest_port=ports["client1_rest"],
             api_key=args.api_key,
@@ -4457,16 +4533,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             report["checks"][
                 f"rust_server_udp_source_v{udp_source_request_version}_transfer_add"
-            ] = add_transfer(
+            ] = add_download(
                 base_url,
                 args.api_key,
                 source_link,
                 SERVER_SOURCE_FILE_HASH.hex(),
             )
-            source_transfer_rows["rust"] = wait_for_transfer_sources(
+            source_transfer_rows["rust"] = wait_for_download_sources(
                 base_url,
                 args.api_key,
-                transfer_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                download_id=report["checks"][f"rust_server_udp_source_v{udp_source_request_version}_transfer_add"]["jobId"],
+                expected_hash=SERVER_SOURCE_FILE_HASH.hex(),
                 expected_name=SERVER_SOURCE_FILE_NAME,
                 expected_size=SERVER_SOURCE_FILE_SIZE,
                 timeout_seconds=args.server_publish_timeout_seconds,
@@ -4898,20 +4975,23 @@ def main(argv: list[str] | None = None) -> int:
                 ("rust", base_url),
             ):
                 current_phase = f"queue_{client}_relayed_reask_transfer"
-                add_receipt = add_transfer(
-                    client_base_url,
-                    args.api_key,
-                    relayed_link,
-                    RELAYED_REASK_FILE_HASH.hex(),
-                )
-                transfer_row = wait_for_transfer(
-                    client_base_url,
-                    args.api_key,
-                    transfer_hash=RELAYED_REASK_FILE_HASH.hex(),
-                    expected_name=RELAYED_REASK_FILE_NAME,
-                    expected_size=RELAYED_REASK_FILE_SIZE,
-                    timeout_seconds=args.server_publish_timeout_seconds,
-                )
+                if client == "rust":
+                    add_receipt = add_download(client_base_url, args.api_key, relayed_link,
+                                               RELAYED_REASK_FILE_HASH.hex())
+                    transfer_row = wait_for_download(
+                        client_base_url, args.api_key, download_id=add_receipt["jobId"],
+                        expected_hash=RELAYED_REASK_FILE_HASH.hex(), expected_name=RELAYED_REASK_FILE_NAME,
+                        expected_size=RELAYED_REASK_FILE_SIZE,
+                        timeout_seconds=args.server_publish_timeout_seconds,
+                    )
+                else:
+                    add_receipt = add_transfer(client_base_url, args.api_key, relayed_link,
+                                               RELAYED_REASK_FILE_HASH.hex())
+                    transfer_row = wait_for_transfer(
+                        client_base_url, args.api_key, transfer_hash=RELAYED_REASK_FILE_HASH.hex(),
+                        expected_name=RELAYED_REASK_FILE_NAME, expected_size=RELAYED_REASK_FILE_SIZE,
+                        timeout_seconds=args.server_publish_timeout_seconds,
+                    )
                 relayed_transfers[client] = {
                     "add": add_receipt,
                     "transfer": transfer_row,
@@ -5169,16 +5249,17 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.server_publish_timeout_seconds,
             )
             current_phase = "rust_server_source_transfer"
-            report["checks"]["rust_server_source_transfer_add"] = add_transfer(
+            report["checks"]["rust_server_source_transfer_add"] = add_download(
                 base_url,
                 args.api_key,
                 source_link,
                 SERVER_SOURCE_FILE_HASH.hex(),
             )
-            source_transfer_rows["rust"] = wait_for_transfer_sources(
+            source_transfer_rows["rust"] = wait_for_download_sources(
                 base_url,
                 args.api_key,
-                transfer_hash=SERVER_SOURCE_FILE_HASH.hex(),
+                download_id=report["checks"]["rust_server_source_transfer_add"]["jobId"],
+                expected_hash=SERVER_SOURCE_FILE_HASH.hex(),
                 expected_name=SERVER_SOURCE_FILE_NAME,
                 expected_size=SERVER_SOURCE_FILE_SIZE,
                 timeout_seconds=args.server_publish_timeout_seconds,
@@ -5254,25 +5335,18 @@ def main(argv: list[str] | None = None) -> int:
             },
         }
         current_phase = "add_transfer"
-        report["checks"]["client1_transfer_add"] = rust_local_ed2k.request_json(
-            base_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {
-                "link": direct_source_link,
-                "paused": False,
-                "categoryId": 0,
-            },
-        )
+        admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
+        download_id = admission["jobId"]
+        report["checks"]["client1_transfer_add"] = admission
         report["checks"]["client1_transfer_completed_file"] = (
-            rust_local_ed2k.wait_for_transfer_completed(
+            rust_local_ed2k.wait_for_download_completed(
                 base_url,
                 args.api_key,
-                transfer_hash,
-                rust_profile,
+                download_id,
+                expected_hash=transfer_hash,
                 expected_size=int(link_info["size"]),
                 expected_sha256=fixture_sha256,
+                expected_delivery_path=rust_incoming / fixture_file.name,
                 timeout_seconds=args.transfer_completion_timeout_seconds,
             )
         )
@@ -5281,7 +5355,7 @@ def main(argv: list[str] | None = None) -> int:
                 "client1_transfer_completed_file"
             ]
         final_transfer = rest_smoke.http_request(
-            base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key
+            base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(
             final_transfer

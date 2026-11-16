@@ -287,7 +287,8 @@ def test_transfer_payload_is_deterministic(tmp_path) -> None:
     assert (tmp_path / "first.bin").read_bytes() == (tmp_path / "second.bin").read_bytes()
 
 
-def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("ownership", ["owned", "unowned"])
+def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path, ownership) -> None:
     incoming = tmp_path / "incoming"
     incoming.mkdir()
     delivered = incoming / "payload.bin"
@@ -300,7 +301,7 @@ def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
         requests.append((method, path))
         if path == "/api/v1/downloads/7":
             return {"id": "7", "hash": transfer_hash, "state": "completed", "payloadVerified": True,
-                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "owned"}}
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": ownership}}
         return {
             "hash": transfer_hash,
             "complete": True,
@@ -326,6 +327,7 @@ def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
 
     assert report["deliveredPathWithinIncoming"] is True
     assert report["sharedFileRegistered"] is True
+    assert report["deliveryOwnership"] == ownership
     assert requests == [("GET", "/api/v1/downloads/7"), ("GET", f"/api/v1/shared-files/{transfer_hash}")]
     assert str(tmp_path) not in json.dumps(report)
 
@@ -367,6 +369,22 @@ def test_download_delivery_rejects_wrong_or_incomplete_shared_content(
         )
         is None
     )
+
+
+def test_download_delivery_rejects_none_ownership_even_with_matching_bytes(monkeypatch, tmp_path) -> None:
+    delivered = tmp_path / "payload.bin"
+    delivered.write_bytes(b"payload")
+    file_hash = "00112233445566778899aabbccddeeff"
+    def response(_base, _method, path, _key):
+        if path == "/api/v1/downloads/7":
+            return {"id": "7", "hash": file_hash, "state": "completed", "payloadVerified": True,
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "none"}}
+        raise AssertionError("A job without delivery ownership must not reach shared-file proof")
+    monkeypatch.setattr(smoke, "request_json", response)
+    monkeypatch.setattr(smoke, "wait_for", lambda probe, **_kwargs: probe())
+    assert smoke._wait_for_download_delivery("http://127.0.0.1:4711", "7", file_hash,
+                                              incoming=tmp_path, expected_size=7,
+                                              expected_sha256=smoke.file_sha256(delivered)) is None
 
 
 def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> None:

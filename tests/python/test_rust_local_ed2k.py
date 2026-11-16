@@ -486,3 +486,45 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
     assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
     assert calls[2] == ("GET", "/api/v1/shared-files", None)
     assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"
+
+
+@pytest.mark.parametrize("ownership", ["owned", "unowned"])
+def test_download_completion_uses_retained_job_and_actual_delivery_path(monkeypatch, tmp_path: Path,
+                                                                      ownership: str) -> None:
+    delivered = tmp_path / "incoming" / "payload.bin"
+    delivered.parent.mkdir()
+    delivered.write_bytes(b"verified payload")
+    file_hash = "00112233445566778899aabbccddeeff"
+    calls = []
+    def response(_base, method, path, _key):
+        calls.append((method, path))
+        return {"id": "17", "hash": file_hash, "sizeBytes": delivered.stat().st_size,
+                "state": "completed", "completedAt": 123, "payloadVerified": True,
+                "delivery": {"path": str(delivered), "state": "delivered", "ownership": ownership}}
+    monkeypatch.setattr(rust_local_ed2k, "request_json", response)
+    monkeypatch.setattr(rust_local_ed2k, "wait_for", lambda probe, **_kwargs: probe())
+    row = rust_local_ed2k.wait_for_download_completed(
+        "http://127.0.0.1:4711", "key", "17", expected_hash=file_hash,
+        expected_size=delivered.stat().st_size,
+        expected_sha256=rust_local_ed2k.file_sha256(delivered),
+        expected_delivery_path=delivered, timeout_seconds=2.0,
+    )
+    assert row["delivered_file_exists"] is True
+    assert row["delivered_file_size"] == delivered.stat().st_size
+    assert row["deliveryOwnership"] == ownership
+    assert calls == [("GET", "/api/v1/downloads/17")]
+    assert rust_local_ed2k.wait_for_download_completed(
+        "http://127.0.0.1:4711", "key", "17", expected_hash=file_hash,
+        expected_size=delivered.stat().st_size,
+        expected_sha256="0" * 64, expected_delivery_path=delivered,
+        timeout_seconds=2.0,
+    ) is None
+    invalid = response("", "GET", "/api/v1/downloads/17", "key")
+    invalid["delivery"]["ownership"] = "none"
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: invalid)
+    assert rust_local_ed2k.wait_for_download_completed(
+        "http://127.0.0.1:4711", "key", "17", expected_hash=file_hash,
+        expected_size=delivered.stat().st_size,
+        expected_sha256=rust_local_ed2k.file_sha256(delivered),
+        expected_delivery_path=delivered, timeout_seconds=2.0,
+    ) is None
