@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import jsonschema
 import pytest
+import yaml
 
 from emule_test_harness.rust_openapi_responses import (
     load_openapi_document,
@@ -115,7 +117,7 @@ def test_selected_friend_frontdoors_document_current_persistence_errors(selected
     codes = schema["properties"]["error"]["properties"]["code"]["enum"]
     assert {code for code in codes if code.startswith("PERSISTENCE_")} == set(PERSISTENCE_ERROR_STATUSES)
     mutations = [("post", "/friends"), ("delete", "/friends/{userHash}")]
-    for prefix in ("/transfers/{hash}/sources/{clientId}", "/uploads/{clientId}", "/upload-queue/{clientId}"):
+    for prefix in ("/downloads/{id}/sources/{clientId}", "/uploads/{clientId}", "/upload-queue/{clientId}"):
         mutations.extend(("post", f"{prefix}/operations/{operation}")
                          for operation in ("add-friend", "remove-friend"))
     assert len(mutations) == 8
@@ -725,7 +727,7 @@ components:
         type: integer
         minimum: 0
         maximum: 4294967295
-    TransferCategoryFilter:
+    DownloadCategory:
       name: category
       in: query
       required: false
@@ -738,6 +740,10 @@ components:
 
     assert openapi_parameter_metadata_drift(openapi_yaml) == (
         ParameterMetadataDrift(
+            source="components.parameters.DownloadCategory.schema",
+            issue="download parameter must use current job-ID or bounded page shape",
+        ),
+        ParameterMetadataDrift(
             source="components.parameters.Limit.schema",
             issue="limit query parameter range must be 1..1000",
         ),
@@ -748,10 +754,6 @@ components:
         ParameterMetadataDrift(
             source="components.parameters.Offset.schema",
             issue="offset query parameter range must be 0..2147483647",
-        ),
-        ParameterMetadataDrift(
-            source="components.parameters.TransferCategoryFilter.schema",
-            issue="category name parameter must reference CategoryName",
         ),
     )
 
@@ -787,7 +789,7 @@ components:
         minimum: 1
         maximum: 1000
         default: 200
-    TransferCategoryFilter:
+    DownloadCategory:
       name: category
       in: query
       required: false
@@ -1111,62 +1113,21 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
-def test_openapi_parameter_metadata_drift_requires_transfer_state_filter_ref(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  parameters:
-    TransferStateFilter:
-      name: state
-      in: query
-      required: false
-      schema:
-        type: string
-""",
-    )
-
-    assert openapi_parameter_metadata_drift(openapi_yaml) == (
-        ParameterMetadataDrift(
-            source="components.parameters.TransferStateFilter.schema",
-            issue="state query parameter must reference #/components/schemas/TransferState",
-        ),
-    )
-
-
-def test_openapi_parameter_metadata_drift_accepts_transfer_state_filter_ref(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  parameters:
-    TransferStateFilter:
-      name: state
-      in: query
-      required: false
-      schema:
-        $ref: "#/components/schemas/TransferState"
-""",
-    )
-
-    assert openapi_parameter_metadata_drift(openapi_yaml) == ()
-
-
 def test_openapi_parameter_ref_drift_requires_shared_parameter_refs(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
 paths:
-  /transfers/{hash}:
+  /downloads/{id}:
     parameters:
-      - name: hash
+      - name: id
         in: path
         required: true
         schema:
           type: string
     get:
       parameters:
-        - name: state
+        - name: view
           in: query
           required: false
           schema:
@@ -1186,11 +1147,11 @@ components:
 
     assert openapi_parameter_ref_drift(openapi_yaml) == (
         ParameterRefDrift(
-            source="paths./transfers/{hash}.get.parameters[0]",
+            source="paths./downloads/{id}.get.parameters[0]",
             issue="parameter must reference a shared parameter component",
         ),
         ParameterRefDrift(
-            source="paths./transfers/{hash}.parameters[0]",
+            source="paths./downloads/{id}.parameters[0]",
             issue="parameter must reference a shared parameter component",
         ),
     )
@@ -1292,44 +1253,6 @@ components:
             issue="schema component must be an object",
         ),
     )
-
-
-def test_openapi_schema_component_drift_requires_transfer_state_values(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  schemas:
-    TransferState:
-      type: string
-      enum: [downloading, paused, queued, completed, error]
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="TransferState",
-            issue=(
-                "transfer state enum must be downloading, paused, queued, checking, "
-                "completing, completed, error, missingfiles"
-            ),
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_transfer_state_values(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  schemas:
-    TransferState:
-      type: string
-      enum: [downloading, paused, queued, checking, completing, completed, error, missingfiles]
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_requires_search_status_reason(tmp_path: Path) -> None:
@@ -1547,35 +1470,6 @@ components:
       properties:
         maxUploadSlots:
           type: integer
-    TransferPriority:
-      type: string
-      enum: [auto, verylow, low, normal, high, veryhigh]
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [category]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      properties:
-        priority:
-          $ref: "#/components/schemas/TransferPriority"
-        displayName:
-          type: string
-          minLength: 1
-          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
     SharedFilePriority:
       type: string
       enum: [auto, not-published, verylow, low, normal, high, release]
@@ -1604,467 +1498,6 @@ components:
             issue="patch/update schema must reject empty objects with minProperties: 1 or required-field composition",
         ),
     )
-
-
-def test_openapi_schema_component_drift_requires_transfer_rename_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [category]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      minProperties: 1
-      properties:
-        displayName:
-          type: string
-          minLength: 1
-          maxLength: 255
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="TransferPatch.properties.displayName",
-            issue=(
-                "transfer rename pattern must reject trim-empty text, "
-                "Windows-forbidden filename characters, and controls"
-            ),
-        ),
-        SchemaComponentDrift(
-            component="TransferPatch.properties.displayName",
-            issue="transfer rename schema must not claim an unsupported maxLength",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_transfer_rename_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [category]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      minProperties: 1
-      properties:
-        displayName:
-          type: string
-          minLength: 1
-          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
-
-
-def test_openapi_schema_component_drift_requires_transfer_patch_mutation_family_schema(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferPriority:
-      type: string
-      enum: [auto, verylow, low, normal, high, veryhigh]
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [categoryLabel]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      minProperties: 1
-      properties:
-        displayName:
-          type: string
-          minLength: 1
-          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
-        priority:
-          $ref: "#/components/schemas/TransferPriority"
-        category:
-          $ref: "#/components/schemas/NullableCategory"
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="TransferPatch",
-            issue="transfer patch schema must allow exactly one mutation family",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_transfer_patch_mutation_family_schema(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferPriority:
-      type: string
-      enum: [auto, verylow, low, normal, high, veryhigh]
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [category]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      minProperties: 1
-      properties:
-        displayName:
-          type: string
-          minLength: 1
-          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
-        priority:
-          $ref: "#/components/schemas/TransferPriority"
-        category:
-          $ref: "#/components/schemas/NullableCategory"
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
-
-
-def test_openapi_schema_component_drift_requires_transfer_link_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferCreateRequest:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [link]
-          not:
-            required: [links]
-        - required: [links]
-          not:
-            required: [link]
-      properties:
-        link:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          pattern: '^[eE][dD]2[kK]://\S+$'
-        links:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: string
-            minLength: 1
-            maxLength: 2048
-            pattern: '^[eE][dD]2[kK]://\S+$'
-        paused:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="TransferCreateRequest.properties.link",
-            issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
-        ),
-        SchemaComponentDrift(
-            component="TransferCreateRequest.properties.links.items",
-            issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_requires_transfer_create_link_choice(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferCreateRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        link:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        links:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: string
-            minLength: 1
-            maxLength: 2048
-            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        paused:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="TransferCreateRequest",
-            issue="transfer create schema must require exactly one of link or links",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_transfer_create_link_choice(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferCreateRequest:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [link]
-          not:
-            required: [links]
-        - required: [links]
-          not:
-            required: [link]
-      properties:
-        link:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        links:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: string
-            minLength: 1
-            maxLength: 2048
-            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        paused:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
-
-
-def test_openapi_schema_component_drift_requires_paused_boolean_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferCreateRequest:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [link]
-          not:
-            required: [links]
-        - required: [links]
-          not:
-            required: [link]
-      properties:
-        link:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        links:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: string
-            minLength: 1
-            maxLength: 2048
-            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        paused:
-          type: string
-    SearchResultDownloadRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        paused:
-          type: string
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="SearchResultDownloadRequest.properties.paused",
-            issue="paused type must be boolean",
-        ),
-        SchemaComponentDrift(
-            component="TransferCreateRequest.properties.paused",
-            issue="paused type must be boolean",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_paused_boolean_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferCreateRequest:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [link]
-          not:
-            required: [links]
-        - required: [links]
-          not:
-            required: [link]
-      properties:
-        link:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        links:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: string
-            minLength: 1
-            maxLength: 2048
-            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        paused:
-          type: boolean
-    SearchResultDownloadRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        paused:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
-
-
-def test_openapi_schema_component_drift_accepts_transfer_link_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    TransferCreateRequest:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [link]
-          not:
-            required: [links]
-        - required: [links]
-          not:
-            required: [link]
-      properties:
-        link:
-          type: string
-          minLength: 1
-          maxLength: 2048
-          pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        links:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: string
-            minLength: 1
-            maxLength: 2048
-            pattern: '^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$'
-        paused:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_requires_search_query_constraints(
@@ -2656,39 +2089,6 @@ def test_openapi_schema_component_drift_requires_priority_constraints(
         r"""
 components:
   schemas:
-    TransferPriority:
-      type: string
-      enum: [auto, verylow, low, normal, high]
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [category]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      minProperties: 1
-      properties:
-        displayName:
-          type: string
-          minLength: 1
-          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
-        priority:
-          type: string
-          enum: [low, normal, high]
-        category:
-          $ref: "#/components/schemas/NullableCategory"
     SharedFilePriority:
       type: string
       enum: [auto, verylow, low, normal, high]
@@ -2767,14 +2167,6 @@ components:
             component="SharedFilePriority",
             issue="shared file priority enum must be auto, not-published, verylow, low, normal, high, release",
         ),
-        SchemaComponentDrift(
-            component="TransferPatch.properties.priority",
-            issue="transfer patch priority must reference #/components/schemas/TransferPriority",
-        ),
-        SchemaComponentDrift(
-            component="TransferPriority",
-            issue="transfer priority enum must be auto, verylow, low, normal, high, veryhigh",
-        ),
     )
 
 
@@ -2786,38 +2178,6 @@ def test_openapi_schema_component_drift_accepts_priority_constraints(
         r"""
 components:
   schemas:
-    TransferPriority:
-      type: string
-      enum: [auto, verylow, low, normal, high, veryhigh]
-    TransferPatch:
-      type: object
-      additionalProperties: false
-      oneOf:
-        - required: [priority]
-          not:
-            anyOf:
-              - required: [displayName]
-              - required: [category]
-        - required: [displayName]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [category]
-        - required: [category]
-          not:
-            anyOf:
-              - required: [priority]
-              - required: [displayName]
-      minProperties: 1
-      properties:
-        displayName:
-          type: string
-          minLength: 1
-          pattern: '^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
-        priority:
-          $ref: "#/components/schemas/TransferPriority"
-        category:
-          $ref: "#/components/schemas/NullableCategory"
     SharedFilePriority:
       type: string
       enum: [auto, not-published, verylow, low, normal, high, release]
@@ -3505,7 +2865,7 @@ components:
 
 
 def test_nullable_category_ref_accepts_null_default_but_rejects_shape_changes() -> None:
-    component = "TransferCreateRequest.properties.category"
+    component = "DownloadCreateRequest.properties.category"
     reference = {"$ref": "#/components/schemas/NullableCategory"}
     for valid in (reference, {**reference, "default": None},
                   {**reference, "description": "Saved name or null", "default": None}):
@@ -3519,6 +2879,82 @@ def test_nullable_category_ref_accepts_null_default_but_rejects_shape_changes() 
         assert drift == [SchemaComponentDrift(
             component=component, issue="category must reference NullableCategory",
         )]
+
+
+def test_selected_download_shapes_use_job_ids_nullable_metadata_and_per_id_results(selected_rust_openapi) -> None:
+    openapi, document = selected_rust_openapi
+    assert not [drift for drift in openapi_schema_component_drift(openapi)
+                if drift.component.startswith("Download")]
+    for action in ("start", "stop", "verify", "remove"):
+        operation = document["paths"][f"/downloads/{action}"]["post"]
+        assert {code for code in operation["responses"] if code.isdigit() and code.startswith("2")} == {"207"}
+        component = "DownloadRemoveRequest" if action == "remove" else "DownloadActionRequest"
+        assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{component}",
+        }
+    identity = openapi_schema_component(document, "DownloadId")
+    for valid in ("1", "9223372036854775807"):
+        validate_openapi_schema(document, identity, valid)
+    for invalid in ("0", "01", "1\n", 1, None, "1" * 20):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, identity, invalid)
+
+    create = openapi_schema_component(document, "DownloadCreateRequest")
+    validate_openapi_schema(document, create, {
+        "source": {"type": "content", "hash": "a" * 32, "name": "Unknown size", "sizeBytes": None},
+        "category": None, "intent": "stopped", "redownload": True,
+    })
+    link = "ed2k://|file|current.bin|1|" + "a" * 32 + "|/"
+    validate_openapi_schema(document, create, {"source": {"type": "ed2k-link", "link": link}})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, create, {"source": {"type": "ed2k-link", "link": link + "\n"}})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, create, {"source": {"type": "content", "name": "Missing hash"}})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, create, {"source": {"type": "unknown", "hash": "a" * 32,
+                                                              "name": "Unknown source"}})
+    patch = openapi_schema_component(document, "DownloadPatch")
+    validate_openapi_schema(document, patch, {"sizeBytes": 1024})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, patch, {"sizeBytes": None})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, patch, {"unexpectedField": "value"})
+
+    summary = openapi_schema_component(document, "DownloadSummary")
+    validate_openapi_schema(document, summary, {
+        "id": "1", "hash": "a" * 32, "name": "Unknown size", "category": None,
+        "sizeBytes": None, "progress": None, "intent": "stopped", "state": "waiting-metadata",
+        "createdAt": 1, "updatedAt": 1, "completedAt": None,
+    })
+    batch = openapi_schema_component(document, "DownloadBatchItem")
+    validate_openapi_schema(document, batch, {"id": "1", "status": "accepted", "httpStatus": 202})
+    validate_openapi_schema(document, batch, {"id": "2", "status": "failed", "httpStatus": 404,
+                                              "error": {"code": "NOT_FOUND", "message": "Missing", "details": {}}})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, batch, {"id": "2", "status": "failed", "httpStatus": 200})
+    observation = openapi_schema_component(document, "DownloadFileNameObservation")
+    reported = {"rawName": "raw", "normalizedName": "normalized", "origin": "peer",
+                "serverEndpoint": None, "observedAt": 1}
+    validate_openapi_schema(document, observation, reported)
+    for field, size in (("rawName", 65_537), ("normalizedName", 4_097)):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, observation, {**reported, field: "a" * size})
+
+
+def test_download_schema_drift_reports_missing_current_properties(selected_rust_openapi, tmp_path: Path) -> None:
+    _, document = selected_rust_openapi
+    damaged = deepcopy(document)
+    schemas = damaged["components"]["schemas"]
+    for component, field in (("DownloadSummary", "hash"),
+                             ("Ed2kLinkDownloadSource", "link"),
+                             ("DownloadPageMeta", "nextCursor"),
+                             ("DownloadBatchItem", "id")):
+        del schemas[component]["properties"][field]
+    path = tmp_path / "REST-API-OPENAPI.yaml"
+    path.write_text(yaml.safe_dump(damaged, sort_keys=False), encoding="utf-8")
+    components = {drift.component for drift in openapi_schema_component_drift(path)}
+    assert {"DownloadSummary", "Ed2kLinkDownloadSource", "DownloadPageMeta",
+            "DownloadBatchItem"} <= components
 
 
 def test_category_name_and_response_schema_match_current_contract(tmp_path: Path) -> None:
@@ -3794,152 +3230,6 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
-def test_openapi_schema_component_drift_requires_transfer_event_variants(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  responses:
-    EventStreamResponse:
-      description: Event stream.
-  schemas:
-    TransferEvent:
-      oneOf:
-        - $ref: "#/components/schemas/TransferAddedEvent"
-        - $ref: "#/components/schemas/WrongUpdatedEvent"
-        - $ref: "#/components/schemas/TransferRemovedEvent"
-        - $ref: "#/components/schemas/TransferSyncResetEvent"
-      discriminator:
-        propertyName: event
-        mapping:
-          transfer.added: "#/components/schemas/TransferAddedEvent"
-    TransferAddedEvent:
-      type: object
-      additionalProperties: true
-      required: [id, type]
-      properties:
-        type:
-          type: string
-          enum: [transfer.added, transfer.updated]
-    TransferUpdatedEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type, transfer]
-      properties:
-        type:
-          type: string
-          enum: [transfer.updated]
-    TransferRemovedEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type, hash]
-      properties:
-        type:
-          type: string
-          enum: [transfer.removed]
-    TransferSyncResetEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type]
-      properties:
-        type:
-          type: string
-          enum: [sync.reset]
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="TransferAddedEvent",
-            issue="required fields must be ['id', 'transfer', 'type']",
-        ),
-        SchemaComponentDrift(
-            component="TransferAddedEvent",
-            issue="transfer event variant must set additionalProperties: false",
-        ),
-        SchemaComponentDrift(
-            component="TransferAddedEvent",
-            issue="type enum must be [transfer.added]",
-        ),
-        SchemaComponentDrift(
-            component="TransferEvent",
-            issue="discriminator mapping must cover every transfer event variant",
-        ),
-        SchemaComponentDrift(
-            component="TransferEvent",
-            issue="discriminator propertyName must be type",
-        ),
-        SchemaComponentDrift(
-            component="TransferEvent",
-            issue="must oneOf the transfer event variant schemas in event-name order",
-        ),
-        SchemaComponentDrift(
-            component="TransferSyncResetEvent",
-            issue="required fields must be ['id', 'reason', 'type']",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_transfer_event_variants(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  responses:
-    EventStreamResponse:
-      description: Event stream.
-  schemas:
-    TransferEvent:
-      oneOf:
-        - $ref: "#/components/schemas/TransferAddedEvent"
-        - $ref: "#/components/schemas/TransferUpdatedEvent"
-        - $ref: "#/components/schemas/TransferRemovedEvent"
-        - $ref: "#/components/schemas/TransferSyncResetEvent"
-      discriminator:
-        propertyName: type
-        mapping:
-          transfer.added: "#/components/schemas/TransferAddedEvent"
-          transfer.updated: "#/components/schemas/TransferUpdatedEvent"
-          transfer.removed: "#/components/schemas/TransferRemovedEvent"
-          sync.reset: "#/components/schemas/TransferSyncResetEvent"
-    TransferAddedEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type, transfer]
-      properties:
-        type:
-          type: string
-          enum: [transfer.added]
-    TransferUpdatedEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type, transfer]
-      properties:
-        type:
-          type: string
-          enum: [transfer.updated]
-    TransferRemovedEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type, hash]
-      properties:
-        type:
-          type: string
-          enum: [transfer.removed]
-    TransferSyncResetEvent:
-      type: object
-      additionalProperties: false
-      required: [id, type, reason]
-      properties:
-        type:
-          type: string
-          enum: [sync.reset]
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
-
-
 def test_openapi_confirmation_contract_drift_requires_true_sentinels(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
@@ -4005,14 +3295,12 @@ def test_openapi_query_parameter_inventory_resolves_refs_and_inline_params(tmp_p
         tmp_path / "REST-API-OPENAPI.yaml",
         """
 paths:
-  /transfers:
+  /downloads:
     get:
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - name: state
+        - name: view
           in: query
-        - name: hash
-          in: path
       responses: {}
 components:
   parameters:
@@ -4023,7 +3311,7 @@ components:
     )
 
     assert openapi_query_parameter_inventory(openapi_yaml) == {
-        Route("GET", "/transfers"): ("limit", "state"),
+        Route("GET", "/downloads"): ("limit", "view"),
     }
 
 
@@ -4032,9 +3320,9 @@ def test_openapi_path_parameter_drift_requires_template_parameter_docs(tmp_path:
         tmp_path / "REST-API-OPENAPI.yaml",
         """
 paths:
-  /transfers/{hash}/sources/{clientId}:
+  /downloads/{id}/sources/{clientId}:
     parameters:
-      - $ref: "#/components/parameters/FileHash"
+      - $ref: "#/components/parameters/DownloadId"
       - name: extra
         in: path
         required: true
@@ -4045,8 +3333,8 @@ paths:
       responses: {}
 components:
   parameters:
-    FileHash:
-      name: hash
+    DownloadId:
+      name: id
       in: path
       required: true
 """,
@@ -4055,16 +3343,16 @@ components:
     assert set(openapi_path_parameter_drift(openapi_yaml)) == {
         PathParameterDrift(
             method="GET",
-            path="/transfers/{hash}/sources/{clientId}",
-            template_parameters=("clientId", "hash"),
-            documented_path_parameters=("clientId", "extra", "hash"),
+            path="/downloads/{id}/sources/{clientId}",
+            template_parameters=("clientId", "id"),
+            documented_path_parameters=("clientId", "extra", "id"),
             issue="path template parameters must match documented path parameters",
         ),
         PathParameterDrift(
             method="GET",
-            path="/transfers/{hash}/sources/{clientId}",
-            template_parameters=("clientId", "hash"),
-            documented_path_parameters=("clientId", "extra", "hash"),
+            path="/downloads/{id}/sources/{clientId}",
+            template_parameters=("clientId", "id"),
+            documented_path_parameters=("clientId", "extra", "id"),
             issue="path parameter 'clientId' must be required",
         ),
     }
@@ -4078,8 +3366,8 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
             .route("/api/v1/app", get(app))
             .route("/api/v1/snapshot", get(snapshot))
             .route("/api/v1/upload-queue", get(upload_queue))
-            .route("/api/v1/searches/{searchId}", get(search))
-            .route("/api/v1/transfers/{hash}/files", delete(transfer_delete_files));
+            .route("/api/v1/downloads", get(downloads))
+            .route("/api/v1/searches/{searchId}", get(search));
         ''',
     )
     route_metadata_rs = write(
@@ -4088,7 +3376,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
         fn route_query_fields(method: &str, path: &str) -> Option<&'static [&'static str]> {
             const NONE: &[&str] = &[];
             const SNAPSHOT: &[&str] = &["limit"];
-            const CONFIRM: &[&str] = &["confirm"];
+            const DOWNLOADS: &[&str] = &["view", "category", "cursor", "limit"];
             const SEARCH: &[&str] = &["offset", "limit", "includeEvidence", "exactTotal"];
             const UPLOAD_QUEUE: &[&str] = &["offset", "limit", "includeScoreBreakdown"];
             match (method, path) {
@@ -4098,6 +3386,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
                     _ => NONE,
                 }),
                 ("GET", "/api/v1/snapshot") => Some(SNAPSHOT),
+                ("GET", "/api/v1/downloads") => Some(DOWNLOADS),
                 _ => route_query_fields_for_parameterized(method, path),
             }
         }
@@ -4107,12 +3396,10 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
             path: &str,
         ) -> Option<&'static [&'static str]> {
             const NONE: &[&str] = &[];
-            const CONFIRM: &[&str] = &["confirm"];
             const SEARCH: &[&str] = &["offset", "limit", "includeEvidence", "exactTotal"];
             let segments = path.strip_prefix("/api/v1/")?.split('/').collect::<Vec<_>>();
             match (method, segments.as_slice()) {
                 ("GET", ["searches", _]) => Some(SEARCH),
-                ("DELETE", ["transfers", _, "files"]) => Some(CONFIRM),
                 _ => Some(NONE),
             }
         }
@@ -4123,8 +3410,8 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
         Route("GET", "/app"): (),
         Route("GET", "/snapshot"): ("limit",),
         Route("GET", "/upload-queue"): ("includeScoreBreakdown", "limit", "offset"),
+        Route("GET", "/downloads"): ("category", "cursor", "limit", "view"),
         Route("GET", "/searches/{searchId}"): ("exactTotal", "includeEvidence", "limit", "offset"),
-        Route("DELETE", "/transfers/{hash}/files"): ("confirm",),
     }
 
 
@@ -4178,27 +3465,28 @@ def test_openapi_body_field_inventory_reads_ref_schema_properties(tmp_path: Path
         tmp_path / "REST-API-OPENAPI.yaml",
         """
 paths:
-  /transfers:
+  /downloads:
     post:
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TransferCreateRequest"
+              $ref: "#/components/schemas/SampleRequest"
       responses: {}
 components:
   schemas:
-    TransferCreateRequest:
+    SampleRequest:
       type: object
       properties:
-        link: { type: string }
-        links: { type: array }
-        paused: { type: boolean }
+        source: { type: object }
+        category: { type: string }
+        intent: { type: string }
+        redownload: { type: boolean }
 """,
     )
 
     assert openapi_body_field_inventory(openapi_yaml) == {
-        Route("POST", "/transfers"): ("link", "links", "paused"),
+        Route("POST", "/downloads"): ("category", "intent", "redownload", "source"),
     }
 
 
@@ -4215,7 +3503,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TransferCreateRequest"
+              $ref: "#/components/schemas/SampleRequest"
       responses: {}
   /extra-media:
     post:
@@ -4224,7 +3512,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TransferCreateRequest"
+              $ref: "#/components/schemas/SampleRequest"
           text/plain:
             schema: { type: string }
       responses: {}
@@ -4266,7 +3554,7 @@ paths:
       responses: {}
 components:
   schemas:
-    TransferCreateRequest:
+    SampleRequest:
       type: object
       additionalProperties: false
     SearchResultDownloadRequest:
@@ -4802,8 +4090,9 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
         '''
         Router::new()
             .route("/api/v1/app", get(app))
-            .route("/api/v1/transfers", post(create_transfer))
-            .route("/api/v1/transfers/{hash}", patch(update_transfer))
+            .route("/api/v1/downloads", post(create_download))
+            .route("/api/v1/downloads/{id}", patch(update_download))
+            .route("/api/v1/downloads/start", post(start_downloads))
             .route("/api/v1/shared-directories/ignores/defaults/{ruleKey}", patch(update_ignore))
             .route("/api/v1/servers/operations/import-met-url", post(import_servers))
             .route("/api/v1/searches/{searchId}/results/{hash}/operations/download", post(download));
@@ -4813,20 +4102,24 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
         tmp_path / "route_body_metadata.rs",
         '''
         fn route_body_fields(method: &str, path: &str) -> Option<&'static [&'static str]> {
-            const TRANSFER_ADD: &[&str] = &["link", "links", "category", "paused"];
-            const TRANSFER_PATCH: &[&str] = &["displayName", "priority", "category"];
-            const SEARCH_RESULT_DOWNLOAD: &[&str] = &["category", "paused"];
+            const DOWNLOAD_CREATE: &[&str] = &["source", "category", "intent", "redownload"];
+            const DOWNLOAD_PATCH: &[&str] = &["name", "category", "sizeBytes"];
+            const DOWNLOAD_ACTION: &[&str] = &["ids"];
+            const SEARCH_RESULT_DOWNLOAD: &[&str] = &["category", "intent", "redownload"];
             const SHARED_FILE_IGNORE_RULE: &[&str] = &["enabled"];
             const URL_IMPORT: &[&str] = &["url"];
-            if method == "POST" && path == "/api/v1/transfers" {
-                return Some(TRANSFER_ADD);
+            if method == "POST" && path == "/api/v1/downloads" {
+                return Some(DOWNLOAD_CREATE);
+            }
+            if method == "POST" && path == "/api/v1/downloads/start" {
+                return Some(DOWNLOAD_ACTION);
             }
             if uses_url_import_body(method, path) {
                 return Some(URL_IMPORT);
             }
             let segments = api_segments(path)?;
             match (method, segments.as_slice()) {
-                ("PATCH", ["transfers", _]) => Some(TRANSFER_PATCH),
+                ("PATCH", ["downloads", _]) => Some(DOWNLOAD_PATCH),
                 ("PATCH", ["shared-directories", "ignores", "defaults", _]) => {
                     Some(SHARED_FILE_IGNORE_RULE)
                 }
@@ -4849,16 +4142,14 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
     assert rust_body_field_inventory(route_body_metadata_rs, routes_rs) == {
         Route("GET", "/app"): (),
         Route("PATCH", "/shared-directories/ignores/defaults/{ruleKey}"): ("enabled",),
-        Route("POST", "/transfers"): ("category", "link", "links", "paused"),
-        Route("PATCH", "/transfers/{hash}"): (
-            "category",
-            "displayName",
-            "priority",
-        ),
+        Route("POST", "/downloads"): ("category", "intent", "redownload", "source"),
+        Route("PATCH", "/downloads/{id}"): ("category", "name", "sizeBytes"),
+        Route("POST", "/downloads/start"): ("ids",),
         Route("POST", "/servers/operations/import-met-url"): ("url",),
         Route("POST", "/searches/{searchId}/results/{hash}/operations/download"): (
             "category",
-            "paused",
+            "intent",
+            "redownload",
         ),
     }
 
@@ -4866,7 +4157,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
 def test_compare_route_contract_reports_body_field_drift(tmp_path: Path) -> None:
     routes_rs = write(
         tmp_path / "routes.rs",
-        'Router::new().route("/api/v1/transfers", post(create_transfer));',
+        'Router::new().route("/api/v1/downloads", post(create_download));',
     )
     route_metadata_rs = write(
         tmp_path / "route_metadata.rs",
@@ -4876,9 +4167,9 @@ def test_compare_route_contract_reports_body_field_drift(tmp_path: Path) -> None
         tmp_path / "route_body_metadata.rs",
         '''
         fn route_body_fields(method: &str, path: &str) -> Option<&'static [&'static str]> {
-            const TRANSFER_ADD: &[&str] = &["link"];
-            if method == "POST" && path == "/api/v1/transfers" {
-                return Some(TRANSFER_ADD);
+            const DOWNLOAD_CREATE: &[&str] = &["source"];
+            if method == "POST" && path == "/api/v1/downloads" {
+                return Some(DOWNLOAD_CREATE);
             }
             None
         }
@@ -4888,7 +4179,7 @@ def test_compare_route_contract_reports_body_field_drift(tmp_path: Path) -> None
         tmp_path / "REST-API-OPENAPI.yaml",
         """
 paths:
-  /transfers:
+  /downloads:
     post:
       requestBody:
         content:
@@ -4896,8 +4187,8 @@ paths:
             schema:
               type: object
               properties:
-                link: { type: string }
-                paused: { type: boolean }
+                source: { type: object }
+                category: { type: string }
       responses: {}
 """,
     )
@@ -4906,8 +4197,8 @@ paths:
 
     assert report.body_field_drift == (
         BodyFieldDrift(
-            route=Route("POST", "/transfers"),
-            rust_body_fields=("link",),
-            openapi_body_fields=("link", "paused"),
+            route=Route("POST", "/downloads"),
+            rust_body_fields=("source",),
+            openapi_body_fields=("category", "source"),
         ),
     )

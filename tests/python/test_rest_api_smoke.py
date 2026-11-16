@@ -56,6 +56,42 @@ def test_mfc_rest_smoke_keeps_existing_server_preference_owner() -> None:
     }
 
 
+def test_openapi_operation_loader_accepts_valid_yaml_styles(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    source = tmp_path / "REST-API-OPENAPI.yaml"
+    source.write_text("""
+openapi: 3.1.0
+paths:
+  /downloads/start:
+    post:
+      tags:
+        - Downloads
+      operationId: startDownloads
+      requestBody:
+        required: true
+      responses:
+        '207':
+          $ref: '#/components/responses/DownloadBatchResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+  /app:
+    get:
+      tags: [App]
+      operationId: getApp
+      responses:
+        "200":
+          $ref: "#/components/responses/AppResponse"
+""", encoding="utf-8")
+    assert module.load_openapi_operations(source) == [
+        {"operationId": "startDownloads", "method": "POST", "openapiPath": "/downloads/start",
+         "tag": "Downloads", "hasRequestBody": True, "requestBodyRequired": True,
+         "successResponseStatuses": ["207"], "successResponseRefs": ["DownloadBatchResponse"]},
+        {"operationId": "getApp", "method": "GET", "openapiPath": "/app",
+         "tag": "App", "hasRequestBody": False, "requestBodyRequired": False,
+         "successResponseStatuses": ["200"], "successResponseRefs": ["AppResponse"]},
+    ]
+
+
 def test_nat_backend_order_accepts_upnp_first() -> None:
     module = load_rest_api_smoke_module()
 

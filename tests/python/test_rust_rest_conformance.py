@@ -213,8 +213,33 @@ def test_rust_category_contract_uses_name_paths_and_nullable_download_body() -> 
     assert module.assert_contract_routes_match_openapi()["ok"] is True
     assert module.get_contract_route_body("patchCategory") == {"comment": "REST contract"}
     assert module.get_contract_route_body("downloadSearchResult") == {
-        "paused": True, "category": None,
+        "intent": "stopped", "category": None,
     }
+
+
+def test_rust_download_path_uses_public_job_id() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    path = module.concrete_contract_path("/downloads/{id}/details", "getDownloadDetails")
+    assert path == "/api/v1/downloads/9223372036854775807/details"
+    assert module.normalize_contract_path_for_openapi(path) == "/downloads/{id}/details"
+
+
+def test_rust_download_contract_uses_explicit_id_action_bodies() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
+    routes = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+    assert routes["getDownload"]["path"] == "/api/v1/downloads/9223372036854775807"
+    assert routes["startDownloads"]["successResponseStatuses"] == ["207"]
+    missing = rust_rest_conformance.RUST_MISSING_DOWNLOAD_ID
+    assert module.get_contract_route_body("createDownload") == {}
+    assert module.get_contract_route_body("patchDownload") == {"category": None}
+    for action in ("startDownloads", "stopDownloads", "verifyDownloads"):
+        assert module.get_contract_route_body(action) == {"ids": [missing]}
+    assert module.get_contract_route_body("removeDownloads") == {
+        "ids": [missing], "deleteData": False,
+    }
+    assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES["getDownload"] == (404,)
 
 
 def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
@@ -253,14 +278,20 @@ def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
         assert routes_by_operation[operation_id]["safety"] == "unsafe"
 
 
-def test_rust_openapi_transfer_schema_includes_delivery_fields() -> None:
-    module = rust_rest_conformance.load_rest_smoke_module()
-    transfer_properties = module.load_openapi_document()["components"]["schemas"][
-        "Transfer"
-    ]["properties"]
-
-    assert transfer_properties["deliveredPath"]["type"] == ["string", "null"]
-    assert transfer_properties["inIncoming"] == {"type": "boolean"}
+def test_rust_openapi_download_schema_separates_job_and_delivery_identity() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
+    schemas = module.load_openapi_document()["components"]["schemas"]
+    download = schemas["Download"]
+    assert download["properties"]["id"] == {"$ref": "#/components/schemas/DownloadId"}
+    assert download["properties"]["hash"]["pattern"] == "^[0-9a-f]{32}$"
+    assert download["properties"]["hash"]["minLength"] == 32
+    assert download["properties"]["hash"]["maxLength"] == 32
+    assert download["properties"]["delivery"]["oneOf"] == [
+        {"$ref": "#/components/schemas/DownloadDelivery"}, {"type": "null"},
+    ]
+    assert "payloadVerified" in download["required"]
 
 
 def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -> None:
@@ -336,15 +367,17 @@ def test_rust_openapi_documents_all_supported_nat_backends() -> None:
         ]
 
 
-def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> None:
-    module = rust_rest_conformance.load_rest_smoke_module()
+def test_rust_openapi_diagnostics_documents_download_event_runtime_metrics() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
     schemas = module.load_openapi_document()["components"]["schemas"]
 
     assert "transferEvents" in schemas["RuntimeDiagnostics"]["required"]
     assert schemas["RuntimeDiagnostics"]["properties"]["transferEvents"] == {
-        "$ref": "#/components/schemas/TransferEventRuntimeDiagnostics"
+        "$ref": "#/components/schemas/DownloadEventRuntimeDiagnostics"
     }
-    assert schemas["TransferEventRuntimeDiagnostics"]["required"] == [
+    assert schemas["DownloadEventRuntimeDiagnostics"]["required"] == [
         "enabled",
         "stream",
         "channelCapacity",
@@ -354,10 +387,10 @@ def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> 
         "nextEventId",
         "resumeBehavior",
     ]
-    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["stream"][
+    assert schemas["DownloadEventRuntimeDiagnostics"]["properties"]["stream"][
         "enum"
     ] == ["sse"]
-    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["resumeBehavior"][
+    assert schemas["DownloadEventRuntimeDiagnostics"]["properties"]["resumeBehavior"][
         "enum"
     ] == ["reset"]
     for field_name in (
@@ -367,13 +400,13 @@ def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> 
         "latestEventId",
     ):
         assert (
-            schemas["TransferEventRuntimeDiagnostics"]["properties"][field_name][
+            schemas["DownloadEventRuntimeDiagnostics"]["properties"][field_name][
                 "minimum"
             ]
             == 0
         )
     assert (
-        schemas["TransferEventRuntimeDiagnostics"]["properties"]["nextEventId"][
+        schemas["DownloadEventRuntimeDiagnostics"]["properties"]["nextEventId"][
             "minimum"
         ]
         == 1
@@ -488,16 +521,16 @@ def test_run_response_conformance_reports_event_stream_failure() -> None:
     }
 
 
-def write_transfer_event_openapi(path: Path) -> Path:
+def write_download_event_openapi(path: Path) -> Path:
     path.write_text(
         """
 openapi: 3.1.0
 components:
   schemas:
-    TransferEvent:
+    DownloadEvent:
       oneOf:
-        - $ref: "#/components/schemas/TransferSyncResetEvent"
-    TransferSyncResetEvent:
+        - $ref: "#/components/schemas/DownloadSyncResetEvent"
+    DownloadSyncResetEvent:
       type: object
       additionalProperties: false
       required: [id, type, reason]
@@ -518,7 +551,7 @@ components:
 
 def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -> None:
     requests = []
-    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    openapi_yaml = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(request, *, timeout: float):
         requests.append((request, timeout))
@@ -550,7 +583,7 @@ def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -
             "X-Contract-Version": "2.0.0",
             "X-Accel-Buffering": "no",
         },
-        "payloadSchema": "TransferEvent",
+        "payloadSchema": "DownloadEvent",
     }
     request, timeout = requests[0]
     assert request.full_url == "http://127.0.0.1:4711/api/v1/events"
@@ -578,7 +611,7 @@ def test_run_event_stream_conformance_rejects_api_root_base_url() -> None:
 def test_run_event_stream_conformance_fails_without_stream_headers(
     tmp_path: Path,
 ) -> None:
-    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    openapi_yaml = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(_request, *, timeout: float):
         assert timeout == 2.0
@@ -615,7 +648,7 @@ def test_run_event_stream_conformance_fails_without_stream_headers(
 def test_run_event_stream_conformance_fails_on_schema_invalid_payload(
     tmp_path: Path,
 ) -> None:
-    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    openapi_yaml = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(_request, *, timeout: float):
         assert timeout == 2.0

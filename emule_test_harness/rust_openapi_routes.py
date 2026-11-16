@@ -56,41 +56,25 @@ QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
     "IncludeEvidence": "includeEvidence",
     "ExactTotal": "exactTotal",
 }
-TRANSFER_EVENT_COMPONENT = "TransferEvent"
-TRANSFER_EVENT_VARIANTS = {
-    "transfer.added": "TransferAddedEvent",
-    "transfer.updated": "TransferUpdatedEvent",
-    "transfer.removed": "TransferRemovedEvent",
-    "sync.reset": "TransferSyncResetEvent",
+DOWNLOAD_EVENT_COMPONENT = "DownloadEvent"
+DOWNLOAD_EVENT_VARIANTS = {
+    "download.changed": "DownloadChangedEvent",
+    "download.removed": "DownloadRemovedEvent",
+    "sync.reset": "DownloadSyncResetEvent",
 }
-TRANSFER_EVENT_REQUIRED_FIELDS = {
-    "TransferAddedEvent": ("id", "transfer", "type"),
-    "TransferUpdatedEvent": ("id", "transfer", "type"),
-    "TransferRemovedEvent": ("hash", "id", "type"),
-    "TransferSyncResetEvent": ("id", "reason", "type"),
+DOWNLOAD_EVENT_REQUIRED_FIELDS = {
+    "DownloadChangedEvent": ("downloadId", "id", "type"),
+    "DownloadRemovedEvent": ("downloadId", "id", "type"),
+    "DownloadSyncResetEvent": ("id", "reason", "type"),
 }
-TRANSFER_STATE_COMPONENT = "TransferState"
-TRANSFER_STATE_VALUES = (
-    "downloading",
-    "paused",
-    "queued",
-    "checking",
-    "completing",
-    "completed",
-    "error",
-    "missingfiles",
-)
-TRANSFER_CREATE_REQUEST_COMPONENT = "TransferCreateRequest"
-TRANSFER_ADD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+$"
-TRANSFER_PRIORITY_COMPONENT = "TransferPriority"
-TRANSFER_PRIORITY_VALUES = ("auto", "verylow", "low", "normal", "high", "veryhigh")
-TRANSFER_PATCH_COMPONENT = "TransferPatch"
-TRANSFER_PATCH_MUTATION_FAMILIES = (
-    "priority",
-    "displayName",
-    "category",
-)
-TRANSFER_RENAME_PATTERN = r'^(?=.*\S)[^<>:"/\\|?*\x00-\x1F\x7F-\x9F]*$'
+DOWNLOAD_ID_COMPONENT = "DownloadId"
+DOWNLOAD_ID_PATTERN = r"^[1-9][0-9]{0,18}(?![\s\S])"
+DOWNLOAD_STATE_COMPONENT = "DownloadState"
+DOWNLOAD_STATE_VALUES = ("queued", "waiting-metadata", "downloading", "stopping", "stopped",
+                         "verifying", "delivering", "completed", "removing", "failed")
+DOWNLOAD_CREATE_REQUEST_COMPONENT = "DownloadCreateRequest"
+DOWNLOAD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+(?![\s\S])"
+DOWNLOAD_PATCH_COMPONENT = "DownloadPatch"
 SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
 SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
 SHARED_FILE_PRIORITY_VALUES = (
@@ -1107,7 +1091,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             append_path_lowercase_md4_parameter_schema_drift(drift, name, source, parameter)
             append_path_token_parameter_schema_drift(drift, name, source, parameter)
             append_query_boolean_parameter_schema_drift(drift, name, source, parameter)
-            append_transfer_state_parameter_schema_drift(drift, name, source, parameter)
+            append_download_parameter_schema_drift(drift, name, source, parameter)
 
     for path, path_item in (document.get("paths", {}) or {}).items():
         if not isinstance(path_item, dict):
@@ -1221,28 +1205,18 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
                     issue="patch/update schema must reject empty objects with minProperties: 1 or required-field composition",
                 )
             )
-    if TRANSFER_EVENT_COMPONENT in schemas or EVENT_STREAM_RESPONSE_COMPONENT in responses:
-        append_transfer_event_schema_drift(drift, schemas)
-    if TRANSFER_STATE_COMPONENT in schemas:
+    if DOWNLOAD_EVENT_COMPONENT in schemas or EVENT_STREAM_RESPONSE_COMPONENT in responses:
+        append_download_event_schema_drift(drift, schemas)
+    if DOWNLOAD_STATE_COMPONENT in schemas:
         assert_priority_enum_schema(
             drift,
-            TRANSFER_STATE_COMPONENT,
-            schemas.get(TRANSFER_STATE_COMPONENT),
-            TRANSFER_STATE_VALUES,
-            "transfer state",
+            DOWNLOAD_STATE_COMPONENT,
+            schemas.get(DOWNLOAD_STATE_COMPONENT),
+            DOWNLOAD_STATE_VALUES,
+            "download state",
         )
-    if TRANSFER_CREATE_REQUEST_COMPONENT in schemas:
-        append_transfer_create_schema_drift(drift, schemas)
-    if TRANSFER_PRIORITY_COMPONENT in schemas:
-        assert_priority_enum_schema(
-            drift,
-            TRANSFER_PRIORITY_COMPONENT,
-            schemas.get(TRANSFER_PRIORITY_COMPONENT),
-            TRANSFER_PRIORITY_VALUES,
-            "transfer priority",
-        )
-    if TRANSFER_PATCH_COMPONENT in schemas:
-        append_transfer_patch_schema_drift(drift, schemas)
+    if DOWNLOAD_ID_COMPONENT in schemas:
+        append_download_schema_drift(drift, schemas)
     if SHARED_FILE_PRIORITY_COMPONENT in schemas:
         assert_priority_enum_schema(
             drift,
@@ -1300,7 +1274,6 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         )
     append_category_name_component_schema_drift(drift, schemas)
     append_category_response_schema_drift(drift, schemas)
-    append_transfer_category_response_schema_drift(drift, schemas)
     if FRIEND_CREATE_REQUEST_COMPONENT in schemas:
         append_friend_create_schema_drift(drift, schemas)
     if CATEGORY_CREATE_REQUEST_COMPONENT in schemas:
@@ -1336,156 +1309,168 @@ def schema_rejects_empty_object(schema: dict[str, object]) -> bool:
     return False
 
 
-def append_transfer_create_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
-) -> None:
-    schema = schemas.get(TRANSFER_CREATE_REQUEST_COMPONENT)
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_CREATE_REQUEST_COMPONENT,
-                issue="missing transfer create request schema component",
-            )
-        )
-        return
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_CREATE_REQUEST_COMPONENT,
-                issue="must declare request properties",
-            )
-        )
-        return
-    assert_transfer_create_link_choice_schema(drift, schema)
-    assert_transfer_link_text_schema(
-        drift,
-        "TransferCreateRequest.properties.link",
-        properties.get("link"),
-    )
-    links = properties.get("links")
-    if not isinstance(links, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component="TransferCreateRequest.properties.links",
-                issue="links must be an array schema",
-            )
-        )
-        return
-    if links.get("minItems") != 1:
-        drift.append(
-            SchemaComponentDrift(
-                component="TransferCreateRequest.properties.links",
-                issue="links minItems must be 1",
-            )
-        )
-    if links.get("maxItems") != 100:
-        drift.append(
-            SchemaComponentDrift(
-                component="TransferCreateRequest.properties.links",
-                issue="links maxItems must be 100",
-            )
-        )
-    assert_transfer_link_text_schema(
-        drift,
-        "TransferCreateRequest.properties.links.items",
-        links.get("items"),
-    )
-    assert_nullable_category_ref_schema(drift, "TransferCreateRequest.properties.category", properties.get("category"))
-    assert_paused_boolean_schema(
-        drift,
-        "TransferCreateRequest.properties.paused",
-        properties.get("paused"),
-    )
+def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dict[str, object]) -> None:
+    identity = schemas.get("DownloadId")
+    if (not isinstance(identity, dict) or identity.get("type") != "string"
+            or identity.get("minLength") != 1 or identity.get("maxLength") != 19
+            or identity.get("pattern") != DOWNLOAD_ID_PATTERN):
+        drift.append(SchemaComponentDrift("DownloadId", "job ID must be a canonical positive decimal string"))
 
+    summary_fields = {"id", "hash", "name", "category", "sizeBytes", "progress", "intent",
+                      "state", "createdAt", "updatedAt", "completedAt"}
+    for component, expected in (("DownloadSummary", summary_fields),
+                                ("Download", summary_fields | {"payloadVerified", "delivery"})):
+        schema = schemas.get(component)
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if (not isinstance(schema, dict) or schema.get("type") != "object"
+                or schema.get("additionalProperties") is not False
+                or not isinstance(properties, dict) or set(properties) != expected
+                or not isinstance(schema.get("required"), list)
+                or set(schema.get("required", [])) != expected):
+            drift.append(SchemaComponentDrift(component, "download must require exactly its native summary or detail fields"))
+            continue
+        if properties["id"] != {"$ref": "#/components/schemas/DownloadId"}:
+            drift.append(SchemaComponentDrift(f"{component}.properties.id", "job ID must reference DownloadId"))
+        hash_schema = properties.get("hash")
+        if (not isinstance(hash_schema, dict) or hash_schema.get("type") != "string"
+                or hash_schema.get("minLength") != 32 or hash_schema.get("maxLength") != 32
+                or hash_schema.get("pattern") != r"^[0-9a-f]{32}$"):
+            drift.append(SchemaComponentDrift(f"{component}.properties.hash", "protocol hash must be lowercase MD4"))
+        if properties["category"] != {"$ref": "#/components/schemas/NullableCategory"}:
+            drift.append(SchemaComponentDrift(f"{component}.properties.category", "category must be nullable"))
+        for field, kind in (("sizeBytes", "integer"), ("progress", "number")):
+            value = properties[field]
+            if (not isinstance(value, dict) or value.get("type") != [kind, "null"]
+                    or value.get("minimum") != 0
+                    or value.get("maximum") != (18_446_744_073_709_551_615 if field == "sizeBytes" else 1)):
+                drift.append(SchemaComponentDrift(f"{component}.properties.{field}",
+                                                  f"{field} must be bounded and nullable"))
+        delivery = properties.get("delivery")
+        if component == "Download" and (properties["payloadVerified"] != {"type": "boolean"}
+                                        or not isinstance(delivery, dict) or delivery.get("oneOf") != [
+                                            {"$ref": "#/components/schemas/DownloadDelivery"}, {"type": "null"}]):
+            drift.append(SchemaComponentDrift("Download", "verification and delivery must be separate details"))
 
-def assert_transfer_create_link_choice_schema(
-    drift: list[SchemaComponentDrift],
-    schema: dict[str, object],
-) -> None:
-    branches = schema.get("oneOf")
-    if not isinstance(branches, list) or len(branches) != 2:
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_CREATE_REQUEST_COMPONENT,
-                issue="transfer create schema must require exactly one of link or links",
-            )
-        )
-        return
-    choices: set[tuple[str, str]] = set()
-    for branch in branches:
-        if not isinstance(branch, dict):
-            break
-        required = branch.get("required")
-        not_schema = branch.get("not")
-        if (
-            not isinstance(required, list)
-            or len(required) != 1
-            or not isinstance(required[0], str)
-            or not isinstance(not_schema, dict)
-        ):
-            break
-        excluded = not_schema.get("required")
-        if (
-            not isinstance(excluded, list)
-            or len(excluded) != 1
-            or not isinstance(excluded[0], str)
-        ):
-            break
-        choices.add((required[0], excluded[0]))
-    else:
-        if choices == {("link", "links"), ("links", "link")}:
-            return
-    drift.append(
-        SchemaComponentDrift(
-            component=TRANSFER_CREATE_REQUEST_COMPONENT,
-            issue="transfer create schema must require exactly one of link or links",
-        )
-    )
+    source = schemas.get("DownloadSourceInput")
+    if (not isinstance(source, dict) or source.get("oneOf") != [
+            {"$ref": "#/components/schemas/Ed2kLinkDownloadSource"},
+            {"$ref": "#/components/schemas/ContentDownloadSource"}]
+            or source.get("discriminator") != {"propertyName": "type", "mapping": {
+                "ed2k-link": "#/components/schemas/Ed2kLinkDownloadSource",
+                "content": "#/components/schemas/ContentDownloadSource",
+            }}):
+        drift.append(SchemaComponentDrift("DownloadSourceInput", "download source must discriminate link and content"))
+    for component, kind, required in (("Ed2kLinkDownloadSource", "ed2k-link", {"type", "link"}),
+                                      ("ContentDownloadSource", "content", {"type", "hash", "name"})):
+        value = schemas.get(component)
+        properties = value.get("properties") if isinstance(value, dict) else None
+        if (not isinstance(value, dict) or value.get("additionalProperties") is not False
+                or not isinstance(value.get("required"), list)
+                or set(value.get("required", [])) != required or not isinstance(properties, dict)
+                or properties.get("type") != {"const": kind}):
+            drift.append(SchemaComponentDrift(component, "download source variant must require its native fields"))
+            continue
+        if component == "Ed2kLinkDownloadSource" and (
+                not isinstance(properties.get("link"), dict)
+                or properties["link"].get("pattern") != DOWNLOAD_LINK_PATTERN):
+            drift.append(SchemaComponentDrift(component, "link source must require a bounded ed2k link"))
+        if component == "ContentDownloadSource" and (
+                not isinstance(properties.get("sizeBytes"), dict)
+                or properties["sizeBytes"].get("type") != ["integer", "null"]):
+            drift.append(SchemaComponentDrift(component, "content source must permit unknown size"))
+    create = schemas.get("DownloadCreateRequest")
+    create_properties = create.get("properties") if isinstance(create, dict) else None
+    if (not isinstance(create, dict) or create.get("additionalProperties") is not False
+            or create.get("required") != ["source"] or not isinstance(create_properties, dict)
+            or set(create_properties) != {"source", "category", "intent", "redownload"}
+            or create_properties["source"] != {"$ref": "#/components/schemas/DownloadSourceInput"}
+            or not isinstance(create_properties["category"], dict)
+            or create_properties["category"].get("$ref") != "#/components/schemas/NullableCategory"
+            or not isinstance(create_properties["intent"], dict)
+            or create_properties["intent"].get("$ref") != "#/components/schemas/DownloadIntent"
+            or not isinstance(create_properties["redownload"], dict)
+            or create_properties["redownload"].get("type") != "boolean"):
+        drift.append(SchemaComponentDrift("DownloadCreateRequest", "create must use source, category, intent and redownload"))
+    patch = schemas.get("DownloadPatch")
+    patch_properties = patch.get("properties") if isinstance(patch, dict) else None
+    if (not isinstance(patch, dict) or patch.get("additionalProperties") is not False
+            or patch.get("minProperties") != 1 or not isinstance(patch_properties, dict)
+            or set(patch_properties) != {"name", "category", "sizeBytes"}
+            or patch_properties["category"] != {"$ref": "#/components/schemas/NullableCategory"}
+            or not isinstance(patch_properties["sizeBytes"], dict)
+            or patch_properties["sizeBytes"].get("type") != "integer"):
+        drift.append(SchemaComponentDrift("DownloadPatch", "patch must use name, category and numeric sizeBytes"))
 
+    ids = schemas.get("DownloadIds")
+    if (not isinstance(ids, dict) or ids.get("type") != "array" or ids.get("minItems") != 1
+            or ids.get("maxItems") != 100 or ids.get("uniqueItems") is not True
+            or ids.get("items") != {"$ref": "#/components/schemas/DownloadId"}):
+        drift.append(SchemaComponentDrift("DownloadIds", "actions must use 1..100 distinct job IDs"))
+    for component, fields in (("DownloadActionRequest", {"ids"}),
+                              ("DownloadRemoveRequest", {"ids", "deleteData"})):
+        schema = schemas.get(component)
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if (not isinstance(schema, dict) or schema.get("additionalProperties") is not False
+                or not isinstance(properties, dict) or set(properties) != fields
+                or not isinstance(schema.get("required"), list)
+                or set(schema.get("required", [])) != fields
+                or properties["ids"] != {"$ref": "#/components/schemas/DownloadIds"}
+                or ("deleteData" in fields and properties["deleteData"] != {"type": "boolean"})):
+            drift.append(SchemaComponentDrift(component, "action must require explicit IDs and removal data choice"))
 
-def assert_transfer_link_text_schema(
-    drift: list[SchemaComponentDrift],
-    component: str,
-    schema: object,
-) -> None:
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="link text schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != "string":
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="link text type must be string",
-            )
-        )
-    if schema.get("minLength") != 1:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="link text minLength must be 1",
-            )
-        )
-    if schema.get("maxLength") != 2048:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="link text maxLength must be 2048",
-            )
-        )
-    if schema.get("pattern") != TRANSFER_ADD_LINK_PATTERN:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="link text pattern must require case-insensitive ed2k:// without whitespace or controls",
-            )
-        )
+    page = schemas.get("DownloadPageEnvelope")
+    batch = schemas.get("DownloadBatchEnvelope")
+    for component, schema, item in (("DownloadPageEnvelope", page, "DownloadSummary"),
+                                    ("DownloadBatchEnvelope", batch, "DownloadBatchItem")):
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        data = properties.get("data") if isinstance(properties, dict) else None
+        if (not isinstance(properties, dict) or not isinstance(data, dict)
+                or data.get("type") != "array"
+                or data.get("maxItems") != (200 if component == "DownloadPageEnvelope" else 100)
+                or data.get("items") != {"$ref": f"#/components/schemas/{item}"}):
+            drift.append(SchemaComponentDrift(component, "download envelope data must be a bounded item array"))
+    meta = schemas.get("DownloadPageMeta")
+    meta_properties = meta.get("properties") if isinstance(meta, dict) else None
+    if (not isinstance(meta_properties, dict)
+            or not isinstance(meta.get("required"), list)
+            or set(meta.get("required", [])) != {"apiVersion", "nextCursor", "hasMore"}
+            or not isinstance(meta_properties.get("nextCursor"), dict)
+            or meta_properties["nextCursor"].get("type") != ["string", "null"]
+            or meta_properties["nextCursor"].get("maxLength") != 1024
+            or meta_properties.get("hasMore") != {"type": "boolean"}):
+        drift.append(SchemaComponentDrift("DownloadPageMeta", "cursor page must expose bounded cursor and hasMore"))
+    item = schemas.get("DownloadBatchItem")
+    item_properties = item.get("properties") if isinstance(item, dict) else None
+    if (not isinstance(item_properties, dict) or not isinstance(item.get("required"), list)
+            or set(item.get("required", [])) != {"id", "status", "httpStatus"}
+            or item_properties.get("id") != {"$ref": "#/components/schemas/DownloadId"}
+            or not isinstance(item_properties.get("status"), dict)
+            or item_properties["status"].get("enum") != ["accepted", "unchanged", "failed"]
+            or not isinstance(item.get("allOf"), list) or len(item["allOf"]) != 2):
+        drift.append(SchemaComponentDrift("DownloadBatchItem", "batch result must report per-ID status and errors"))
+    elif (item["allOf"][0].get("then", {}).get("required") != ["error"]
+          or item["allOf"][0].get("then", {}).get("properties", {}).get("httpStatus", {}).get("minimum") != 400
+          or item["allOf"][0].get("else", {}).get("not") != {"required": ["error"]}
+          or item["allOf"][1].get("then", {}).get("properties", {}).get("httpStatus") != {"const": 200}):
+        drift.append(SchemaComponentDrift("DownloadBatchItem", "failed items need errors and unchanged items need 200"))
+    source_row = schemas.get("DownloadSource")
+    source_properties = source_row.get("properties") if isinstance(source_row, dict) else None
+    if (not isinstance(source_properties, dict)
+            or not isinstance(source_row.get("required"), list)
+            or "reportedFileNamesHasMore" not in source_row.get("required", [])
+            or not isinstance(source_properties.get("reportedFileNamesHasMore"), dict)
+            or source_properties["reportedFileNamesHasMore"].get("type") != "boolean"
+            or not isinstance(source_properties.get("reportedFileNames"), dict)
+            or source_properties["reportedFileNames"].get("maxItems") != 16):
+        drift.append(SchemaComponentDrift("DownloadSource", "source names must use a bounded window with hasMore"))
+    name_row = schemas.get("DownloadFileNameObservation")
+    name_properties = name_row.get("properties") if isinstance(name_row, dict) else None
+    if (not isinstance(name_properties, dict)
+            or not isinstance(name_properties.get("rawName"), dict)
+            or name_properties["rawName"].get("maxLength") != 65_536
+            or not isinstance(name_properties.get("normalizedName"), dict)
+            or name_properties["normalizedName"].get("maxLength") != 4_096):
+        drift.append(SchemaComponentDrift("DownloadFileNameObservation", "reported names need bounded projections"))
 
 
 def assert_priority_enum_schema(
@@ -1541,149 +1526,6 @@ def assert_priority_ref_schema(
             SchemaComponentDrift(
                 component=component,
                 issue=f"{label} must reference {expected_ref}",
-            )
-        )
-
-
-def append_transfer_patch_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
-) -> None:
-    schema = schemas.get(TRANSFER_PATCH_COMPONENT)
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_PATCH_COMPONENT,
-                issue="missing transfer patch request schema component",
-            )
-        )
-        return
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_PATCH_COMPONENT,
-                issue="must declare request properties",
-            )
-        )
-        return
-    assert_transfer_patch_mutation_family_schema(drift, schema)
-    assert_transfer_rename_schema(drift, properties.get("displayName"))
-    assert_priority_ref_schema(
-        drift,
-        "TransferPatch.properties.priority",
-        properties.get("priority"),
-        "#/components/schemas/TransferPriority",
-        "transfer patch priority",
-    )
-    assert_nullable_category_ref_schema(drift, "TransferPatch.properties.category", properties.get("category"))
-
-
-def assert_transfer_patch_mutation_family_schema(
-    drift: list[SchemaComponentDrift],
-    schema: dict[str, object],
-) -> None:
-    branches = schema.get("oneOf")
-    if not isinstance(branches, list) or len(branches) != len(TRANSFER_PATCH_MUTATION_FAMILIES):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_PATCH_COMPONENT,
-                issue="transfer patch schema must allow exactly one mutation family",
-            )
-        )
-        return
-    expected_choices = {
-        (
-            field,
-            tuple(sorted(other for other in TRANSFER_PATCH_MUTATION_FAMILIES if other != field)),
-        )
-        for field in TRANSFER_PATCH_MUTATION_FAMILIES
-    }
-    actual_choices: set[tuple[str, tuple[str, ...]]] = set()
-    for branch in branches:
-        if not isinstance(branch, dict):
-            break
-        required = branch.get("required")
-        not_schema = branch.get("not")
-        if (
-            not isinstance(required, list)
-            or len(required) != 1
-            or not isinstance(required[0], str)
-            or not isinstance(not_schema, dict)
-        ):
-            break
-        any_of = not_schema.get("anyOf")
-        if not isinstance(any_of, list):
-            break
-        excluded: list[str] = []
-        for exclusion in any_of:
-            if not isinstance(exclusion, dict):
-                break
-            exclusion_required = exclusion.get("required")
-            if (
-                not isinstance(exclusion_required, list)
-                or len(exclusion_required) != 1
-                or not isinstance(exclusion_required[0], str)
-            ):
-                break
-            excluded.append(exclusion_required[0])
-        else:
-            actual_choices.add((required[0], tuple(sorted(excluded))))
-            continue
-        break
-    else:
-        if actual_choices == expected_choices:
-            return
-    drift.append(
-        SchemaComponentDrift(
-            component=TRANSFER_PATCH_COMPONENT,
-            issue="transfer patch schema must allow exactly one mutation family",
-        )
-    )
-
-
-def assert_transfer_rename_schema(
-    drift: list[SchemaComponentDrift],
-    schema: object,
-) -> None:
-    component = "TransferPatch.properties.displayName"
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="transfer rename schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != "string":
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="transfer rename type must be string",
-            )
-        )
-    if schema.get("minLength") != 1:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="transfer rename minLength must be 1",
-            )
-        )
-    if "maxLength" in schema:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="transfer rename schema must not claim an unsupported maxLength",
-            )
-        )
-    if schema.get("pattern") != TRANSFER_RENAME_PATTERN:
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue=(
-                    "transfer rename pattern must reject trim-empty text, "
-                    "Windows-forbidden filename characters, and controls"
-                ),
             )
         )
 
@@ -2134,34 +1976,15 @@ def append_search_result_download_schema_drift(
             )
         )
         return
+    if (schema.get("additionalProperties") is not False
+            or set(properties) != {"category", "intent", "redownload"}
+            or properties["intent"].get("$ref") != "#/components/schemas/DownloadIntent"
+            or properties["redownload"].get("type") != "boolean"):
+        drift.append(SchemaComponentDrift(
+            SEARCH_RESULT_DOWNLOAD_REQUEST_COMPONENT,
+            "search download must use category, intent and redownload",
+        ))
     assert_nullable_category_ref_schema(drift, "SearchResultDownloadRequest.properties.category", properties.get("category"))
-    assert_paused_boolean_schema(
-        drift,
-        "SearchResultDownloadRequest.properties.paused",
-        properties.get("paused"),
-    )
-
-
-def assert_paused_boolean_schema(
-    drift: list[SchemaComponentDrift],
-    component: str,
-    schema: object,
-) -> None:
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="paused schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != "boolean":
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="paused type must be boolean",
-            )
-        )
 
 
 def assert_category_name_schema(
@@ -2269,25 +2092,6 @@ def append_category_response_schema_drift(
     if properties["comment"].get("type") != "string":
         drift.append(SchemaComponentDrift(component="Category.properties.comment",
                                           issue="category comment must be a string"))
-
-
-def append_transfer_category_response_schema_drift(
-    drift: list[SchemaComponentDrift], schemas: dict[str, object]
-) -> None:
-    transfer = schemas.get("Transfer")
-    if transfer is None:
-        return
-    if not isinstance(transfer, dict):
-        drift.append(SchemaComponentDrift(component="Transfer", issue="transfer schema must be an object"))
-        return
-    properties = transfer.get("properties")
-    required = transfer.get("required")
-    if (not isinstance(properties, dict) or not isinstance(required, list)
-            or "category" not in required
-            or properties.get("category") != {"$ref": "#/components/schemas/NullableCategory"}):
-        drift.append(SchemaComponentDrift(
-            component="Transfer", issue="transfer must require nullable category",
-        ))
 
 
 def append_url_import_schema_drift(
@@ -2905,107 +2709,34 @@ def assert_friend_name_schema(
         )
 
 
-def append_transfer_event_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
+def append_download_event_schema_drift(
+    drift: list[SchemaComponentDrift], schemas: dict[str, object]
 ) -> None:
-    transfer_event = schemas.get(TRANSFER_EVENT_COMPONENT)
-    if not isinstance(transfer_event, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_EVENT_COMPONENT,
-                issue="missing transfer event schema component",
-            )
-        )
-        return
-
-    expected_refs = tuple(
-        f"#/components/schemas/{component}"
-        for component in TRANSFER_EVENT_VARIANTS.values()
-    )
-    actual_refs = tuple(
-        entry.get("$ref")
-        for entry in transfer_event.get("oneOf", [])
-        if isinstance(entry, dict)
-    )
-    if actual_refs != expected_refs:
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_EVENT_COMPONENT,
-                issue="must oneOf the transfer event variant schemas in event-name order",
-            )
-        )
-
-    discriminator = transfer_event.get("discriminator")
-    expected_mapping = {
-        event_name: f"#/components/schemas/{component}"
-        for event_name, component in TRANSFER_EVENT_VARIANTS.items()
-    }
-    if not isinstance(discriminator, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=TRANSFER_EVENT_COMPONENT,
-                issue="must declare a type discriminator",
-            )
-        )
-    else:
-        if discriminator.get("propertyName") != "type":
-            drift.append(
-                SchemaComponentDrift(
-                    component=TRANSFER_EVENT_COMPONENT,
-                    issue="discriminator propertyName must be type",
-                )
-            )
-        if discriminator.get("mapping") != expected_mapping:
-            drift.append(
-                SchemaComponentDrift(
-                    component=TRANSFER_EVENT_COMPONENT,
-                    issue="discriminator mapping must cover every transfer event variant",
-                )
-            )
-
-    for event_name, component in TRANSFER_EVENT_VARIANTS.items():
-        schema = schemas.get(component)
-        if not isinstance(schema, dict):
-            drift.append(
-                SchemaComponentDrift(
-                    component=component,
-                    issue="missing transfer event variant schema component",
-                )
-            )
+    event = schemas.get(DOWNLOAD_EVENT_COMPONENT)
+    expected_refs = [{"$ref": f"#/components/schemas/{component}"}
+                     for component in DOWNLOAD_EVENT_VARIANTS.values()]
+    expected_mapping = {name: f"#/components/schemas/{component}"
+                        for name, component in DOWNLOAD_EVENT_VARIANTS.items()}
+    if (not isinstance(event, dict) or event.get("oneOf") != expected_refs
+            or event.get("discriminator") != {"propertyName": "type", "mapping": expected_mapping}):
+        drift.append(SchemaComponentDrift(DOWNLOAD_EVENT_COMPONENT,
+                                          "download event must discriminate changed, removed and reset"))
+    for name, component in DOWNLOAD_EVENT_VARIANTS.items():
+        value = schemas.get(component)
+        properties = value.get("properties") if isinstance(value, dict) else None
+        if (not isinstance(value, dict) or value.get("type") != "object"
+                or value.get("additionalProperties") is not False
+                or set(value.get("required", [])) != set(DOWNLOAD_EVENT_REQUIRED_FIELDS[component])
+                or not isinstance(properties, dict)
+                or (properties.get("type", {}).get("enum") != [name]
+                    if component == "DownloadSyncResetEvent"
+                    else properties.get("type", {}).get("const") != name)):
+            drift.append(SchemaComponentDrift(component, "download event variant has wrong required fields"))
             continue
-        if schema.get("type") != "object":
-            drift.append(
-                SchemaComponentDrift(
-                    component=component,
-                    issue="transfer event variant must be an object",
-                )
-            )
-        if schema.get("additionalProperties") is not False:
-            drift.append(
-                SchemaComponentDrift(
-                    component=component,
-                    issue="transfer event variant must set additionalProperties: false",
-                )
-            )
-        required = tuple(sorted(schema.get("required", []))) if isinstance(schema.get("required"), list) else ()
-        if required != TRANSFER_EVENT_REQUIRED_FIELDS[component]:
-            drift.append(
-                SchemaComponentDrift(
-                    component=component,
-                    issue=f"required fields must be {list(TRANSFER_EVENT_REQUIRED_FIELDS[component])}",
-                )
-            )
-        properties = schema.get("properties", {}) if isinstance(schema.get("properties"), dict) else {}
-        type_schema = properties.get("type") if isinstance(properties, dict) else None
-        type_values = type_schema.get("enum") if isinstance(type_schema, dict) else None
-        if type_values != [event_name]:
-            drift.append(
-                SchemaComponentDrift(
-                    component=component,
-                    issue=f"type enum must be [{event_name}]",
-                )
-            )
+        if component != "DownloadSyncResetEvent" and properties.get("downloadId") != {
+            "$ref": "#/components/schemas/DownloadId"
+        }:
+            drift.append(SchemaComponentDrift(component, "download event must carry the public job ID"))
 
 
 def openapi_confirmation_contract_drift(openapi_yaml: Path) -> tuple[ConfirmationContractDrift, ...]:
@@ -3186,9 +2917,9 @@ def append_category_name_parameter_schema_drift(
     source: str,
     parameter: object,
 ) -> None:
-    if component_name not in {"CategoryName", "TransferCategoryFilter"} or not isinstance(parameter, dict):
+    if component_name != "CategoryName" or not isinstance(parameter, dict):
         return
-    expected_name = "categoryName" if component_name == "CategoryName" else "category"
+    expected_name = "categoryName"
     if parameter.get("name") != expected_name:
         drift.append(ParameterMetadataDrift(
             source=f"{source}.name",
@@ -3281,24 +3012,24 @@ def append_query_boolean_parameter_schema_drift(
         )
 
 
-def append_transfer_state_parameter_schema_drift(
-    drift: list[ParameterMetadataDrift],
-    component_name: str,
-    source: str,
-    parameter: object,
+def append_download_parameter_schema_drift(
+    drift: list[ParameterMetadataDrift], component_name: str, source: str, parameter: object
 ) -> None:
-    if component_name != "TransferStateFilter" or not isinstance(parameter, dict):
+    expected = {
+        "DownloadId": ("id", "path", {"$ref": "#/components/schemas/DownloadId"}),
+        "DownloadCategory": ("category", "query", {"$ref": "#/components/schemas/CategoryName"}),
+        "DownloadView": ("view", "query", {"type": "string", "enum": ["unfinished", "completed", "all"],
+                                               "default": "unfinished"}),
+        "DownloadCursor": ("cursor", "query", {"type": "string", "minLength": 1, "maxLength": 1024}),
+        "DownloadLimit": ("limit", "query", {"type": "integer", "minimum": 1, "maximum": 200,
+                                                "default": 100}),
+    }.get(component_name)
+    if expected is None or not isinstance(parameter, dict):
         return
-    schema = parameter.get("schema")
-    if not isinstance(schema, dict):
-        return
-    if schema.get("$ref") != "#/components/schemas/TransferState":
-        drift.append(
-            ParameterMetadataDrift(
-                source=f"{source}.schema",
-                issue="state query parameter must reference #/components/schemas/TransferState",
-            )
-        )
+    name, location, schema = expected
+    if (parameter.get("name") != name or parameter.get("in") != location
+            or parameter.get("schema") != schema):
+        drift.append(ParameterMetadataDrift(f"{source}.schema", "download parameter must use current job-ID or bounded page shape"))
 
 
 def rust_query_parameter_inventory(route_metadata_rs: Path, routes_rs: Path) -> dict[Route, tuple[str, ...]]:
@@ -3347,7 +3078,6 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
         (r'\("GET",\s*\["searches", _\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}"),
-        (r'\("DELETE",\s*\["transfers", _, "files"\]\)\s*=>\s*Some\((\w+)\)', "DELETE", "/transfers/{hash}/files"),
     ):
         match = re.search(pattern, parameterized)
         if match is not None:
@@ -3461,7 +3191,7 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
     returns: dict[Route, str] = {}
     route_body_fields = route_body_metadata_rs_text.split("fn route_body_fields", 1)[-1]
     for pattern, method, path in (
-        (r'\("PATCH",\s*\["transfers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/transfers/{hash}"),
+        (r'\("PATCH",\s*\["downloads", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/downloads/{id}"),
         (r'\("PATCH",\s*\["shared-files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/shared-files/{hash}"),
         (
             r'\("PATCH",\s*\["shared-directories", "ignores", "defaults", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',

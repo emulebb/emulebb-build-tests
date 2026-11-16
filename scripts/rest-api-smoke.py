@@ -455,6 +455,7 @@ OPENAPI_TAG_FAMILIES = {
     "VpnGuard": "vpn-guard",
     "Categories": "categories",
     "Transfers": "transfers",
+    "Downloads": "downloads",
     "SharedFiles": "shared",
     "SharedDirectories": "shared-directories",
     "Uploads": "uploads",
@@ -709,101 +710,45 @@ def _commit_openapi_operation(
 
 
 def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[dict[str, object]]:
-    """Extracts operation metadata from the source OpenAPI YAML without extra dependencies."""
+    """Extracts operation metadata from the parsed OpenAPI document."""
 
+    document = load_openapi_document(openapi_path)
+    paths = document.get("paths")
+    if not isinstance(paths, dict):
+        raise RuntimeError("OpenAPI document is missing paths")
     operations: list[dict[str, object]] = []
-    current_path: str | None = None
-    current_method: str | None = None
-    current_operation_id: str | None = None
-    current_tag: str | None = None
-    current_has_request_body = False
-    current_request_body_required = False
-    current_success_response_statuses: list[str] = []
-    current_success_response_refs: list[str] = []
-    current_response_status: str | None = None
-    in_paths = False
-    for raw_line in openapi_path.read_text(encoding="utf-8").splitlines():
-        if raw_line == "paths:":
-            in_paths = True
+    for path, path_item in paths.items():
+        if not isinstance(path_item, dict):
             continue
-        if not in_paths:
-            continue
-        if raw_line.startswith("components:"):
-            break
-        if raw_line.startswith("  /") and raw_line.rstrip().endswith(":"):
+        for method, operation in path_item.items():
+            if method not in {"get", "post", "patch", "delete"} or not isinstance(operation, dict):
+                continue
+            tags = operation.get("tags")
+            tag = tags[0] if isinstance(tags, list) and tags and isinstance(tags[0], str) else None
+            responses = operation.get("responses")
+            success_statuses: list[str] = []
+            success_refs: list[str] = []
+            if isinstance(responses, dict):
+                for status, response in responses.items():
+                    status_text = str(status)
+                    if not (len(status_text) == 3 and status_text.startswith("2") and status_text.isdecimal()):
+                        continue
+                    reference = response.get("$ref") if isinstance(response, dict) else None
+                    if isinstance(reference, str) and reference.startswith("#/components/responses/"):
+                        success_statuses.append(status_text)
+                        success_refs.append(reference.rsplit("/", 1)[-1])
+            request_body = operation.get("requestBody")
             _commit_openapi_operation(
                 operations,
-                path=current_path,
-                method=current_method,
-                operation_id=current_operation_id,
-                tag=current_tag,
-                has_request_body=current_has_request_body,
-                request_body_required=current_request_body_required,
-                success_response_statuses=current_success_response_statuses,
-                success_response_refs=current_success_response_refs,
+                path=str(path),
+                method=method,
+                operation_id=operation.get("operationId"),
+                tag=tag,
+                has_request_body=request_body is not None,
+                request_body_required=isinstance(request_body, dict) and request_body.get("required") is True,
+                success_response_statuses=success_statuses,
+                success_response_refs=success_refs,
             )
-            current_path = raw_line.strip()[:-1]
-            current_method = None
-            current_operation_id = None
-            current_tag = None
-            current_has_request_body = False
-            current_request_body_required = False
-            current_success_response_statuses = []
-            current_success_response_refs = []
-            current_response_status = None
-            continue
-        stripped = raw_line.strip()
-        if stripped in {"get:", "post:", "patch:", "delete:"}:
-            _commit_openapi_operation(
-                operations,
-                path=current_path,
-                method=current_method,
-                operation_id=current_operation_id,
-                tag=current_tag,
-                has_request_body=current_has_request_body,
-                request_body_required=current_request_body_required,
-                success_response_statuses=current_success_response_statuses,
-                success_response_refs=current_success_response_refs,
-            )
-            current_method = stripped[:-1]
-            current_operation_id = None
-            current_tag = None
-            current_has_request_body = False
-            current_request_body_required = False
-            current_success_response_statuses = []
-            current_success_response_refs = []
-            current_response_status = None
-            continue
-        if current_method is None:
-            continue
-        if stripped.startswith("operationId:"):
-            current_operation_id = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("tags:"):
-            tag_text = stripped.split(":", 1)[1].strip()
-            if tag_text.startswith("[") and tag_text.endswith("]"):
-                current_tag = tag_text[1:-1].split(",", 1)[0].strip()
-        elif stripped == "requestBody:":
-            current_has_request_body = True
-        elif current_has_request_body and stripped.startswith("required:"):
-            current_request_body_required = stripped.split(":", 1)[1].strip().lower() == "true"
-        elif stripped.startswith('"2') and stripped.endswith('":'):
-            current_response_status = stripped.split(":", 1)[0].strip('"')
-        elif current_response_status is not None and stripped.startswith("$ref:"):
-            response_ref = stripped.rsplit("/", 1)[-1].strip('"')
-            current_success_response_statuses.append(current_response_status)
-            current_success_response_refs.append(response_ref)
-            current_response_status = None
-    _commit_openapi_operation(
-        operations,
-        path=current_path,
-        method=current_method,
-        operation_id=current_operation_id,
-        tag=current_tag,
-        has_request_body=current_has_request_body,
-        request_body_required=current_request_body_required,
-        success_response_statuses=current_success_response_statuses,
-        success_response_refs=current_success_response_refs,
-    )
     return operations
 
 

@@ -22,7 +22,7 @@ REST_COVERAGE_BUDGETS = ("contract", "contract-stress")
 EVENT_STREAM_PATH = "/api/v1/events"
 EVENT_STREAM_LAST_EVENT_ID = "1"
 EVENT_STREAM_READ_LINES = 16
-TRANSFER_EVENT_SCHEMA_COMPONENT = "TransferEvent"
+DOWNLOAD_EVENT_SCHEMA_COMPONENT = "DownloadEvent"
 OPENAPI_CONTRACT_ENV = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUST_OPENAPI_CONTRACT_PATH = (
@@ -44,6 +44,7 @@ EVENT_STREAM_EXPECTED_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 RUST_MISSING_CATEGORY_NAME = "MissingCategory"
+RUST_MISSING_DOWNLOAD_ID = "9223372036854775807"
 
 
 class RestConformanceError(AssertionError):
@@ -66,22 +67,42 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     contract_body = smoke.get_contract_route_body
 
     def rust_concrete_path(path: str, operation_id: str) -> str:
-        return concrete_path(path, operation_id).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME)
+        concrete = concrete_path(path, operation_id).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME)
+        return concrete.replace("{id}", RUST_MISSING_DOWNLOAD_ID) if path.startswith("/downloads/") else concrete
 
     def rust_normalize_path(path: str) -> str:
         return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
-                                           "/categories/{categoryName}"))
+                                           "/categories/{categoryName}")
+                              .replace(f"/downloads/{RUST_MISSING_DOWNLOAD_ID}",
+                                       "/downloads/{id}"))
 
     def rust_contract_body(operation_id: str) -> dict[str, object] | None:
         if operation_id == "patchCategory":
             return {"comment": "REST contract"}
+        if operation_id == "createDownload":
+            return {}
+        if operation_id == "patchDownload":
+            return {"category": None}
+        if operation_id in {"startDownloads", "stopDownloads", "verifyDownloads"}:
+            return {"ids": [RUST_MISSING_DOWNLOAD_ID]}
+        if operation_id == "removeDownloads":
+            return {"ids": [RUST_MISSING_DOWNLOAD_ID], "deleteData": False}
         if operation_id == "downloadSearchResult":
-            return {"paused": True, "category": None}
+            return {"intent": "stopped", "category": None}
         return contract_body(operation_id)
 
     smoke.concrete_contract_path = rust_concrete_path
     smoke.normalize_contract_path_for_openapi = rust_normalize_path
     smoke.get_contract_route_body = rust_contract_body
+    smoke.REST_CONTRACT_EXPECTED_ERROR_STATUSES.update({
+        "createDownload": (400,),
+        **{name: (404,) for name in (
+            "getDownload", "patchDownload", "getDownloadDetails", "listDownloadComments",
+            "listDownloadSources", "getDownloadSource", "browseDownloadSource",
+            "addDownloadSourceFriend", "removeDownloadSourceFriend", "removeDownloadSource",
+            "banDownloadSource", "unbanDownloadSource", "releaseDownloadSourceUploadSlot",
+        )},
+    })
     smoke.REST_CONTRACT_ROUTES = smoke.build_openapi_contract_routes()
     return smoke
 
@@ -180,7 +201,7 @@ def run_event_stream_conformance(
         data = _sse_frame_data(frame)
         payload = json.loads(data)
         rust_openapi_responses.validate_openapi_schema_component_payload(
-            TRANSFER_EVENT_SCHEMA_COMPONENT,
+            DOWNLOAD_EVENT_SCHEMA_COMPONENT,
             payload,
             openapi_path,
         )
@@ -210,7 +231,7 @@ def run_event_stream_conformance(
         result["payloadSchemaError"] = payload_error
         result["frameSample"] = frame[:500]
     elif payload is not None:
-        result["payloadSchema"] = TRANSFER_EVENT_SCHEMA_COMPONENT
+        result["payloadSchema"] = DOWNLOAD_EVENT_SCHEMA_COMPONENT
     return result
 
 
