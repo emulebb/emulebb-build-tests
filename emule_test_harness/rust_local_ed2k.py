@@ -58,6 +58,7 @@ def request_json(
     body: dict[str, object] | None = None,
     *,
     timeout_seconds: float = 10.0,
+    expected_status: int | None = None,
 ) -> dict[str, object]:
     """Run one authenticated JSON request with an explicit, normally ten-second deadline."""
 
@@ -72,6 +73,8 @@ def request_json(
         request.add_header("Content-Type", "application/json; charset=utf-8")
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            if expected_status is not None and response.status != expected_status:
+                raise RuntimeError(f"Rust REST {method} {path} returned HTTP {response.status}; expected {expected_status}")
             text = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()

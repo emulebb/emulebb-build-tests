@@ -12,38 +12,23 @@ from emule_test_harness import android_apk_peer as subject
 IDENTITY = {"sourceRevision": "a" * 40, "version": "0.1.0-test", "channel": "development"}
 
 
-@pytest.mark.parametrize("message,category", [
-    (None, "none"), ("", "none"),
-    ("failed to create delivery staging file /private", "stage-create"),
-    ("failed to open delivery payload /private", "stage-open-payload"),
-    ("failed to copy payload /private", "stage-copy"),
-    ("failed to install delivery staging file /private at /private: permission denied", "install"),
-    ("failed to install delivery staging file /private at /private: filesystem does not support atomic no-replace rename: private", "atomic-no-replace-unsupported"),
-    ("failed to deliver completed transfer private: delivery staging file failed verification: /private", "verification"),
-    ("failed to sync directory /private", "other-present"),
-    ("atomic rename private", "other-present"), ({"private": "value"}, None),
-])
-def test_completion_delivery_error_uses_only_exact_source_markers(message, category):
-    assert subject._delivery_error_category(message) == category
-
-
 @pytest.mark.parametrize("response,presence", [
-    ({"transfer": {"hash": "b" * 32, "state": "completing", "progress": 1.0}}, "present"),
-    ({"transfer": {"hash": "c" * 32, "state": "completing", "progress": 1.0}}, "ambiguous"),
-    ({"transfer": [{"hash": "b" * 32}, {"hash": "b" * 32}]}, "ambiguous"),
-    ({"transfer": {"hash": "private", "state": "completing"}}, "unavailable"),
-    ({"transfer": None}, "unavailable"), ({}, "unavailable"),
+    ({"id": "12", "hash": "b" * 32, "state": "delivering", "progress": 1.0}, "present"),
+    ({"id": "12", "hash": "c" * 32, "state": "delivering", "progress": 1.0}, "ambiguous"),
+    ({"id": "13", "hash": "b" * 32}, "ambiguous"),
+    ({"id": "12", "hash": "private", "state": "delivering"}, "unavailable"),
+    (None, "unavailable"), ({}, "unavailable"),
     (subject.RustRestFailure("private", status=404, detail="{}"), "absent"),
     (RuntimeError("private"), "unavailable"),
 ])
-def test_completion_sample_requires_owned_details_transfer(response, presence):
+def test_completion_sample_requires_captured_download_identity(response, presence):
     def request(method, route):
-        assert method == "GET" and route == "/api/v1/transfers/" + "b" * 32 + "/details"
+        assert method == "GET" and route == "/api/v1/downloads/12"
         if isinstance(response, Exception):
             raise response
         return response
 
-    sample = subject._completion_sample(request, "b" * 32, "missing")
+    sample = subject._completion_sample(request, "12", "b" * 32, "missing")
     assert sample["sharedLookup"] == "missing" and sample["transferPresence"] == presence
     if presence != "present":
         assert set(sample) == {"sharedLookup", "transferPresence"}
@@ -53,16 +38,16 @@ def test_completion_sample_requires_owned_details_transfer(response, presence):
 @pytest.mark.parametrize("progress", [False, True, -0.1, 1.1, float("nan"), float("inf"), 10**1000, "private", None])
 def test_completion_projection_rejects_invalid_progress_and_untrusted_fields(progress):
     sample = {"sharedLookup": "missing", "transferPresence": "present", "state": ["private"], "progress": progress,
-        "completedBytes": True, "sizeBytes": 2**64, "partsObtained": -1, "partsTotal": 2**32,
-        "deliveryPathPresent": "private", "deliveryErrorCategory": "private", "hash": "private", "path": "private"}
+        "payloadVerified": "private", "sizeBytes": 2**64, "deliveryState": "private",
+        "deliveryPathPresent": "private", "deliveryOwnership": "private", "hash": "private", "path": "private"}
     result = subject.safe_completion_failure({"reason": "deadline-exhausted", "samples": [sample], "private": "private"})
     assert result == {"reason": "deadline-exhausted", "samples": [{"sharedLookup": "missing", "transferPresence": "present"}]}
 
 
 def test_completion_projection_admits_exact_numeric_boundaries_and_closed_fields():
-    sample = {"sharedLookup": "metadata-mismatch", "transferPresence": "present", "state": "completing", "progress": 1.0,
-        "completedBytes": 0, "sizeBytes": 2**64 - 1, "partsObtained": 0, "partsTotal": 2**32 - 1,
-        "deliveryPathPresent": False, "deliveryErrorCategory": "none"}
+    sample = {"sharedLookup": "metadata-mismatch", "transferPresence": "present", "state": "delivering", "progress": 1.0,
+        "sizeBytes": 2**64 - 1, "payloadVerified": True, "deliveryState": "pending",
+        "deliveryPathPresent": False, "deliveryOwnership": "none"}
     assert subject.safe_completion_failure({"reason": "lookup-failed", "samples": [sample]}) == {
         "reason": "lookup-failed", "samples": [sample]}
     assert subject.safe_completion_failure({"reason": "lookup-failed", "samples": [sample] * 3}) is None
@@ -253,7 +238,8 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
     "history", "duplicate-accepted", "active-row", "preflight-enqueue", "incomplete-inventory",
-    "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion"])
+    "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion", "unowned",
+    "creation-200", "creation-id", "creation-hash"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
     from copy import deepcopy
@@ -284,7 +270,11 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     def page(items, *, shared=False):
         return {"items": items, "total": len(items), "limit": 100, **({"nextCursor": None} if shared else {"offset": 0})}
 
-    def request(base, method, route, key, body=None):
+    def downloads(items, *, more=False):
+        return {"data": items, "meta": {"apiVersion": "v1", "hasMore": more,
+            "nextCursor": "more" if more else None}}
+
+    def request(base, method, route, key, body=None, *, expected_status=None):
         if route == "/api/v1/network":
             return {"binding": {"activeConfiguredAddress": "192.0.2.20"}}
         if route == "/api/v1/app/settings":
@@ -310,32 +300,38 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         if route.endswith("/operations/connect"):
             assert "%3A20031/operations/connect" in route and "/127." in route
             return {"connected": False, "connecting": True, "operationQueued": failure != "listener"}
-        if route == "/api/v1/transfers":
-            if method == "GET":
+        if route.startswith("/api/v1/downloads?view="):
+            assert method == "GET"
+            if route.endswith("view=unfinished&limit=200"):
                 if failure == "unfinished":
-                    return page([{"hash": "c" * 32, "state": "paused"}])
-                if failure == "incomplete-inventory":
-                    return {**page([]), "total": 1}
+                    return downloads([{"id": "13", "hash": "c" * 32, "state": "stopped"}])
                 if state.get("promoted") and failure == "active-row" or state.get("duplicateQueued"):
-                    return page([{"hash": "b" * 32, "state": "paused"}])
-                # Actual successful delivery retires the transfer/manifest.
-                return page([])
-            if body.get("knownFilePolicy") == "reject":
-                assert body["paused"] is True and set(body) == {"link", "paused", "knownFilePolicy"}
+                    return downloads([{"id": "13", "hash": "b" * 32, "state": "stopped"}])
+            if failure == "incomplete-inventory":
+                return downloads([], more=True)
+            if route.endswith("view=all&limit=200") and state.get("promoted"):
+                return downloads([{"id": "12", "hash": "b" * 32, "state": "completed"}])
+            return downloads([])
+        if route == "/api/v1/downloads":
+            assert method == "POST" and body["source"]["type"] == "ed2k-link"
+            assert "|sources,192.0.2.20:20029|/" in body["source"]["link"]
+            if state["created"]:
+                assert body["intent"] == "stopped" and set(body) == {"source", "intent"}
                 if failure == "duplicate-accepted":
-                    return {"ok": True}
+                    return {"id": "12", "hash": "b" * 32, "sizeBytes": len(content)}
                 state["duplicateQueued"] = failure == "preflight-enqueue"
-                conflicts = [{"hash": "b" * 32, "kind": "presentLocalFile", "requestedSizeBytes": len(content),
-                    "recordedSizeBytes": len(content), "currentPaths": [state["incoming"] + "/Android Sample_01.bin"]},
-                    {"hash": "b" * 32, "kind": "previouslyCompleted", "firstCompletedAtMs": 1,
-                     "lastCompletedAtMs": 0 if failure == "history" else 2}]
+                conflicts = [{"jobId": "12", "hash": "b" * 32, "kind": "presentLocalFile",
+                    "requestedName": "Android Sample.bin", "requestedSizeBytes": len(content),
+                    "recordedSizeBytes": len(content), "path": state["incoming"] + "/Android Sample_01.bin",
+                    "redownloadAllowed": True, "firstCompletedAt": 1,
+                    "lastCompletedAt": 0 if failure == "history" else 2}]
                 raise subject.RustRestFailure("private conflict details", status=409,
                     detail=json.dumps({"error": {"code": "DOWNLOAD_CONFLICT", "details": {"conflicts": conflicts}}}))
+            assert body["intent"] == "started" and set(body) == {"source", "intent"}
             state["created"] = True
-            # TransferCreate in the actual Rust REST model accepts singular link
-            # and paused; this is the existing release-smoke owner's exact body.
-            assert method == "POST" and set(body) == {"link", "paused"} and body["paused"] is False
-            assert "|sources,192.0.2.20:20029|/" in body["link"]
+            assert expected_status == 201
+            if failure == "creation-200":
+                raise RuntimeError("Rust REST POST /api/v1/downloads returned HTTP 200; expected 201")
             assert state["incoming"] == state["settings"]["daemon"]["incomingDir"]
             assert state["restarts"] == 1, "the immutable live incoming destination requires a real restart"
             guest_files[state["incoming"] + "/Android Sample_01.bin"] = b"corrupt" if failure == "payload" else content
@@ -343,10 +339,14 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                 guest_files[state["incoming"] + "/Android Sample.bin"] = content
             if failure == "server-owner":
                 servers[base][-1]["name"] = "operator changed endpoint"
-        if route.endswith("/files?confirm=true"):
-            assert method == "DELETE" and route == "/api/v1/transfers/" + "b" * 32 + "/files?confirm=true"
+            return {"id": "0" if failure == "creation-id" else "12",
+                "hash": "c" * 32 if failure == "creation-hash" else "b" * 32,
+                "sizeBytes": len(content)}
+        if route == "/api/v1/downloads/remove":
+            assert method == "POST" and expected_status == 207
+            assert body == {"ids": ["12"], "deleteData": False}
             state["deleted"] = True
-            # DELETE is a no-op after promotion: local shared content survives.
+            return {"data": [{"id": "12", "status": "accepted", "httpStatus": 200}]}
         if route == "/api/v1/shared-files":
             if not state["created"]:
                 return page([{"hash": "b" * 32}] if failure == "known-hash" else [], shared=True)
@@ -365,15 +365,18 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             return {"hash": "b" * 32, "complete": True, "partFile": False,
                               "sizeBytes": len(content),
                               "path": ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2 else state["incoming"]) + "/Android Sample_01.bin"}
-        if route == "/api/v1/transfers/" + "b" * 32 + "/details":
-            assert not state["deleted"] and not disabled_servers
+        if route == "/api/v1/downloads/12":
+            assert not state["deleted"]
             detail_reads.append(clock[0])
-            if failure == "completion-diagnostics":
+            if failure == "completion-diagnostics" and detail_reads.count(120) > 1:
                 raise RuntimeError("synthetic-private-diagnostic-error")
-            return {"transfer": {"hash": "b" * 32, "state": "completing", "progress": 1.0,
-                "completedBytes": len(content), "sizeBytes": len(content), "partsObtained": 1, "partsTotal": 1,
-                "deliveredPath": None, "deliveryError": "failed to install delivery staging file /private at /private: "
-                    "filesystem does not support atomic no-replace rename: private-error"}}
+            completed = bool(state.get("promoted"))
+            return {"id": "12", "hash": "b" * 32, "state": "completed" if completed else "delivering",
+                "progress": 1.0, "sizeBytes": len(content), "payloadVerified": completed,
+                "completedAt": 2 if completed else None,
+                "delivery": {"path": state["incoming"] + "/Android Sample_01.bin" if completed else None,
+                    "state": "delivered" if completed else "pending",
+                    "ownership": "unowned" if failure == "unowned" else "owned" if completed else "none"}}
         return {}
 
     def command(*args, **kwargs):
@@ -410,7 +413,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     monkeypatch.setattr(subject, "request_json", request)
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
                      report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
-    if failure and failure != "transient-completion":
+    if failure and failure not in {"transient-completion", "unowned"}:
         expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
                           "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
@@ -418,6 +421,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                           "restore": "cleanup-restore-original-settings", "history": "verify-completed-download-evidence",
                           "duplicate-accepted": "verify-completed-download-evidence", "active-row": "verify-completed-delivery-metadata",
                           "preflight-enqueue": "verify-completed-download-evidence", "incomplete-inventory": "admit-prior-downloads-and-roots",
+                          **{name: "enqueue-owned-transfer" for name in ("creation-200", "creation-id", "creation-hash")},
                           **{name: "await-completed-delivery" for name in ("completion-missing", "completion-mismatch",
                               "completion-lookup", "completion-diagnostics")}}[failure]
         with pytest.raises(subject.CampaignFailure) as failed:
@@ -425,19 +429,22 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         assert failed.value.failure["phase"] == expected_phase
         receipt = json.loads((tmp_path / "transfer-campaign.json").read_text())
         assert receipt["status"] == "failed" and receipt["failure"]["code"] == expected_phase + "-failed"
+        if failure in {"creation-200", "creation-id", "creation-hash"}:
+            assert state["deleted"] is False, "unreceipted creation cannot authorize job removal"
+            assert json.loads((tmp_path / "transfer-cleanup.json").read_text())["status"] == "failed"
         if failure.startswith("completion-"):
             completion = failed.value.failure["completion"]
             assert receipt["failure"]["completion"] == completion
             assert completion["reason"] == ("lookup-failed" if failure == "completion-lookup" else "deadline-exhausted")
             assert len(completion["samples"]) == 1
-            assert detail_reads == ([0] if failure == "completion-lookup" else [120])
+            assert detail_reads and detail_reads[-1] == (0 if failure == "completion-lookup" else 120)
             assert clock[0] == (0 if failure == "completion-lookup" else 120)
             assert all(sample["sharedLookup"] == {"completion-missing": "missing", "completion-diagnostics": "missing",
                 "completion-mismatch": "metadata-mismatch", "completion-lookup": "unavailable"}[failure] for sample in completion["samples"])
             assert all(sample["transferPresence"] == ("unavailable" if failure == "completion-diagnostics" else "present")
                        for sample in completion["samples"])
             if failure != "completion-diagnostics":
-                assert all(sample["deliveryErrorCategory"] == "atomic-no-replace-unsupported" for sample in completion["samples"])
+                assert all(sample["deliveryState"] == "pending" for sample in completion["samples"])
             assert "private" not in json.dumps(completion)
             if failure == "completion-lookup":
                 assert receipt["failure"]["rest"]["httpStatus"] == 503
@@ -446,11 +453,13 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     else:
         result = subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert result["status"] == "passed"
+        assert result["downloadId"] == "12"
+        assert result["deliveryOwnership"] == ("unowned" if failure == "unowned" else "owned")
         assert result["collisionPreserved"] is True
         assert result["completedDeliverySurvivesRestart"] is True
         assert result["sha256"] == hashlib.sha256(content).hexdigest()
         assert state["settings"] == original and state["incoming"] == original["daemon"]["incomingDir"]
-        assert not detail_reads, "successful transfer waits must not run diagnostic REST requests"
+        assert detail_reads, "successful transfer waits must inspect the retained job"
         if failure == "transient-completion":
             assert clock[0] == 1 and shared_reads[:2] == [0, 1]
         assert state["restarts"] == 3 and state["deleted"]
@@ -459,7 +468,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         for rows in servers.values():
             assert rows[0] == public_server and len(rows) == 2 and rows[1]["enabled"] is False
         assert all(item["disposition"] == "owned-endpoint-disabled" for item in result["listenerCleanup"].values())
-        assert result["restartEvidence"] == {"sharedCatalog": True, "completionHistory": True, "duplicateRejected": True, "activeTransferAbsent": True}
+        assert result["restartEvidence"] == {"sharedCatalog": True, "retainedJob": True,
+            "duplicateRejected": True, "unfinishedDownloadAbsent": True}
         assert json.loads((tmp_path / "transfer-campaign.json").read_text())["fixtureCleanup"] == {
             "filesRemoved": 2, "directoriesRemoved": 1}
     if failure not in {"unfinished", "restore"}:
@@ -489,14 +499,14 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
 
     def request(base, method, route, key, body=None):
         calls.append((base, method, route))
-        assert route != "/api/v1/transfers" or method == "GET"
+        assert not route.startswith("/api/v1/downloads") or method == "GET"
         assert method != "PATCH"
         if route == "/api/v1/app/settings":
             return deepcopy(original)
         if route == "/api/v1/shared-directories":
             return {"roots": [{"path": "/operator/Shared"}]}
-        if route == "/api/v1/transfers":
-            return {"items": [], "total": 0, "limit": 100, "offset": 0}
+        if route == "/api/v1/downloads?view=unfinished&limit=200":
+            return {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
         if route == "/api/v1/network":
             return {"binding": {"activeConfiguredAddress": "192.0.2.20"}}
         if ((failure == "app-create" and base == app_base and route == "/api/v1/servers" and method == "POST")
@@ -614,14 +624,14 @@ def test_listener_delete_is_exact_owned_disabled_tombstone_and_preserves_every_p
 
 
 @pytest.mark.parametrize("kind,document", [
-    ("transfers", {"items": [], "total": 1, "limit": 100, "offset": 0}),
-    ("transfers", {"items": [], "total": 0, "limit": 100, "offset": 100}),
-    ("transfers", {"items": [], "total": 0, "limit": 100, "offset": False}),
-    ("transfers", {"items": []}),
+    ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": True, "nextCursor": "next"}}),
+    ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": "next"}}),
+    ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": False}}),
+    ("downloads", {"items": []}),
     ("shared-files", {"items": [], "total": 1, "limit": 100, "nextCursor": "private cursor"}),
     ("shared-files", {"items": [], "total": 0, "limit": False, "nextCursor": None}),
 ])
 def test_initial_inventory_never_treats_a_truncated_or_unknown_page_as_exhaustive(kind, document):
-    with pytest.raises(RuntimeError, match="complete bounded collection"):
+    with pytest.raises(RuntimeError, match="complete bounded"):
         subject._complete_items(document, kind=kind)
     assert subject._complete_items({"items": []}, kind="servers") == []

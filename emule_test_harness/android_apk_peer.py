@@ -22,9 +22,7 @@ from .android_apk_cleanup import COLLISION_OCCUPANT, OwnedFixtureFailure, remove
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
-TRANSFER_STATES = frozenset({"downloading", "paused", "queued", "checking", "completing", "completed", "error", "missingfiles"})
-DELIVERY_ERROR_CATEGORIES = frozenset({"none", "atomic-no-replace-unsupported", "stage-create", "stage-open-payload",
-    "stage-copy", "install", "verification", "other-present"})
+DOWNLOAD_STATES = frozenset({"queued", "waiting-metadata", "downloading", "stopping", "stopped", "verifying", "delivering", "completed", "removing", "failed"})
 
 
 def safe_completion_failure(value):
@@ -42,72 +40,53 @@ def safe_completion_failure(value):
             return None
         safe = {name: sample[name] for name in ("sharedLookup", "transferPresence")}
         if sample["transferPresence"] == "present":
-            if isinstance(sample.get("state"), str) and sample["state"] in TRANSFER_STATES:
+            if isinstance(sample.get("state"), str) and sample["state"] in DOWNLOAD_STATES:
                 safe["state"] = sample["state"]
             progress = sample.get("progress")
             if type(progress) in {int, float} and 0 <= progress <= 1 and math.isfinite(progress):
                 safe["progress"] = progress
-            for name, maximum in (("completedBytes", 2**64 - 1), ("sizeBytes", 2**64 - 1),
-                                  ("partsObtained", 2**32 - 1), ("partsTotal", 2**32 - 1)):
+            for name, maximum in (("sizeBytes", 2**64 - 1),):
                 if type(sample.get(name)) is int and 0 <= sample[name] <= maximum:
                     safe[name] = sample[name]
+            if type(sample.get("payloadVerified")) is bool:
+                safe["payloadVerified"] = sample["payloadVerified"]
+            if isinstance(sample.get("deliveryState"), str) and sample["deliveryState"] in {"pending", "delivered"}:
+                safe["deliveryState"] = sample["deliveryState"]
+            if isinstance(sample.get("deliveryOwnership"), str) and sample["deliveryOwnership"] in {"none", "owned", "unowned"}:
+                safe["deliveryOwnership"] = sample["deliveryOwnership"]
             if type(sample.get("deliveryPathPresent")) is bool:
                 safe["deliveryPathPresent"] = sample["deliveryPathPresent"]
-            if isinstance(sample.get("deliveryErrorCategory"), str) and sample["deliveryErrorCategory"] in DELIVERY_ERROR_CATEGORIES:
-                safe["deliveryErrorCategory"] = sample["deliveryErrorCategory"]
         samples.append(safe)
     return {"reason": value["reason"], "samples": samples}
 
 
-def _delivery_error_category(value):
-    """Classify only source-owned delivery signatures; never retain the error text."""
-    if value is None or value == "":
-        return "none"
-    if not isinstance(value, str):
-        return None
-    markers = (("filesystem does not support atomic no-replace rename:", "atomic-no-replace-unsupported"),
-        ("failed to create delivery staging file ", "stage-create"),
-        ("failed to open delivery payload ", "stage-open-payload"),
-        ("failed to copy payload ", "stage-copy"),
-        ("failed to install delivery staging file ", "install"),
-        ("delivered file failed verification:", "verification"),
-        ("delivery staging file failed verification:", "verification"),
-        ("published delivery failed verification:", "verification"))
-    for marker, category in markers:
-        if value.startswith(marker) or ": " + marker in value:
-            return category
-    return "other-present"
-
-
-def _completion_sample(request, file_hash, shared_lookup):
-    """Read the owned transfer once; failed diagnostics remain explicitly unavailable."""
+def _completion_sample(request, download_id, file_hash, shared_lookup):
+    """Read the captured job once; failed diagnostics remain explicitly unavailable."""
     sample = {"sharedLookup": shared_lookup, "transferPresence": "unavailable"}
     try:
-        details = request("GET", "/api/v1/transfers/" + file_hash + "/details")
+        details = request("GET", "/api/v1/downloads/" + download_id)
     except RustRestFailure as error:
         if error.safe_failure["httpStatus"] == 404:
             sample["transferPresence"] = "absent"
         return sample
     except Exception:
         return sample
-    transfer = details.get("transfer") if isinstance(details, dict) else None
+    transfer = details if isinstance(details, dict) else None
     if not isinstance(transfer, dict):
-        if isinstance(transfer, list) and len(transfer) > 1:
-            sample["transferPresence"] = "ambiguous"
         return sample
     owned_hash = transfer.get("hash")
     if not isinstance(owned_hash, str) or re.fullmatch(r"[0-9a-fA-F]{32}", owned_hash) is None:
         return sample
-    if owned_hash.lower() != file_hash:
+    if owned_hash.lower() != file_hash or transfer.get("id") != download_id:
         sample["transferPresence"] = "ambiguous"
         return sample
     sample.update({"transferPresence": "present", **{name: transfer[name] for name in (
-        "state", "progress", "completedBytes", "sizeBytes", "partsObtained", "partsTotal") if name in transfer}})
-    if "deliveredPath" in transfer and (transfer["deliveredPath"] is None or isinstance(transfer["deliveredPath"], str)):
-        sample["deliveryPathPresent"] = bool(transfer["deliveredPath"])
-    category = _delivery_error_category(transfer.get("deliveryError"))
-    if category is not None:
-        sample["deliveryErrorCategory"] = category
+        "state", "progress", "sizeBytes", "payloadVerified") if name in transfer}})
+    delivery = transfer.get("delivery")
+    if isinstance(delivery, dict):
+        sample["deliveryState"] = delivery.get("state")
+        sample["deliveryOwnership"] = delivery.get("ownership")
+        sample["deliveryPathPresent"] = isinstance(delivery.get("path"), str) and bool(delivery["path"])
     return safe_completion_failure({"reason": "lookup-failed", "samples": [sample]})["samples"][0]
 
 
@@ -168,14 +147,22 @@ class _Campaign:
 
 
 def _complete_items(document, *, kind):
+    if kind == "downloads":
+        rows = document.get("data") if isinstance(document, dict) else None
+        meta = document.get("meta") if isinstance(document, dict) else None
+        if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+                or not isinstance(meta, dict) or meta.get("hasMore") is not False
+                or "nextCursor" not in meta or meta["nextCursor"] is not None
+                or not isinstance(meta.get("apiVersion"), str)):
+            raise RuntimeError("Qualification requires a complete bounded download page")
+        return rows
     rows = document.get("items")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise RuntimeError("Qualification collection is invalid")
-    if kind in {"transfers", "shared-files"}:
+    if kind == "shared-files":
         if (type(document.get("total")) is not int or document["total"] != len(rows)
                 or type(document.get("limit")) is not int or document["limit"] < max(1, len(rows))
-                or document.get("nextCursor") is not None
-                or kind == "transfers" and (type(document.get("offset")) is not int or document["offset"] != 0)):
+                or document.get("nextCursor") is not None):
             raise RuntimeError("Qualification requires a complete bounded collection")
     return rows
 
@@ -509,7 +496,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
         original = request("GET", "/api/v1/app/settings")
         roots = {row["path"] for row in request("GET", "/api/v1/shared-directories")["roots"]}
         campaign.mark("admit-prior-downloads")
-        if any(row.get("state") != "completed" for row in _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")):
+        if _complete_items(request("GET", "/api/v1/downloads?view=unfinished&limit=200"), kind="downloads"):
             raise RuntimeError("Listener probe refuses to interrupt unfinished downloads")
         campaign.mark("admit-network-binding")
         binding = request("GET", "/api/v1/network")["binding"]
@@ -556,8 +543,9 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                     prefix, spawn_daemon, stop_client, campaign) -> dict:
     """Own a real transfer, collision and restart campaign; restore operator state."""
     base = f"http://127.0.0.1:{apk_port}"
-    def request(method, route, body=None):
-        return request_json(base, method, route, api_key, body)
+    def request(method, route, body=None, *, expected_status=None):
+        options = {} if expected_status is None else {"expected_status": expected_status}
+        return request_json(base, method, route, api_key, body, **options)
 
     def shell(*args):
         return command(*prefix, "shell", *args)
@@ -579,9 +567,10 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         raise RuntimeError("APK transfer requires its explicit prepared incoming configuration")
     campaign.mark("admit-prior-downloads-and-roots")
     original_roots = shared_roots()
-    rows = _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")
-    if any(row.get("state") != "completed" for row in rows):
+    rows = _complete_items(request("GET", "/api/v1/downloads?view=unfinished&limit=200"), kind="downloads")
+    if rows:
         raise RuntimeError("APK transfer refuses to interrupt preexisting unfinished downloads")
+    rows = _complete_items(request("GET", "/api/v1/downloads?view=all&limit=200"), kind="downloads")
     prior_hashes = {row.get("hash", "").lower() for row in rows}
     shared = _complete_items(request("GET", "/api/v1/shared-files"), kind="shared-files")
     prior_hashes.update(row.get("hash", "").lower() for row in shared)
@@ -612,7 +601,8 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
     if canonical != "/storage/emulated/0/Download/" + PurePosixPath(incoming).name:
         raise RuntimeError("APK incoming fixture did not resolve to its owned directory")
     incoming = canonical
-    file_hash = path = None
+    file_hash = path = download_id = None
+    enqueue_attempted = False
     changed = False
     cleanup_errors = []
     try:
@@ -649,7 +639,17 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
             campaign.mark("directed-local-listener-start")
             with local_listener(peer_base, PEER_KEY, role="peer", campaign=campaign), local_listener(base, api_key, campaign=campaign):
                 campaign.mark("enqueue-owned-transfer")
-                request("POST", "/api/v1/transfers", {"link": source_link, "paused": False})
+                enqueue_attempted = True
+                created = request("POST", "/api/v1/downloads",
+                    {"source": {"type": "ed2k-link", "link": source_link}, "intent": "started"},
+                    expected_status=201)
+                candidate_id = created.get("id") if isinstance(created, dict) else None
+                if (not isinstance(candidate_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", candidate_id) is None
+                        or int(candidate_id) > 9223372036854775807
+                        or created.get("hash", "").lower() != file_hash or created.get("sizeBytes") != len(content)):
+                    raise RuntimeError("APK download creation did not return its durable job identity")
+                download_id = candidate_id
+                campaign.record(downloadId=download_id)
                 deadline = time.monotonic() + 120
                 campaign.mark("await-completed-delivery")
                 shared_lookup = "unavailable"
@@ -668,9 +668,19 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                                 or result.get("complete") is not True or result.get("partFile") is not False):
                             result = None
                             shared_lookup = "metadata-mismatch"
-                        if result is not None:
-                            path = PurePosixPath(result.get("path", ""))
+                        job = request("GET", "/api/v1/downloads/" + download_id)
+                        delivery = job.get("delivery") if isinstance(job, dict) else None
+                        verified = (isinstance(job, dict) and job.get("id") == download_id
+                            and job.get("hash", "").lower() == file_hash and job.get("sizeBytes") == len(content)
+                            and job.get("state") == "completed" and job.get("payloadVerified") is True
+                            and type(job.get("completedAt")) is int and job["completedAt"] >= 0
+                            and isinstance(delivery, dict) and delivery.get("state") == "delivered"
+                            and delivery.get("ownership") in {"owned", "unowned"})
+                        if result is not None and verified:
                             campaign.mark("verify-delivered-path-and-size")
+                            if delivery.get("path") != result.get("path"):
+                                raise RuntimeError("APK delivered job and shared catalog disagree on the output path")
+                            path = PurePosixPath(result.get("path", ""))
                             if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
                                 raise RuntimeError("APK delivered file has invalid size, location or collision handling")
                             campaign.mark("verify-delivered-bytes")
@@ -692,7 +702,7 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                         # original failure even if diagnostics cannot run.
                         try:
                             try:
-                                sample = _completion_sample(request, file_hash, shared_lookup)
+                                sample = _completion_sample(request, download_id, file_hash, shared_lookup)
                             except Exception:
                                 sample = {"sharedLookup": shared_lookup, "transferPresence": "unavailable"}
                             campaign.fail(error)
@@ -705,57 +715,77 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         campaign.mark("restart-completed-delivery")
         restart_service()
         campaign.mark("verify-completed-delivery-metadata")
-        # WHY: delivery promotes content to the shared catalog and retires the
-        # transfer/manifest. Persistence is local content + completion history,
-        # not a completed row in the active transfer collection.
+        # Delivery and the durable completed job must survive the service restart.
         shared_file = request("GET", "/api/v1/shared-files/" + file_hash)
         if (shared_file.get("hash", "").lower() != file_hash or shared_file.get("path") != str(path)
                 or shared_file.get("sizeBytes") != len(content) or shared_file.get("complete") is not True
                 or shared_file.get("partFile") is not False):
             raise RuntimeError("APK completed delivery metadata did not survive restart")
-        if any(row.get("hash", "").lower() == file_hash for row in _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")):
-            raise RuntimeError("APK delivered content still has an active transfer")
+        retained = request("GET", "/api/v1/downloads/" + download_id)
+        retained_delivery = retained.get("delivery") if isinstance(retained, dict) else None
+        if (not isinstance(retained, dict) or retained.get("id") != download_id or retained.get("hash", "").lower() != file_hash
+                or retained.get("state") != "completed" or retained.get("payloadVerified") is not True
+                or type(retained.get("completedAt")) is not int or not isinstance(retained_delivery, dict)
+                or retained_delivery.get("path") != str(path) or retained_delivery.get("state") != "delivered"
+                or retained_delivery.get("ownership") not in {"owned", "unowned"}):
+            raise RuntimeError("APK completed job did not survive restart")
+        listed = _complete_items(request("GET", "/api/v1/downloads?view=all&limit=200"), kind="downloads")
+        if (len([row for row in listed if row.get("id") == download_id and row.get("hash", "").lower() == file_hash
+                 and row.get("state") == "completed"]) != 1
+                or _complete_items(request("GET", "/api/v1/downloads?view=unfinished&limit=200"), kind="downloads")):
+            raise RuntimeError("APK completed job page did not survive restart")
         campaign.mark("verify-completed-download-evidence")
         try:
-            request("POST", "/api/v1/transfers", {"link": source_link, "paused": True, "knownFilePolicy": "reject"})
+            request("POST", "/api/v1/downloads", {"source": {"type": "ed2k-link", "link": source_link}, "intent": "stopped"})
         except RustRestFailure as error:
-            conflicts = error.response_error.get("details", {}).get("conflicts", [])
+            conflicts = error.response_error.get("details", {}).get("conflicts")
             if (error.safe_failure["httpStatus"] != 409 or error.safe_failure["apiCode"] != "DOWNLOAD_CONFLICT"
-                    or not isinstance(conflicts, list)):
+                    or not isinstance(conflicts, list) or len(conflicts) != 1 or not isinstance(conflicts[0], dict)):
                 raise
-            local = [row for row in conflicts if row.get("hash", "").lower() == file_hash and row.get("kind") == "presentLocalFile"]
-            history = [row for row in conflicts if row.get("hash", "").lower() == file_hash and row.get("kind") == "previouslyCompleted"]
-            if (len(local) != 1 or local[0].get("currentPaths") != [str(path)]
-                    or local[0].get("requestedSizeBytes") != len(content) or local[0].get("recordedSizeBytes") != len(content)
-                    or len(history) != 1 or type(history[0].get("firstCompletedAtMs")) is not int
-                    or type(history[0].get("lastCompletedAtMs")) is not int
-                    or not 0 < history[0]["firstCompletedAtMs"] <= history[0]["lastCompletedAtMs"]):
+            evidence = conflicts[0]
+            if (evidence.get("hash", "").lower() != file_hash or evidence.get("jobId") != download_id
+                    or evidence.get("kind") != "presentLocalFile" or evidence.get("path") != str(path)
+                    or evidence.get("requestedSizeBytes") != len(content)
+                    or evidence.get("recordedSizeBytes") != len(content)
+                    or evidence.get("redownloadAllowed") is not True
+                    or type(evidence.get("firstCompletedAt")) is not int
+                    or type(evidence.get("lastCompletedAt")) is not int
+                    or not 0 <= evidence["firstCompletedAt"] <= evidence["lastCompletedAt"]):
                 raise RuntimeError("APK download conflict did not retain completed local evidence") from None
         else:
             raise RuntimeError("APK completed download duplicate was not rejected")
-        if any(row.get("hash", "").lower() == file_hash for row in _complete_items(request("GET", "/api/v1/transfers"), kind="transfers")):
-            raise RuntimeError("APK duplicate preflight enqueued an active transfer")
+        if _complete_items(request("GET", "/api/v1/downloads?view=unfinished&limit=200"), kind="downloads"):
+            raise RuntimeError("APK duplicate preflight enqueued an active download")
         campaign.mark("verify-completed-delivery-bytes")
         if guest_sha256(command, str(path), prefix=prefix) != expected_sha:
             raise RuntimeError("APK delivered bytes changed across service restart")
         return {"status": "passed", "sizeBytes": len(content), "sha256": expected_sha,
                 "collisionPreserved": True, "completedDeliverySurvivesRestart": True,
+                "downloadId": download_id, "deliveryOwnership": retained_delivery["ownership"],
                 "deliveredInSharedStorage": True, "peerSourceRevision": peer["sourceRevision"],
                 "transport": "same-device-p2p", "wifiDataPlane": "not-claimed",
                 "listenerCleanup": campaign.value["listenerCleanup"],
-                "restartEvidence": {"sharedCatalog": True, "completionHistory": True, "duplicateRejected": True, "activeTransferAbsent": True}}
+                "restartEvidence": {"sharedCatalog": True, "retainedJob": True, "duplicateRejected": True, "unfinishedDownloadAbsent": True}}
     except Exception as error:
         campaign.fail(error)
         raise
     finally:
         active_failure = sys.exc_info()[0] is not None
         def remove_transfer():
-            if file_hash is not None:
-                # Only a hash absent before this nonce-owned campaign is ours.
+            if enqueue_attempted and download_id is None:
+                raise RuntimeError("APK download enqueue lacks a captured creation receipt; cleanup authority is unknown")
+            if download_id is not None:
                 if path is not None and (path.parent != PurePosixPath(incoming)
                         or guest_sha256(command, str(path), prefix=prefix) != expected_sha):
                     raise RuntimeError("Owned delivery changed; refusing file deletion")
-                request("DELETE", f"/api/v1/transfers/{file_hash}/files?confirm=true")
+                result = request("POST", "/api/v1/downloads/remove", {"ids": [download_id], "deleteData": False},
+                    expected_status=207)
+                items = result.get("data") if isinstance(result, dict) else None
+                if (not isinstance(items, list) or len(items) != 1 or items[0].get("id") != download_id
+                        or items[0].get("status") not in {"accepted", "unchanged"}
+                        or type(items[0].get("httpStatus")) is not int or not 200 <= items[0]["httpStatus"] < 300
+                        or "error" in items[0]):
+                    raise RuntimeError("APK download removal did not accept the captured job")
         def restore_settings():
             if changed:
                 request("PATCH", "/api/v1/app/settings", original)

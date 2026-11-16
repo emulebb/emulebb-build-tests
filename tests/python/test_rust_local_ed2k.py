@@ -61,6 +61,22 @@ def test_request_json_preserves_default_and_accepts_explicit_deadline(monkeypatc
     assert calls == [(10.0 if timeout_seconds is None else timeout_seconds, b'{"value": 1}')]
 
 
+@pytest.mark.parametrize("actual,accepted", [(207, True), (200, False), (201, False)])
+def test_request_json_requires_exact_batch_http_status(monkeypatch, actual, accepted):
+    class Response(io.BytesIO):
+        status = actual
+
+    monkeypatch.setattr(rust_local_ed2k.urllib.request, "urlopen",
+        lambda request, *, timeout: Response(b'{"data":[{"id":"12","status":"accepted","httpStatus":200}]}'))
+    if accepted:
+        assert rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/downloads/stop",
+            "key", {"ids": ["12"]}, expected_status=207)["data"][0]["id"] == "12"
+    else:
+        with pytest.raises(RuntimeError, match="expected 207"):
+            rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/downloads/stop",
+                "key", {"ids": ["12"]}, expected_status=207)
+
+
 @pytest.mark.parametrize("code,message,expected", [
     ("BAD_REQUEST", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
     ("EMULE_ERROR", "failed to bind eD2k TCP listener on 192.0.2.20:20029", "ed2k-listener-bind"),

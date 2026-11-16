@@ -58,27 +58,45 @@ def browser_api_key_read_script() -> str:
     return f"() => sessionStorage.getItem({json.dumps(WEBUI_API_KEY_STORAGE_KEY)})"
 
 
+def _download_rows(base_url: str, api_key: str) -> list[dict[str, Any]]:
+    document = api_document(base_url, "downloads?view=all&limit=200", api_key)
+    rows = document.get("data") if isinstance(document, dict) else None
+    meta = document.get("meta") if isinstance(document, dict) else None
+    if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+            or not isinstance(meta, dict) or meta.get("hasMore") is not False
+            or "nextCursor" not in meta or meta["nextCursor"] is not None
+            or not isinstance(meta.get("apiVersion"), str)):
+        raise RuntimeError("WebUI proof requires a complete bounded download page")
+    return rows
+
+
+def _require_download_batch(document: dict, download_id: str) -> None:
+    rows = document.get("data") if isinstance(document, dict) else None
+    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or rows[0].get("id") != download_id or rows[0].get("status") not in {"accepted", "unchanged"}
+            or type(rows[0].get("httpStatus")) is not int or not 200 <= rows[0]["httpStatus"] < 300
+            or "error" in rows[0]):
+        raise RuntimeError("WebUI download action did not accept the captured job")
+
+
 def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
                            file_hash: str, size_bytes: int, cleanup_evidence: dict,
                            timeout_seconds: float = 30) -> dict:
     """Exercise the real handoff form; inspect actual requests and persisted rows."""
     timeout = int(timeout_seconds * 1000)
     posts = []
+    download_id = None
 
     def observe(request):
-        if request.method == "POST" and urlparse(request.url).path == "/api/v1/transfers":
+        if request.method == "POST" and urlparse(request.url).path == "/api/v1/downloads":
             if len(posts) < 8:
                 posts.append(request.post_data_json)
 
     def rows():
-        value = api_data(base_url, "transfers?limit=100", api_key)
-        items = value.get("items") if isinstance(value, dict) else None
-        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
-            raise RuntimeError("File-link proof received an invalid transfer collection")
-        return items
+        return _download_rows(base_url, api_key)
 
     def identities(items):
-        return sorted((item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
+        return sorted((item.get("id"), item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
 
     baseline = rows()
     if any(item.get("hash", "").lower() == file_hash for item in baseline):
@@ -108,24 +126,31 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
         field.wait_for(timeout=timeout)
         if field.input_value() != link:
             raise RuntimeError("File-link form did not restore the requested link")
-        # Queue only a paused synthetic fixture: this checks the real POST and
+        # Queue only a stopped synthetic fixture: this checks the real POST and
         # persistence without inventing an available P2P source for these bytes.
         page.get_by_label("Paused", exact=True).check(timeout=timeout)
         if identities(rows()) != identities(baseline) or posts:
             raise RuntimeError("File-link handoff queued a transfer before confirmation")
         with page.expect_response(lambda response: response.request.method == "POST"
-                                  and urlparse(response.url).path == "/api/v1/transfers", timeout=timeout) as response:
+                                  and urlparse(response.url).path == "/api/v1/downloads", timeout=timeout) as response:
             page.get_by_role("button", name="Add links", exact=True).click(timeout=timeout)
-        if not response.value.ok or posts != [{"links": [link], "paused": True, "knownFilePolicy": "reject"}]:
-            raise RuntimeError("File-link confirmation did not submit the exact requested paused transfer")
+        created = response.value.json().get("data") if response.value.ok and response.value.status == 201 else None
+        candidate_id = created.get("id") if isinstance(created, dict) else None
+        if (posts != [{"source": {"type": "ed2k-link", "link": link}, "intent": "stopped"}]
+                or not isinstance(candidate_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", candidate_id) is None
+                or int(candidate_id) > 9223372036854775807
+                or created.get("hash", "").lower() != file_hash or created.get("sizeBytes") != size_bytes):
+            raise RuntimeError("File-link confirmation did not submit the exact requested stopped download")
+        download_id = candidate_id
         page.wait_for_function("location.hash === ''", timeout=timeout)
 
         def confirmed():
             items = rows()
-            matched = [item for item in items if item.get("hash", "").lower() == file_hash]
+            matched = [item for item in items if item.get("id") == download_id]
             if (len(matched) == 1 and matched[0].get("sizeBytes") == size_bytes
-                    and matched[0].get("state") == "paused"
-                    and identities(items) == sorted(identities(baseline) + [(file_hash, size_bytes)])):
+                    and matched[0].get("hash", "").lower() == file_hash
+                    and matched[0].get("intent") == "stopped"
+                    and identities(items) == sorted(identities(baseline) + [(download_id, file_hash, size_bytes)])):
                 return items
             return None
 
@@ -138,7 +163,7 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
         page.get_by_role("button", name="Cancel links", exact=True).click(timeout=timeout)
         return {"status": "passed", "signInPreserved": True, "cancelWithoutEnqueue": True,
                 "explicitConfirmation": True, "repeatedNavigationWithoutEnqueue": True,
-                "transferHash": file_hash, "sizeBytes": size_bytes, "state": "paused"}
+                "downloadId": download_id, "hash": file_hash, "sizeBytes": size_bytes, "intent": "stopped"}
     finally:
         active_failure = sys.exc_info()[0] is not None
         errors = []
@@ -146,11 +171,14 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
             page.remove_listener("request", observe)
         except Exception as error:
             errors.append(type(error).__name__)
-        # The hash was absent before this disposable proof. Delete only its own
-        # partial fixture via the canonical public API, even on a failed check.
+        # Remove only the job created by this disposable proof.
         try:
-            if any(item.get("hash", "").lower() == file_hash for item in rows()):
-                request_json(base_url, "DELETE", f"/api/v1/transfers/{file_hash}/files?confirm=true", api_key)
+            if download_id is not None and any(item.get("id") == download_id for item in rows()):
+                result = request_json(base_url, "POST", "/api/v1/downloads/remove", api_key,
+                    {"ids": [download_id], "deleteData": True}, expected_status=207)
+                _require_download_batch(result, download_id)
+            if len(posts) > 1 or download_id is None and identities(rows()) != identities(baseline):
+                raise RuntimeError("File-link proof has an enqueue without a captured creation receipt")
             if identities(rows()) != identities(baseline):
                 raise RuntimeError("File-link proof cleanup did not restore the original transfer collection")
         except Exception as error:
@@ -309,15 +337,20 @@ def profile_settings_api_key(settings_path: Path) -> str:
     return api_key.strip()
 
 
-def api_data(base_url: str, path: str, api_key: str) -> Any:
-    """Fetch one authenticated REST resource and unwrap the API envelope."""
-
+def api_document(base_url: str, path: str, api_key: str) -> Any:
+    """Fetch one authenticated REST response with its page metadata."""
     request = Request(
         f"{base_url.rstrip('/')}/api/v1/{path.lstrip('/')}",
         headers={"X-API-Key": api_key},
     )
     with urlopen(request, timeout=5.0) as response:
-        payload = json.loads(response.read())
+        return json.loads(response.read())
+
+
+def api_data(base_url: str, path: str, api_key: str) -> Any:
+    """Fetch one authenticated REST resource and unwrap the API envelope."""
+
+    payload = api_document(base_url, path, api_key)
     return payload.get("data", payload) if isinstance(payload, dict) else payload
 
 
@@ -887,11 +920,22 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             result_name = str(download_result["name"])
             result_row = search_panel.locator("tbody tr").filter(has_text=result_name).first
             result_row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
-            result_row.get_by_role("button", name="Download", exact=True).click()
+            with page.expect_response(lambda response: response.request.method == "POST"
+                    and re.fullmatch(r"/api/v1/searches/[^/]+/results/[0-9a-fA-F]{32}/operations/download",
+                        urlparse(response.url).path) is not None,
+                    timeout=int(options.network_timeout_seconds * 1000)) as download_response:
+                result_row.get_by_role("button", name="Download", exact=True).click()
             page.get_by_text("Download queued", exact=True).wait_for(
                 timeout=int(options.network_timeout_seconds * 1000)
             )
+            created = download_response.value.json().get("data") if download_response.value.ok else None
+            download_id = created.get("id") if isinstance(created, dict) else None
+            if (not isinstance(download_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", download_id) is None
+                    or int(download_id) > 9223372036854775807
+                    or created.get("hash", "").lower() != str(download_result["hash"]).lower()):
+                raise RuntimeError("Rendered search download did not return a durable job ID")
             selected_transfer = {
+                "id": download_id,
                 "hash": str(download_result["hash"]).lower(),
                 "name": result_name,
                 "sizeBytes": int(download_result["sizeBytes"]),
@@ -920,13 +964,13 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     def active_transfer() -> dict[str, Any] | None:
         value = api_data(
             base_url,
-            f"transfers/{selected_transfer['hash']}",
+            f"downloads/{selected_transfer['id']}",
             api_key,
         )
         if not isinstance(value, dict):
             return None
-        completed_bytes = int(value.get("completedBytes") or 0)
-        return value if completed_bytes > 0 else None
+        progress = value.get("progress")
+        return value if value.get("id") == selected_transfer["id"] and type(progress) in {int, float} and progress > 0 else None
 
     transfer_activity_observed = True
     try:
@@ -939,7 +983,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer_activity_observed = False
         transfer = api_data(
             base_url,
-            f"transfers/{selected_transfer['hash']}",
+            f"downloads/{selected_transfer['id']}",
             api_key,
         )
         if not isinstance(transfer, dict):
@@ -951,27 +995,47 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer = _wait_for_api(
             "rendered WebUI allowlisted transfer completion",
             options.transfer_timeout_seconds,
-            lambda: (lambda value: value if int(value.get("completedBytes") or 0) == selected_transfer["sizeBytes"] else None)(
-                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
+            lambda: (lambda value: value if isinstance(value, dict) and value.get("id") == selected_transfer["id"]
+                and value.get("state") == "completed" and value.get("payloadVerified") is True
+                and isinstance(value.get("delivery"), dict) and value["delivery"].get("state") == "delivered"
+                and value["delivery"].get("ownership") in {"owned", "unowned"}
+                and isinstance(value["delivery"].get("path"), str) and value["delivery"]["path"] else None)(
+                api_data(base_url, f"downloads/{selected_transfer['id']}", api_key)
             ),
         )
     else:
         transfer_row = transfer_panel.locator("tbody tr").filter(has_text=selected_transfer["name"]).first
-        transfer_row.get_by_role("button", name="Stop", exact=True).click()
+        with page.expect_response(lambda response: response.request.method == "POST"
+                and urlparse(response.url).path == "/api/v1/downloads/stop",
+                timeout=int(options.network_timeout_seconds * 1000)) as stop_response:
+            transfer_row.get_by_role("button", name="Stop", exact=True).click()
+        if (stop_response.value.status != 207
+                or stop_response.value.request.post_data_json != {"ids": [selected_transfer["id"]]}):
+            raise RuntimeError("Rendered Stop did not return a batch outcome")
+        _require_download_batch(stop_response.value.json(), selected_transfer["id"])
         page.get_by_text("Transfer stopped", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
         )
         transfer = _wait_for_api(
             "rendered WebUI transfer quiescence after Stop",
             min(15.0, options.network_timeout_seconds),
-            lambda: (lambda value: value if isinstance(value, dict) and value.get("stopped") is True else None)(
-                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
+            lambda: (lambda value: value if isinstance(value, dict) and value.get("intent") == "stopped"
+                and value.get("state") == "stopped" else None)(
+                api_data(base_url, f"downloads/{selected_transfer['id']}", api_key)
             ),
         )
         transfer_stop_state = str(transfer.get("state") or "unknown")
-        stopped_after_observation = transfer.get("stopped") is True
+        stopped_after_observation = transfer.get("intent") == "stopped" and transfer.get("state") == "stopped"
         page.once("dialog", lambda dialog: dialog.accept())
-        transfer_row.get_by_role("button", name="Delete", exact=True).click()
+        with page.expect_response(lambda response: response.request.method == "POST"
+                and urlparse(response.url).path == "/api/v1/downloads/remove",
+                timeout=int(options.network_timeout_seconds * 1000)) as remove_response:
+            transfer_row.get_by_role("button", name="Delete", exact=True).click()
+        if (remove_response.value.status != 207
+                or remove_response.value.request.post_data_json != {
+                    "ids": [selected_transfer["id"]], "deleteData": False}):
+            raise RuntimeError("Rendered Delete did not return a batch outcome")
+        _require_download_batch(remove_response.value.json(), selected_transfer["id"])
         page.get_by_text("Transfer deleted", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
         )
@@ -982,7 +1046,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
         def deleted_transfer() -> dict[str, Any] | None:
             try:
-                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
+                api_data(base_url, f"downloads/{selected_transfer['id']}", api_key)
             except HTTPError as error:
                 if error.code == 404:
                     return {"status": 404}
@@ -1005,7 +1069,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     transfer_name_round_trip = str(transfer.get("name") or "") == selected_transfer["name"]
     # eD2K protocol identity is hash + byte size. Display names may be normalized
     # by a live result source and are retained as a non-gating diagnostic only.
-    transfer_identity_verified = transfer_hash_verified and transfer_size_verified
+    transfer_identity_verified = (transfer.get("id") == selected_transfer["id"]
+        and transfer_hash_verified and transfer_size_verified)
     failures = []
     if not kad_disconnect_verified:
         failures.append("kad-disconnect")
@@ -1069,16 +1134,16 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "displayNameRoundTrip": transfer_name_round_trip,
             "networkActivityRequired": True,
             "networkActivityObserved": transfer_activity_observed,
-            "sourceCount": int(transfer.get("sources") or 0),
-            "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
-            "completed": int(transfer.get("completedBytes") or 0) == options.transfer_size,
-            "completedBytes": int(transfer.get("completedBytes") or 0),
+            "downloadId": selected_transfer["id"],
+            "progress": transfer.get("progress"),
+            "completed": transfer.get("state") == "completed" and transfer.get("payloadVerified") is True,
+            "deliveryOwnership": (transfer.get("delivery") or {}).get("ownership"),
             "sizeBytes": int(transfer.get("sizeBytes") or selected_transfer["sizeBytes"]),
             "stopRequested": not options.complete_transfer,
             "deleteRequested": not options.complete_transfer,
             "finalState": transfer_stop_state,
             "stoppedAfterObservation": stopped_after_observation,
-            "stoppedFlag": bool(transfer.get("stopped")),
+            "stoppedFlag": transfer.get("intent") == "stopped",
             "deletedAfterStop": deleted_after_stop,
             "absentAfterDelete": deleted_after_stop,
         },
@@ -1246,9 +1311,10 @@ class RequestRecorder:
 
 
 def sanitize_api_request_key(key: str) -> str:
-    """Removes live transfer/file hash material from an API request key."""
+    """Remove live download IDs and file hashes from a request key."""
 
-    return HASH_TOKEN_RE.sub("{hash}", key)
+    return HASH_TOKEN_RE.sub("{hash}",
+        re.sub(r"(?<=downloads/)[1-9][0-9]{0,18}(?=/|$)", "{id}", key))
 
 
 def sanitize_report_text(value: str, redactions: tuple[str, ...] = ()) -> str:

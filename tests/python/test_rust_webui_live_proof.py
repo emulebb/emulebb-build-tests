@@ -110,7 +110,8 @@ def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:
     assert "localStorage" not in read_script
 
 
-@pytest.mark.parametrize("failure", [None, "automatic", "cancel", "body", "size", "hash", "duplicate", "cleanup", "body-cleanup"])
+@pytest.mark.parametrize("failure", [None, "automatic", "cancel", "body", "size", "hash", "duplicate", "cleanup", "body-cleanup",
+    "creation-200", "creation-id", "creation-hash"])
 def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_size(monkeypatch, failure):
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -119,9 +120,9 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
 
     file_hash = "00112233445566778899aabbccddeeff"
     link = f"ed2k://|file|Android%20Intent%20Sample.bin|1|{file_hash}|/"
-    baseline = [{"hash": "b" * 32, "sizeBytes": 262144, "state": "completed"}]
+    baseline = [{"id": "7", "hash": "b" * 32, "sizeBytes": 262144, "state": "completed"}]
     items = list(baseline)
-    calls = []
+    calls, removals = [], []
     cleanup = {}
 
     class Page:
@@ -139,13 +140,13 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             self.observer = None
 
         def post(self):
-            body = {"links": [link], "paused": True, "knownFilePolicy": "reject"}
+            body = {"source": {"type": "ed2k-link", "link": link}, "intent": "stopped"}
             if failure in {"body", "body-cleanup"}:
-                body = {"link": link, "paused": True}
-            self.observer(SimpleNamespace(method="POST", url="http://127.0.0.1:1234/api/v1/transfers",
+                body = {"source": {"type": "ed2k-link"}, "intent": "stopped"}
+            self.observer(SimpleNamespace(method="POST", url="http://127.0.0.1:1234/api/v1/downloads",
                                           post_data_json=body))
-            items.append({"hash": "c" * 32 if failure == "hash" else file_hash,
-                          "sizeBytes": 2 if failure == "size" else 1, "state": "paused"})
+            items.append({"id": "8", "hash": "c" * 32 if failure == "hash" else file_hash,
+                          "sizeBytes": 2 if failure == "size" else 1, "intent": "stopped"})
 
         def goto(self, url, **kwargs):
             self.value = parse_qs(urlparse(url).fragment)["ed2k"][0]
@@ -187,12 +188,16 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
 
         @contextmanager
         def expect_response(self, predicate, **kwargs):
-            response = SimpleNamespace(ok=True, request=SimpleNamespace(method="POST"),
-                                       url="http://127.0.0.1:1234/api/v1/transfers")
+            response = SimpleNamespace(ok=True, status=200 if failure == "creation-200" else 201,
+                                       request=SimpleNamespace(method="POST"),
+                                       url="http://127.0.0.1:1234/api/v1/downloads",
+                                       json=lambda: {"data": {"id": "0" if failure == "creation-id" else "8",
+                                           "hash": "c" * 32 if failure == "creation-hash" else file_hash, "sizeBytes": 1}})
             assert predicate(response)
             yield SimpleNamespace(value=response)
 
-    monkeypatch.setattr(rust_webui_live_proof, "api_data", lambda *args: {"items": list(items)})
+    monkeypatch.setattr(rust_webui_live_proof, "api_document", lambda *args: {
+        "data": list(items), "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}})
 
     def wait(description, timeout_seconds, probe):
         result = probe()
@@ -200,11 +205,15 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             raise RuntimeError("confirmed file-link transfer was not persisted")
         return result
 
-    def delete(base, method, path, key):
-        assert method == "DELETE" and path == f"/api/v1/transfers/{file_hash}/files?confirm=true"
+    def delete(base, method, path, key, body, *, expected_status):
+        removals.append(body)
+        assert method == "POST" and path == "/api/v1/downloads/remove"
+        assert expected_status == 207
+        assert body == {"ids": ["8"], "deleteData": True}
         if failure in {"cleanup", "body-cleanup"}:
             raise ValueError("synthetic-private-key-not-for-receipts")
-        items[:] = [item for item in items if item["hash"] != file_hash]
+        items[:] = [item for item in items if item["id"] != "8"]
+        return {"data": [{"id": "8", "status": "accepted", "httpStatus": 200}]}
 
     monkeypatch.setattr(rust_webui_live_proof, "_wait_for_api", wait)
     monkeypatch.setattr(rust_local_ed2k, "request_json", delete)
@@ -214,18 +223,23 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
         with pytest.raises(RuntimeError, match={"automatic": "before authentication", "cancel": "cancellation",
             "body": "exact requested", "body-cleanup": "exact requested", "size": "not persisted", "hash": "not persisted",
             "duplicate": "automatically changed",
-            "cleanup": "cleanup failed"}[failure]):
+            "cleanup": "cleanup failed", "creation-200": "exact requested",
+            "creation-id": "exact requested", "creation-hash": "exact requested"}[failure]):
             rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
     else:
         result = rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
-        assert result["status"] == "passed" and result["transferHash"] == file_hash and result["sizeBytes"] == 1
+        assert result["status"] == "passed" and result["downloadId"] == "8" and result["sizeBytes"] == 1
         from emule_test_harness.android_apk_lifecycle import FILE_LINK_BROWSER_REQUIRED_CHECKS
         assert FILE_LINK_BROWSER_REQUIRED_CHECKS == frozenset({
             "signInPreserved", "cancelWithoutEnqueue", "explicitConfirmation", "repeatedNavigationWithoutEnqueue"})
         assert all(result[name] is True for name in FILE_LINK_BROWSER_REQUIRED_CHECKS)
         assert calls == ["Connect", "Cancel links", "Add links", "Cancel links"]
-    assert cleanup["status"] == ("failed" if failure in {"cleanup", "body-cleanup", "hash"} else "passed")
-    if failure not in {"cleanup", "body-cleanup", "hash"}:
+    assert cleanup["status"] == ("failed" if failure in {"automatic", "cancel", "duplicate", "body", "cleanup", "body-cleanup",
+        "creation-200", "creation-id", "creation-hash"} else "passed")
+    if failure in {"automatic", "cancel", "body", "body-cleanup", "creation-200", "creation-id", "creation-hash"}:
+        assert removals == [], "an unreceipted enqueue must not grant deletion authority"
+    if failure not in {"automatic", "cancel", "duplicate", "body", "cleanup", "body-cleanup",
+            "creation-200", "creation-id", "creation-hash"}:
         assert items == baseline
 
 
@@ -380,16 +394,27 @@ def test_request_recorder_counts_only_same_origin_api_and_static_assets() -> Non
 
     recorder.record_url("http://192.0.2.10:4731/api/v1/snapshot?limit=500")
     recorder.record_url("http://192.0.2.10:4731/api/v1/logs?limit=300")
-    recorder.record_url("http://192.0.2.10:4731/api/v1/transfers/abcdef0123456789abcdef0123456789/sources")
+    recorder.record_url("http://192.0.2.10:4731/api/v1/downloads/12/sources")
     recorder.record_url("http://192.0.2.10:4731/assets/index-test.js")
     recorder.record_url("http://example.invalid/api/v1/snapshot?limit=500")
 
     assert recorder.snapshot()["apiCounts"] == {
         "logs?limit=300": 1,
         "snapshot?limit=500": 1,
-        "transfers/{hash}/sources": 1,
+        "downloads/{id}/sources": 1,
     }
     assert recorder.snapshot()["staticAssets"] == {"/assets/index-test.js": 1}
+
+
+@pytest.mark.parametrize("meta", [
+    {"apiVersion": "v1", "hasMore": False},
+    {"apiVersion": "v1", "hasMore": True, "nextCursor": "next"},
+    {"apiVersion": "v1", "hasMore": False, "nextCursor": "next"},
+])
+def test_webui_download_inventory_requires_a_complete_native_page(monkeypatch, meta):
+    monkeypatch.setattr(rust_webui_live_proof, "api_document", lambda *_args: {"data": [], "meta": meta})
+    with pytest.raises(RuntimeError, match="complete bounded download page"):
+        rust_webui_live_proof._download_rows("http://127.0.0.1:1234", "key")
 
 
 def test_steady_request_load_allows_snapshot_polling_only() -> None:
