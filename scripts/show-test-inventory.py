@@ -94,14 +94,16 @@ def render_markdown(inv: dict) -> str:
         "",
         "## Protocol live-suite ownership",
         "",
-        "| Path | Classification | Campaigns | Reason |",
-        "| --- | --- | --- | --- |",
+        "| Path | Classification | Campaigns |",
+        "| --- | --- | --- |",
     ]
     for row in inv["layers"]["protocolParity"]["liveProtocolSuites"]:
         out.append(
-            f"| `{row['path']}` | {row['classification']} | {', '.join(row['campaignIds']) or '(none)'} | "
-            f"{row['reason']} |"
+            f"| `{row['path']}` | {row['classification']} | {', '.join(row['campaignIds']) or '(none)'} |"
         )
+    out.append("")
+    for row in inv["layers"]["protocolParity"]["liveProtocolSuites"]:
+        out.append(f"- `{row['path']}`: {row['reason']}")
     out += [
         "",
         "## Native doctest suites",
