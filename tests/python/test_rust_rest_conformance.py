@@ -8,6 +8,7 @@ import urllib.parse
 import pytest
 
 from emule_test_harness import rust_rest_conformance
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 
 def test_explicit_contract_load_does_not_override_operator_environment(tmp_path, monkeypatch):
@@ -196,6 +197,23 @@ def test_rust_openapi_shared_root_routes_use_controlled_external_path(
     }
     assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {
         "enabled": True
+    }
+
+
+def test_rust_category_contract_uses_name_paths_and_nullable_download_body() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
+    routes = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+    for operation_id in ("getCategory", "patchCategory", "deleteCategory"):
+        route = routes[operation_id]
+        assert route["path"] == "/api/v1/categories/MissingCategory"
+        assert route["openapiPath"] == "/categories/{categoryName}"
+        assert module.normalize_contract_path_for_openapi(route["path"]) == route["openapiPath"]
+    assert module.assert_contract_routes_match_openapi()["ok"] is True
+    assert module.get_contract_route_body("patchCategory") == {"comment": "REST contract"}
+    assert module.get_contract_route_body("downloadSearchResult") == {
+        "paused": True, "category": None,
     }
 
 

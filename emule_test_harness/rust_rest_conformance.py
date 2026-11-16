@@ -43,6 +43,7 @@ EVENT_STREAM_EXPECTED_HEADERS = {
     REST_CONTRACT_VERSION_HEADER: REST_CONTRACT_VERSION,
     "X-Accel-Buffering": "no",
 }
+RUST_MISSING_CATEGORY_NAME = "MissingCategory"
 
 
 class RestConformanceError(AssertionError):
@@ -55,8 +56,34 @@ class RestConformanceError(AssertionError):
 
 def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     """Select a contract before script initialization without changing environment."""
-    return load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py",
-                              initial_globals={"SELECTED_OPENAPI_CONTRACT_PATH": openapi_path or RUST_OPENAPI_CONTRACT_PATH})
+    smoke = load_script_module("rest_api_smoke_for_rust_conformance", "rest-api-smoke.py",
+                               initial_globals={"SELECTED_OPENAPI_CONTRACT_PATH": openapi_path or RUST_OPENAPI_CONTRACT_PATH})
+    if not hasattr(smoke, "build_openapi_contract_routes"):
+        return smoke
+
+    concrete_path = smoke.concrete_contract_path
+    normalize_path = smoke.normalize_contract_path_for_openapi
+    contract_body = smoke.get_contract_route_body
+
+    def rust_concrete_path(path: str, operation_id: str) -> str:
+        return concrete_path(path, operation_id).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME)
+
+    def rust_normalize_path(path: str) -> str:
+        return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
+                                           "/categories/{categoryName}"))
+
+    def rust_contract_body(operation_id: str) -> dict[str, object] | None:
+        if operation_id == "patchCategory":
+            return {"comment": "REST contract"}
+        if operation_id == "downloadSearchResult":
+            return {"paused": True, "category": None}
+        return contract_body(operation_id)
+
+    smoke.concrete_contract_path = rust_concrete_path
+    smoke.normalize_contract_path_for_openapi = rust_normalize_path
+    smoke.get_contract_route_body = rust_contract_body
+    smoke.REST_CONTRACT_ROUTES = smoke.build_openapi_contract_routes()
+    return smoke
 
 
 def _event_stream_url(base_url: str) -> str:
