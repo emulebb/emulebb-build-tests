@@ -620,16 +620,16 @@ def test_public_search_candidate_safety_rejects_unsafe_rows() -> None:
     control = _load_rust_soak_control()
     safe = {
         "hash": "0123456789abcdef0123456789abcdef",
-        "name": "public-document.pdf",
+        "displayName": "public-document.pdf",
         "sizeBytes": 1024,
         "fileType": "Doc",
         "sources": 2,
     }
 
     assert control.public_search_candidate_safety_reason(safe, min_sources=2, max_size_bytes=2048) is None
-    assert control.public_search_candidate_safety_reason({**safe, "name": "setup.exe"}, min_sources=2, max_size_bytes=2048) == "unsafe-suffix"
+    assert control.public_search_candidate_safety_reason({**safe, "displayName": "setup.exe"}, min_sources=2, max_size_bytes=2048) == "unsafe-suffix"
     assert control.public_search_candidate_safety_reason({**safe, "fileType": "Pro"}, min_sources=2, max_size_bytes=2048) == "unsafe-type"
-    assert control.public_search_candidate_safety_reason({**safe, "name": "linux keygen doc.pdf"}, min_sources=2, max_size_bytes=2048) == "unsafe-name-token"
+    assert control.public_search_candidate_safety_reason({**safe, "displayName": "linux keygen doc.pdf"}, min_sources=2, max_size_bytes=2048) == "unsafe-name-token"
     assert control.public_search_candidate_safety_reason({**safe, "hash": "ABCDEF0123456789ABCDEF0123456789"}, min_sources=2, max_size_bytes=2048) == "bad-hash"
     assert control.public_search_candidate_safety_reason({**safe, "sizeBytes": 4096}, min_sources=2, max_size_bytes=2048) == "too-large"
     assert control.public_search_candidate_safety_reason({**safe, "sources": 1}, min_sources=2, max_size_bytes=2048) == "weak-sources"
@@ -644,262 +644,76 @@ def test_public_search_candidate_safety_rejects_unsafe_rows() -> None:
     )
 
 
-def test_public_search_download_proof_triggers_paused_resume_without_leaking_private_values(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("first_stalls", [False, True])
+def test_public_search_download_proof_starts_captured_job_and_requires_bytes(monkeypatch, tmp_path, first_stalls):
     control = _load_rust_soak_control()
-    delivered = tmp_path / "incoming" / "public-document.pdf"
-    delivered.parent.mkdir()
-    delivered.write_bytes(b"ok")
-    calls: list[tuple[str, str, object]] = []
-    stop_calls: list[str] = []
-    transfer_reads = 0
-
-    def fake_terms(_inputs: Path, group: str) -> tuple[str, ...]:
-        assert group == "documents"
-        return ("private search term",)
-
-    def fake_sample(_base_url: str, _api_key: str) -> dict[str, object]:
-        return {"ed2kConnected": True, "kadConnected": True}
-
-    def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
-        nonlocal transfer_reads
-        calls.append((str(kwargs.get("method") or "GET"), path, kwargs.get("body")))
+    hashes = ["1" * 32, "2" * 32] if first_stalls else ["1" * 32]
+    candidates = [{"hash": value, "displayName": f"public-document-{index}.pdf", "sizeBytes": 1024,
+                   "fileType": "Doc", "sources": 4 - index, "completeSources": 2 - index}
+                  for index, value in enumerate(hashes)]
+    jobs = {}
+    reads = {}
+    calls = []
+    stops = []
+    def request(_base, path, **kwargs):
+        calls.append((kwargs.get("method", "GET"), path, kwargs.get("body")))
         if path == "/searches":
             return {"id": "search-1"}
         if path.startswith("/searches/search-1?"):
-            return {
-                "status": "running",
-                "items": [
-                    {
-                        "hash": "0123456789abcdef0123456789abcdef",
-                        "name": "public-document.pdf",
-                        "sizeBytes": 1024,
-                        "fileType": "Doc",
-                        "sources": 3,
-                        "completeSources": 1,
-                        "knownType": "unknown",
-                    }
-                ],
-            }
-        if path.endswith("/operations/download"):
-            return {"ok": True, "hash": "0123456789abcdef0123456789abcdef"}
-        if path.endswith("/operations/resume"):
-            return {"ok": True, "hash": "0123456789abcdef0123456789abcdef", "state": "downloading"}
-        if path == "/transfers/0123456789abcdef0123456789abcdef":
-            transfer_reads += 1
-            completed_bytes = 0 if transfer_reads == 1 else 128
-            return {
-                "hash": "0123456789abcdef0123456789abcdef",
-                "name": "public-document.pdf",
-                "state": "downloading",
-                "sizeBytes": 1024,
-                "completedBytes": completed_bytes,
-                "sources": 3,
-                "sourcesTransferring": 1,
-                "progress": completed_bytes / 1024,
-                "deliveredPath": str(delivered),
-            }
+            return {"status": "running", "items": candidates}
+        if path == "/downloads":
+            source = kwargs["body"]["source"]
+            job_id = str(7 + len(jobs))
+            jobs[job_id] = source["hash"]
+            reads[job_id] = 0
+            return {"id": job_id, "hash": source["hash"]}
+        if path == "/downloads/start":
+            job_id = kwargs["body"]["ids"][0]
+            assert job_id in jobs and reads[job_id] == 1
+            return {"data": [{"id": job_id, "status": "accepted", "httpStatus": 202}]}
+        if path.endswith("/sources?limit=200"):
+            return {"data": [{"clientId": "private-source"}], "meta": {"hasMore": False}}
+        if path.startswith("/downloads/"):
+            job_id = path.rsplit("/", 1)[1]
+            reads[job_id] += 1
+            return {"id": job_id, "hash": jobs[job_id], "name": "private-output.pdf",
+                    "state": "downloading" if reads[job_id] > 1 else "stopped",
+                    "sizeBytes": 1024, "payloadVerified": False,
+                    "delivery": {"state": "pending", "path": None}}
         raise AssertionError(path)
-
-    monkeypatch.setattr(control, "public_search_terms_from_inputs", fake_terms)
-    monkeypatch.setattr(control, "sample", fake_sample)
-    monkeypatch.setattr(control, "request_json", fake_request_json)
-    monkeypatch.setattr(
-        control,
-        "request_json_attempt",
-        lambda _base_url, path, **kwargs: (
-            stop_calls.append(path)
-            or {"ok": True, "path": path, "method": kwargs.get("method", "GET")}
-        ),
-    )
-
-    result = control.public_search_download_proof(
-        SimpleNamespace(
-            base_url="http://192.0.2.10:4731/api/v1",
-            api_key="key",
-            inputs=tmp_path / "inputs.json",
-            term=None,
-            term_group="documents",
-            search_method="automatic",
-            search_type="doc",
-            max_terms=4,
-            result_limit=50,
-            min_sources=2,
-            min_complete_sources=1,
-            max_size_bytes=8 * 1024 * 1024,
-            search_timeout_seconds=1.0,
-            progress_timeout_seconds=1.0,
-            completion_timeout_seconds=1.0,
-            poll_seconds=0.01,
-            request_timeout_seconds=1.0,
-            require_completion=False,
-            stop_search=True,
-            progress_jsonl=tmp_path / "progress.jsonl",
-        )
-    )
-
-    assert result["ok"] is True
-    assert calls[0] == (
-        "POST",
-        "/searches",
-        {
-            "query": "private search term",
-            "method": "automatic",
-            "type": "doc",
-            "maxSizeBytes": 8 * 1024 * 1024,
-            "minAvailability": 2,
-        },
-    )
-    assert ("POST", "/searches/search-1/results/0123456789abcdef0123456789abcdef/operations/download", {"paused": True, "categoryId": 0}) in calls
-    assert ("POST", "/transfers/0123456789abcdef0123456789abcdef/operations/resume", {}) in calls
-    assert stop_calls == ["/searches/search-1"]
-    assert calls.index(("POST", "/searches/search-1/results/0123456789abcdef0123456789abcdef/operations/download", {"paused": True, "categoryId": 0})) < calls.index(("POST", "/transfers/0123456789abcdef0123456789abcdef/operations/resume", {}))
-    assert "private search term" not in repr(result)
-    assert "public-document.pdf" not in repr(result)
-    assert "0123456789abcdef0123456789abcdef" not in repr(result)
-    progress_rows = [
-        json.loads(line)
-        for line in (tmp_path / "progress.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert [row["phase"] for row in progress_rows] == [
-        "search-started",
-        "search-poll",
-        "candidate-selected",
-        "download-triggered",
-        "paused-transfer",
-        "resume-triggered",
-        "transfer-progress-poll",
-        "completion-result",
-    ]
-    assert "private search term" not in repr(progress_rows)
-    assert "public-document.pdf" not in repr(progress_rows)
-    assert "0123456789abcdef0123456789abcdef" not in repr(progress_rows)
-
-
-def test_public_search_download_proof_retries_when_sources_do_not_move_bytes(monkeypatch, tmp_path: Path) -> None:
-    control = _load_rust_soak_control()
-    first_hash = "11111111111111111111111111111111"
-    second_hash = "22222222222222222222222222222222"
-    calls: list[tuple[str, str, object]] = []
-    stop_calls: list[str] = []
-    transfer_reads: dict[str, int] = {first_hash: 0, second_hash: 0}
-
-    def fake_terms(_inputs: Path, group: str) -> tuple[str, ...]:
-        assert group == "documents"
-        return ("private search term",)
-
-    def fake_sample(_base_url: str, _api_key: str) -> dict[str, object]:
-        return {"ed2kConnected": True, "kadConnected": True}
-
-    def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
-        calls.append((str(kwargs.get("method") or "GET"), path, kwargs.get("body")))
-        if path == "/searches":
-            return {"id": "search-1"}
-        if path.startswith("/searches/search-1?"):
-            return {
-                "status": "running",
-                "items": [
-                    {
-                        "hash": first_hash,
-                        "name": "public-first.pdf",
-                        "sizeBytes": 1024,
-                        "fileType": "Doc",
-                        "sources": 4,
-                        "completeSources": 2,
-                    },
-                    {
-                        "hash": second_hash,
-                        "name": "public-second.pdf",
-                        "sizeBytes": 1024,
-                        "fileType": "Doc",
-                        "sources": 3,
-                        "completeSources": 1,
-                    },
-                ],
-            }
-        if path.endswith("/operations/download"):
-            return {"ok": True}
-        if path == f"/transfers/{first_hash}/operations/resume":
-            return {"ok": True, "hash": first_hash, "state": "downloading"}
-        if path == f"/transfers/{second_hash}/operations/resume":
-            return {"ok": True, "hash": second_hash, "state": "downloading"}
-        if path == f"/transfers/{first_hash}":
-            transfer_reads[first_hash] += 1
-            return {
-                "hash": first_hash,
-                "name": "public-first.pdf",
-                "state": "downloading",
-                "sizeBytes": 1024,
-                "completedBytes": 0,
-                "sources": 4,
-                "sourcesTransferring": 0,
-                "progress": 0.0,
-            }
-        if path == f"/transfers/{second_hash}":
-            transfer_reads[second_hash] += 1
-            completed_bytes = 0 if transfer_reads[second_hash] == 1 else 256
-            return {
-                "hash": second_hash,
-                "name": "public-second.pdf",
-                "state": "downloading",
-                "sizeBytes": 1024,
-                "completedBytes": completed_bytes,
-                "sources": 3,
-                "sourcesTransferring": 1,
-                "progress": completed_bytes / 1024,
-            }
-        raise AssertionError(path)
-
-    monkeypatch.setattr(control, "public_search_terms_from_inputs", fake_terms)
-    monkeypatch.setattr(control, "sample", fake_sample)
-    monkeypatch.setattr(control, "request_json", fake_request_json)
-    monkeypatch.setattr(
-        control,
-        "request_json_attempt",
-        lambda _base_url, path, **kwargs: (
-            stop_calls.append(path)
-            or {"ok": True, "path": path, "method": kwargs.get("method", "GET")}
-        ),
-    )
-
-    result = control.public_search_download_proof(
-        SimpleNamespace(
-            base_url="http://192.0.2.10:4731/api/v1",
-            api_key="key",
-            inputs=tmp_path / "inputs.json",
-            term=None,
-            term_group="documents",
-            search_method="automatic",
-            search_type="doc",
-            max_terms=1,
-            max_download_candidates=2,
-            result_limit=50,
-            min_sources=2,
-            min_complete_sources=1,
-            max_size_bytes=8 * 1024 * 1024,
-            search_timeout_seconds=1.0,
-            progress_timeout_seconds=0.01,
-            completion_timeout_seconds=1.0,
-            poll_seconds=0.01,
-            request_timeout_seconds=1.0,
-            require_completion=False,
-            stop_search=True,
-            progress_jsonl=tmp_path / "progress.jsonl",
-        )
-    )
-
-    assert result["ok"] is True
-    assert len(result["downloadAttempts"]) == 1
-    assert result["downloadAttempts"][0]["progress"]["ok"] is False
-    assert result["downloadAttempts"][0]["progress"]["sourcesObserved"] is True
-    assert result["downloadAttempts"][0]["progress"]["byteProgressObserved"] is False
-    assert result["progress"]["byteProgressObserved"] is True
-    assert stop_calls == ["/searches/search-1"]
-    assert ("POST", f"/searches/search-1/results/{first_hash}/operations/download", {"paused": True, "categoryId": 0}) in calls
-    assert ("POST", f"/searches/search-1/results/{second_hash}/operations/download", {"paused": True, "categoryId": 0}) in calls
-    assert first_hash not in repr(result)
-    assert second_hash not in repr(result)
-    assert "public-first.pdf" not in repr(result)
-    assert "public-second.pdf" not in repr(result)
+    def parts(base, key, job_id):
+        assert base == "http://192.0.2.10:4731"
+        moving = reads[job_id] > 1 and not (first_stalls and job_id == "7")
+        return {"partCount": 1, "presentBytes": 128 if moving else 0, "verifiedBytes": 0}
+    monkeypatch.setattr(control, "request_json", request)
+    monkeypatch.setattr(control, "download_part_totals", parts)
+    monkeypatch.setattr(control, "public_search_terms_from_inputs", lambda *_args: ("private search term",))
+    monkeypatch.setattr(control, "sample", lambda *_args: {"ed2kConnected": True, "kadConnected": True})
+    monkeypatch.setattr(control, "request_json_attempt", lambda _base, path, **_kwargs: stops.append(path) or {"ok": True})
+    result = control.public_search_download_proof(SimpleNamespace(
+        base_url="http://192.0.2.10:4731/api/v1", api_key="key", inputs=tmp_path / "inputs.json",
+        term=None, term_group="documents", search_method="automatic", search_type="doc",
+        max_terms=1, max_download_candidates=2, result_limit=50, min_sources=2, min_complete_sources=1,
+        max_size_bytes=8 * 1024 * 1024, search_timeout_seconds=1, progress_timeout_seconds=0.02,
+        completion_timeout_seconds=1, poll_seconds=0.001, request_timeout_seconds=1,
+        require_completion=False, stop_search=True, progress_jsonl=tmp_path / "progress.jsonl"))
+    assert result["ok"] is True and result["progress"]["byteProgressObserved"] is True
+    assert result["progress"]["latest"]["payloadVerified"] is False
+    assert result["progress"]["latest"]["verifiedBytes"] == 0
+    assert len(result["downloadAttempts"]) == int(first_stalls)
+    if first_stalls:
+        failed = result["downloadAttempts"][0]["progress"]
+        assert failed["ok"] is False and failed["sourcesObserved"] is True
+        assert failed["byteProgressObserved"] is False
+    for candidate in candidates:
+        assert ("POST", "/downloads", {"source": {"type": "content", "hash": candidate["hash"],
+            "name": candidate["displayName"], "sizeBytes": 1024}, "intent": "stopped"}) in calls
+    assert stops == ["/searches/search-1"]
+    events = [json.loads(line) for line in (tmp_path / "progress.jsonl").read_text(encoding="utf-8").splitlines()]
+    for private in ["private search term", "private-output.pdf", *hashes, *[row["displayName"] for row in candidates]]:
+        assert private not in repr(result) and private not in repr(events)
+    assert all(row["phase"] in {"search-started", "search-poll", "candidate-selected", "download-created",
+        "download-baseline", "start-triggered", "download-progress-poll", "completion-result"} for row in events)
 
 
 def test_public_search_download_cli_writes_json_output(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1037,7 +851,7 @@ def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatc
         if path == "/searches":
             return {"id": "search-1"}
         if path.startswith("/searches/search-1?"):
-            return {"status": "complete", "items": []}
+            return {"status": "completed", "items": []}
         raise AssertionError(path)
 
     monkeypatch.setattr(control, "request_json", fake_request_json)
@@ -4638,3 +4452,69 @@ def test_metadata_counts_do_not_create_a_missing_profile(tmp_path):
     database = tmp_path / "missing.sqlite"
     assert control.rust_metadata_counts(database) == {"metadataDb": str(database), "metadataDbExists": False}
     assert not database.exists()
+
+
+def test_public_download_completion_waits_for_verified_delivery(monkeypatch, tmp_path):
+    control = _load_rust_soak_control()
+    output = tmp_path / "output.pdf"
+    output.write_bytes(b"verified bytes")
+    base = {"id": "7", "hash": "a" * 32, "sizeBytes": output.stat().st_size,
+            "state": "completed", "payloadVerified": True, "presentBytes": 0, "verifiedBytes": 0,
+            "delivery": {"state": "delivered", "path": str(output)}}
+    frames = iter([{**base, "state": "verifying"}, {**base, "payloadVerified": False},
+                   {**base, "delivery": {"state": "pending", "path": str(output)}}, base])
+    reads = []
+    def read(_args, job_id, expected_hash):
+        reads.append((job_id, expected_hash))
+        return next(frames)
+    monkeypatch.setattr(control, "read_public_download", read)
+    monkeypatch.setattr(control.time, "sleep", lambda _seconds: None)
+    result = control.wait_for_download_completion(SimpleNamespace(completion_timeout_seconds=1, poll_seconds=0.001), "7", "a" * 32)
+    assert result["ok"] is True and reads == [("7", "a" * 32)] * 4
+    assert result["final"]["payloadVerified"] is True and result["final"]["presentBytes"] == 0
+    assert str(output) not in repr(result)
+
+
+def test_public_download_completion_requires_recorded_output_size(monkeypatch, tmp_path):
+    control = _load_rust_soak_control()
+    output = tmp_path / "output.pdf"
+    output.write_bytes(b"short")
+    monkeypatch.setattr(control, "read_public_download", lambda *_args: {"id": "7", "hash": "a" * 32,
+        "state": "completed", "sizeBytes": 100, "payloadVerified": True,
+        "delivery": {"state": "delivered", "path": str(output)}})
+    result = control.wait_for_download_completion(SimpleNamespace(completion_timeout_seconds=1), "7", "a" * 32)
+    assert result["ok"] is False
+
+
+@pytest.mark.parametrize("row, message", [
+    ({"id": "8", "hash": "a" * 32}, "substituted another job"),
+    ({"id": "7", "hash": "a" * 32, "state": "failed"}, "explicit operator action"),
+])
+def test_public_download_faults_stop_before_extra_reads(monkeypatch, row, message):
+    control = _load_rust_soak_control()
+    calls = []
+    monkeypatch.setattr(control, "request_json", lambda *_args, **_kwargs: calls.append("read") or row)
+    monkeypatch.setattr(control, "download_part_totals", lambda *_args: pytest.fail("faulted job read parts"))
+    with pytest.raises(RuntimeError, match=message):
+        control.read_public_download(SimpleNamespace(base_url="http://requester.test", api_key="key", request_timeout_seconds=1), "7", "a" * 32)
+    assert calls == ["read"]
+
+
+def test_public_download_start_requires_successful_batch_item(monkeypatch):
+    control = _load_rust_soak_control()
+    calls = []
+    def request(_base, path, **kwargs):
+        calls.append(path)
+        if path == "/downloads":
+            return {"id": "7", "hash": "a" * 32}
+        assert path == "/downloads/start"
+        return {"data": [{"id": "7", "status": "failed", "httpStatus": 409,
+                          "error": {"code": "CONFLICT", "message": "start refused"}}]}
+    monkeypatch.setattr(control, "request_json", request)
+    monkeypatch.setattr(control, "read_public_download", lambda *_args: {"id": "7", "presentBytes": 0})
+    monkeypatch.setattr(control, "wait_for_download_progress", lambda *_args, **_kwargs: pytest.fail("failed start progressed"))
+    with pytest.raises(RuntimeError, match="did not accept captured job"):
+        control.run_public_search_candidate_download(SimpleNamespace(base_url="http://requester.test", api_key="key", request_timeout_seconds=1),
+            {"searchId": "search-1", "termFingerprint": "safe"},
+            {"hash": "a" * 32, "displayName": "fixture.pdf", "sizeBytes": 100})
+    assert calls == ["/downloads", "/downloads/start"]

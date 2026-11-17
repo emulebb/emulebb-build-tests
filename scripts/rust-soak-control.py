@@ -47,7 +47,9 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness.rust_local_ed2k import canonical_download_id, require_download_id
+from emule_test_harness.rust_local_ed2k import (
+    canonical_download_id, download_part_totals, require_download_batch, require_download_id,
+)
 from emule_test_harness.rust_client import (
     RUST_PROFILE_METADATA_FILE,
     RUST_PROFILE_SETTINGS_FILE,
@@ -1742,13 +1744,13 @@ def public_search_candidate_safety_reason(
     min_complete_sources: int = 0,
     max_size_bytes: int,
 ) -> str | None:
-    """Returns None when a public search result is safe enough to trigger as a paused download."""
+    """Returns None when a public search result is safe enough to create a stopped download."""
 
     if not isinstance(result_row, dict):
         return "not-object"
-    file_name = str(result_row.get("name") or "").strip()
+    file_name = str(result_row.get("displayName") or "").strip()
     file_type = str(result_row.get("fileType") or "").strip().lower()
-    size_bytes = result_row.get("sizeBytes", result_row.get("size"))
+    size_bytes = result_row.get("sizeBytes")
     sources = result_row.get("sources")
     complete_sources = result_row.get("completeSources")
     if not file_name:
@@ -1782,9 +1784,9 @@ def sanitized_public_search_candidate(result_row: dict[str, object]) -> dict[str
 
     return {
         "hashFingerprint": text_fingerprint(result_row.get("hash")),
-        "nameFingerprint": text_fingerprint(result_row.get("name")),
-        "namePresent": bool(str(result_row.get("name") or "").strip()),
-        "sizeBytes": result_row.get("sizeBytes", result_row.get("size")),
+        "nameFingerprint": text_fingerprint(result_row.get("displayName")),
+        "namePresent": bool(str(result_row.get("displayName") or "").strip()),
+        "sizeBytes": result_row.get("sizeBytes"),
         "fileType": result_row.get("fileType"),
         "sources": result_row.get("sources"),
         "completeSources": result_row.get("completeSources"),
@@ -1797,7 +1799,7 @@ def public_search_candidate_sort_key(result_row: dict[str, object]) -> tuple[int
 
     complete_sources = safe_int(result_row.get("completeSources")) or 0
     sources = safe_int(result_row.get("sources")) or 0
-    size_bytes = safe_int(result_row.get("sizeBytes", result_row.get("size"))) or 0
+    size_bytes = safe_int(result_row.get("sizeBytes")) or 0
     return (-complete_sources, -sources, size_bytes)
 
 
@@ -1812,22 +1814,23 @@ def public_search_terms_from_inputs(inputs_path: Path, group: str) -> tuple[str,
     raise RuntimeError(f"unsupported public search term group: {group}")
 
 
-def sanitized_transfer_proof_row(transfer: dict[str, object]) -> dict[str, object]:
-    """Returns report-safe transfer state for public proof output."""
-
-    delivered_path = Path(str(transfer.get("deliveredPath"))) if transfer.get("deliveredPath") else None
+def sanitized_download_proof_row(download: dict[str, object]) -> dict[str, object]:
+    """Return scalar job evidence while keeping names and paths private."""
+    delivery = download.get("delivery") or {}
+    path = delivery.get("path")
     return {
-        "hashFingerprint": text_fingerprint(transfer.get("hash")),
-        "nameFingerprint": text_fingerprint(transfer.get("name")),
-        "state": transfer.get("state"),
-        "sizeBytes": transfer.get("sizeBytes"),
-        "completedBytes": transfer.get("completedBytes"),
-        "progress": transfer.get("progress"),
-        "sources": transfer.get("sources"),
-        "sourcesTransferring": transfer.get("sourcesTransferring"),
-        "deliveredPathPresent": delivered_path is not None,
-        "deliveredPathFingerprint": private_path_fingerprint(str(delivered_path)) if delivered_path is not None else None,
-        "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
+        "downloadId": download.get("id"),
+        "hashFingerprint": text_fingerprint(download.get("hash")),
+        "nameFingerprint": text_fingerprint(download.get("name")),
+        "state": download.get("state"),
+        "sizeBytes": download.get("sizeBytes"),
+        "presentBytes": download.get("presentBytes"),
+        "verifiedBytes": download.get("verifiedBytes"),
+        "payloadVerified": download.get("payloadVerified"),
+        "sourceCountLowerBound": download.get("sourceCountLowerBound"),
+        "deliveryState": delivery.get("state"),
+        "deliveredPathPresent": bool(path),
+        "deliveredPathFingerprint": private_path_fingerprint(str(path)) if path else None,
     }
 
 
@@ -1973,7 +1976,7 @@ def wait_for_public_search_candidate(
             )
             if selected is not None:
                 break
-            if payload.get("status") == "complete":
+            if payload.get("status") == "completed":
                 break
             time.sleep(args.poll_seconds)
     finally:
@@ -1994,226 +1997,111 @@ def wait_for_public_search_candidate(
     }
 
 
-def wait_for_transfer_progress(
-    args: argparse.Namespace,
-    transfer_hash: str,
-    *,
-    initial_completed_bytes: int,
-) -> dict[str, object]:
-    """Waits until a triggered transfer moves bytes, has sources, or completes."""
+def read_public_download(args: argparse.Namespace, download_id: str, expected_hash: str) -> dict[str, object]:
+    """Read the captured job with streamed parts and one bounded source window."""
+    download = request_json(args.base_url, f"/downloads/{download_id}", api_key=args.api_key,
+                            timeout_seconds=args.request_timeout_seconds)
+    if require_download_id(download, expected_hash=expected_hash) != download_id:
+        raise RuntimeError("public download reader substituted another job")
+    if download.get("state") == "failed":
+        raise RuntimeError("public download failed; explicit operator action is required")
+    totals = download_part_totals(args.base_url.rstrip("/").removesuffix("/api/v1"), args.api_key, download_id)
+    page = request_json(args.base_url, f"/downloads/{download_id}/sources?limit=200", api_key=args.api_key,
+                        timeout_seconds=args.request_timeout_seconds)
+    if (not isinstance(page.get("data"), list) or not isinstance(page.get("meta"), dict)
+            or type(page["meta"].get("hasMore")) is not bool):
+        raise RuntimeError("public download requires a bounded source cursor page")
+    return {**download, **totals,
+            "sourceCountLowerBound": len(page["data"]) + int(page["meta"]["hasMore"])}
 
-    observations: list[dict[str, object]] = []
+
+def download_delivered(download: dict[str, object]) -> bool:
+    """Whole-payload verification and durable delivery define completion."""
+    delivery = download.get("delivery")
+    return (download.get("state") == "completed" and download.get("payloadVerified") is True
+            and isinstance(delivery, dict) and delivery.get("state") == "delivered")
+
+
+def wait_for_download_progress(args: argparse.Namespace, download_id: str, expected_hash: str,
+                               *, initial_present_bytes: int) -> dict[str, object]:
+    """Require byte progress or verified delivery; source presence alone is insufficient."""
+    observations = []
     deadline = time.time() + args.progress_timeout_seconds
-    latest: dict[str, object] | None = None
+    latest = None
     while time.time() <= deadline:
-        transfer = request_json(
-            args.base_url,
-            f"/transfers/{quote(transfer_hash, safe='')}",
-            api_key=args.api_key,
-            timeout_seconds=args.request_timeout_seconds,
-        )
-        latest = transfer
-        completed_bytes = safe_int(transfer.get("completedBytes")) or 0
-        sources = safe_int(transfer.get("sources")) or 0
-        observations.append(
-            {
-                "observedAt": round(time.time(), 3),
-                "state": transfer.get("state"),
-                "completedBytes": completed_bytes,
-                "progress": transfer.get("progress"),
-                "sources": sources,
-                "sourcesTransferring": transfer.get("sourcesTransferring"),
-                "deliveredPathPresent": bool(transfer.get("deliveredPath")),
-            }
-        )
-        emit_public_download_probe_event(
-            args,
-            {
-                "phase": "transfer-progress-poll",
-                "transfer": sanitized_transfer_proof_row(transfer),
-            },
-        )
-        if transfer.get("state") == "completed" or completed_bytes > initial_completed_bytes:
+        latest = read_public_download(args, download_id, expected_hash)
+        observations.append(sanitized_download_proof_row(latest))
+        del observations[:-30]
+        emit_public_download_probe_event(args, {"phase": "download-progress-poll", "download": observations[-1]})
+        if download_delivered(latest) or int(latest["presentBytes"]) > initial_present_bytes:
             break
         time.sleep(args.poll_seconds)
     if latest is None:
-        raise RuntimeError("transfer progress probe did not run")
-    latest_completed_bytes = safe_int(latest.get("completedBytes")) or 0
-    byte_progress_observed = latest_completed_bytes > initial_completed_bytes
-    sources_observed = any((safe_int(row.get("sources")) or 0) > 0 for row in observations)
-    return {
-        "ok": latest.get("state") == "completed" or byte_progress_observed,
-        "byteProgressObserved": byte_progress_observed,
-        "sourcesObserved": sources_observed,
-        "observations": observations[-30:],
-        "latest": latest,
-    }
+        raise RuntimeError("download progress probe did not run")
+    byte_progress = int(latest["presentBytes"]) > initial_present_bytes
+    return {"ok": download_delivered(latest) or byte_progress,
+            "byteProgressObserved": byte_progress,
+            "sourcesObserved": any(int(row["sourceCountLowerBound"]) > 0 for row in observations),
+            "observations": observations, "latest": latest}
 
 
-def run_public_search_candidate_download(
-    args: argparse.Namespace,
-    selected: dict[str, object],
-    candidate: dict[str, object],
-) -> dict[str, object]:
-    """Triggers one safe public candidate and returns sanitized byte-progress proof."""
-
+def run_public_search_candidate_download(args: argparse.Namespace, selected: dict[str, object],
+                                         candidate: dict[str, object]) -> dict[str, object]:
+    """Create one stopped content job and prove its explicit start and progress."""
     search_id = str(selected["searchId"])
-    transfer_hash = str(candidate["hash"])
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "candidate-selected",
-            "searchIdFingerprint": text_fingerprint(search_id),
-            "termFingerprint": selected["termFingerprint"],
-            "candidate": sanitized_public_search_candidate(candidate),
-        },
-    )
-    download = request_json(
-        args.base_url,
-        f"/searches/{quote(search_id, safe='')}/results/{quote(transfer_hash, safe='')}/operations/download",
-        api_key=args.api_key,
-        method="POST",
-        body={"paused": True, "categoryId": 0},
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "download-triggered",
-            "hashFingerprint": text_fingerprint(download.get("hash", transfer_hash)),
-            "ok": download.get("ok", True),
-        },
-    )
-    paused = request_json(
-        args.base_url,
-        f"/transfers/{quote(transfer_hash, safe='')}",
-        api_key=args.api_key,
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "paused-transfer",
-            "transfer": sanitized_transfer_proof_row(paused),
-        },
-    )
-    resume = request_json(
-        args.base_url,
-        f"/transfers/{quote(transfer_hash, safe='')}/operations/resume",
-        api_key=args.api_key,
-        method="POST",
-        body={},
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "resume-triggered",
-            "hashFingerprint": text_fingerprint(resume.get("hash", transfer_hash)),
-            "state": resume.get("state"),
-            "ok": resume.get("ok", True),
-        },
-    )
-    progress = wait_for_transfer_progress(
-        args,
-        transfer_hash,
-        initial_completed_bytes=safe_int(paused.get("completedBytes")) or 0,
-    )
-    completion = (
-        wait_for_transfer_completion(args, transfer_hash)
-        if args.require_completion
-        else {"ok": None, "skipped": True, "reason": "require-completion disabled"}
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "completion-result",
-            "ok": completion.get("ok"),
-            "skipped": completion.get("skipped", False),
-            "reason": completion.get("reason"),
-        },
-    )
-    ok = bool(download.get("ok", True)) and bool(progress.get("ok")) and (
-        bool(completion.get("ok")) if args.require_completion else True
-    )
+    expected_hash = str(candidate["hash"])
+    emit_public_download_probe_event(args, {"phase": "candidate-selected",
+        "searchIdFingerprint": text_fingerprint(search_id), "termFingerprint": selected["termFingerprint"],
+        "candidate": sanitized_public_search_candidate(candidate)})
+    admission = request_json(args.base_url, "/downloads", api_key=args.api_key, method="POST",
+        body={"source": {"type": "content", "hash": expected_hash,
+                         "name": candidate["displayName"], "sizeBytes": candidate["sizeBytes"]},
+              "intent": "stopped"}, timeout_seconds=args.request_timeout_seconds)
+    download_id = require_download_id(admission, expected_hash=expected_hash)
+    emit_public_download_probe_event(args, {"phase": "download-created", "downloadId": download_id})
+    baseline = read_public_download(args, download_id, expected_hash)
+    emit_public_download_probe_event(args, {"phase": "download-baseline", "download": sanitized_download_proof_row(baseline)})
+    start = request_json(args.base_url, "/downloads/start", api_key=args.api_key, method="POST",
+                          body={"ids": [download_id]}, timeout_seconds=args.request_timeout_seconds)
+    receipt = require_download_batch(start, download_id)
+    emit_public_download_probe_event(args, {"phase": "start-triggered", "downloadId": download_id,
+                                          "status": receipt["status"]})
+    progress = wait_for_download_progress(args, download_id, expected_hash, initial_present_bytes=int(baseline["presentBytes"]))
+    completion = (wait_for_download_completion(args, download_id, expected_hash) if args.require_completion
+                  else {"ok": None, "skipped": True, "reason": "require-completion disabled"})
+    emit_public_download_probe_event(args, {"phase": "completion-result", "ok": completion.get("ok"),
+                                          "skipped": completion.get("skipped", False), "reason": completion.get("reason")})
     return {
-        "ok": ok,
-        "requireCompletion": args.require_completion,
-        "termGroup": args.term_group,
-        "selected": {
-            "searchIdFingerprint": text_fingerprint(search_id),
-            "termFingerprint": selected["termFingerprint"],
-            "candidate": sanitized_public_search_candidate(candidate),
-            "observations": selected["observations"],
-        },
-        "download": {
-            "ok": download.get("ok", True),
-            "hashFingerprint": text_fingerprint(download.get("hash", transfer_hash)),
-        },
-        "pausedTransfer": sanitized_transfer_proof_row(paused),
-        "resume": {
-            "hashFingerprint": text_fingerprint(resume.get("hash", transfer_hash)),
-            "state": resume.get("state"),
-            "ok": resume.get("ok", True),
-        },
-        "progress": {
-            "ok": progress.get("ok"),
-            "byteProgressObserved": progress.get("byteProgressObserved"),
-            "sourcesObserved": progress.get("sourcesObserved"),
-            "observations": progress.get("observations"),
-            "latest": sanitized_transfer_proof_row(progress.get("latest") if isinstance(progress.get("latest"), dict) else {}),
-        },
+        "ok": bool(progress["ok"]) and (bool(completion["ok"]) if args.require_completion else True),
+        "requireCompletion": args.require_completion, "termGroup": args.term_group,
+        "selected": {"searchIdFingerprint": text_fingerprint(search_id), "termFingerprint": selected["termFingerprint"],
+                     "candidate": sanitized_public_search_candidate(candidate), "observations": selected["observations"]},
+        "downloadId": download_id, "baseline": sanitized_download_proof_row(baseline),
+        "start": receipt,
+        "progress": {**progress, "latest": sanitized_download_proof_row(progress["latest"])},
         "completion": completion,
     }
 
 
-def wait_for_transfer_completion(args: argparse.Namespace, transfer_hash: str) -> dict[str, object]:
-    """Waits for a public proof transfer to complete and verifies delivered-file presence."""
-
-    observations: list[dict[str, object]] = []
+def wait_for_download_completion(args: argparse.Namespace, download_id: str, expected_hash: str) -> dict[str, object]:
+    """Verify retained completion and the recorded output file, without another-copy lookup."""
+    observations = []
     deadline = time.time() + args.completion_timeout_seconds
-    latest: dict[str, object] | None = None
+    latest = None
     while time.time() <= deadline:
-        transfer = request_json(
-            args.base_url,
-            f"/transfers/{quote(transfer_hash, safe='')}",
-            api_key=args.api_key,
-            timeout_seconds=args.request_timeout_seconds,
-        )
-        latest = transfer
-        delivered_path = Path(str(transfer.get("deliveredPath"))) if transfer.get("deliveredPath") else None
-        observations.append(
-            {
-                "observedAt": round(time.time(), 3),
-                "state": transfer.get("state"),
-                "completedBytes": safe_int(transfer.get("completedBytes")) or 0,
-                "progress": transfer.get("progress"),
-                "sources": transfer.get("sources"),
-                "sourcesTransferring": transfer.get("sourcesTransferring"),
-                "deliveredPathPresent": delivered_path is not None,
-                "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
-            }
-        )
-        emit_public_download_probe_event(
-            args,
-            {
-                "phase": "transfer-completion-poll",
-                "transfer": sanitized_transfer_proof_row(transfer),
-            },
-        )
-        if transfer.get("state") == "completed":
-            return {
-                "ok": delivered_path is not None and delivered_path.is_file(),
-                "observations": observations[-30:],
-                "final": sanitized_transfer_proof_row(transfer),
-            }
+        latest = read_public_download(args, download_id, expected_hash)
+        observations.append(sanitized_download_proof_row(latest))
+        del observations[:-30]
+        emit_public_download_probe_event(args, {"phase": "download-completion-poll", "download": observations[-1]})
+        if download_delivered(latest):
+            path = latest["delivery"].get("path")
+            output = Path(path) if isinstance(path, str) and path else None
+            size = latest.get("sizeBytes")
+            return {"ok": output is not None and type(size) is int and output.is_file() and output.stat().st_size == size,
+                    "observations": observations, "final": observations[-1]}
         time.sleep(args.poll_seconds)
-    return {
-        "ok": False,
-        "reason": "completion-timeout",
-        "observations": observations[-30:],
-        "final": sanitized_transfer_proof_row(latest or {}),
-    }
+    return {"ok": False, "reason": "completion-timeout", "observations": observations,
+            "final": sanitized_download_proof_row(latest or {})}
 
 
 def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
