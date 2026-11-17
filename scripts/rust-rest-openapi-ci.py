@@ -33,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import rust_client, rust_local_ed2k, rust_metadata, rust_rest_conformance  # noqa: E402
+from emule_test_harness.ed2k_file_observer import Ed2kFilePeerObserver  # noqa: E402
 from emule_test_harness.paths import get_required_emule_workspace_root, get_workspace_output_root  # noqa: E402
 from emule_test_harness.vm_guest_profiles import http_json, wait_until  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
@@ -374,15 +375,15 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         validate_openapi_schema(document, schema, payload)
         return payload
 
-    def tag_request(method: str, path: str, contract_path: str, status: int,
+    def library_request(method: str, path: str, contract_path: str, status: int,
                     body: dict[str, Any] | None = None) -> Any:
         response = smoke.http_request(base_url, path, method=method, api_key=package.API_KEY,
                                       json_body=body, request_timeout_seconds=min(5.0, remaining()))
         if response["status"] != status:
-            raise RuntimeError(f"Tag contract expected HTTP {status}: {response}")
+            raise RuntimeError(f"Library contract expected HTTP {status}: {response}")
         if status == 204:
             if response.get("body_text") != "" or response.get("raw_json") is not None:
-                raise RuntimeError("Tag deletion returned a body")
+                raise RuntimeError("No-content library operation returned a body")
             return None
         payload = response["raw_json"]
         schema = response_json_schema(openapi_operation_response(document, method, contract_path, status),
@@ -390,8 +391,20 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         validate_openapi_schema(document, schema, payload)
         return payload["data"]
 
+    def sharing(enabled: bool, selected: list[str], expected: list[str]) -> None:
+        rows = library_request("POST", "/api/v1/library/files/sharing", "/library/files/sharing", 207,
+                               {"enabled": enabled, "hashes": selected})
+        if [row["hash"] for row in rows] != selected or [row["status"] for row in rows] != expected:
+            raise RuntimeError(f"Ordered sharing outcomes differ: {rows}")
+
+    def sharing_flags(selected: list[str]) -> list[bool | None]:
+        with closing(sqlite3.connect(database)) as connection:
+            return [None if (row := connection.execute(
+                "SELECT sharing_enabled FROM known_files WHERE ed2k_hash=?", (bytes.fromhex(value),)).fetchone()) is None
+                else bool(row[0]) for value in selected]
+
     def require_file_tags(hash_value: str, names: list[str]) -> None:
-        rows = tag_request("GET", f"/api/v1/library/files/{hash_value}/tags",
+        rows = library_request("GET", f"/api/v1/library/files/{hash_value}/tags",
                            "/library/files/{hash}/tags", 200)
         if rows != [{"name": name} for name in names]:
             raise RuntimeError(f"Durable library tag membership differs: {rows}")
@@ -597,13 +610,13 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         only_hash, duplicate_hash = only_row["hash"], duplicate_row["hash"]
         if only_hash == duplicate_hash or Path(duplicate_row["path"]).resolve() != category_copy.resolve():
             raise RuntimeError("Category root did not own the initial complete shares")
-        tag_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "Rotate"})
-        tag_request("GET", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 200)
-        if tag_request("GET", "/api/v1/library/tags", "/library/tags", 200) != [{"name": "Rotate"}]:
+        library_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "Rotate"})
+        library_request("GET", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 200)
+        if library_request("GET", "/api/v1/library/tags", "/library/tags", 200) != [{"name": "Rotate"}]:
             raise RuntimeError("Created tag did not appear in the name collection")
         missing_hash = "ff" * 16
         tag_hashes = [only_hash, missing_hash, duplicate_hash]
-        outcomes = tag_request("POST", "/api/v1/library/files/tags/add", "/library/files/tags/add", 207,
+        outcomes = library_request("POST", "/api/v1/library/files/tags/add", "/library/files/tags/add", 207,
                                {"tag": "rotate", "hashes": tag_hashes})
         if ([row["hash"] for row in outcomes] != tag_hashes
                 or [row["status"] for row in outcomes] != ["accepted", "failed", "accepted"]
@@ -618,6 +631,21 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         wait_until("independent root reload", remaining(), reload_settled)
         if independent_copy.read_bytes() != duplicate_bytes:
             raise RuntimeError("Independent complete copy changed before category deletion")
+
+        # Both physical copies are eligible here. Keep one connection and its
+        # cached complete reader across REST rotation; a fresh request must fail.
+        with Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining())) as peer:
+            if not peer.filename_available(duplicate_hash) or not peer.start_upload(duplicate_hash):
+                raise RuntimeError("Enabled complete content was not admitted to the local peer")
+            if peer.request_range(duplicate_hash, 0, 10) != duplicate_bytes[:10]:
+                raise RuntimeError("Local peer received different verified bytes")
+            sharing(False, [duplicate_hash], ["accepted"])
+            if peer.request_range(duplicate_hash, 10, 20) is not None:
+                raise RuntimeError("Disabled hash reused a complete reader on the established connection")
+            sharing(True, [duplicate_hash], ["accepted"])
+            if not peer.start_upload(duplicate_hash) or peer.request_range(duplicate_hash, 20, 30) != duplicate_bytes[20:30]:
+                raise RuntimeError("Re-enabled content did not resume the established peer")
+            sharing_wire = list(peer.transcript)
 
         request("DELETE", "/api/v1/categories/ALPHA")
         if assignments() != [None, "Second-2", None]:
@@ -639,6 +667,11 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Category deletion changed complete-share files")
         require_file_tags(only_hash, ["Rotate"])
         require_file_tags(duplicate_hash, ["Rotate"])
+        selected_sharing = [only_hash, missing_hash, duplicate_hash]
+        sharing(False, selected_sharing, ["accepted", "failed", "accepted"])
+        sharing(False, selected_sharing, ["unchanged", "failed", "unchanged"])
+        if sharing_flags(selected_sharing) != [False, None, False]:
+            raise RuntimeError("Sharing mutations changed unknown or durable hash policy unexpectedly")
         request("POST", "/api/v1/app/shutdown", body={"confirmShutdown": True})
         process.wait(timeout=min(20.0, remaining()))
         if process.returncode != 0:
@@ -647,6 +680,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         handle = None
         process, handle = package._start_daemon(executable, profile, root / "restart.log")
         wait_until("restarted category REST readiness", remaining(), ready)
+        request("POST", "/api/v1/servers/operations/connect")
         request("POST", "/api/v1/shared-directories/operations/reload")
         wait_until("restarted category root reload", remaining(), reload_settled)
         surviving = categories()
@@ -665,6 +699,22 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         require_category(recreated, name="ALPHA", temp_dir=None, destination_dir=None, comment="")
         if assignments() != [None, "Second-2", None]:
             raise RuntimeError("Reusing a deleted name changed transfer assignments")
+        if sharing_flags(selected_sharing) != [False, None, False]:
+            raise RuntimeError("Sharing policy changed across profile reopen or hydration")
+        with Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining())) as peer:
+            if peer.filename_available(duplicate_hash) or peer.request_range(duplicate_hash, 0, 10) is not None:
+                raise RuntimeError("Restarted disabled hash accepted a new peer request")
+            sharing(True, [only_hash, duplicate_hash], ["accepted", "accepted"])
+            if not peer.filename_available(duplicate_hash) or not peer.start_upload(duplicate_hash):
+                raise RuntimeError("Re-enabled hash was not visible to the new peer")
+            if peer.request_range(duplicate_hash, 0, 10) != duplicate_bytes[:10]:
+                raise RuntimeError("Re-enabled restarted hash returned different bytes")
+            sharing_wire.extend(peer.transcript)
+        report["librarySharing"] = {"orderedMixedOutcomes": True, "idempotentWrites": True,
+            "hashPolicyAcrossCopies": True, "tagsAndFilesPreserved": True, "unknownHashNotCreated": True,
+            "persistedAcrossReopen": True, "cachedReaderRefusedOnNewRequest": True,
+            "restartHydrationRefusedNewRequest": True, "reEnabledRequestsSucceeded": True,
+            "wireTranscript": sharing_wire}
         wait_until("restarted independent complete share", remaining(), category_share_withdrawal)
         if (category_only.read_bytes(), category_copy.read_bytes(), independent_copy.read_bytes()) != (
             category_only_bytes, duplicate_bytes, duplicate_bytes
@@ -673,14 +723,14 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         require_file_tags(only_hash, ["Rotate"])
         require_file_tags(duplicate_hash, ["Rotate"])
         for expected in ("accepted", "unchanged"):
-            removed = tag_request("POST", "/api/v1/library/files/tags/remove", "/library/files/tags/remove", 207,
+            removed = library_request("POST", "/api/v1/library/files/tags/remove", "/library/files/tags/remove", 207,
                                   {"tag": "ROTATE", "hashes": [only_hash]})
             if removed[0]["status"] != expected:
                 raise RuntimeError(f"Tag removal idempotence differs: {removed}")
         require_file_tags(only_hash, [])
-        tag_request("DELETE", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 204)
+        library_request("DELETE", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 204)
         require_file_tags(duplicate_hash, [])
-        tag_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "ROTATE"})
+        library_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "ROTATE"})
         require_file_tags(duplicate_hash, [])
         report["libraryTags"] = {"orderedMixedOutcomes": True, "unavailableContentRetained": True,
                                  "persistedAcrossReopen": True, "idempotentRemoval": True,

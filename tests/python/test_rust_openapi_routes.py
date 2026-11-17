@@ -4348,3 +4348,33 @@ components:
     contract.write_text(text + "      content: {application/json: {schema: {type: object}}}\n", encoding="utf-8")
     assert any("must not define content" in item.issue for item in openapi_success_response_drift(contract))
     assert any("must not define content" in item.issue for item in openapi_response_component_drift(contract))
+
+
+def test_selected_library_sharing_requires_explicit_bool_and_bounded_distinct_hashes(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "LibrarySharingRequest")
+    valid = {"enabled": False, "hashes": ["ab" * 16]}
+    validate_openapi_schema(document, schema, valid)
+    for invalid in ({"hashes": valid["hashes"]}, {**valid, "enabled": None}, {**valid, "enabled": "false"},
+                    {**valid, "hashes": []}, {**valid, "hashes": ["ab" * 16] * 2},
+                    {**valid, "hashes": [f"{i:032x}" for i in range(101)]}, {**valid, "hashes": ["AB" * 16]}):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, invalid)
+    operation = document["paths"]["/library/files/sharing"]["post"]
+    assert operation["operationId"] == "setLibrarySharing"
+    assert operation["requestBody"]["required"] is True
+
+
+def test_selected_library_sharing_outcomes_preserve_error_status_and_commit_meaning(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "LibrarySharingBatchItem")
+    for status in ("accepted", "unchanged"):
+        validate_openapi_schema(document, schema, {"hash": "01" * 16, "status": status, "httpStatus": 200})
+    committed = {"hash": "01" * 16, "status": "failed", "httpStatus": 503,
+                 "error": {"code": "PERSISTENCE_COMMITTED", "message": "publication failed", "details": {"committed": True}}}
+    validate_openapi_schema(document, schema, committed)
+    for invalid in ({**committed, "httpStatus": 500}, {**committed, "status": "accepted"},
+                    {**committed, "error": {**committed["error"], "details": {"committed": False}}},
+                    {"hash": "01" * 16, "status": "failed", "httpStatus": 404}):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, invalid)

@@ -79,6 +79,8 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
                                        "/downloads/{id}"))
 
     def rust_contract_body(operation_id: str) -> dict[str, object] | None:
+        if operation_id == "setLibrarySharing":
+            return {"enabled": False, "hashes": ["ff" * 16]}
         if operation_id == "createLibraryTag":
             return {}
         if operation_id in {"addLibraryFileTags", "removeLibraryFileTags"}:

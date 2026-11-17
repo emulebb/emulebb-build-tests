@@ -361,6 +361,7 @@ TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCo
 DIAGNOSTIC_BUNDLE_MIN_BYTES = 64 * 1024
 UNSAFE_OPENAPI_OPERATIONS = {
     "deleteLibraryTag",
+    "setLibrarySharing",
     "addLibraryFileTags",
     "removeLibraryFileTags",
     "bootstrapKad",

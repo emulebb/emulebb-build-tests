@@ -749,3 +749,11 @@ def test_event_cursor_matches_payload_epoch_and_exact_revision(tmp_path, cursor,
     assert result["ok"] is expected
     if not expected:
         assert result["missing"] == ["cursor"]
+
+
+def test_sharing_mutation_is_explicitly_unsafe_for_generic_profile_probes():
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    module = rust_rest_conformance.load_rest_smoke_module(tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    row = next(route for route in module.REST_CONTRACT_ROUTES if route["operationId"] == "setLibrarySharing")
+    assert row["safe"] is False
+    assert module.get_contract_route_body("setLibrarySharing") == {"enabled": False, "hashes": ["ff" * 16]}
