@@ -219,9 +219,9 @@ def test_rust_category_contract_uses_name_paths_and_nullable_download_body() -> 
 
 def test_rust_download_path_uses_public_job_id() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
-    path = module.concrete_contract_path("/downloads/{id}/details", "getDownloadDetails")
-    assert path == "/api/v1/downloads/9223372036854775807/details"
-    assert module.normalize_contract_path_for_openapi(path) == "/downloads/{id}/details"
+    path = module.concrete_contract_path("/downloads/{id}/parts", "listDownloadParts")
+    assert path == "/api/v1/downloads/9223372036854775807/parts"
+    assert module.normalize_contract_path_for_openapi(path) == "/downloads/{id}/parts"
 
 
 def test_rust_download_contract_uses_explicit_id_action_bodies() -> None:
@@ -373,13 +373,14 @@ def test_rust_openapi_diagnostics_documents_download_event_runtime_metrics() -> 
     module = rust_rest_conformance.load_rest_smoke_module(openapi)
     schemas = module.load_openapi_document()["components"]["schemas"]
 
-    assert "transferEvents" in schemas["RuntimeDiagnostics"]["required"]
-    assert schemas["RuntimeDiagnostics"]["properties"]["transferEvents"] == {
+    assert "downloadEvents" in schemas["RuntimeDiagnostics"]["required"]
+    assert schemas["RuntimeDiagnostics"]["properties"]["downloadEvents"] == {
         "$ref": "#/components/schemas/DownloadEventRuntimeDiagnostics"
     }
     assert schemas["DownloadEventRuntimeDiagnostics"]["required"] == [
         "enabled",
         "stream",
+        "epoch",
         "channelCapacity",
         "queuedEventCount",
         "subscriberCount",
@@ -533,16 +534,16 @@ components:
     DownloadSyncResetEvent:
       type: object
       additionalProperties: false
-      required: [id, type, reason]
+      required: [id, epoch, type, reason]
       properties:
-        id: { type: integer, minimum: 1 }
+        id: { type: integer, minimum: 0 }
+        epoch: { type: string, format: uuid }
         type:
           type: string
           enum: [sync.reset]
         reason:
           type: string
-          enum: [last-event-id]
-        lastEventId: { type: string }
+          enum: [initial, reconnect, lagged, epoch-changed]
 """,
         encoding="utf-8",
     )
@@ -558,8 +559,8 @@ def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -
         return FakeEventStreamResponse(
             [
                 b"event: sync.reset\n",
-                b"id: 42\n",
-                b'data: {"id":42,"type":"sync.reset","reason":"last-event-id","lastEventId":"1"}\n',
+                b"id: 00000000-0000-4000-8000-000000000001:42\n",
+                b'data: {"id":42,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset","reason":"reconnect"}\n',
                 b"\n",
             ]
         )
@@ -588,7 +589,7 @@ def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -
     request, timeout = requests[0]
     assert request.full_url == "http://127.0.0.1:4711/api/v1/events"
     assert request.headers["Accept"] == "text/event-stream"
-    assert request.headers["Last-event-id"] == "1"
+    assert request.headers["Last-event-id"] == "00000000-0000-4000-8000-000000000001:1"
     assert request.headers["X-api-key"] == "test-key"
     assert timeout == 2.0
 
@@ -618,8 +619,8 @@ def test_run_event_stream_conformance_fails_without_stream_headers(
         return FakeEventStreamResponse(
             [
                 b"event: sync.reset\n",
-                b"id: 42\n",
-                b'data: {"id":42,"type":"sync.reset","reason":"last-event-id","lastEventId":"1"}\n',
+                b"id: 00000000-0000-4000-8000-000000000001:42\n",
+                b'data: {"id":42,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset","reason":"reconnect"}\n',
                 b"\n",
             ],
             headers={
@@ -655,8 +656,8 @@ def test_run_event_stream_conformance_fails_on_schema_invalid_payload(
         return FakeEventStreamResponse(
             [
                 b"event: sync.reset\n",
-                b"id: 42\n",
-                b'data: {"id":42,"type":"sync.reset","lastEventId":"1"}\n',
+                b"id: 00000000-0000-4000-8000-000000000001:42\n",
+                b'data: {"id":42,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset"}\n',
                 b"\n",
             ]
         )
@@ -727,3 +728,24 @@ def test_run_cli_reports_api_root_base_url_as_preflight_error(
 
     assert exit_code == 2
     assert "preflight failed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("cursor, expected", [
+    ("00000000-0000-4000-8000-000000000001:18446744073709551615", True),
+    ("00000000-0000-4000-8000-000000000002:18446744073709551615", False),
+    ("00000000-0000-4000-8000-000000000001:18446744073709552000", False),
+])
+def test_event_cursor_matches_payload_epoch_and_exact_revision(tmp_path, cursor, expected):
+    openapi = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    def opener(_request, *, timeout):
+        return FakeEventStreamResponse([
+            b"event: sync.reset\n", f"id: {cursor}\n".encode(),
+            b'data: {"id":18446744073709551615,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset","reason":"reconnect"}\n',
+            b"\n",
+        ])
+    result = rust_rest_conformance.run_event_stream_conformance(
+        "http://127.0.0.1:4711", "test-key", opener=opener, openapi_path=openapi,
+    )
+    assert result["ok"] is expected
+    if not expected:
+        assert result["missing"] == ["cursor"]

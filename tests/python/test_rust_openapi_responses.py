@@ -98,34 +98,34 @@ def test_schema_component_payload_validation_resolves_component_refs(tmp_path: P
 openapi: 3.1.0
 components:
   schemas:
-    TransferEvent:
+    DownloadEvent:
       oneOf:
-        - $ref: "#/components/schemas/TransferSyncResetEvent"
-    TransferSyncResetEvent:
+        - $ref: "#/components/schemas/DownloadSyncResetEvent"
+    DownloadSyncResetEvent:
       type: object
       additionalProperties: false
-      required: [id, type, reason]
+      required: [id, epoch, type, reason]
       properties:
-        id: { type: integer, minimum: 1 }
+        id: { type: integer, minimum: 0 }
+        epoch: { type: string, format: uuid }
         type:
           type: string
           enum: [sync.reset]
         reason:
           type: string
-          enum: [last-event-id]
-        lastEventId: { type: string }
+          enum: [reconnect]
 """,
     )
 
     validate_openapi_schema_component_payload(
-        "TransferEvent",
-        {"id": 1, "type": "sync.reset", "reason": "last-event-id", "lastEventId": "0"},
+        "DownloadEvent",
+        {"id": 1, "epoch": "00000000-0000-4000-8000-000000000001", "type": "sync.reset", "reason": "reconnect"},
         openapi_yaml,
     )
     with pytest.raises(jsonschema.ValidationError):
         validate_openapi_schema_component_payload(
-            "TransferEvent",
-            {"id": 1, "type": "sync.reset", "lastEventId": "0"},
+            "DownloadEvent",
+            {"id": 1, "epoch": "00000000-0000-4000-8000-000000000001", "type": "sync.reset"},
             openapi_yaml,
         )
 

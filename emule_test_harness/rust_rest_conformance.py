@@ -20,7 +20,7 @@ from emule_test_harness.rust_rest_contract import REST_CONTRACT_VERSION, REST_CO
 
 REST_COVERAGE_BUDGETS = ("contract", "contract-stress")
 EVENT_STREAM_PATH = "/api/v1/events"
-EVENT_STREAM_LAST_EVENT_ID = "1"
+EVENT_STREAM_LAST_EVENT_ID = "00000000-0000-4000-8000-000000000001:1"
 EVENT_STREAM_READ_LINES = 16
 DOWNLOAD_EVENT_SCHEMA_COMPONENT = "DownloadEvent"
 OPENAPI_CONTRACT_ENV = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
@@ -97,10 +97,10 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     smoke.REST_CONTRACT_EXPECTED_ERROR_STATUSES.update({
         "createDownload": (400,),
         **{name: (404,) for name in (
-            "getDownload", "patchDownload", "getDownloadDetails", "listDownloadComments",
+            "getDownload", "patchDownload", "listDownloadParts", "listDownloadComments",
             "listDownloadSources", "getDownloadSource", "browseDownloadSource",
             "addDownloadSourceFriend", "removeDownloadSourceFriend", "removeDownloadSource",
-            "banDownloadSource", "unbanDownloadSource", "releaseDownloadSourceUploadSlot",
+            "banDownloadSource", "unbanDownloadSource",
         )},
     })
     smoke.REST_CONTRACT_ROUTES = smoke.build_openapi_contract_routes()
@@ -185,9 +185,6 @@ def run_event_stream_conformance(
     expected = {
         "event": "event: sync.reset",
         "id": "id: ",
-        "type": '"type":"sync.reset"',
-        "reason": '"reason":"last-event-id"',
-        "lastEventId": f'"lastEventId":"{EVENT_STREAM_LAST_EVENT_ID}"',
     }
     missing = [name for name, needle in expected.items() if needle not in frame]
     missing_headers = [
@@ -207,6 +204,15 @@ def run_event_stream_conformance(
         )
     except (json.JSONDecodeError, RuntimeError, jsonschema.ValidationError) as exc:
         payload_error = str(exc)
+    if isinstance(payload, dict):
+        if payload.get("type") != "sync.reset":
+            missing.append("type")
+        if payload.get("reason") != "reconnect":
+            missing.append("reason")
+        cursor = next((line.removeprefix("id:").strip() for line in frame.splitlines()
+                       if line.startswith("id:")), None)
+        if cursor != f"{payload.get('epoch')}:{payload.get('id')}":
+            missing.append("cursor")
     ok = (
         status == 200
         and content_type.startswith("text/event-stream")
