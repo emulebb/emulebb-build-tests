@@ -513,7 +513,7 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
                 or (failure == "app-connect" and base == app_base and route.endswith("/operations/connect"))
                 or (failure == "peer-connect" and base == peer_base and route.endswith("/operations/connect"))):
             raise subject.RustRestFailure("raw-private-path-key-endpoint", status=400,
-                detail=json.dumps({"error": {"code": "BAD_REQUEST", "message": "ED2K network is not configured /private/key"}}))
+                detail=json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": "ED2K network is not configured /private/key"}}))
         if route == "/api/v1/servers":
             if method == "POST":
                 servers[base].append({**deepcopy(body), "priority": "normal", "static": False, "enabled": True})
@@ -537,7 +537,7 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         expected = {"peer-connect": "peer-listener-directed-connect", "app-create": "app-listener-server-create",
                     "app-connect": "app-listener-directed-connect"}[failure]
         assert error.value.failure["phase"] == expected
-        assert error.value.failure["rest"] == {"httpStatus": 400, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-not-configured"}
+        assert error.value.failure["rest"] == {"httpStatus": 400, "apiCode": "INVALID_ARGUMENT", "coreContext": "ed2k-not-configured"}
     else:
         result = subject.probe_local_listeners(lambda *args: pytest.fail("no transfer fixture IO"),
                                               {"sourceRevision": IDENTITY["sourceRevision"]}, **args)
