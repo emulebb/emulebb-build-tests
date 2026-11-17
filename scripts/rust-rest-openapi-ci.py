@@ -403,6 +403,22 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                 "SELECT sharing_enabled FROM known_files WHERE ed2k_hash=?", (bytes.fromhex(value),)).fetchone()) is None
                 else bool(row[0]) for value in selected]
 
+    def upload_counts(hash_value: str) -> tuple[int, int]:
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            row = connection.execute(
+                "SELECT all_time_upload_requests,all_time_upload_accepts FROM known_files WHERE ed2k_hash=?",
+                (bytes.fromhex(hash_value),),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Upload accounting lost the known library hash")
+        return int(row[0]), int(row[1])
+
+    def require_upload_checkpoint(hash_value: str, expected: tuple[int, int]) -> tuple[int, int]:
+        def settled() -> tuple[int, int] | None:
+            current = upload_counts(hash_value)
+            return current if current == expected else None
+        return wait_until("upload accounting checkpoint", remaining(), settled)
+
     def require_file_tags(hash_value: str, names: list[str]) -> None:
         rows = library_request("GET", f"/api/v1/library/files/{hash_value}/tags",
                            "/library/files/{hash}/tags", 200)
@@ -634,19 +650,29 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
 
         # Both physical copies are eligible here. Keep one connection and its
         # cached complete reader across REST rotation; a fresh request must fail.
+        counts_before = upload_counts(duplicate_hash)
         peer = Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining()))
         with peer:
             if not peer.filename_available(duplicate_hash) or not peer.start_upload(duplicate_hash):
                 raise RuntimeError("Enabled complete content was not admitted to the local peer")
             if peer.request_range(duplicate_hash, 0, 10) != duplicate_bytes[:10]:
                 raise RuntimeError("Local peer received different verified bytes")
+            if peer.request_range(duplicate_hash, 10, 20) != duplicate_bytes[10:20]:
+                raise RuntimeError("Second request in one upload stint returned different bytes")
+            if (counts := upload_counts(duplicate_hash))[0] != counts_before[0] + 2 or not counts_before[1] <= counts[1] <= counts_before[1] + 1:
+                raise RuntimeError("Multiple payload requests did not count as one accepted upload stint")
             sharing(False, [duplicate_hash], ["accepted"])
-            if peer.request_range(duplicate_hash, 10, 20) is not None:
+            if peer.request_range(duplicate_hash, 20, 30) is not None:
                 raise RuntimeError("Disabled hash reused a complete reader on the established connection")
+            if (counts := upload_counts(duplicate_hash))[0] != counts_before[0] + 3 or not counts_before[1] <= counts[1] <= counts_before[1] + 1:
+                raise RuntimeError("Refused demand changed the accepted-stint count")
             sharing(True, [duplicate_hash], ["accepted"])
-            if not peer.start_upload(duplicate_hash) or peer.request_range(duplicate_hash, 20, 30) != duplicate_bytes[20:30]:
+            if not peer.start_upload(duplicate_hash) or peer.request_range(duplicate_hash, 30, 40) != duplicate_bytes[30:40]:
                 raise RuntimeError("Re-enabled content did not resume the established peer")
+            if (counts := upload_counts(duplicate_hash))[0] != counts_before[0] + 4 or not counts_before[1] <= counts[1] <= counts_before[1] + 1:
+                raise RuntimeError("Re-enable duplicated acceptance within the same upload stint")
             sharing_wire = list(peer.transcript)
+        require_upload_checkpoint(duplicate_hash, (counts_before[0] + 4, counts_before[1] + 1))
 
         request("DELETE", "/api/v1/categories/ALPHA")
         if assignments() != [None, "Second-2", None]:
@@ -712,6 +738,10 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             if peer.request_range(duplicate_hash, 0, 10) != duplicate_bytes[:10]:
                 raise RuntimeError("Re-enabled restarted hash returned different bytes")
             sharing_wire.extend(peer.transcript)
+        counts_after = require_upload_checkpoint(duplicate_hash, (counts_before[0] + 6, counts_before[1] + 2))
+        report["uploadAccounting"] = {"before": list(counts_before), "after": list(counts_after),
+            "multiplePacketsOneAcceptedStint": True, "refusedDemandCounted": True,
+            "reEnableKeepsSameStint": True, "newSessionAfterRestart": True}
         report["librarySharing"] = {"orderedMixedOutcomes": True, "idempotentWrites": True,
             "hashPolicyAcrossCopies": True, "tagsAndFilesPreserved": True, "unknownHashNotCreated": True,
             "persistedAcrossReopen": True, "cachedReaderRefusedOnNewRequest": True,
