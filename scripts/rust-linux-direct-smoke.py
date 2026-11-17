@@ -33,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.direct_safe_corpus import LINUX_PDF_TERMS, MAX_PDF_BYTES
 from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.rust_local_ed2k import download_detail, download_part_totals, require_download_id
 from emule_test_harness import (
     diag_event_diff,
     diag_event_runs,
@@ -175,9 +176,9 @@ def verify_completed_probe_types(
         if suffix not in required_types:
             continue
         snapshot = snapshots.get(str(row["hash"]).lower(), {})
-        if int(snapshot.get("completedBytes") or 0) != int(row["size"]):
+        if not download_completed(snapshot, row):
             continue
-        if verified_delivered_path(incoming_dir, row) is None:
+        if verified_delivered_path(incoming_dir, row, snapshot) is None:
             raise RuntimeError(f"Completed allowlisted .{suffix} probe was not delivered with its expected size/SHA-256.")
         completed[suffix] = True
     return completed
@@ -193,17 +194,25 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verified_delivered_path(incoming_dir: Path, row: dict[str, Any]) -> Path | None:
-    """Find exact delivered bytes even when the client sanitizes the link name."""
+def download_completed(snapshot: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Require durable payload verification and delivery, not byte presence."""
+    delivery = snapshot.get("delivery")
+    return (snapshot.get("state") == "completed" and snapshot.get("payloadVerified") is True
+            and type(snapshot.get("sizeBytes")) is int and snapshot["sizeBytes"] == row["size"]
+            and isinstance(delivery, dict) and delivery.get("state") == "delivered")
 
-    preferred = incoming_dir / str(row["name"])
-    candidates = [preferred]
-    candidates.extend(path for path in incoming_dir.iterdir() if path != preferred)
-    for path in candidates:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size != int(row["size"]):
-            continue
-        if sha256_file(path) == str(row["sha256"]):
-            return path
+
+def verified_delivered_path(incoming_dir: Path, row: dict[str, Any], snapshot: dict[str, Any]) -> Path | None:
+    """Verify the recorded output inside this campaign's incoming directory."""
+    recorded = snapshot.get("delivery", {}).get("path")
+    if not isinstance(recorded, str) or not recorded:
+        return None
+    path = Path(recorded)
+    if (path.parent.resolve() != incoming_dir.resolve() or path.is_symlink()
+            or not path.is_file() or path.stat().st_size != int(row["size"])):
+        return None
+    if sha256_file(path) == str(row["sha256"]):
+        return path
     return None
 
 
@@ -234,9 +243,9 @@ def audit_existing_delivery(run_dir: Path, inputs_path: Path, required_types: se
     snapshots = {str(probe.get("hash", "")).lower(): probe for probe in report["probes"]}
     for row in rows:
         snapshot = snapshots.get(str(row["hash"]).lower(), {})
-        if int(snapshot.get("completedBytes") or 0) != int(row["size"]):
+        if not download_completed(snapshot, row):
             continue
-        delivered = verified_delivered_path(incoming_dir, row)
+        delivered = verified_delivered_path(incoming_dir, row, snapshot)
         if delivered is None:
             raise RuntimeError("completed allowlisted probe has no size/SHA-256-matching delivered file.")
         verified.append({"hash": row["hash"], "suffix": row["suffix"], "size": row["size"]})
@@ -453,30 +462,23 @@ def remove_nat_matrix_trigger_server(base_url: str) -> None:
     )
 
 
-def add_allowlisted_transfer(base_url: str, row: dict[str, Any]) -> None:
+def add_allowlisted_transfer(base_url: str, row: dict[str, Any]) -> str:
     # Stock MFC EncodeUrlUtf8 percent-encodes spaces and UTF-8 file-name bytes.
     encoded_name = urllib.parse.quote(str(row["name"]), safe="")
     link = f"ed2k://|file|{encoded_name}|{row['size']}|{str(row['hash']).upper()}|/"
-    post_json(base_url, "/api/v1/transfers", {"link": link, "paused": False})
+    admission = api_data(post_json(base_url, "/api/v1/downloads", {
+        "source": {"type": "ed2k-link", "link": link}, "intent": "started",
+    }))
+    return require_download_id(admission, expected_hash=str(row["hash"]))
 
 
-def transfer_snapshot(base_url: str, transfer_hash: str) -> dict[str, Any]:
-    data = api_data(
-        retry_http_json(
-            "safe transfer",
-            2,
-            base_url,
-            f"/api/v1/transfers/{transfer_hash}",
-            api_key=API_KEY,
-        )
-    )
-    if not isinstance(data, dict):
-        return {}
-    return {
-        key: data.get(key)
-        for key in ("hash", "state", "completedBytes", "sizeBytes", "sources", "speedDownBytesPerSec")
-        if key in data
-    }
+def transfer_snapshot(base_url: str, download_id: str, expected_hash: str) -> dict[str, Any]:
+    data = download_detail(base_url, API_KEY, download_id, expected_hash=expected_hash)
+    if data.get("state") == "failed":
+        raise RuntimeError("Direct-smoke download failed; explicit operator action is required")
+    return {key: data.get(key) for key in (
+        "id", "hash", "state", "sizeBytes", "payloadVerified", "delivery", "completedAt",
+    )} | download_part_totals(base_url, API_KEY, download_id)
 
 
 def completed_transfer_evidence(
@@ -488,24 +490,24 @@ def completed_transfer_evidence(
 ) -> dict[str, Any]:
     """Waits for and verifies one exact allowlisted transfer."""
 
-    add_allowlisted_transfer(base_url, row)
+    download_id = add_allowlisted_transfer(base_url, row)
     deadline = time.monotonic() + timeout_seconds
     snapshot: dict[str, Any] = {}
     while time.monotonic() < deadline:
         if monitor is not None:
             monitor()
-        snapshot = transfer_snapshot(base_url, str(row["hash"]))
-        if int(snapshot.get("completedBytes") or 0) == int(row["size"]):
+        snapshot = transfer_snapshot(base_url, download_id, str(row["hash"]))
+        if download_completed(snapshot, row):
             break
         time.sleep(min(5.0, max(0.1, deadline - time.monotonic())))
     else:
-        if not snapshot.get("sources") and not int(snapshot.get("completedBytes") or 0):
-            return {"hash": row["hash"], "suffix": row["suffix"], "status": "inconclusive", "reason": "no_source"}
+        if not int(snapshot.get("presentBytes") or 0):
+            return {"id": download_id, "hash": row["hash"], "suffix": row["suffix"], "status": "inconclusive", "reason": "no_payload_observed"}
         raise RuntimeError(f"Timed out waiting for allowlisted {row['suffix']} transfer completion: {snapshot}")
 
     completed_path = wait_until(
         "completed transfer delivery", 30.0,
-        lambda: verified_delivered_path(incoming_dir, row),
+        lambda: verified_delivered_path(incoming_dir, row, snapshot),
     )
     actual_size = completed_path.stat().st_size
     actual_sha256 = sha256_file(completed_path)
@@ -515,8 +517,8 @@ def completed_transfer_evidence(
         "hash": row["hash"],
         "suffix": row["suffix"],
         "expectedSize": row["size"],
-        "completedBytes": snapshot.get("completedBytes"),
-        "sources": snapshot.get("sources"),
+        "id": download_id,
+        "verifiedBytes": snapshot["sizeBytes"],
         "sizeVerified": True,
         "sha256Verified": True,
         "deliveredName": completed_path.name,
@@ -882,9 +884,10 @@ def main(argv: list[str] | None = None) -> int:
             "connected": bool(kad.get("connected")),
             "contactCount": int(kad.get("contactCount") or 0),
         }
+        probe_ids = {}
         if args.probe_count:
             for row in probe_rows:
-                add_allowlisted_transfer(base_url, row)
+                probe_ids[str(row["hash"])] = add_allowlisted_transfer(base_url, row)
         if args.complete_transfers:
             report["transfers"] = []
             for row in safe_transfers:
@@ -902,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.probe_count:
             report["probes"] = [
                 {"hash": row["hash"], "suffix": row["suffix"],
-                 **transfer_snapshot(base_url, str(row["hash"]))}
+                 **transfer_snapshot(base_url, probe_ids[str(row["hash"])], str(row["hash"]))}
                 for row in probe_rows
             ]
         if args.require_completed_type:
@@ -1002,7 +1005,7 @@ def main(argv: list[str] | None = None) -> int:
         elif any(row.get("status") == "inconclusive" for row in transfer_results):
             report["status"] = "inconclusive"
         elif args.probe_count and not (
-            any(int(row.get("completedBytes") or 0) > 0 for row in report["probes"])
+            any(int(row.get("presentBytes") or 0) > 0 or row.get("payloadVerified") is True for row in report["probes"])
             or int(report.get("diagnostics", {}).get("acceptedPayloadBytes") or 0) > 0
         ):
             report["status"] = "inconclusive"
