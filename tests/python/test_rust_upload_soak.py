@@ -216,60 +216,75 @@ def test_safe_counter_helpers_tolerate_missing_values() -> None:
     assert rust_upload_soak.safe_float("bad") == 0.0
 
 
-def test_find_hash_item_handles_retired_transfer_and_local_share(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_shared_file_uses_the_exact_hash_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     file_hash = "00112233445566778899aabbccddeeff"
-    responses = {
-        "/api/v1/transfers": {"items": []},
-        "/api/v1/shared-files": {"items": [{"hash": file_hash, "path": "C:\\incoming\\payload.bin"}]},
-    }
-    monkeypatch.setattr(rust_upload_soak, "request_json", lambda _base, _method, path, _key: responses[path])
-
-    assert rust_upload_soak.find_hash_item("http://127.0.0.1", "key", "/api/v1/transfers", file_hash) is None
-    assert rust_upload_soak.find_hash_item("http://127.0.0.1", "key", "/api/v1/shared-files", file_hash) == responses["/api/v1/shared-files"]["items"][0]
+    row = {"hash": file_hash, "path": "/sample/incoming/payload.bin"}
+    def read(_base, method, path, _key):
+        assert method == "GET" and path == f"/api/v1/shared-files/{file_hash}"
+        return row
+    monkeypatch.setattr(rust_upload_soak, "request_json", read)
+    assert rust_upload_soak.find_shared_file("http://127.0.0.1", "key", file_hash) == row
 
 
-def test_verify_download_delivery_checks_library_promotion(tmp_path: Path) -> None:
+def test_find_shared_file_distinguishes_absence_and_failure(monkeypatch):
+    def missing(*_args):
+        raise rust_upload_soak.RustRestFailure("not found", status=404, detail='{"error":{"code":"NOT_FOUND"}}')
+    monkeypatch.setattr(rust_upload_soak, "request_json", missing)
+    assert rust_upload_soak.find_shared_file("http://127.0.0.1", "key", "a" * 32) is None
+    def failed(*_args):
+        raise rust_upload_soak.RustRestFailure("busy", status=503, detail='{"error":{"code":"PERSISTENCE_BUSY"}}')
+    monkeypatch.setattr(rust_upload_soak, "request_json", failed)
+    with pytest.raises(rust_upload_soak.RustRestFailure):
+        rust_upload_soak.find_shared_file("http://127.0.0.1", "key", "a" * 32)
+
+
+def test_verify_download_delivery_checks_retained_terminal_job_and_exact_bytes(tmp_path: Path) -> None:
     delivered = tmp_path / "incoming" / "payload.bin"
     payload = rust_upload_soak.write_payload(delivered, 4096)
-
-    result = rust_upload_soak.verify_download_delivery(
-        None,
-        {"hash": "00112233445566778899aabbccddeeff", "sizeBytes": payload["sizeBytes"], "path": str(delivered)},
-        payload,
-        require_completion=True,
-        require_delivered_path=True,
-    )
-
-    assert result["ok"] is True
-    assert result["completed"] is True
-    assert result["deliveredPathPresent"] is True
-    assert result["deliveredFileExists"] is True
+    download = {"id": "7", "state": "completed", "sizeBytes": 4096, "payloadVerified": True,
+                "delivery": {"state": "delivered", "path": str(delivered), "ownership": "owned"}}
+    result = rust_upload_soak.verify_download_delivery(download, payload, require_completion=True, require_delivered_path=True)
+    assert result["ok"] is True and result["completed"] is True
+    assert result["verifiedBytes"] == 4096
+    assert result["deliveredPathPresent"] is True and result["deliveredFileExists"] is True
     assert result["deliveredFileSizeBytes"] == payload["sizeBytes"]
     assert result["deliveredSha256"] == payload["sha256"]
 
 
-def test_verify_download_delivery_rejects_incomplete_transfer(tmp_path: Path) -> None:
+def test_verify_download_delivery_rejects_incomplete_job(tmp_path: Path) -> None:
     payload = rust_upload_soak.write_payload(tmp_path / "payload.bin", 4096)
-
-    with pytest.raises(RuntimeError, match="did not enter the verified library"):
-        rust_upload_soak.verify_download_delivery(
-            {"state": "downloading", "completedBytes": 1024},
-            None,
-            payload,
-            require_completion=True,
-            require_delivered_path=False,
-        )
+    with pytest.raises(RuntimeError, match="did not complete verified delivery"):
+        rust_upload_soak.verify_download_delivery({"state": "downloading", "sizeBytes": 4096,
+            "payloadVerified": False, "delivery": {"state": "pending", "path": None}}, payload,
+            require_completion=True, require_delivered_path=False, verified_bytes=1024)
 
 
-def test_delivered_path_requires_retired_transfer(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verified, delivery_state", [(False, "delivered"), (True, "pending")])
+def test_delivery_requires_verified_terminal_state(tmp_path: Path, verified, delivery_state) -> None:
     delivered = tmp_path / "incoming" / "payload.bin"
     payload = rust_upload_soak.write_payload(delivered, 4096)
+    with pytest.raises(RuntimeError, match="has not completed verified delivery"):
+        rust_upload_soak.verify_download_delivery({"id": "7", "state": "completed", "sizeBytes": 4096,
+            "payloadVerified": verified, "delivery": {"state": delivery_state, "path": str(delivered)}}, payload,
+            require_completion=False, require_delivered_path=True)
 
-    with pytest.raises(RuntimeError, match="still has a transfer row"):
-        rust_upload_soak.verify_download_delivery(
-            {"state": "completed", "completedBytes": 4096},
-            {"sizeBytes": 4096, "path": str(delivered)},
-            payload,
-            require_completion=False,
-            require_delivered_path=True,
-        )
+
+def test_completed_delivery_still_requires_matching_file_bytes(tmp_path: Path) -> None:
+    payload = rust_upload_soak.write_payload(tmp_path / "source.bin", 4096)
+    delivered = tmp_path / "damaged.bin"
+    delivered.write_bytes(b"damaged")
+    with pytest.raises(RuntimeError, match="did not match the source payload"):
+        rust_upload_soak.verify_download_delivery({"id": "7", "state": "completed", "sizeBytes": 4096,
+            "payloadVerified": True, "delivery": {"state": "delivered", "path": str(delivered)}}, payload,
+            require_completion=True, require_delivered_path=True)
+
+
+@pytest.mark.parametrize("verified, expected", [(True, 4096), (False, 0)])
+def test_progress_separates_retired_piece_presence_from_payload_verification(monkeypatch, verified, expected):
+    monkeypatch.setattr(rust_upload_soak, "download_part_totals", lambda *_args: {
+        "partCount": 0, "presentBytes": 0, "verifiedBytes": 0,
+    })
+    totals = rust_upload_soak._download_progress_totals("http://127.0.0.1", "key", {
+        "id": "7", "sizeBytes": 4096, "state": "completed", "payloadVerified": verified,
+    })
+    assert totals == {"partCount": 0, "presentBytes": 0, "verifiedBytes": expected}

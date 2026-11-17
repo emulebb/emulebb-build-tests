@@ -78,7 +78,7 @@ def test_request_json_requires_exact_batch_http_status(monkeypatch, actual, acce
 
 
 @pytest.mark.parametrize("code,message,expected", [
-    ("BAD_REQUEST", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
+    ("INVALID_ARGUMENT", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
     ("EMULE_ERROR", "failed to bind eD2k TCP listener on 192.0.2.20:20029", "ed2k-listener-bind"),
     ("PRIVATE_SECRET", "private operator text", "unrecognized"),
     (["secret"], "private operator text", "unrecognized"),
@@ -87,7 +87,7 @@ def test_rest_failure_has_closed_status_code_and_core_context(code, message, exp
     error = rust_local_ed2k.RustRestFailure("private raw message", status=400,
         detail=json.dumps({"error": {"code": code, "message": message}}))
     assert error.safe_failure == {"httpStatus": 400,
-        "apiCode": code if code in ("BAD_REQUEST", "EMULE_ERROR") else "unrecognized", "coreContext": expected}
+        "apiCode": code if code in ("INVALID_ARGUMENT", "EMULE_ERROR") else "unrecognized", "coreContext": expected}
     assert "private" not in json.dumps(error.safe_failure) and "192.0.2.20" not in json.dumps(error.safe_failure)
 
 
@@ -544,3 +544,52 @@ def test_download_completion_uses_retained_job_and_actual_delivery_path(monkeypa
         expected_sha256=rust_local_ed2k.file_sha256(delivered),
         expected_delivery_path=delivered, timeout_seconds=2.0,
     ) is None
+
+
+
+def test_download_admission_retains_job_id_separate_from_hash():
+    row = {"id": "9223372036854775807", "hash": "a" * 32}
+    assert rust_local_ed2k.require_download_id(row, expected_hash="a" * 32) == row["id"]
+    with pytest.raises(RuntimeError, match="job identity"):
+        rust_local_ed2k.require_download_id({**row, "hash": "b" * 32}, expected_hash="a" * 32)
+
+
+def test_download_batch_cannot_hide_a_failed_item():
+    with pytest.raises(RuntimeError, match="did not accept captured job"):
+        rust_local_ed2k.require_download_batch({"data": [{"id": "7", "status": "failed", "httpStatus": 409,
+            "error": {"code": "DOWNLOAD_COMPLETED", "message": "Completed", "details": {}}}]}, "7")
+    row = {"id": "7", "status": "unchanged", "httpStatus": 200}
+    assert rust_local_ed2k.require_download_batch({"data": [row]}, "7") == row
+
+
+def test_download_part_totals_stream_pages_and_separate_presence_from_verification(monkeypatch):
+    calls = []
+    def read(_base, method, path, _key):
+        calls.append(path)
+        assert method == "GET"
+        if "cursor=" not in path:
+            return {"data": [{"index": 0, "sizeBytes": 100, "presentBytes": 100, "complete": False}],
+                    "meta": {"hasMore": True, "nextCursor": "next-page"}}
+        return {"data": [{"index": 1, "sizeBytes": 50, "presentBytes": 50, "complete": True}],
+                "meta": {"hasMore": False, "nextCursor": None}}
+    monkeypatch.setattr(rust_local_ed2k, "request_json", read)
+    assert rust_local_ed2k.download_part_totals("http://127.0.0.1", "key", "7") == {
+        "partCount": 2, "presentBytes": 150, "verifiedBytes": 50,
+    }
+    assert calls == ["/api/v1/downloads/7/parts?limit=200", "/api/v1/downloads/7/parts?limit=200&cursor=next-page"]
+
+
+def test_download_part_totals_refuse_repeated_parts(monkeypatch):
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: {
+        "data": [{"index": 0, "sizeBytes": 10, "presentBytes": 0, "complete": False}],
+        "meta": {"hasMore": True, "nextCursor": "next-page"},
+    })
+    with pytest.raises(RuntimeError, match="ordering"):
+        rust_local_ed2k.download_part_totals("http://127.0.0.1", "key", "7")
+
+
+
+def test_download_detail_refuses_a_same_hash_replacement(monkeypatch):
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: {"id": "8", "hash": "a" * 32})
+    with pytest.raises(RuntimeError, match="substituted another job"):
+        rust_local_ed2k.download_detail("http://127.0.0.1", "key", "7", expected_hash="a" * 32)

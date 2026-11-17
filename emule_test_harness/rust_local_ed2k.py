@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -25,6 +27,7 @@ class RustRestFailure(RuntimeError):
     """Keep the existing error text plus a closed projection for public receipts."""
     def __init__(self, message: str, *, status: int, detail: str):
         super().__init__(message)
+        self.status = status
         try:
             value = json.loads(detail).get("error", {})
         except (ValueError, AttributeError):
@@ -33,7 +36,7 @@ class RustRestFailure(RuntimeError):
         # conflict evidence. Public receipts must use only safe_failure.
         self.response_error = value if isinstance(value, dict) else {}
         code = value.get("code") if isinstance(value, dict) else None
-        allowed = {"BAD_REQUEST", "INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN", "DOWNLOAD_CONFLICT"}
+        allowed = {"INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN", "DOWNLOAD_CONFLICT"}
         text = str(value.get("message", "")).lower() if isinstance(value, dict) else ""
         contexts = (("ed2k network is not configured", "ed2k-not-configured"),
             ("ed2k network is disabled in settings.core", "ed2k-disabled"),
@@ -86,6 +89,69 @@ def request_json(
     if isinstance(data, dict):
         return data
     raise RuntimeError(f"Rust REST returned a non-object payload for {method} {path}: {data!r}")
+
+
+def require_download_id(admission: dict[str, object], *, expected_hash: str) -> str:
+    """Retain the exact allocated job identity alongside its protocol hash."""
+    job_id = admission.get("id")
+    if (not isinstance(job_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", job_id)
+            or int(job_id) > 9223372036854775807 or admission.get("hash") != expected_hash.lower()):
+        raise RuntimeError("Rust download admission returned an invalid job identity")
+    return job_id
+
+
+def download_detail(base_url: str, api_key: str, download_id: str, *, expected_hash: str) -> dict[str, object]:
+    """Read and verify the captured job; a same-hash replacement is not interchangeable."""
+    row = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", api_key)
+    if require_download_id(row, expected_hash=expected_hash) != download_id:
+        raise RuntimeError("Rust download detail substituted another job")
+    return row
+
+
+def require_download_batch(document: dict[str, object], download_id: str) -> dict[str, object]:
+    """A successful HTTP batch still needs a successful item for the captured job."""
+    rows = document.get("data")
+    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or rows[0].get("id") != download_id or rows[0].get("status") not in {"accepted", "unchanged"}
+            or rows[0].get("httpStatus") not in {200, 202} or "error" in rows[0]
+            or (rows[0]["status"] == "unchanged" and rows[0]["httpStatus"] != 200)):
+        raise RuntimeError(f"Rust download action did not accept captured job {download_id}")
+    return rows[0]
+
+
+def download_part_totals(base_url: str, api_key: str, download_id: str) -> dict[str, int]:
+    """Stream part pages with constant retained memory; count presence and verification separately."""
+    cursor = None
+    previous_index = -1
+    totals = {"partCount": 0, "presentBytes": 0, "verifiedBytes": 0}
+    while True:
+        query = {"limit": 200}
+        if cursor is not None:
+            query["cursor"] = cursor
+        page = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}/parts?{urllib.parse.urlencode(query)}", api_key)
+        rows, meta = page.get("data"), page.get("meta")
+        if (not isinstance(rows, list) or len(rows) > 200 or not isinstance(meta, dict)
+                or type(meta.get("hasMore")) is not bool or "nextCursor" not in meta):
+            raise RuntimeError("Rust download parts returned an invalid bounded page")
+        for row in rows:
+            if (not isinstance(row, dict) or type(row.get("index")) is not int or row["index"] <= previous_index
+                    or type(row.get("sizeBytes")) is not int or row["sizeBytes"] < 0
+                    or type(row.get("presentBytes")) is not int or not 0 <= row["presentBytes"] <= row["sizeBytes"]
+                    or type(row.get("complete")) is not bool):
+                raise RuntimeError("Rust download parts lost ordering or byte invariants")
+            previous_index = row["index"]
+            totals["partCount"] += 1
+            totals["presentBytes"] += row["presentBytes"]
+            if row["complete"]:
+                totals["verifiedBytes"] += row["sizeBytes"]
+        next_cursor = meta["nextCursor"]
+        if not meta["hasMore"]:
+            if next_cursor is not None:
+                raise RuntimeError("Rust terminal part page retained a cursor")
+            return totals
+        if not rows or not isinstance(next_cursor, str) or not 0 < len(next_cursor) <= 512 or next_cursor == cursor:
+            raise RuntimeError("Rust download part cursor did not advance")
+        cursor = next_cursor
 
 
 def wait_for(

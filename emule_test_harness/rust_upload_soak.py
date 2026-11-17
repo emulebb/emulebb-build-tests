@@ -20,6 +20,11 @@ from . import ed2k_server as ed2k_harness, kad_nodes, live_process_monitor, rust
 from .local_kad_peer import LocalKadPeer
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
+    RustRestFailure,
+    download_part_totals,
+    download_detail,
+    require_download_id,
+    require_download_batch,
     ed2k_link_with_source,
     file_sha256,
     publish_shared_tree,
@@ -244,7 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rust-exe", type=Path, default=staged_rust_bin("emulebb-rust.exe"))
     parser.add_argument("--discovery-mode", choices=("direct", "kad-wsl"), default="direct")
     parser.add_argument("--linux-rust-exe", type=Path, default=staged_rust_bin("emulebb-rust"))
-    parser.add_argument("--start-paused-resume", action="store_true")
+    parser.add_argument("--start-stopped", action="store_true")
     parser.add_argument("--require-completion", action="store_true")
     parser.add_argument("--require-delivered-path", action="store_true")
     parser.add_argument("--ed2k-server-repo", type=Path)
@@ -479,59 +484,64 @@ def safe_float(value: object) -> float:
         return 0.0
 
 
-def wait_for_transfer_state(
-    base_url: str,
-    api_key: str,
-    transfer_hash: str,
-    *,
-    states: set[str],
-    timeout_seconds: float,
-) -> dict[str, object]:
-    """Waits until one transfer is visible in any expected state."""
-
+def wait_for_download_state(base_url: str, api_key: str, download_id: str, *,
+                            states: set[str], timeout_seconds: float) -> dict[str, object]:
+    """Wait for the captured job without searching by content identity."""
     def probe() -> dict[str, object] | None:
-        transfer = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", api_key)
-        return transfer if str(transfer.get("state") or "") in states else None
-
-    return wait_for(
-        probe,
-        timeout_seconds=timeout_seconds,
-        interval_seconds=0.5,
-        description=f"transfer {transfer_hash} state in {sorted(states)}",
-    )
+        download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", api_key)
+        if download.get("id") != download_id:
+            raise RuntimeError("Rust download detail returned a different job")
+        return download if download.get("state") in states else None
+    return wait_for(probe, timeout_seconds=timeout_seconds, interval_seconds=0.5,
+                    description=f"download {download_id} state in {sorted(states)}")
 
 
-def find_hash_item(base_url: str, api_key: str, path: str, file_hash: str) -> dict[str, object] | None:
-    """Finds one file in this isolated fixture's transfer or share list."""
+def find_shared_file(base_url: str, api_key: str, file_hash: str) -> dict[str, object] | None:
+    """Read this fixture's exact library hash without scanning the catalog."""
+    try:
+        return request_json(base_url, "GET", f"/api/v1/shared-files/{file_hash}", api_key)
+    except RustRestFailure as error:
+        if error.status != 404:
+            raise
+        return None
 
-    response = request_json(base_url, "GET", path, api_key)
-    items = response.get("items")
-    if not isinstance(items, list):
-        raise RuntimeError(f"Rust REST {path} did not return an items list.")
-    return next((item for item in items if isinstance(item, dict) and item.get("hash") == file_hash), None)
+
+def _download_progress_totals(base_url: str, api_key: str, download: dict[str, object]) -> dict[str, int]:
+    totals = download_part_totals(base_url, api_key, str(download["id"]))
+    if download.get("payloadVerified") is True:
+        size = download.get("sizeBytes")
+        if type(size) is not int or size < 0:
+            raise RuntimeError("Verified download has no valid known size")
+        # Terminal internal pieces may already be retired. The durable payload
+        # verification remains distinct from the current internal byte presence.
+        totals["verifiedBytes"] = size
+    return totals
 
 
 def verify_download_delivery(
-    final_transfer: dict[str, object] | None,
-    final_share: dict[str, object] | None,
+    final_download: dict[str, object],
     payload: dict[str, object],
     *,
     require_completion: bool,
     require_delivered_path: bool,
+    verified_bytes: int = 0,
 ) -> dict[str, object]:
     """Builds and enforces the strict download/delivery checks requested by beta proof."""
 
     expected_size = safe_int(payload.get("sizeBytes"))
     expected_sha256 = str(payload.get("sha256") or "")
-    completed = final_transfer is None and final_share is not None and safe_int(final_share.get("sizeBytes")) == expected_size
-    completed_bytes = expected_size if completed else safe_int((final_transfer or {}).get("completedBytes"))
-    delivered_path_value = (final_share or {}).get("path")
+    delivery = final_download.get("delivery")
+    completed = (final_download.get("state") == "completed" and final_download.get("payloadVerified") is True
+                 and final_download.get("sizeBytes") == expected_size and isinstance(delivery, dict)
+                 and delivery.get("state") == "delivered")
+    verified_bytes = expected_size if completed else verified_bytes
+    delivered_path_value = delivery.get("path") if isinstance(delivery, dict) else None
     delivered_path = Path(str(delivered_path_value)) if delivered_path_value else None
     result: dict[str, object] = {
         "requireCompletion": require_completion,
         "requireDeliveredPath": require_delivered_path,
-        "state": "shared" if completed else (final_transfer or {}).get("state"),
-        "completedBytes": completed_bytes,
+        "state": final_download.get("state"),
+        "verifiedBytes": verified_bytes,
         "expectedSizeBytes": expected_size,
         "deliveredPathPresent": delivered_path is not None,
         "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
@@ -542,19 +552,19 @@ def verify_download_delivery(
         if not completed:
             result["ok"] = False
             raise RuntimeError(
-                f"Rust local download did not enter the verified library: state={(final_transfer or {}).get('state')!r} "
-                f"completedBytes={completed_bytes} expected={expected_size}"
+                f"Rust local download did not complete verified delivery: state={final_download.get('state')!r} "
+                f"verifiedBytes={verified_bytes} expected={expected_size}"
             )
     if require_delivered_path:
         if not completed:
             result["ok"] = False
-            raise RuntimeError("Rust local download still has a transfer row or no verified library share.")
+            raise RuntimeError("Rust local download has not completed verified delivery.")
         if delivered_path is None:
             result["ok"] = False
-            raise RuntimeError("Rust local download completed without deliveredPath.")
+            raise RuntimeError("Rust local download completed without delivery.path.")
         if not delivered_path.is_file():
             result["ok"] = False
-            raise RuntimeError(f"Rust local download deliveredPath does not exist: {delivered_path}")
+            raise RuntimeError(f"Rust local download delivery.path does not exist: {delivered_path}")
         result["deliveredFileSizeBytes"] = delivered_path.stat().st_size
         result["deliveredSha256"] = file_sha256(delivered_path)
         if delivered_path.stat().st_size != expected_size or result["deliveredSha256"] != expected_sha256:
@@ -593,7 +603,7 @@ def run(argv: list[str] | None = None) -> int:
         "durationSeconds": args.duration_seconds,
         "payloadMiB": args.payload_mib,
         "uploadLimitKiBps": args.upload_limit_kibps,
-        "startPausedResume": args.start_paused_resume,
+        "startStopped": args.start_stopped,
         "requireCompletion": args.require_completion,
         "requireDeliveredPath": args.require_delivered_path,
         "rustExe": str(args.rust_exe),
@@ -830,47 +840,24 @@ def run(argv: list[str] | None = None) -> int:
                 "serverDisconnectedBeforeTransfer": True,
                 "indexImportedBeforeTransfer": True,
             }
-        transfer = request_json(
-            leecher_base,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {
-                "link": str(file_row["ed2kLink"]) if kad_wsl else ed2k_link_with_source(
-                    str(file_row["ed2kLink"]), lan, seeder_ed2k_port
-                ),
-                "paused": bool(args.start_paused_resume),
-            },
-        )
-        report["transferCreate"] = transfer
-        if args.start_paused_resume:
-            paused_transfer = wait_for_transfer_state(
-                leecher_base,
-                args.api_key,
-                file_hash,
-                states={"paused"},
-                timeout_seconds=20.0,
-            )
-            resume = request_json(
-                leecher_base,
-                "POST",
-                f"/api/v1/transfers/{file_hash}/operations/resume",
-                args.api_key,
-                {},
-            )
-            resumed_transfer = wait_for_transfer_state(
-                leecher_base,
-                args.api_key,
-                file_hash,
-                states={"downloading", "queued", "completed"},
-                timeout_seconds=20.0,
-            )
-            report["checks"]["pausedStartResume"] = {
-                "pausedState": paused_transfer.get("state"),
-                "resume": resume,
-                "resumedState": resumed_transfer.get("state"),
-                "ok": True,
-            }
+        link = str(file_row["ed2kLink"]) if kad_wsl else ed2k_link_with_source(
+            str(file_row["ed2kLink"]), lan, seeder_ed2k_port)
+        download = request_json(leecher_base, "POST", "/api/v1/downloads", args.api_key, {
+            "source": {"type": "ed2k-link", "link": link},
+            "intent": "stopped" if args.start_stopped else "started",
+        })
+        download_id = require_download_id(download, expected_hash=file_hash)
+        report["downloadCreate"] = download
+        if args.start_stopped:
+            stopped_download = wait_for_download_state(leecher_base, args.api_key, download_id,
+                                                       states={"stopped"}, timeout_seconds=20.0)
+            started = request_json(leecher_base, "POST", "/api/v1/downloads/start", args.api_key,
+                                   {"ids": [download_id]})
+            require_download_batch(started, download_id)
+            started_download = wait_for_download_state(leecher_base, args.api_key, download_id,
+                states={"downloading", "queued", "completed", "verifying", "delivering"}, timeout_seconds=20.0)
+            report["checks"]["stoppedStart"] = {"stoppedState": stopped_download["state"],
+                "start": started, "startedState": started_download["state"], "ok": True}
         if not kad_wsl:
             seeder_metrics = open_process_metrics(seeder_process, "seeder", artifacts_dir / "analysis", args.sample_interval_seconds)
         if not kad_wsl:
@@ -879,7 +866,7 @@ def run(argv: list[str] | None = None) -> int:
         sample_count = 0
         max_active_uploads = 0
         max_upload_speed_kibps = 0.0
-        max_completed_bytes = 0
+        max_verified_bytes = 0
         upload_rows_observed = 0
         with samples_path.open("w", encoding="utf-8") as samples:
             while time.monotonic() < deadline:
@@ -888,27 +875,27 @@ def run(argv: list[str] | None = None) -> int:
                 if leecher_process.poll() is not None:
                     raise RuntimeError(f"leecher exited early with code {leecher_process.returncode}")
                 seeder_status = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
-                leecher_transfer = find_hash_item(leecher_base, args.api_key, "/api/v1/transfers", file_hash)
-                leecher_share = find_hash_item(leecher_base, args.api_key, "/api/v1/shared-files", file_hash)
+                leecher_download = download_detail(leecher_base, args.api_key, download_id, expected_hash=file_hash)
+                part_totals = _download_progress_totals(leecher_base, args.api_key, leecher_download)
+                leecher_share = find_shared_file(leecher_base, args.api_key, file_hash)
                 seeder_uploads = request_json(seeder_base, "GET", "/api/v1/uploads", args.api_key)
                 seeder_stats = seeder_status.get("stats", {}) if isinstance(seeder_status.get("stats"), dict) else {}
                 upload_items = seeder_uploads.get("items") if isinstance(seeder_uploads.get("items"), list) else []
                 max_active_uploads = max(max_active_uploads, safe_int(seeder_stats.get("activeUploads")))
                 max_upload_speed_kibps = max(max_upload_speed_kibps, safe_float(seeder_stats.get("uploadSpeedKiBps")))
-                max_completed_bytes = max(
-                    max_completed_bytes,
-                    safe_int((leecher_transfer or {}).get("completedBytes")),
-                    safe_int((leecher_share or {}).get("sizeBytes")) if leecher_transfer is None else 0,
+                max_verified_bytes = max(
+                    max_verified_bytes,
+                    part_totals["verifiedBytes"],
                 )
                 upload_rows_observed += len(upload_items)
                 row = {
                     "elapsedSeconds": round(args.duration_seconds - max(0.0, deadline - time.monotonic()), 3),
                     "seederStats": seeder_stats,
-                    "leecherTransfer": {
-                        "state": (leecher_transfer or {}).get("state"),
-                        "completedBytes": (leecher_transfer or {}).get("completedBytes"),
-                        "sizeBytes": (leecher_transfer or {}).get("sizeBytes"),
-                        "progress": (leecher_transfer or {}).get("progress"),
+                    "leecherDownload": {
+                        "id": download_id, "state": leecher_download.get("state"),
+                        "verifiedBytes": part_totals["verifiedBytes"], "presentBytes": part_totals["presentBytes"],
+                        "sizeBytes": leecher_download.get("sizeBytes"),
+                        "progress": leecher_download.get("progress"),
                     },
                     "leecherSharedFile": leecher_share,
                     "seederUploads": seeder_uploads,
@@ -924,37 +911,38 @@ def run(argv: list[str] | None = None) -> int:
                 samples.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
                 samples.flush()
                 sample_count += 1
-                if leecher_share is not None and leecher_transfer is None:
+                if (leecher_download.get("state") == "completed" and leecher_download.get("payloadVerified") is True
+                        and isinstance(leecher_download.get("delivery"), dict)
+                        and leecher_download["delivery"].get("state") == "delivered"):
                     report["completedBeforeDuration"] = True
                     break
                 time.sleep(args.sample_interval_seconds)
         report["uploadEvidence"] = {
             "maxActiveUploads": max_active_uploads,
             "maxUploadSpeedKiBps": round(max_upload_speed_kibps, 3),
-            "maxLeecherCompletedBytes": max_completed_bytes,
+            "maxLeecherVerifiedBytes": max_verified_bytes,
             "uploadRowsObserved": upload_rows_observed,
         }
-        if max_completed_bytes <= 0 and max_active_uploads <= 0 and max_upload_speed_kibps <= 0:
+        if max_verified_bytes <= 0 and max_active_uploads <= 0 and max_upload_speed_kibps <= 0:
             raise RuntimeError("Rust local upload soak did not observe upload progress.")
         report["sampleCount"] = sample_count
         report["finalSeederStatus"] = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
-        report["finalLeecherTransfer"] = find_hash_item(leecher_base, args.api_key, "/api/v1/transfers", file_hash)
-        report["finalLeecherSharedFile"] = find_hash_item(leecher_base, args.api_key, "/api/v1/shared-files", file_hash)
-        delivery_share = report["finalLeecherSharedFile"]
-        if kad_wsl and delivery_share is not None:
-            retained_delivery = export_wsl_delivery(
-                wsl_mountpoint, leecher_profile, str(delivery_share["path"]),
-                artifacts_dir / "delivery-proof" / Path(payload["path"]).name,
-            )
+        final_download = download_detail(leecher_base, args.api_key, download_id, expected_hash=file_hash)
+        report["finalLeecherDownload"] = final_download
+        report["finalLeecherSharedFile"] = find_shared_file(leecher_base, args.api_key, file_hash)
+        verification_download = final_download
+        delivery = final_download.get("delivery")
+        if (kad_wsl and final_download.get("state") == "completed" and final_download.get("payloadVerified") is True
+                and isinstance(delivery, dict) and delivery.get("state") == "delivered"
+                and isinstance(delivery.get("path"), str)):
+            retained_delivery = export_wsl_delivery(wsl_mountpoint, leecher_profile, delivery["path"],
+                artifacts_dir / "delivery-proof" / Path(payload["path"]).name)
             report["retainedDeliveredFile"] = str(retained_delivery)
-            delivery_share = {**delivery_share, "path": str(retained_delivery)}
-        report["checks"]["downloadDelivery"] = verify_download_delivery(
-            report["finalLeecherTransfer"],
-            delivery_share,
-            payload,
-            require_completion=bool(args.require_completion),
-            require_delivered_path=bool(args.require_delivered_path),
-        )
+            verification_download = {**final_download, "delivery": {**delivery, "path": str(retained_delivery)}}
+        verified_bytes = _download_progress_totals(leecher_base, args.api_key, final_download)["verifiedBytes"]
+        report["checks"]["downloadDelivery"] = verify_download_delivery(verification_download, payload,
+            require_completion=bool(args.require_completion), require_delivered_path=bool(args.require_delivered_path),
+            verified_bytes=verified_bytes)
         if kad_helper is not None and safe_int(kad_helper.evidence().get("unbiasedRequests")) == 0:
             raise RuntimeError("Kad run has no unbiased UDP firewall witness")
         if kad_helper is not None and safe_int(kad_helper.evidence().get("sourceResults")) == 0:
