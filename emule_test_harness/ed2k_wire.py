@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 
 PROTO_EDONKEY = 0xE3
+PROTO_EMULE = 0xC5
 PROTO_PACKED = 0xD4
 
 OP_LOGINREQUEST = 0x01
@@ -193,13 +194,16 @@ def encode_frame(opcode: int, payload: bytes = b"") -> bytes:
     )
 
 
-def decode_frame_bytes(data: bytes) -> Ed2kFrame:
+def decode_frame_bytes(data: bytes, *, peer_protocol: bool = False) -> Ed2kFrame:
     """Decodes exactly one complete clear or packed eD2K TCP frame."""
 
     if len(data) < 6:
         raise Ed2kWireError("eD2K frame is shorter than its six-byte header.")
     marker = data[0]
-    if marker not in {PROTO_EDONKEY, PROTO_PACKED}:
+    markers = {PROTO_EDONKEY, PROTO_PACKED}
+    if peer_protocol:
+        markers.add(PROTO_EMULE)
+    if marker not in markers:
         raise Ed2kWireError(f"Unsupported eD2K protocol marker 0x{marker:02X}.")
     declared = int.from_bytes(data[1:5], "little")
     if declared < 1 or declared > MAX_FRAME_BYTES:
@@ -930,6 +934,7 @@ class Ed2kWireClient:
     port: int
     timeout_seconds: float = 5.0
     transcript: list[dict[str, object]] = field(default_factory=list)
+    peer_protocol: bool = field(default=False, kw_only=True)
     _socket: socket.socket | None = field(default=None, init=False, repr=False)
 
     def __enter__(self) -> "Ed2kWireClient":
@@ -980,7 +985,7 @@ class Ed2kWireClient:
             declared = int.from_bytes(header[1:5], "little")
             if declared < 1 or declared > MAX_FRAME_BYTES:
                 raise Ed2kWireError(f"Invalid eD2K frame length {declared}.")
-            frame = decode_frame_bytes(header + _recv_exact(stream, declared - 1))
+            frame = decode_frame_bytes(header + _recv_exact(stream, declared - 1), peer_protocol=self.peer_protocol)
         finally:
             if timeout_seconds is not None:
                 stream.settimeout(previous_timeout)

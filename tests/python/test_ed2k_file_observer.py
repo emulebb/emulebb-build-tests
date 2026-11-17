@@ -198,7 +198,7 @@ def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_
         SimpleNamespace(marker=0xe3, opcode=0x48, payload=value),
     ]
     class Client:
-        def __init__(self, *args):
+        def __init__(self, *args, **kwargs):
             self.sent, self.transcript, self.closed = [], [], False
         def connect(self): pass
         def close(self): self.closed = True
@@ -223,7 +223,7 @@ def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_
 def test_peer_observer_closes_failed_hello_and_does_not_treat_other_hash_as_refusal(monkeypatch):
     from types import SimpleNamespace
     class Client:
-        def __init__(self, *args): self.closed = False
+        def __init__(self, *args, **kwargs): self.closed = False
         def connect(self): pass
         def close(self): self.closed = True
         def send(self, *args): pass

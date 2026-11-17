@@ -634,7 +634,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
 
         # Both physical copies are eligible here. Keep one connection and its
         # cached complete reader across REST rotation; a fresh request must fail.
-        with Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining())) as peer:
+        peer = Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining()))
+        with peer:
             if not peer.filename_available(duplicate_hash) or not peer.start_upload(duplicate_hash):
                 raise RuntimeError("Enabled complete content was not admitted to the local peer")
             if peer.request_range(duplicate_hash, 0, 10) != duplicate_bytes[:10]:
@@ -701,7 +702,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Reusing a deleted name changed transfer assignments")
         if sharing_flags(selected_sharing) != [False, None, False]:
             raise RuntimeError("Sharing policy changed across profile reopen or hydration")
-        with Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining())) as peer:
+        peer = Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining()))
+        with peer:
             if peer.filename_available(duplicate_hash) or peer.request_range(duplicate_hash, 0, 10) is not None:
                 raise RuntimeError("Restarted disabled hash accepted a new peer request")
             sharing(True, [only_hash, duplicate_hash], ["accepted", "accepted"])
@@ -746,6 +748,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         report["status"] = "passed"
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
+        if "peer" in locals():
+            report["sharingWireFailure"] = list(peer.transcript)
         try:
             fields = ("id", "hash", "category", "intent", "temp", "storage", "marker")
             report["durableJobs"] = [{**dict(zip(fields, row[:7])), "storageIdentityCaptured": row[7] is not None}

@@ -528,3 +528,13 @@ def test_obfuscated_source_decoder_distinguishes_lowid_and_highid() -> None:
         "crypt_options": 0x81,
         "user_hash": user_hash.hex().upper(),
     }
+
+
+@pytest.mark.unit
+def test_peer_frame_mode_decodes_emule_packets_explicitly():
+    frame = bytes([ed2k_wire.PROTO_EMULE]) + ed2k_wire.encode_frame(1, b"peer-info")[1:]
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="protocol marker"):
+        ed2k_wire.decode_frame_bytes(frame)
+    decoded = ed2k_wire.decode_frame_bytes(frame, peer_protocol=True)
+    assert (decoded.marker, decoded.opcode, decoded.payload) == (ed2k_wire.PROTO_EMULE, 1, b"peer-info")
+    assert ed2k_wire.Ed2kWireClient("127.0.0.1", 4662, peer_protocol=True).peer_protocol

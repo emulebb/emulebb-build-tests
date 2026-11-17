@@ -242,7 +242,7 @@ class Ed2kFilePeerObserver:
     """Observe sharing on one persistent peer connection using the wire client."""
 
     def __init__(self, host: str, port: int, timeout_seconds: float = 5.0):
-        self.client = ed2k_wire.Ed2kWireClient(host, port, timeout_seconds)
+        self.client = ed2k_wire.Ed2kWireClient(host, port, timeout_seconds, peer_protocol=True)
 
     def __enter__(self):
         from .buddy_callback_probe import encode_hello_request
