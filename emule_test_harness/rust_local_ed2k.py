@@ -91,11 +91,18 @@ def request_json(
     raise RuntimeError(f"Rust REST returned a non-object payload for {method} {path}: {data!r}")
 
 
+def canonical_download_id(job_id: object) -> str:
+    """Validate the public positive decimal i64 job identity."""
+    if (not isinstance(job_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", job_id)
+            or int(job_id) > 9223372036854775807):
+        raise RuntimeError("Rust download admission returned an invalid job identity")
+    return job_id
+
+
 def require_download_id(admission: dict[str, object], *, expected_hash: str) -> str:
     """Retain the exact allocated job identity alongside its protocol hash."""
-    job_id = admission.get("id")
-    if (not isinstance(job_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", job_id)
-            or int(job_id) > 9223372036854775807 or admission.get("hash") != expected_hash.lower()):
+    job_id = canonical_download_id(admission.get("id"))
+    if admission.get("hash") != expected_hash.lower():
         raise RuntimeError("Rust download admission returned an invalid job identity")
     return job_id
 

@@ -963,114 +963,69 @@ def test_public_search_download_cli_fails_when_report_is_not_ok(
     assert report_payload["reason"] == "no-safe-public-candidate"
 
 
-def test_public_transfer_debug_summary_sanitizes_transfer_and_sources(monkeypatch) -> None:
+def test_public_download_debug_summary_reads_one_job_and_bounded_sources(monkeypatch):
     control = _load_rust_soak_control()
     private_hash = "0123456789abcdef0123456789abcdef"
-    private_name = "public-document.pdf"
-    private_path = r"C:\Private\transfers\public-document.pdf"
+    private_path = "/private/incoming/public-document.pdf"
     private_client = "198.51.100.9:4662"
-    calls: list[str] = []
-
-    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+    calls = []
+    def request(_base, path, **_kwargs):
         calls.append(path)
-        if path == "/transfers?limit=2&offset=0":
-            return {
-                "items": [
-                    {"hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "other.bin"},
-                    {
-                        "hash": private_hash,
-                        "name": private_name,
-                        "path": private_path,
-                        "state": "downloading",
-                        "sizeBytes": 1024,
-                        "completedBytes": 0,
-                        "sources": 1,
-                        "sourcesTransferring": 0,
-                    },
-                ]
-            }
-        if path == f"/transfers/{private_hash}/details":
-            return {
-                "transfer": {},
-                "parts": [],
-                "sources": [
-                    {
-                        "clientId": private_client,
-                        "userHash": "00112233445566778899aabbccddeeff",
-                        "userName": "Private Peer",
-                        "clientSoftware": "eMule",
-                        "downloadState": "queued",
-                        "downloadSpeedKiBps": 0.0,
-                        "availableParts": 1,
-                        "partCount": 1,
-                        "address": private_client,
-                        "serverIp": "203.0.113.9",
-                        "serverPort": 4661,
-                        "lowId": False,
-                        "queueRank": 42,
-                    }
-                ],
-            }
-        raise AssertionError(path)
-
-    monkeypatch.setattr(control, "request_json", fake_request_json)
-
-    result = control.public_transfer_debug_summary(
-        SimpleNamespace(
-            base_url="http://192.0.2.10:4731/api/v1",
-            api_key="key",
-            hash_fingerprint=control.text_fingerprint(private_hash),
-            page_limit=2,
-            max_offset=10,
-            source_sample_limit=5,
-            request_timeout_seconds=1.0,
-        )
-    )
-
-    assert result["ok"] is True
-    assert result["sourceStateCounts"] == {"queued": 1}
-    assert result["sourceSamples"][0]["clientSoftware"] == "eMule"
-    assert result["sourceSamples"][0]["addressPresent"] is True
-    assert calls == ["/transfers?limit=2&offset=0", f"/transfers/{private_hash}/details"]
-    assert private_hash not in repr(result)
-    assert private_name not in repr(result)
-    assert private_path not in repr(result)
-    assert private_client not in repr(result)
-    assert "Private Peer" not in repr(result)
+        if path == "/downloads/7":
+            return {"id": "7", "hash": private_hash, "name": "public-document.pdf",
+                    "state": "downloading", "sizeBytes": 1024, "payloadVerified": False,
+                    "delivery": {"state": "pending", "path": private_path}}
+        assert path == "/downloads/7/sources?limit=5"
+        return {"data": [{"clientId": private_client, "userName": "Private Peer",
+                          "userHash": "a" * 32, "clientSoftware": "eMule",
+                          "address": private_client, "downloadState": "queued",
+                          "downloadRateBytesPerSecond": 0}],
+                "meta": {"hasMore": True, "nextCursor": "not-followed"}}
+    monkeypatch.setattr(control, "request_json", request)
+    result = control.public_download_debug_summary(SimpleNamespace(
+        base_url="http://requester.test/api/v1", api_key="key", download_id="7",
+        source_sample_limit=5, request_timeout_seconds=1))
+    assert calls == ["/downloads/7", "/downloads/7/sources?limit=5"]
+    assert result["downloadId"] == "7" and result["sourceCountLowerBound"] == 2
+    assert result["sourcesHaveMore"] is True
+    assert result["sourceWindowStateCounts"] == {"queued": 1}
+    assert result["sourceSamples"][0]["downloadRateBytesPerSecond"] == 0
+    for private in (private_hash, private_path, private_client, "public-document.pdf", "Private Peer"):
+        assert private not in repr(result)
 
 
-def test_public_transfer_debug_summary_cli_writes_json_output(
-    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_public_download_debug_summary_refuses_substituted_job(monkeypatch):
     control = _load_rust_soak_control()
-    report = tmp_path / "transfer-debug.json"
+    calls = []
+    def request(*args, **kwargs):
+        calls.append(args)
+        return {"id": "8", "hash": "a" * 32}
+    monkeypatch.setattr(control, "request_json", request)
+    with pytest.raises(RuntimeError, match="substituted another job"):
+        control.public_download_debug_summary(SimpleNamespace(base_url="http://requester.test",
+            api_key="key", download_id="7", source_sample_limit=5, request_timeout_seconds=1))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("job_id", ["0", "01", "-1", "9223372036854775808", "7/8"])
+def test_public_download_debug_summary_validates_identity_before_network(monkeypatch, job_id):
+    control = _load_rust_soak_control()
+    monkeypatch.setattr(control, "request_json", lambda *_args, **_kwargs: pytest.fail("invalid identity reached network"))
+    with pytest.raises(RuntimeError, match="invalid job identity"):
+        control.public_download_debug_summary(SimpleNamespace(download_id=job_id, source_sample_limit=5))
+
+
+def test_public_download_debug_summary_cli_writes_json_output(monkeypatch, tmp_path, capsys):
+    control = _load_rust_soak_control()
+    report = tmp_path / "download-debug.json"
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
-
-    monkeypatch.setattr(
-        control,
-        "public_transfer_debug_summary",
-        lambda args: {
-            "ok": True,
-            "hashFingerprint": args.hash_fingerprint,
-            "jsonOutput": str(args.json_output),
-        },
-    )
-
-    assert control.main(
-        [
-            "public-transfer-debug-summary",
-            "--hash-fingerprint",
-            "abcdef0123456789",
-            "--json-output",
-            str(report),
-        ]
-    ) == 0
-
-    stdout_payload = json.loads(capsys.readouterr().out)
-    report_payload = json.loads(report.read_text(encoding="utf-8"))
-    assert stdout_payload == report_payload
-    assert report_payload["hashFingerprint"] == "abcdef0123456789"
-    assert report_payload["jsonOutput"] == str(report)
+    monkeypatch.setattr(control, "public_download_debug_summary", lambda args: {
+        "ok": True, "downloadId": args.download_id, "jsonOutput": str(args.json_output)})
+    assert control.main(["public-download-debug-summary", "--download-id", "7",
+                         "--json-output", str(report)]) == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert json.loads(capsys.readouterr().out) == payload
+    assert payload["downloadId"] == "7"
 
 
 def test_public_search_candidate_wait_stops_on_completed_empty_search(monkeypatch, tmp_path: Path) -> None:

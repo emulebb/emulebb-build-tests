@@ -47,6 +47,7 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.rust_local_ed2k import canonical_download_id, require_download_id
 from emule_test_harness.rust_client import (
     RUST_PROFILE_METADATA_FILE,
     RUST_PROFILE_SETTINGS_FILE,
@@ -1839,7 +1840,7 @@ def sanitized_transfer_source_row(source: dict[str, object]) -> dict[str, object
         "userNameFingerprint": text_fingerprint(source.get("userName")),
         "clientSoftware": source.get("clientSoftware"),
         "downloadState": source.get("downloadState"),
-        "downloadSpeedKiBps": source.get("downloadSpeedKiBps"),
+        "downloadRateBytesPerSecond": source.get("downloadRateBytesPerSecond"),
         "availableParts": source.get("availableParts"),
         "partCount": source.get("partCount"),
         "lowId": source.get("lowId"),
@@ -1851,58 +1852,39 @@ def sanitized_transfer_source_row(source: dict[str, object]) -> dict[str, object
     }
 
 
-def public_transfer_debug_summary(args: argparse.Namespace) -> dict[str, object]:
-    """Prints sanitized transfer/source state for a transfer hash fingerprint."""
-
-    offset = 0
-    matched: dict[str, object] | None = None
-    scanned = 0
-    while offset <= args.max_offset:
-        payload = request_json(
-            args.base_url,
-            f"/transfers?limit={args.page_limit}&offset={offset}",
-            api_key=args.api_key,
-            timeout_seconds=args.request_timeout_seconds,
-        )
-        items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        scanned += len(items)
-        for item in items:
-            if isinstance(item, dict) and text_fingerprint(item.get("hash")) == args.hash_fingerprint:
-                matched = item
-                break
-        if matched is not None or len(items) < args.page_limit:
-            break
-        offset += args.page_limit
-    if matched is None:
-        return {
-            "ok": False,
-            "reason": "transfer-not-found",
-            "hashFingerprint": args.hash_fingerprint,
-            "scannedTransfers": scanned,
-        }
-
-    transfer_hash = str(matched.get("hash"))
-    details = request_json(
-        args.base_url,
-        f"/transfers/{quote(transfer_hash, safe='')}/details",
-        api_key=args.api_key,
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    sources = details.get("sources") if isinstance(details.get("sources"), list) else []
-    source_rows = [
-        sanitized_transfer_source_row(source)
-        for source in sources
-        if isinstance(source, dict)
-    ]
-    state_counts = Counter(str(row.get("downloadState") or "") for row in source_rows)
+def public_download_debug_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Read one captured job and one bounded source window without scanning history."""
+    if not 1 <= args.source_sample_limit <= 200:
+        raise RuntimeError("--source-sample-limit must be 1..200")
+    canonical_download_id(args.download_id)
+    download = request_json(args.base_url, f"/downloads/{args.download_id}",
+                            api_key=args.api_key, timeout_seconds=args.request_timeout_seconds)
+    if require_download_id(download, expected_hash=str(download.get("hash") or "")) != args.download_id:
+        raise RuntimeError("download debug reader substituted another job")
+    page = request_json(args.base_url, f"/downloads/{args.download_id}/sources?limit={args.source_sample_limit}",
+                        api_key=args.api_key, timeout_seconds=args.request_timeout_seconds)
+    if (not isinstance(page.get("data"), list) or not isinstance(page.get("meta"), dict)
+            or type(page["meta"].get("hasMore")) is not bool):
+        raise RuntimeError("download debug requires a bounded source cursor page")
+    source_rows = [sanitized_transfer_source_row(source) for source in page["data"]]
+    delivery = download.get("delivery") or {}
     return {
         "ok": True,
-        "hashFingerprint": args.hash_fingerprint,
-        "transfer": sanitized_transfer_proof_row(matched),
-        "sourceCount": len(source_rows),
-        "sourceStateCounts": dict(sorted(state_counts.items())),
-        "sourceSamples": source_rows[: args.source_sample_limit],
-        "scannedTransfers": scanned,
+        "downloadId": args.download_id,
+        "download": {
+            "hashFingerprint": text_fingerprint(download.get("hash")),
+            "nameFingerprint": text_fingerprint(download.get("name")),
+            "state": download.get("state"),
+            "sizeBytes": download.get("sizeBytes"),
+            "payloadVerified": download.get("payloadVerified"),
+            "deliveryState": delivery.get("state"),
+            "deliveredPathPresent": bool(delivery.get("path")),
+            "deliveredPathFingerprint": private_path_fingerprint(str(delivery["path"])) if delivery.get("path") else None,
+        },
+        "sourceCountLowerBound": len(source_rows) + int(page["meta"]["hasMore"]),
+        "sourcesHaveMore": page["meta"]["hasMore"],
+        "sourceWindowStateCounts": dict(sorted(Counter(str(row.get("downloadState") or "") for row in source_rows).items())),
+        "sourceSamples": source_rows,
     }
 
 
@@ -6969,21 +6951,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     public_download_parser.set_defaults(func=public_search_download_proof)
 
-    transfer_debug_parser = sub.add_parser(
-        "public-transfer-debug-summary",
-        help="Print sanitized transfer/source diagnostics for one transfer hash fingerprint.",
+    download_debug_parser = sub.add_parser(
+        "public-download-debug-summary",
+        help="Print sanitized download/source diagnostics for one job ID.",
     )
-    transfer_debug_parser.add_argument("--hash-fingerprint", required=True)
-    transfer_debug_parser.add_argument("--page-limit", type=int, default=1000)
-    transfer_debug_parser.add_argument("--max-offset", type=int, default=50000)
-    transfer_debug_parser.add_argument("--source-sample-limit", type=int, default=20)
-    transfer_debug_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
-    transfer_debug_parser.add_argument(
+    download_debug_parser.add_argument("--download-id", required=True)
+    download_debug_parser.add_argument("--source-sample-limit", type=int, default=20)
+    download_debug_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    download_debug_parser.add_argument(
         "--json-output",
         type=Path,
-        help="Write the sanitized transfer/source diagnostics to this JSON path.",
+        help="Write the sanitized download/source diagnostics to this JSON path.",
     )
-    transfer_debug_parser.set_defaults(func=public_transfer_debug_summary)
+    download_debug_parser.set_defaults(func=public_download_debug_summary)
 
     shared_summary_parser = sub.add_parser(
         "shared-summary",
