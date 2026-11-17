@@ -476,26 +476,36 @@ def _restore_existing_daemon(suspended: SuspendedDaemon) -> int:
     raise RuntimeError(f"restored operator daemon REST did not become ready: {last_error}")
 
 
-def _persistence_snapshot(base_url: str, api_key: str, transfer_hash: str) -> dict[str, Any]:
+def _persistence_snapshot(base_url: str, api_key: str, download_id: str, *, expected_hash: str) -> dict[str, Any]:
+    """Read fixed counts and the captured durable job without scanning history."""
+    if (not isinstance(download_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", download_id)
+            or int(download_id) > 9223372036854775807):
+        raise RuntimeError("consumer workflow did not retain a canonical download ID")
     searches = api_data(base_url, "searches", api_key)
     search_rows = searches.get("items", []) if isinstance(searches, dict) else []
-    transfers = api_data(base_url, "transfers", api_key)
-    transfer_rows = transfers.get("items", []) if isinstance(transfers, dict) else []
+    snapshot = api_data(base_url, "snapshot?limit=1", api_key)
+    counts = snapshot.get("downloads") if isinstance(snapshot, dict) else None
+    if (not isinstance(counts, dict) or any(type(counts.get(key)) is not int or counts[key] < 0
+                                          for key in ("unfinished", "completed"))):
+        raise RuntimeError("persisted download counts did not return nonnegative integers")
     try:
-        transfer = api_data(base_url, f"transfers/{transfer_hash}", api_key)
+        download = api_data(base_url, f"downloads/{download_id}", api_key)
     except HTTPError as error:
         if error.code != 404:
             raise
-        transfer = None
-    if transfer is not None and not isinstance(transfer, dict):
-        raise RuntimeError("persisted transfer did not return an object")
+        download = None
+    if download is not None and (not isinstance(download, dict) or download.get("id") != download_id
+                                 or download.get("hash") != expected_hash):
+        raise RuntimeError("persisted download identity differs from the captured job")
     return {
         "searchCount": len(search_rows),
-        "transferCount": len(transfer_rows),
-        "transferPresent": bool(transfer and transfer.get("hash")),
-        "transferCompleted": bool(transfer)
-        and int(transfer.get("completedBytes") or 0) == int(transfer.get("sizeBytes") or -1),
-        "transferState": str(transfer.get("state") or "unknown") if transfer else "deleted",
+        "downloadCount": counts["unfinished"] + counts["completed"],
+        "downloadPresent": download is not None,
+        "downloadCompleted": bool(download and download.get("state") == "completed"
+                                  and download.get("payloadVerified") is True
+                                  and isinstance(download.get("delivery"), dict)
+                                  and download["delivery"].get("state") == "delivered"),
+        "downloadState": str(download.get("state") or "unknown") if download else "deleted",
     }
 
 
@@ -760,14 +770,15 @@ def run_consumer_live(
         if restarted_api_key != api_key:
             raise RuntimeError("default-profile API key changed across restart")
         _wait_for_rest(base_url, api_key, process, log_path)
-        persistence = _persistence_snapshot(base_url, api_key, str(transfer["hash"]))
+        persistence = _persistence_snapshot(base_url, api_key, transfer_check["downloadId"],
+                                            expected_hash=str(transfer["hash"]))
         shared_persistence = _shared_persistence_snapshot(base_url, api_key, shared_fixtures)
         if persistence["searchCount"] < 3:
             raise RuntimeError("search state did not persist across restart")
         if complete_transfer:
-            if not persistence["transferPresent"] or not persistence["transferCompleted"]:
-                raise RuntimeError("completed-transfer state did not persist across restart")
-        elif persistence["transferCount"] != 0:
+            if not persistence["downloadPresent"] or not persistence["downloadCompleted"]:
+                raise RuntimeError("completed download state did not persist across restart")
+        elif persistence["downloadCount"] != 0:
             raise RuntimeError("WebUI-deleted transfer queue was not empty after restart")
         second_proof = run_webui_live_proof(
             base_url=base_url,

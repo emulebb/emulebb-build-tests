@@ -128,7 +128,7 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
             raise RuntimeError("File-link form did not restore the requested link")
         # Queue only a stopped synthetic fixture: this checks the real POST and
         # persistence without inventing an available P2P source for these bytes.
-        page.get_by_label("Paused", exact=True).check(timeout=timeout)
+        page.get_by_label("Stopped", exact=True).check(timeout=timeout)
         if identities(rows()) != identities(baseline) or posts:
             raise RuntimeError("File-link handoff queued a transfer before confirmation")
         with page.expect_response(lambda response: response.request.method == "POST"

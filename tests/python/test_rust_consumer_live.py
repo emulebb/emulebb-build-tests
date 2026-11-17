@@ -157,22 +157,23 @@ def test_persist_consumer_report_rewrites_post_run_recovery_fields(tmp_path: Pat
     assert json.loads(path.read_text(encoding="utf-8")) == report
 
 
-def test_persistence_snapshot_reports_webui_deleted_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_persistence_snapshot_reports_webui_deleted_download(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_api_data(_base_url: str, path: str, _api_key: str):
         if path == "searches":
             return {"items": [{"id": "1"}, {"id": "2"}, {"id": "3"}]}
-        if path == "transfers":
-            return {"items": []}
-        raise HTTPError("http://127.0.0.1/transfers/redacted", 404, "not found", None, None)
+        if path == "snapshot?limit=1":
+            return {"downloads": {"unfinished": 0, "completed": 0}}
+        assert path == "downloads/7"
+        raise HTTPError("http://127.0.0.1/downloads/7", 404, "not found", None, None)
 
     monkeypatch.setattr(rust_consumer_live, "api_data", fake_api_data)
 
-    assert rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "redacted") == {
+    assert rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "7", expected_hash="a" * 32) == {
         "searchCount": 3,
-        "transferCount": 0,
-        "transferPresent": False,
-        "transferCompleted": False,
-        "transferState": "deleted",
+        "downloadCount": 0,
+        "downloadPresent": False,
+        "downloadCompleted": False,
+        "downloadState": "deleted",
     }
 
 
@@ -242,3 +243,39 @@ def test_finalize_consumer_artifacts_retains_failed_payloads(
         "payloadsRetained": True,
         "reason": "run-failed",
     }
+
+
+@pytest.mark.parametrize("state, verified, delivery, completed", [
+    ("completed", True, "delivered", True),
+    ("stopped", True, "pending", False),
+    ("completed", True, "pending", False),
+    ("completed", False, "delivered", False),
+])
+def test_persistence_snapshot_uses_global_counts_and_the_exact_captured_job(monkeypatch, state, verified, delivery, completed):
+    calls = []
+    def read(_base, path, _key):
+        calls.append(path)
+        if path == "searches":
+            return {"items": [{"id": "1"}]}
+        if path == "snapshot?limit=1":
+            return {"downloads": {"unfinished": 1000, "completed": 100000}}
+        assert path == "downloads/9223372036854775807"
+        return {"id": "9223372036854775807", "hash": "a" * 32, "state": state,
+                "sizeBytes": 0, "progress": 1, "payloadVerified": verified, "delivery": {"state": delivery}}
+    monkeypatch.setattr(rust_consumer_live, "api_data", read)
+    result = rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "9223372036854775807", expected_hash="a" * 32)
+    assert result["downloadCount"] == 101000
+    assert result["downloadCompleted"] is completed
+    assert calls == ["searches", "snapshot?limit=1", "downloads/9223372036854775807"]
+
+
+def test_persistence_snapshot_refuses_substituted_job_identity(monkeypatch):
+    def read(_base, path, _key):
+        if path == "searches":
+            return {"items": []}
+        if path == "snapshot?limit=1":
+            return {"downloads": {"unfinished": 1, "completed": 0}}
+        return {"id": "8", "hash": "b" * 32, "state": "completed"}
+    monkeypatch.setattr(rust_consumer_live, "api_data", read)
+    with pytest.raises(RuntimeError, match="identity differs"):
+        rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "7", expected_hash="a" * 32)

@@ -161,7 +161,7 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             return self.control("key")
 
         def get_by_label(self, name, **kwargs):
-            assert name in {"eD2K links", "Paused"}
+            assert name in {"eD2K links", "Stopped"}
             return self.control(name)
 
         def control(self, name):
