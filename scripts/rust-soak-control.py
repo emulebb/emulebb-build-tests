@@ -2600,7 +2600,7 @@ def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[st
     upload_requests = safe_int(metadata.get("knownUploadRequests")) or 0
     known_completed = safe_int(metadata.get("knownFilesCompleted")) or 0
     completed_downloads = safe_int(metadata.get("downloadHistoryTotal")) or 0
-    transfers_total = safe_int(metadata.get("transfersTotal")) or 0
+    download_jobs_total = safe_int(metadata.get("downloadJobsTotal")) or 0
     return {
         "ed2kConnected": sample_row.get("ed2kConnected") is True,
         "ed2kHighId": sample_row.get("ed2kHighId") is True,
@@ -2616,9 +2616,9 @@ def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[st
         "knownUploadRequests": upload_requests,
         "knownFilesCompleted": known_completed,
         "downloadHistoryTotal": completed_downloads,
-        "transfersTotal": transfers_total,
+        "downloadJobsTotal": download_jobs_total,
         "hasUploadHistory": known_uploaded > 0 or upload_accepts > 0 or upload_requests > 0,
-        "hasDownloadHistory": completed_downloads > 0 or transfers_total > 0,
+        "hasDownloadHistory": completed_downloads > 0 or download_jobs_total > 0,
     }
 
 
@@ -4423,10 +4423,9 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     ]
     connection = sqlite3.connect(args.metadata_db)
     try:
-        total_transfers = connection.execute("SELECT COUNT(*) FROM transfers").fetchone()[0]
-        completed_transfers = connection.execute(
-            "SELECT COUNT(*) FROM transfers WHERE completed_at_ms IS NOT NULL"
-        ).fetchone()[0]
+        unfinished_downloads, completed_downloads = connection.execute(
+            "SELECT unfinished, completed FROM download_job_counts WHERE id=1"
+        ).fetchone()
         rows = connection.execute(
             """
             SELECT local_paths.display_path, local_file_instances.file_size, local_file_instances.verified_fingerprint
@@ -4458,8 +4457,9 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     duplicate_source_rows = sum(count for count in source_counts.values() if count > 1)
     return {
         "metadataDbExists": True,
-        "totalTransfers": total_transfers,
-        "completedTransfers": completed_transfers,
+        "downloadJobsTotal": unfinished_downloads + completed_downloads,
+        "downloadJobsUnfinished": unfinished_downloads,
+        "downloadJobsCompleted": completed_downloads,
         "localFileInstances": total_sources,
         "localFileInstancesWithMtime": with_source_mtime,
         "duplicateSourcePathCount": duplicate_source_paths,
@@ -4937,221 +4937,49 @@ def stop_profile_launch(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def sqlite_table_names(connection: sqlite3.Connection) -> set[str]:
-    """Returns table names in one SQLite database."""
-
-    rows = connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-    return {str(row[0]) for row in rows}
-
-
-def sqlite_columns(connection: sqlite3.Connection, table: str) -> set[str]:
-    """Returns columns for one SQLite table."""
-
-    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
-
-
-def sqlite_count_table(connection: sqlite3.Connection, tables: set[str], table: str) -> int | None:
-    """Counts one table if it exists."""
-
-    if table not in tables:
-        return None
-    return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-
-
-def first_present_int(*values: int | None) -> int | None:
-    """Returns the first non-None integer, preserving zero counts."""
-
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
-def sqlite_count_truthy(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    candidate_columns: tuple[str, ...],
-) -> int | None:
-    """Counts rows where the first available candidate column is truthy."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    for column in candidate_columns:
-        if column in columns:
-            return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} != 0").fetchone()[0])
-    return None
-
-
-def sqlite_count_all_truthy(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    candidate_columns: tuple[str, ...],
-) -> int | None:
-    """Counts rows where all listed columns are present and truthy."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    selected = [column for column in candidate_columns if column in columns]
-    if not selected:
-        return None
-    predicate = " AND ".join(f"{column} != 0" for column in selected)
-    return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {predicate}").fetchone()[0])
-
-
-def sqlite_count_truthy_with_null(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    truthy_columns: tuple[str, ...],
-    null_columns: tuple[str, ...],
-) -> int | None:
-    """Counts rows where present truthy columns are true and present null columns are NULL."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    predicates = [f"{column} != 0" for column in truthy_columns if column in columns]
-    predicates.extend(f"{column} IS NULL" for column in null_columns if column in columns)
-    if not predicates:
-        return None
-    return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {' AND '.join(predicates)}").fetchone()[0])
-
-
-def sqlite_sum_column(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    candidate_columns: tuple[str, ...],
-) -> int | None:
-    """Sums the first available candidate column from one table."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    for column in candidate_columns:
-        if column in columns:
-            value = connection.execute(f"SELECT COALESCE(SUM({column}), 0) FROM {table}").fetchone()[0]
-            return int(value or 0)
-    return None
-
-
-def sqlite_sum_column_where_truthy(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    sum_columns: tuple[str, ...],
-    truthy_columns: tuple[str, ...],
-) -> int | None:
-    """Sums the first available sum column where the first truthy column is true."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    sum_column = next((column for column in sum_columns if column in columns), None)
-    if sum_column is None:
-        return None
-    truthy_column = next((column for column in truthy_columns if column in columns), None)
-    if truthy_column is None:
-        value = connection.execute(f"SELECT COALESCE(SUM({sum_column}), 0) FROM {table}").fetchone()[0]
-    else:
-        value = connection.execute(
-            f"SELECT COALESCE(SUM({sum_column}), 0) FROM {table} WHERE {truthy_column} != 0"
-        ).fetchone()[0]
-    return int(value or 0)
-
-
 def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
-    """Returns compact persisted Rust metadata counters."""
+    """Read current-schema counters from one read-only SQLite snapshot."""
 
     if not metadata_db.is_file():
         return {"metadataDb": str(metadata_db), "metadataDbExists": False}
-    connection = sqlite3.connect(metadata_db)
+    queries = {
+        "knownFilesTotal": "SELECT COUNT(*) FROM known_files",
+        "knownFilesCompleted": "SELECT COUNT(*) FROM verified_local_content",
+        "knownCompletedBytes": "SELECT coalesce(sum(k.size_bytes), 0) FROM known_files k JOIN verified_local_content v ON v.known_file_id=k.id",
+        "knownUploadedBytes": "SELECT coalesce(sum(all_time_uploaded_bytes), 0) FROM known_files",
+        "knownUploadRequests": "SELECT coalesce(sum(all_time_upload_requests), 0) FROM known_files",
+        "knownUploadAccepts": "SELECT coalesce(sum(all_time_upload_accepts), 0) FROM known_files",
+        "downloadJobsTotal": "SELECT unfinished+completed FROM download_job_counts WHERE id=1",
+        "downloadJobsUnfinished": "SELECT unfinished FROM download_job_counts WHERE id=1",
+        "downloadJobsCompleted": "SELECT completed FROM download_job_counts WHERE id=1",
+        "downloadHistoryTotal": "SELECT COUNT(*) FROM download_history",
+        "sharedRootsTotal": "SELECT COUNT(*) FROM shared_directory_roots",
+        "sharedRootsEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE enabled!=0",
+        "sharedRootsAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE enabled!=0 AND accessible!=0",
+        "sharedRootsActive": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_ms IS NULL",
+        "sharedRootsActiveEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_ms IS NULL AND enabled!=0",
+        "sharedRootsActiveAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_ms IS NULL AND enabled!=0 AND accessible!=0",
+        "serversTotal": "SELECT COUNT(*) FROM servers",
+        "kadBootstrapEndpoints": "SELECT COUNT(*) FROM kad_bootstrap_endpoints",
+        "peersTotal": "SELECT COUNT(*) FROM peers",
+        "downloadSourcesTotal": "SELECT COUNT(*) FROM download_job_sources",
+        "ed2kPartHashRows": "SELECT COUNT(*) FROM download_job_md4_part_hashes",
+        "aichPartHashRows": "SELECT COUNT(*) FROM download_job_aich_part_hashes",
+        "kadKeywordPublishRows": "SELECT COUNT(*) FROM kad_keyword_publishes",
+        "kadSourcePublishRows": "SELECT COUNT(*) FROM kad_source_publishes",
+    }
+    connection = sqlite3.connect(metadata_db.resolve().as_uri() + "?mode=ro", uri=True)
     try:
-        tables = sqlite_table_names(connection)
-        return {
-            "metadataDb": str(metadata_db),
-            "metadataDbExists": True,
-            "knownFilesTotal": sqlite_count_table(connection, tables, "known_files"),
-            "knownFilesCompleted": sqlite_count_table(connection, tables, "verified_local_content"),
-            "knownCompletedBytes": (
-                connection.execute(
-                    "SELECT coalesce(sum(known_files.size_bytes), 0) FROM known_files "
-                    "JOIN verified_local_content ON verified_local_content.known_file_id = known_files.id"
-                ).fetchone()[0]
-                if {"known_files", "verified_local_content"} <= tables
-                else None
-            ),
-            "knownUploadedBytes": sqlite_sum_column(
-                connection,
-                tables,
-                "known_files",
-                ("uploaded_bytes", "all_time_uploaded_bytes"),
-            ),
-            "knownUploadRequests": sqlite_sum_column(
-                connection,
-                tables,
-                "known_files",
-                ("upload_requests", "all_time_upload_requests"),
-            ),
-            "knownUploadAccepts": sqlite_sum_column(
-                connection,
-                tables,
-                "known_files",
-                ("upload_accepts", "all_time_upload_accepts"),
-            ),
-            "transfersTotal": sqlite_count_table(connection, tables, "transfers"),
-            "downloadHistoryTotal": sqlite_count_table(connection, tables, "download_history"),
-            "sharedRootsTotal": first_present_int(
-                sqlite_count_table(connection, tables, "shared_directory_roots"),
-                sqlite_count_table(connection, tables, "shared_roots"),
-                sqlite_count_table(connection, tables, "shared_directories"),
-            ),
-            "sharedRootsEnabled": sqlite_count_all_truthy(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled",),
-            ),
-            "sharedRootsAccessibleEnabled": sqlite_count_all_truthy(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled", "accessible"),
-            ),
-            "sharedRootsActive": sqlite_count_truthy_with_null(
-                connection,
-                tables,
-                "shared_directory_roots",
-                tuple(),
-                ("deleted_at_ms",),
-            ),
-            "sharedRootsActiveEnabled": sqlite_count_truthy_with_null(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled",),
-                ("deleted_at_ms",),
-            ),
-            "sharedRootsActiveAccessibleEnabled": sqlite_count_truthy_with_null(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled", "accessible"),
-                ("deleted_at_ms",),
-            ),
-            "serversTotal": sqlite_count_table(connection, tables, "servers"),
-            "kadBootstrapEndpoints": sqlite_count_table(connection, tables, "kad_bootstrap_endpoints"),
-            "peersTotal": sqlite_count_table(connection, tables, "peers"),
-            "transferSourcesTotal": sqlite_count_table(connection, tables, "transfer_sources"),
-            "ed2kPartHashRows": sqlite_count_table(connection, tables, "transfer_md4_part_hashes"),
-            "aichPartHashRows": sqlite_count_table(connection, tables, "transfer_aich_part_hashes"),
-            "kadKeywordPublishRows": sqlite_count_table(connection, tables, "kad_keyword_publishes"),
-            "kadSourcePublishRows": sqlite_count_table(connection, tables, "kad_source_publishes"),
-        }
+        # WHY: a live profile can commit between queries; one read transaction
+        # keeps job totals and supporting diagnostics in the same snapshot.
+        connection.execute("BEGIN")
+        result: dict[str, object] = {"metadataDb": str(metadata_db), "metadataDbExists": True}
+        for name, query in queries.items():
+            row = connection.execute(query).fetchone()
+            if row is None:
+                raise RuntimeError("current profile is missing its durable download counters")
+            result[name] = int(row[0])
+        return result
     finally:
         connection.close()
 

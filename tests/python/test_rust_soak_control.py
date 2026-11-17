@@ -2716,7 +2716,7 @@ def test_regular_log_proof_classifies_logs_and_keeps_report_sanitized(monkeypatc
             "knownUploadAccepts": 2,
             "knownUploadRequests": 2,
             "knownFilesCompleted": 7,
-            "transfersTotal": 9,
+            "downloadJobsTotal": 9,
         },
     )
 
@@ -2748,16 +2748,16 @@ def test_regular_log_proof_classifies_logs_and_keeps_report_sanitized(monkeypatc
     assert "0123456789abcdef0123456789abcdef" not in rendered
 
 
-@pytest.mark.parametrize("library_count,history_count,transfer_count,expected", [
+@pytest.mark.parametrize("library_count,history_count,job_count,expected", [
     (7, 0, 0, False), (7, 1, 0, True), (0, 0, 1, True),
 ])
 def test_download_log_evidence_uses_download_ownership(
-    library_count: int, history_count: int, transfer_count: int, expected: bool,
+    library_count: int, history_count: int, job_count: int, expected: bool,
 ) -> None:
     control = _load_rust_soak_control()
     evidence = control.regular_log_status_evidence({}, {
         "knownFilesCompleted": library_count, "downloadHistoryTotal": history_count,
-        "transfersTotal": transfer_count,
+        "downloadJobsTotal": job_count,
     })
     assert evidence["hasDownloadHistory"] is expected
     assert control.regular_log_missing_categories({}, ["download"], evidence) == (
@@ -2794,7 +2794,7 @@ def test_regular_log_proof_fails_when_required_category_missing(monkeypatch, tmp
             "knownUploadAccepts": 0,
             "knownUploadRequests": 0,
             "knownFilesCompleted": 0,
-            "transfersTotal": 0,
+            "downloadJobsTotal": 0,
         },
     )
 
@@ -3730,14 +3730,16 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 0, NULL)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (0, 1, NULL)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, 123)")
+        connection.execute("CREATE TABLE download_job_counts(id INTEGER PRIMARY KEY, unfinished INTEGER, completed INTEGER)")
+        connection.execute("INSERT INTO download_job_counts VALUES(1, 2, 1)")
         for table in (
-            "transfers",
+            "download_history",
             "servers",
             "kad_bootstrap_endpoints",
             "peers",
-            "transfer_sources",
-            "transfer_md4_part_hashes",
-            "transfer_aich_part_hashes",
+            "download_job_sources",
+            "download_job_md4_part_hashes",
+            "download_job_aich_part_hashes",
             "kad_keyword_publishes",
             "kad_source_publishes",
         ):
@@ -3792,6 +3794,10 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
     assert result["metadata"]["sharedRootsActiveEnabled"] == 2
     assert result["metadata"]["sharedRootsActiveAccessibleEnabled"] == 1
     assert result["metadata"]["ed2kPartHashRows"] == 1
+    assert result["metadata"]["downloadJobsTotal"] == 3
+    assert result["metadata"]["downloadJobsUnfinished"] == 2
+    assert result["metadata"]["downloadJobsCompleted"] == 1
+    assert result["metadata"]["downloadSourcesTotal"] == 1
     assert result["watch"]["findings"] == ["watch-not-running", "watch-stale"]
 
 
@@ -3873,7 +3879,8 @@ def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) ->
     ))
     metadata_db = tmp_path / "metadata.sqlite"
     with sqlite3.connect(metadata_db) as conn:
-        conn.execute("CREATE TABLE transfers(completed_at_ms INTEGER)")
+        conn.execute("CREATE TABLE download_job_counts(id INTEGER PRIMARY KEY, unfinished INTEGER, completed INTEGER)")
+        conn.execute("INSERT INTO download_job_counts VALUES(1, 0, 0)")
         conn.execute("CREATE TABLE local_paths(id INTEGER, display_path TEXT)")
         conn.execute("CREATE TABLE local_file_instances(path_id INTEGER, file_size INTEGER, "
                      "verified_fingerprint BLOB, verified_at_ms INTEGER)")
@@ -3881,7 +3888,7 @@ def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) ->
         conn.execute("INSERT INTO local_file_instances VALUES(1, ?, ?, 123)",
                      (stat.st_size, fingerprint))
     summary = control.metadata_source_summary(SimpleNamespace(metadata_db=metadata_db, root=[tmp_path]))
-    assert summary["totalTransfers"] == 0
+    assert summary["downloadJobsTotal"] == 0
     assert summary["localFileInstances"] == 1
     assert summary["localFileInstancesWithMtime"] == 1
     sample = control.metadata_source_stat_sample(SimpleNamespace(
@@ -4654,3 +4661,25 @@ def test_resolve_mfc_start_profile_rejects_incomplete_live_wire_profile(tmp_path
         control.resolve_mfc_start_profile(
             SimpleNamespace(direct_profile_dir=None, rebuild_profile_from_inputs=False, inputs=inputs)
         )
+
+
+def test_metadata_counts_read_the_selected_canonical_schema(tmp_path):
+    from emule_test_harness import rust_metadata
+    from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
+    control = _load_rust_soak_control()
+    database = tmp_path / "metadata.sqlite"
+    rust_repo = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    rust_metadata.create_metadata_db(rust_repo, database)
+    before = database.read_bytes()
+    result = control.rust_metadata_counts(database)
+    assert result["metadataDbExists"] is True
+    assert all(value == 0 for name, value in result.items() if name not in {"metadataDb", "metadataDbExists"})
+    assert database.read_bytes() == before
+
+
+def test_metadata_counts_do_not_create_a_missing_profile(tmp_path):
+    control = _load_rust_soak_control()
+    database = tmp_path / "missing.sqlite"
+    assert control.rust_metadata_counts(database) == {"metadataDb": str(database), "metadataDbExists": False}
+    assert not database.exists()
