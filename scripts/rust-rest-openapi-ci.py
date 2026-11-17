@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
@@ -292,10 +293,12 @@ def run_kad_persistence_phase(*, executable: Path, rust_repo: Path, root: Path,
     return report
 
 
-def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: Path) -> dict[str, object]:
+def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: Path,
+                                   openapi_contract: Path) -> dict[str, object]:
     """Prove category assignment, job identity and complete sharing across restart."""
     package = load_script_module("package_helpers_for_category_contract", "smoke-rust-release-package.py")
-    smoke = rust_rest_conformance.load_rest_smoke_module()
+    smoke = rust_rest_conformance.load_rest_smoke_module(openapi_contract)
+    document = load_openapi_document(openapi_contract)
     root.mkdir(parents=True, exist_ok=False)
     profile = root / "profile"
     incoming = profile / "incoming"
@@ -304,7 +307,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
     independent_root = profile / "independent-shared-root"
     for directory in (incoming, temp_override, destination, independent_root):
         directory.mkdir(parents=True, exist_ok=True)
-    report: dict[str, Any] = {"status": "failed", "networkMode": "local-disabled",
+    report: dict[str, Any] = {"status": "failed", "networkMode": "loopback-direct-local-only",
                               "budgetSeconds": CATEGORY_BUDGET_SECONDS}
     deadline = time.monotonic() + CATEGORY_BUDGET_SECONDS
     process = handle = None
@@ -319,7 +322,13 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         return value
 
     def request(method: str, path: str, *, body: dict[str, Any] | None = None) -> Any:
-        return http_json(base_url, path, api_key=API_KEY, method=method, body=body,
+        if method == "PATCH" and path.startswith("/api/v1/downloads/"):
+            response = smoke.http_request(base_url, path, method=method, api_key=package.API_KEY,
+                                          json_body=body, request_timeout_seconds=min(5.0, remaining()))
+            if response["status"] != 204:
+                raise RuntimeError(f"Download metadata patch expected 204: {response}")
+            return None
+        return http_json(base_url, path, api_key=package.API_KEY, method=method, body=body,
                          timeout_seconds=min(5.0, remaining()))["data"]
 
     def ready() -> object:
@@ -357,6 +366,14 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         if row != expected:
             raise RuntimeError(f"Category contract differs: expected {expected}, got {row}")
 
+    def validated_read(path: str, contract_path: str) -> dict[str, Any]:
+        payload = http_json(base_url, path, api_key=package.API_KEY,
+                            timeout_seconds=min(5.0, remaining()))
+        schema = response_json_schema(openapi_operation_response(document, "GET", contract_path, 200),
+                                      f"GET {contract_path} 200")
+        validate_openapi_schema(document, schema, payload)
+        return payload
+
     def download(job_id: str) -> dict[str, Any]:
         return request("GET", f"/api/v1/downloads/{job_id}")
 
@@ -368,7 +385,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                                          "name": name, "sizeBytes": 4096}, "intent": "stopped"}
         if category is not None:
             body["category"] = category
-        result = smoke.http_request(base_url, "/api/v1/downloads", method="POST", api_key=API_KEY,
+        result = smoke.http_request(base_url, "/api/v1/downloads", method="POST", api_key=package.API_KEY,
                                     json_body=body, request_timeout_seconds=min(5.0, remaining()))
         if result["status"] != 201:
             raise RuntimeError(f"Fresh download admission expected 201: {result}")
@@ -381,12 +398,12 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
 
     def download_action(operation: str, job_id: str) -> str:
         result = smoke.http_request(base_url, f"/api/v1/downloads/{operation}", method="POST",
-                                    api_key=API_KEY, json_body={"ids": [job_id]},
+                                    api_key=package.API_KEY, json_body={"ids": [job_id]},
                                     request_timeout_seconds=min(5.0, remaining()))
         return require_download_action_result(result, job_id)
 
     def download_page(path: str) -> list[dict[str, Any]]:
-        result = http_json(base_url, path, api_key=API_KEY,
+        result = http_json(base_url, path, api_key=package.API_KEY,
                            timeout_seconds=min(5.0, remaining()))
         rows, meta = result.get("data"), result.get("meta")
         if (not isinstance(rows, list) or not isinstance(meta, dict)
@@ -414,19 +431,21 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
               "2031425364758697a8b9cadbecfd0e1f")
     job_ids: list[str] = []
     try:
-        rust_client.write_rust_profile(
-            profile, rust_repo=rust_repo, incoming_dir=incoming, rest_addr=REST_ADDR,
-            rest_port=port, api_key=API_KEY, nat_enabled=False,
-            initial_shared_directory_reload=False, local_only_discovery=True,
-            vpn_guard_mode="off",
+        ports = {port}
+        server_port = package._available_unique_port(ports)
+        tcp_port = package._available_unique_port(ports)
+        udp_port = package._available_unique_port(ports, socket_type=socket.SOCK_DGRAM)
+        package._write_profile(
+            profile, rust_repo=rust_repo, incoming=incoming, rest_port=port,
+            ed2k_port=tcp_port, kad_port=udp_port, runtime_server_port=server_port,
+            p2p_ip=REST_ADDR,
         )
-        for section, settings in rust_client.rust_network_settings_patch(
-            auto_connect=False, reconnect_enabled=False, network_ed2k=False,
-            network_kademlia=False,
-        ).items():
-            rust_metadata.replace_settings_section(database, section, settings)
         process, handle = package._start_daemon(executable, profile, root / "daemon.log")
         wait_until("category REST readiness", remaining(), ready)
+        # WHY: allocation is owned by the bounded network scheduler. Start its
+        # loopback-only runtime before asking this fixture to prove storage;
+        # a fully disabled profile records intent without running that worker.
+        request("POST", "/api/v1/servers/operations/connect")
         if categories():
             raise RuntimeError("Fresh profile exposed a synthetic category")
 
@@ -487,6 +506,25 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         counts = request("GET", "/api/v1/snapshot")["downloads"]
         if counts != {"unfinished": 3, "completed": 0}:
             raise RuntimeError(f"Download snapshot counts differ: {counts}")
+        first_page = validated_read("/api/v1/downloads?view=all&limit=1", "/downloads")
+        if ([row["id"] for row in first_page["data"]] != [job_ids[2]]
+                or first_page["meta"]["hasMore"] is not True or not first_page["meta"]["nextCursor"]):
+            raise RuntimeError("First bounded download page did not expose its continuation")
+        query = urllib.parse.urlencode({"view": "all", "limit": 1,
+                                        "cursor": first_page["meta"]["nextCursor"]})
+        second_page = validated_read(f"/api/v1/downloads?{query}", "/downloads")
+        if [row["id"] for row in second_page["data"]] != [job_ids[1]]:
+            raise RuntimeError("Download cursor repeated or skipped the next job")
+        validated_read(f"/api/v1/downloads/{job_ids[0]}", "/downloads/{id}")
+        for resource in ("parts", "sources", "comments"):
+            payload = validated_read(f"/api/v1/downloads/{job_ids[0]}/{resource}",
+                                     f"/downloads/{{id}}/{resource}")
+            expected = [{"index": 0, "start": 0, "end": 4095, "sizeBytes": 4096,
+                         "presentBytes": 0, "complete": False, "corrupted": False}] if resource == "parts" else []
+            if payload["data"] != expected:
+                raise RuntimeError(f"Stopped unallocated download returned unexpected {resource}: {payload}")
+        report["downloadReadContracts"] = {"detail": "passed", "cursor": "passed",
+                                           "parts": "passed", "sources": "passed", "comments": "passed"}
         if download_action("start", job_ids[0]) != "accepted":
             raise RuntimeError("Stopped download was not started")
         def allocated_storage() -> tuple[Any, ...] | None:
@@ -605,10 +643,16 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         report["status"] = "passed"
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
+        try:
+            fields = ("id", "hash", "category", "intent", "temp", "storage", "marker")
+            report["durableJobs"] = [{**dict(zip(fields, row[:7])), "storageIdentityCaptured": row[7] is not None}
+                                     for row in durable_jobs()]
+        except Exception as evidence_error:
+            report["durableJobsError"] = f"{type(evidence_error).__name__}: {evidence_error}"
     finally:
         try:
             if process is not None and process.poll() is None:
-                http_json(base_url, "/api/v1/app/shutdown", api_key=API_KEY, method="POST",
+                http_json(base_url, "/api/v1/app/shutdown", api_key=package.API_KEY, method="POST",
                           body={"confirmShutdown": True}, timeout_seconds=5.0)
                 process.wait(timeout=20.0)
             if process is not None and process.poll() != 0:
@@ -1014,6 +1058,7 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
         )
         report["categoryPersistencePhase"] = run_category_persistence_phase(
             executable=executable, rust_repo=rust_repo, root=profile_dir / "category-persistence-phase",
+            openapi_contract=openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH,
         )
         report["status"] = "passed"
     except rust_rest_conformance.RestConformanceError as exc:
