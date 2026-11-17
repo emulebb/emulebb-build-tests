@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import socket
 import subprocess
 import time
@@ -18,7 +17,10 @@ from types import ModuleType
 import pytest
 
 from emule_test_harness import rust_client
-from emule_test_harness import rust_metadata
+from emule_test_harness import rust_metadata, rust_rest_conformance
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+from emule_test_harness.rust_local_ed2k import require_download_id, require_download_batch
+from emule_test_harness.local_kad_peer import LocalKadPeer
 from emule_test_harness.script_modules import load_script_module
 
 
@@ -38,34 +40,17 @@ dtt = load_script_module("deterministic_two_client_transfer_for_rust_tests", "de
 def load_rust_rest_smoke_module() -> ModuleType:
     """Loads the shared smoke runner against the forward Rust OpenAPI contract."""
 
-    rust_contract = (
-        _workspace_root_from_environment()
-        / "repos"
-        / "emulebb-tooling"
-        / "docs"
-        / "products"
-        / "emulebb-rust"
-        / "api"
-        / "REST-API-OPENAPI.yaml"
-    )
-    return load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py",
-                              initial_globals={"SELECTED_OPENAPI_CONTRACT_PATH": rust_contract})
+    rust_contract = (resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+                     / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    return rust_rest_conformance.load_rest_smoke_module(rust_contract)
 
 
 rest_smoke = load_rust_rest_smoke_module()
 
 
 def test_local_client_uses_forward_rust_openapi_contract() -> None:
-    expected = (
-        workspace_root()
-        / "repos"
-        / "emulebb-tooling"
-        / "docs"
-        / "products"
-        / "emulebb-rust"
-        / "api"
-        / "REST-API-OPENAPI.yaml"
-    )
+    expected = (resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+                / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
     assert rest_smoke.OPENAPI_CONTRACT_PATH == expected
 
 
@@ -128,7 +113,7 @@ def write_profile(
 ) -> None:
     rust_client.write_rust_profile(
         profile_dir,
-        rust_repo=workspace_root() / "repos" / "emulebb-rust",
+        rust_repo=resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust"),
         rest_addr=lan_host,
         rest_port=port,
         api_key=API_KEY,
@@ -139,6 +124,8 @@ def write_profile(
         kad_bootstrap_nodes=kad_bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=kad_bootstrap_min_routing_contacts,
         kad_passive_replay_enabled=kad_passive_replay_enabled,
+        network_kademlia=True,
+        local_only_discovery=True,
     )
 
 
@@ -150,7 +137,7 @@ def write_remembered_source_manifest(
     source_host: str,
     source_port: int,
 ) -> str:
-    repo = workspace_root() / "repos" / "emulebb-rust"
+    repo = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
     metadata_path = rust_metadata_path(profile_dir)
     if not metadata_path.exists():
         rust_metadata.create_metadata_db(repo, metadata_path)
@@ -237,7 +224,7 @@ def poll_search(
         page = request_json(
             base_url, "GET", f"/api/v1/searches/{search_id}?limit=200&offset=0"
         )["data"]
-        if len(page.get("items", [])) >= want or page.get("status") == "complete":
+        if len(page.get("items", [])) >= want or page.get("status") == "completed":
             if page.get("items"):
                 return page
         time.sleep(interval)
@@ -265,7 +252,8 @@ def request_json_status(
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            payload = response.read().decode("utf-8")
+            return response.status, json.loads(payload) if payload else {}
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
@@ -347,11 +335,12 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
 
 @pytest.mark.native
 def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
-    if shutil.which("cargo") is None:
-        pytest.skip("cargo is not available")
-    repo = workspace_root() / "repos" / "emulebb-rust"
-    if not repo.is_dir():
-        pytest.skip("emulebb-rust repo is not available")
+    repo = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    stage = rust_client.verified_runtime_stage(repo, get_workspace_output_root())
+    executable = Path(stage["executable"])
+    (tmp_path / "stage-input.json").write_text(json.dumps({
+        "stage": stage, "harnessSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
         pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
@@ -374,10 +363,11 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         ed2k_listen_port=free_lan_port(lan_host),
         kad_listen_port=free_lan_port(lan_host),
         kad_passive_replay_enabled=True,
+        kad_bootstrap_min_routing_contacts=1,
     )
     seed_index(repo, rust_metadata_path(profile_dir))
 
-    process = rust_client.start_rust_client(repo, profile_dir, output_path)
+    process = rust_client.start_rust_client_executable(executable, profile_dir, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
@@ -402,7 +392,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
 
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB"
-        assert app["data"]["capabilities"]["transfers"] is True
+        assert app["data"]["capabilities"]["downloads"] is True
         assert "rest.emulebb.v1" not in app["data"]["capabilities"]
         settings = request_json(base_url, "GET", "/api/v1/app/settings")["data"]
         assert settings["core"]["uploadLimitKiBps"] > 0
@@ -431,41 +421,19 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert empty_settings_status == 400
         categories = request_json(base_url, "GET", "/api/v1/categories")["data"]["items"]
-        assert categories[0]["id"] == 0
-        created_category = request_json(
-            base_url,
-            "POST",
-            "/api/v1/categories",
-            {
-                "name": " Harness Media ",
-                "path": str(shared_root),
-                "comment": "daemon category",
-                "color": 255,
-                "priority": "high",
-            },
-        )["data"]
-        assert created_category["id"] == 1
-        assert created_category["name"] == "Harness Media"
-        assert created_category["priority"] == 2
-        updated_category = request_json(
-            base_url,
-            "PATCH",
-            "/api/v1/categories/1",
-            {"name": "Harness Archive", "path": None, "color": None, "priority": "verylow"},
-        )["data"]
-        assert updated_category["name"] == "Harness Archive"
-        assert updated_category["path"] is None
-        assert updated_category["priority"] == 4
-        default_delete_status, _ = request_json_status(
-            base_url,
-            "DELETE",
-            "/api/v1/categories/0",
-        )
-        assert default_delete_status == 400
-        deleted_category = request_json(base_url, "DELETE", "/api/v1/categories/1")["data"]
-        assert deleted_category["ok"] is True
-        missing_category_status, _ = request_json_status(base_url, "GET", "/api/v1/categories/1")
-        assert missing_category_status == 404
+        assert categories == []
+        created_category = request_json(base_url, "POST", "/api/v1/categories", {
+            "name": "Harness-Media", "destinationDir": str(shared_root), "comment": "daemon category",
+        })["data"]
+        assert created_category["name"] == "Harness-Media"
+        updated_category = request_json(base_url, "PATCH", "/api/v1/categories/harness-media", {
+            "destinationDir": None, "comment": "updated category",
+        })["data"]
+        assert updated_category["name"] == "Harness-Media"
+        assert updated_category["destinationDir"] is None
+        assert updated_category["comment"] == "updated category"
+        assert request_json(base_url, "DELETE", "/api/v1/categories/Harness-Media")["data"]["ok"] is True
+        assert request_json_status(base_url, "GET", "/api/v1/categories/Harness-Media")[0] == 404
         friends = request_json(base_url, "GET", "/api/v1/friends")["data"]["items"]
         assert friends == []
         friend_hash = "00112233445566778899aabbccddeeff"
@@ -604,7 +572,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         snapshot = request_json(base_url, "GET", "/api/v1/snapshot?limit=1")["data"]
         assert snapshot["app"]["name"] == "eMuleBB"
         assert snapshot["status"]["lifecycle"]["state"] == "running"
-        assert len(snapshot["transfers"]) <= 1
+        assert snapshot["downloads"] == {"unfinished": 0, "completed": 0}
         assert len(snapshot["sharedFiles"]) <= 1
         assert len(snapshot["uploads"]) <= 1
         assert len(snapshot["uploadQueue"]) <= 1
@@ -642,16 +610,21 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert bad_bootstrap_status == 400
         assert "address" in bad_bootstrap_error["error"]["message"]
-        bootstrapped_kad = request_json(
-            base_url,
-            "POST",
-            "/api/v1/kad/operations/bootstrap",
-            {"address": lan_host, "port": 4662},
-        )["data"]
-        assert bootstrapped_kad["running"] is True
-        assert bootstrapped_kad["connected"] is False
-        assert bootstrapped_kad["firewallState"] == "unknown"
-        assert bootstrapped_kad["contactCount"] == 0
+        # The shared runtime is created explicitly through local server connect.
+        request_json(base_url, "PATCH", "/api/v1/app/settings", {"core": {"networkEd2k": True, "networkKademlia": True}})
+        request_json(base_url, "POST", "/api/v1/servers/operations/connect", timeout=30)
+        fixture = LocalKadPeer(lan_host, {lan_host})
+        fixture.start()
+        try:
+            bootstrapped_kad = request_json(base_url, "POST", "/api/v1/kad/operations/bootstrap", {
+                "address": lan_host, "port": fixture.udp_port,
+            }, timeout=30)["data"]
+            assert bootstrapped_kad["running"] is True
+            assert bootstrapped_kad["connected"] is True
+            assert bootstrapped_kad["contactCount"] >= 1
+            assert fixture.evidence()["priorUdpPackets"] > 0
+        finally:
+            fixture.close()
         recheck_kad = request_json(
             base_url,
             "POST",
@@ -662,6 +635,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         stopped_kad = request_json(base_url, "POST", "/api/v1/kad/operations/stop")["data"]
         assert stopped_kad["running"] is False
         assert stopped_kad["connected"] is False
+        request_json(base_url, "POST", "/api/v1/servers/operations/disconnect")
         logs = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
         assert isinstance(logs, list)
         for entry in logs:
@@ -706,114 +680,54 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert len(paged_search["items"]) == 1
         assert paged_search["items"][0]["hash"] == SEED_HASH
 
-        search_id = search["id"]
-        download = request_json(
-            base_url,
-            "POST",
-            f"/api/v1/searches/{search_id}/results/{SEED_HASH}/operations/download",
-            {"paused": True},
-        )["data"]
-        assert download == {"ok": True, "searchId": search_id, "hash": SEED_HASH}
-        transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
-        assert transfer["hash"] == SEED_HASH
-        assert transfer["state"] == "paused"
-        # Master-aligned transfer fields: KiBps speeds, the separate stopped flag,
-        # and the live source/part counters (0 here with no live peers).
-        assert transfer["stopped"] is False
-        assert "downloadSpeedBytesPerSec" not in transfer
-        assert isinstance(transfer["downloadSpeedKiBps"], (int, float))
-        assert isinstance(transfer["uploadSpeedKiBps"], (int, float))
-        assert transfer["sourcesTransferring"] == 0
-        assert transfer["partsAvailable"] == 0
-        # Transfer details: {transfer, parts, sources}. The parts array carries
-        # real per-part geometry/progress derived from the resume manifest.
-        details = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}/details")["data"]
-        assert details["transfer"]["hash"] == SEED_HASH
-        assert isinstance(details["sources"], list)
-        assert isinstance(details["parts"], list)
-        assert len(details["parts"]) == transfer["partsTotal"]
-        part_fields = {
-            "index", "start", "end", "size", "completedBytes", "gapBytes",
-            "complete", "requested", "corrupted", "availableSources",
-        }
-        for index, part in enumerate(details["parts"]):
-            assert set(part) == part_fields
-            assert part["index"] == index
-            assert part["end"] >= part["start"]
-            assert part["size"] == part["end"] - part["start"] + 1
-            assert part["completedBytes"] + part["gapBytes"] == part["size"]
-            assert part["complete"] == (part["gapBytes"] == 0)
-        details_missing_status, _ = request_json_status(
-            base_url, "GET", "/api/v1/transfers/ffffffffffffffffffffffffffffffff/details"
-        )
-        assert details_missing_status == 404
-        multi_family_patch_status, multi_family_patch_error = request_json_status(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"priority": "high", "displayName": "Rejected.bin"},
-        )
-        assert multi_family_patch_status == 400
-        assert "one mutation family" in multi_family_patch_error["error"]["message"]
-        priority_transfer = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"priority": "veryhigh"},
-        )["data"]
-        assert priority_transfer["priority"] == "veryhigh"
-        download_category = request_json(
-            base_url,
-            "POST",
-            "/api/v1/categories",
-            {"name": "Harness Downloads"},
-        )["data"]
-        categorized_transfer = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"categoryName": "harness downloads"},
-        )["data"]
-        assert categorized_transfer["categoryId"] == download_category["id"]
-        assert categorized_transfer["categoryName"] == "Harness Downloads"
-        renamed_transfer = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"displayName": " Scenario Renamed.bin "},
-        )["data"]
-        assert renamed_transfer["displayName"] == "Scenario Renamed.bin"
-        assert renamed_transfer["priority"] == "veryhigh"
-        assert renamed_transfer["categoryId"] == download_category["id"]
+        candidate = paged_search["items"][0]
+        admission = request_json(base_url, "POST", "/api/v1/downloads", {
+            "source": {"type": "content", "hash": SEED_HASH, "name": candidate["displayName"],
+                       "sizeBytes": candidate["sizeBytes"]}, "intent": "stopped",
+        })["data"]
+        download_id = require_download_id(admission, expected_hash=SEED_HASH)
+        resource = f"/api/v1/downloads/{download_id}"
+        download = request_json(base_url, "GET", resource)["data"]
+        assert download["id"] == download_id and download["hash"] == SEED_HASH
+        assert download["state"] == "stopped" and download["intent"] == "stopped"
+        assert download["payloadVerified"] is False
+        parts = request_json(base_url, "GET", resource + "/parts?limit=200")
+        assert parts["meta"]["hasMore"] is False
+        assert len(parts["data"]) == 1
+        part = parts["data"][0]
+        assert part == {"index": 0, "start": 0, "end": 4095, "sizeBytes": 4096,
+                        "presentBytes": 0, "complete": False, "corrupted": False}
+        for collection in ("sources", "comments"):
+            page = request_json(base_url, "GET", resource + f"/{collection}?limit=200")
+            assert page["data"] == [] and page["meta"]["hasMore"] is False
+        assert request_json_status(base_url, "GET", "/api/v1/downloads/9223372036854775807")[0] == 404
+        request_json(base_url, "POST", "/api/v1/categories", {"name": "Harness-Downloads"})
+        patch_status, _ = request_json_status(base_url, "PATCH", resource, {
+            "name": "Scenario Renamed.bin", "category": "harness-downloads",
+        })
+        assert patch_status == 204
+        updated = request_json(base_url, "GET", resource)["data"]
+        assert updated["name"] == "Scenario Renamed.bin" and updated["category"] == "Harness-Downloads"
+        jobs = request_json(base_url, "GET", "/api/v1/downloads?limit=100")
+        assert any(row["id"] == download_id and row["state"] == "stopped" for row in jobs["data"])
 
-        transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert any(row["hash"] == SEED_HASH and row["state"] == "paused" for row in transfers)
-
-        # Persistence proof: restart the daemon and confirm the paused control
-        # state and renamed canonical name reload from emulebb-rust-metadata.db.
+        # Restart must preserve the same job identity, intent and presentation.
         terminate_process(process)
-        process = rust_client.start_rust_client_append(repo, profile_dir, output_path)
+        process = rust_client.start_rust_client_executable_append(executable, profile_dir, output_path)
         wait_for_rest(base_url, process, output_path)
-        reloaded_transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
-        assert reloaded_transfer["state"] == "paused"
-        assert reloaded_transfer["displayName"] == "Scenario Renamed.bin"
-
-        delete_row_status, delete_row_error = request_json_status(
-            base_url,
-            "DELETE",
-            f"/api/v1/transfers/{SEED_HASH}",
-        )
-        assert delete_row_status == 400
-        assert "only completed transfers can be removed without deleting files" in json.dumps(delete_row_error)
-
-        delete_result = request_json(
-            base_url,
-            "DELETE",
-            f"/api/v1/transfers/{SEED_HASH}/files?confirm=true",
-        )["data"]
-        assert delete_result["items"][0]["ok"] is True
-        assert delete_result["items"][0]["hash"] == SEED_HASH
-        assert not (profile_dir / "transfers" / SEED_HASH).exists()
+        reloaded = request_json(base_url, "GET", resource)["data"]
+        assert reloaded["id"] == download_id and reloaded["state"] == "stopped"
+        assert reloaded["name"] == "Scenario Renamed.bin" and reloaded["category"] == "Harness-Downloads"
+        for action in ("start", "stop"):
+            reply = request_json(base_url, "POST", f"/api/v1/downloads/{action}", {"ids": [download_id]})
+            require_download_batch(reply, download_id)
+        removed = request_json(base_url, "POST", "/api/v1/downloads/remove", {
+            "ids": [download_id], "deleteData": False,
+        })
+        require_download_batch(removed, download_id)
+        assert request_json_status(base_url, "GET", resource)[0] == 404
+        assert shared_top_file.read_bytes() == b"emulebb-rust shared root fixture"
+        assert shared_nested_file.read_bytes() == b"emulebb-rust nested shared root fixture"
         denied_search_clear_status, denied_search_clear_error = request_json_status(
             base_url,
             "DELETE",
