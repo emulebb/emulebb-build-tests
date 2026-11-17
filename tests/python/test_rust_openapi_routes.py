@@ -4257,3 +4257,30 @@ paths:
             openapi_body_fields=("category", "source"),
         ),
     )
+
+
+@pytest.mark.parametrize("event", [
+    {"type": "download.changed", "id": 1, "downloadId": "1"},
+    {"type": "download.removed", "id": 2, "downloadId": "1"},
+    {"type": "sync.reset", "id": 0, "reason": "initial"},
+    {"type": "sync.reset", "id": 7, "reason": "reconnect"},
+    {"type": "sync.reset", "id": 8, "reason": "lagged", "missed": 2},
+    {"type": "sync.reset", "id": 0, "reason": "epoch-changed"},
+])
+def test_selected_download_events_require_epoch_and_valid_revision(selected_rust_openapi, event):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "DownloadEvent")
+    payload = {**event, "epoch": "00000000-0000-4000-8000-000000000001"}
+    validate_openapi_schema(document, schema, payload)
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, schema, event)
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, schema, {**payload, "id": -1})
+
+
+def test_selected_download_parts_are_a_bounded_independent_page(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = response_json_schema(openapi_operation_response(document, "get", "/downloads/{id}/parts", "200"), "download parts")
+    validate_openapi_schema(document, schema, {
+        "data": [], "meta": {"apiVersion": "2.0.0", "nextCursor": None, "hasMore": False},
+    })

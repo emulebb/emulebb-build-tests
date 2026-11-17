@@ -63,9 +63,9 @@ DOWNLOAD_EVENT_VARIANTS = {
     "sync.reset": "DownloadSyncResetEvent",
 }
 DOWNLOAD_EVENT_REQUIRED_FIELDS = {
-    "DownloadChangedEvent": ("downloadId", "id", "type"),
-    "DownloadRemovedEvent": ("downloadId", "id", "type"),
-    "DownloadSyncResetEvent": ("id", "reason", "type"),
+    "DownloadChangedEvent": ("downloadId", "epoch", "id", "type"),
+    "DownloadRemovedEvent": ("downloadId", "epoch", "id", "type"),
+    "DownloadSyncResetEvent": ("epoch", "id", "reason", "type"),
 }
 DOWNLOAD_ID_COMPONENT = "DownloadId"
 DOWNLOAD_ID_PATTERN = r"^[1-9][0-9]{0,18}(?![\s\S])"
@@ -1415,7 +1415,8 @@ def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dic
                 or not isinstance(schema.get("required"), list)
                 or set(schema.get("required", [])) != fields
                 or properties["ids"] != {"$ref": "#/components/schemas/DownloadIds"}
-                or ("deleteData" in fields and properties["deleteData"] != {"type": "boolean"})):
+                or ("deleteData" in fields and (not isinstance(properties["deleteData"], dict)
+                    or properties["deleteData"].get("type") != "boolean"))):
             drift.append(SchemaComponentDrift(component, "action must require explicit IDs and removal data choice"))
 
     page = schemas.get("DownloadPageEnvelope")
@@ -2733,6 +2734,15 @@ def append_download_event_schema_drift(
                     else properties.get("type", {}).get("const") != name)):
             drift.append(SchemaComponentDrift(component, "download event variant has wrong required fields"))
             continue
+        if properties.get("epoch") != {"type": "string", "format": "uuid"}:
+            drift.append(SchemaComponentDrift(component, "download event must carry its UUID epoch"))
+        expected_minimum = 0 if component == "DownloadSyncResetEvent" else 1
+        if properties.get("id") != {"type": "integer", "minimum": expected_minimum}:
+            drift.append(SchemaComponentDrift(component, "download event revision has wrong bounds"))
+        if component == "DownloadSyncResetEvent" and set(
+            properties.get("reason", {}).get("enum", [])
+        ) != {"initial", "reconnect", "lagged", "epoch-changed"}:
+            drift.append(SchemaComponentDrift(component, "download reset must describe stream re-baselining"))
         if component != "DownloadSyncResetEvent" and properties.get("downloadId") != {
             "$ref": "#/components/schemas/DownloadId"
         }:
@@ -3050,9 +3060,9 @@ def rust_query_parameter_inventory(route_metadata_rs: Path, routes_rs: Path) -> 
         if route in inventory:
             inventory[route] = tuple(sorted(constants[constant]))
 
-    for route, constant in parameterized_query_overrides(text).items():
+    for route, fields in parameterized_query_overrides(text).items():
         if route in inventory:
-            inventory[route] = tuple(sorted(constants[constant]))
+            inventory[route] = tuple(sorted(constants[fields] if isinstance(fields, str) else fields))
 
     return inventory
 
@@ -3073,8 +3083,8 @@ def exact_query_overrides(route_metadata_rs_text: str) -> list[tuple[str, str, s
     return overrides
 
 
-def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, str]:
-    overrides: dict[Route, str] = {}
+def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, str | tuple[str, ...]]:
+    overrides: dict[Route, str | tuple[str, ...]] = {}
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
         (r'\("GET",\s*\["searches", _\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}"),
@@ -3082,6 +3092,15 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
         match = re.search(pattern, parameterized)
         if match is not None:
             overrides[Route(method, path)] = match.group(1)
+    # Rust shares one inline allowlist across the independent evidence pages.
+    evidence = re.search(
+        r'\("GET",\s*\["downloads", _,\s*(.*?)\]\)\s*=>\s*Some\(&\[([^\]]*)\]\)',
+        parameterized,
+    )
+    if evidence is not None:
+        fields = tuple(re.findall(r'"([^\"]+)"', evidence.group(2)))
+        for resource in re.findall(r'"([^\"]+)"', evidence.group(1)):
+            overrides[Route("GET", f"/downloads/{{id}}/{resource}")] = fields
     return overrides
 
 
@@ -3176,6 +3195,12 @@ def exact_body_field_returns(route_body_metadata_rs_text: str) -> list[tuple[str
         route_body_metadata_rs_text,
     ):
         returns.append((method, path, constant))
+
+    for method, paths, constant in re.findall(
+        r'if method\s*==\s*"([A-Z]+)"\s*&&\s*matches!\(\s*path,\s*([^)]+)\)\s*\{\s*return Some\((\w+)\);',
+        route_body_metadata_rs_text,
+    ):
+        returns.extend((method, path, constant) for path in re.findall(r'"([^\"]+)"', paths))
 
     url_import = re.search(
         r"fn uses_url_import_body[\s\S]+?matches!\(\s*path,\s*([^)]+?)\s*\)",
