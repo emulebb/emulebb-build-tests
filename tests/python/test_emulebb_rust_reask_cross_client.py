@@ -1175,3 +1175,50 @@ def test_runner_loads_the_accepted_stock_client_udp_record() -> None:
     assert record["payloadDigest"] == (
         "sha256:89468db8e028268f21598216f5949ae11c2b1c3e1370b151d3d7136e8fda812b"
     )
+
+
+def test_rust_download_creation_captures_native_job_id(monkeypatch):
+    module = _load_module()
+    calls = []
+    def request(*args):
+        calls.append(args)
+        return {"data": {"id": "7", "hash": FILE_HASH}}
+    monkeypatch.setattr(module.cc, "request_json", request)
+    assert module.create_rust_download("http://requester.test", "secret", "fixture-link", FILE_HASH) == "7"
+    assert calls[0][2] == "/api/v1/downloads"
+    assert calls[0][4] == {"source": {"type": "ed2k-link", "link": "fixture-link"}, "intent": "started"}
+
+
+def test_rust_source_absence_requires_all_pages(monkeypatch):
+    module = _load_module()
+    calls = []
+    details = []
+    monkeypatch.setattr(module, "download_detail", lambda *args, **kwargs: details.append((args, kwargs)))
+    exact = {"address": "127.0.0.10", "port": 4662, "userHash": SOURCE_USER_HASH}
+    pages = iter([
+        {"data": [{"address": "127.0.0.11"}], "meta": {"hasMore": True, "nextCursor": "page2"}},
+        {"data": [exact], "meta": {"hasMore": False, "nextCursor": None}},
+        {"data": [], "meta": {"hasMore": False, "nextCursor": None}},
+    ])
+    def request(*args):
+        calls.append(args[2])
+        return next(pages)
+    monkeypatch.setattr(module.cc, "request_json", request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    result = module.wait_for_rust_source_absent("http://requester.test", "secret", download_id="7",
+        file_hash=FILE_HASH, source_tcp_endpoint=SOURCE_TCP_ENDPOINT, source_user_hash=SOURCE_USER_HASH, timeout=1)
+    assert result["verifiedAbsent"] is True and result["downloadId"] == "7"
+    assert calls == ["/api/v1/downloads/7/sources?limit=200",
+                     "/api/v1/downloads/7/sources?limit=200&cursor=page2",
+                     "/api/v1/downloads/7/sources?limit=200"]
+    assert len(details) == 2
+
+
+def test_rust_source_absence_refuses_nonadvancing_cursor(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "download_detail", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(module.cc, "request_json", lambda *_args: {
+        "data": [{"address": "127.0.0.11"}], "meta": {"hasMore": True, "nextCursor": "same"}})
+    with pytest.raises(RuntimeError, match="did not advance"):
+        module.wait_for_rust_source_absent("http://requester.test", "secret", download_id="7",
+            file_hash=FILE_HASH, source_tcp_endpoint=SOURCE_TCP_ENDPOINT, source_user_hash=SOURCE_USER_HASH, timeout=1)

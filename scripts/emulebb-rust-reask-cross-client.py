@@ -55,6 +55,7 @@ from emule_test_harness import soak_build_refresh  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
+from emule_test_harness.rust_local_ed2k import download_detail, require_download_id  # noqa: E402
 
 cc = load_script_module(
     "emulebb_rust_emulebb_cross_client_for_reask",
@@ -1258,6 +1259,51 @@ def find_transfer_source(
     return matches[0] if matches else None
 
 
+def create_rust_download(base_url: str, api_key: str, link: str, file_hash: str) -> str:
+    """Capture the exact Rust job while retaining protocol hash evidence separately."""
+    payload = cc.request_json(base_url, "POST", "/api/v1/downloads", api_key,
+                              {"source": {"type": "ed2k-link", "link": link}, "intent": "started"})
+    return require_download_id(_api_data(payload), expected_hash=file_hash)
+
+
+def wait_for_rust_source_absent(base_url: str, api_key: str, *, download_id: str,
+                                file_hash: str, source_tcp_endpoint: str,
+                                source_user_hash: str, timeout: float) -> dict[str, object]:
+    """Prove absence across current source pages for the captured Rust job."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        download_detail(base_url, api_key, download_id, expected_hash=file_hash)
+        cursor = None
+        found = False
+        while True:
+            path = f"/api/v1/downloads/{download_id}/sources?limit=200"
+            if cursor is not None:
+                path += "&cursor=" + quote(cursor, safe="")
+            payload = cc.request_json(base_url, "GET", path, api_key)
+            if (not isinstance(payload, dict) or not isinstance(payload.get("data"), list)
+                    or not isinstance(payload.get("meta"), dict)):
+                raise RuntimeError("Rust source evidence requires a cursor page")
+            if find_transfer_source(payload, source_tcp_endpoint=source_tcp_endpoint,
+                                    source_user_hash=source_user_hash) is not None:
+                found = True
+                break
+            meta = payload["meta"]
+            if meta.get("hasMore") is False:
+                break
+            next_cursor = meta.get("nextCursor")
+            if (meta.get("hasMore") is not True or not payload["data"]
+                    or not isinstance(next_cursor, str) or not 0 < len(next_cursor) <= 512
+                    or next_cursor == cursor):
+                raise RuntimeError("Rust source evidence cursor did not advance")
+            cursor = next_cursor
+        if not found:
+            return {"downloadId": download_id, "fileHash": file_hash,
+                    "sourceTcpEndpoint": source_tcp_endpoint,
+                    "sourceUserHash": source_user_hash, "verifiedAbsent": True}
+        time.sleep(0.25)
+    raise RuntimeError("Rust requester retained the exact file-not-found source")
+
+
 def wait_for_transfer_source_absent(
     base_url: str,
     api_key: str,
@@ -1763,25 +1809,13 @@ def run_rust_requester_phase(
             for runtime in rust_clients
         ]
         for occupier in occupiers:
-            cc.request_json(
-                occupier.base_url,
-                "POST",
-                "/api/v1/transfers",
-                args.api_key,
-                {"link": link, "paused": False},
-            )
+            create_rust_download(occupier.base_url, args.api_key, link, file_hash)
         capacity = wait_for_upload_capacity(
             mfc["diagnosticsDir"],
             active_slots=2,
             timeout=args.reask_observe_timeout_seconds,
         )
-        cc.request_json(
-            requester.base_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {"link": link, "paused": False},
-        )
+        requester_download_id = create_rust_download(requester.base_url, args.api_key, link, file_hash)
         registration = wait_for_udp_reask_registration(
             requester.diagnostics_dir,
             side="rust",
@@ -1858,9 +1892,10 @@ def run_rust_requester_phase(
                 process=requester.process,
             )
             applied = completion["applied"]
-            source_absence_receipt = wait_for_transfer_source_absent(
+            source_absence_receipt = wait_for_rust_source_absent(
                 requester.base_url,
                 args.api_key,
+                download_id=requester_download_id,
                 file_hash=file_hash,
                 source_tcp_endpoint=mfc["tcpEndpoint"],
                 source_user_hash=registration["sourceUserHash"],
@@ -2020,13 +2055,7 @@ def run_mfc_requester_phase(
             occupier.nickname,
             args.server_connect_timeout_seconds,
         )
-        cc.request_json(
-            occupier.base_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {"link": link, "paused": False},
-        )
+        create_rust_download(occupier.base_url, args.api_key, link, file_hash)
         occupied_slot = wait_for_rust_occupied_upload_slot(
             uploader.diagnostics_dir,
             file_hash=file_hash,
