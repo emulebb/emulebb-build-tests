@@ -44,6 +44,7 @@ EVENT_STREAM_EXPECTED_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 RUST_MISSING_CATEGORY_NAME = "MissingCategory"
+RUST_MISSING_TAG_NAME = "MissingTag"
 RUST_MISSING_DOWNLOAD_ID = "9223372036854775807"
 
 
@@ -67,16 +68,21 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     contract_body = smoke.get_contract_route_body
 
     def rust_concrete_path(path: str, operation_id: str) -> str:
-        concrete = concrete_path(path, operation_id).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME)
+        concrete = concrete_path(path, operation_id).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME).replace("{tagName}", RUST_MISSING_TAG_NAME)
         return concrete.replace("{id}", RUST_MISSING_DOWNLOAD_ID) if path.startswith("/downloads/") else concrete
 
     def rust_normalize_path(path: str) -> str:
+        path = path.replace(f"/library/tags/{RUST_MISSING_TAG_NAME}", "/library/tags/{tagName}")
         return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
                                            "/categories/{categoryName}")
                               .replace(f"/downloads/{RUST_MISSING_DOWNLOAD_ID}",
                                        "/downloads/{id}"))
 
     def rust_contract_body(operation_id: str) -> dict[str, object] | None:
+        if operation_id == "createLibraryTag":
+            return {}
+        if operation_id in {"addLibraryFileTags", "removeLibraryFileTags"}:
+            return {"tag": RUST_MISSING_TAG_NAME, "hashes": ["ff" * 16]}
         if operation_id == "patchCategory":
             return {"comment": "REST contract"}
         if operation_id == "createDownload":
@@ -96,6 +102,9 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     smoke.get_contract_route_body = rust_contract_body
     smoke.REST_CONTRACT_EXPECTED_ERROR_STATUSES.update({
         "createDownload": (400,),
+        "createLibraryTag": (400,),
+        "getLibraryTag": (404,),
+        "listLibraryFileTags": (404,),
         **{name: (404,) for name in (
             "getDownload", "patchDownload", "listDownloadParts", "listDownloadComments",
             "listDownloadSources", "getDownloadSource", "browseDownloadSource",

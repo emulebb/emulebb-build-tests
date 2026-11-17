@@ -4608,3 +4608,21 @@ def test_rest_contract_completeness_accepts_category_create_negative_probe(monke
     assert summary["expected_error_count"] == 1
     assert summary["routes"][0]["operationId"] == "createCategory"
     assert summary["routes"][0]["expectedResponseStatuses"] == [200, 400]
+
+
+@pytest.mark.parametrize("body_text,ok", [("", True), ("null", False), ("{}", False)])
+def test_rest_contract_no_content_requires_empty_wire_body(monkeypatch, body_text, ok):
+    module = load_rest_api_smoke_module()
+    route = {"name": "deleteSample", "operationId": "deleteSample", "family": "library",
+             "method": "DELETE", "path": "/api/v1/sample", "safe": True, "safety": "safe",
+             "hasRequestBody": False, "requestBodyRequired": False,
+             "successResponseStatuses": ["204"], "successResponseRefs": ["NoContentResponse"],
+             "responseEnvelope": "NoContentResponse"}
+    monkeypatch.setattr(module, "REST_CONTRACT_ROUTES", (route,))
+    monkeypatch.setattr(module, "assert_contract_routes_match_openapi", lambda: {"ok": True})
+    monkeypatch.setattr(module, "validate_openapi_operation_response_payload", lambda *args: None)
+    monkeypatch.setattr(module, "http_request", lambda *args, **kwargs: {
+        "status": 204, "body_text": body_text, "raw_json": None, "json": None,
+        "content_type": ""})
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
+    assert summary["ok"] is ok

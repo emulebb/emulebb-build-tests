@@ -74,6 +74,10 @@ def validate_openapi_operation_response_payload(
 
     document = load_openapi_document(openapi_path)
     response = openapi_operation_response(document, method, path, status)
+    if str(status) == "204":
+        if response.get("content") or payload is not None:
+            raise RuntimeError("HTTP 204 must document and return no body")
+        return
     schema = response_json_schema(response, f"{method.upper()} {path} {status}")
     validate_openapi_schema(document, schema, payload)
 

@@ -4302,3 +4302,49 @@ def test_selected_download_detail_and_nonempty_parts_match_checkpointed_projecti
                   "presentBytes": 1024, "complete": False, "corrupted": False}],
         "meta": {"apiVersion": "2.0.0", "nextCursor": None, "hasMore": False},
     })
+
+
+def test_selected_library_tags_have_name_identity_and_bounded_bulk_contract(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    from emule_test_harness.rust_openapi_responses import openapi_schema_component, validate_openapi_schema
+    validate_openapi_schema(document, openapi_schema_component(document, "ErrorEnvelope"),
+                            {"error": {"code": "TAG_NAME_CONFLICT", "message": "tag name already exists", "details": {}}})
+    tag = openapi_schema_component(document, "LibraryTag")
+    validate_openapi_schema(document, tag, {"name": "Rotate-1"})
+    assignment = openapi_schema_component(document, "LibraryTagAssignmentRequest")
+    validate_openapi_schema(document, assignment, {"tag": "Rotate-1", "hashes": ["01" * 16]})
+    for value in ([], ["01" * 16] * 2, [f"{i:032x}" for i in range(101)]):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, assignment, {"tag": "Rotate-1", "hashes": value})
+    result = openapi_schema_component(document, "LibraryTagBatchItem")
+    validate_openapi_schema(document, result, {"hash": "01" * 16, "status": "accepted", "httpStatus": 200})
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, result, {"hash": "01" * 16, "status": "failed", "httpStatus": 404})
+    parameters = document["components"]["parameters"]
+    assert parameters["LibraryTagLimit"]["schema"]["default"] == 100
+    assert parameters["LibraryTagLimit"]["schema"]["maximum"] == 200
+    assert parameters["LibraryTagCursor"]["schema"]["maxLength"] == 512
+
+
+def test_no_content_contract_preserves_headers_and_forbids_body(tmp_path: Path):
+    text = """
+paths:
+  /item:
+    delete:
+      responses:
+        "204":
+          $ref: '#/components/responses/NoContentResponse'
+components:
+  responses:
+    NoContentResponse:
+      description: Removed.
+      headers:
+        X-Contract-Version:
+          $ref: '#/components/headers/ContractVersionHeader'
+"""
+    contract = write(tmp_path / "contract.yaml", text)
+    assert openapi_success_response_drift(contract) == ()
+    assert openapi_response_component_drift(contract) == ()
+    contract.write_text(text + "      content: {application/json: {schema: {type: object}}}\n", encoding="utf-8")
+    assert any("must not define content" in item.issue for item in openapi_success_response_drift(contract))
+    assert any("must not define content" in item.issue for item in openapi_response_component_drift(contract))

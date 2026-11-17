@@ -374,6 +374,28 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         validate_openapi_schema(document, schema, payload)
         return payload
 
+    def tag_request(method: str, path: str, contract_path: str, status: int,
+                    body: dict[str, Any] | None = None) -> Any:
+        response = smoke.http_request(base_url, path, method=method, api_key=package.API_KEY,
+                                      json_body=body, request_timeout_seconds=min(5.0, remaining()))
+        if response["status"] != status:
+            raise RuntimeError(f"Tag contract expected HTTP {status}: {response}")
+        if status == 204:
+            if response.get("body_text") != "" or response.get("raw_json") is not None:
+                raise RuntimeError("Tag deletion returned a body")
+            return None
+        payload = response["raw_json"]
+        schema = response_json_schema(openapi_operation_response(document, method, contract_path, status),
+                                      f"{method} {contract_path} {status}")
+        validate_openapi_schema(document, schema, payload)
+        return payload["data"]
+
+    def require_file_tags(hash_value: str, names: list[str]) -> None:
+        rows = tag_request("GET", f"/api/v1/library/files/{hash_value}/tags",
+                           "/library/files/{hash}/tags", 200)
+        if rows != [{"name": name} for name in names]:
+            raise RuntimeError(f"Durable library tag membership differs: {rows}")
+
     def download(job_id: str) -> dict[str, Any]:
         return request("GET", f"/api/v1/downloads/{job_id}")
 
@@ -575,6 +597,20 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         only_hash, duplicate_hash = only_row["hash"], duplicate_row["hash"]
         if only_hash == duplicate_hash or Path(duplicate_row["path"]).resolve() != category_copy.resolve():
             raise RuntimeError("Category root did not own the initial complete shares")
+        tag_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "Rotate"})
+        tag_request("GET", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 200)
+        if tag_request("GET", "/api/v1/library/tags", "/library/tags", 200) != [{"name": "Rotate"}]:
+            raise RuntimeError("Created tag did not appear in the name collection")
+        missing_hash = "ff" * 16
+        tag_hashes = [only_hash, missing_hash, duplicate_hash]
+        outcomes = tag_request("POST", "/api/v1/library/files/tags/add", "/library/files/tags/add", 207,
+                               {"tag": "rotate", "hashes": tag_hashes})
+        if ([row["hash"] for row in outcomes] != tag_hashes
+                or [row["status"] for row in outcomes] != ["accepted", "failed", "accepted"]
+                or outcomes[1]["httpStatus"] != 404):
+            raise RuntimeError(f"Ordered per-hash tag outcomes differ: {outcomes}")
+        require_file_tags(only_hash, ["Rotate"])
+        require_file_tags(duplicate_hash, ["Rotate"])
         request("PATCH", "/api/v1/shared-directories", body={
             "roots": [{"path": str(independent_root)}], "confirmReplaceRoots": True,
         })
@@ -601,6 +637,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             category_only_bytes, duplicate_bytes, duplicate_bytes
         ):
             raise RuntimeError("Category deletion changed complete-share files")
+        require_file_tags(only_hash, ["Rotate"])
+        require_file_tags(duplicate_hash, ["Rotate"])
         request("POST", "/api/v1/app/shutdown", body={"confirmShutdown": True})
         process.wait(timeout=min(20.0, remaining()))
         if process.returncode != 0:
@@ -632,6 +670,21 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             category_only_bytes, duplicate_bytes, duplicate_bytes
         ):
             raise RuntimeError("Category restart changed complete-share files")
+        require_file_tags(only_hash, ["Rotate"])
+        require_file_tags(duplicate_hash, ["Rotate"])
+        for expected in ("accepted", "unchanged"):
+            removed = tag_request("POST", "/api/v1/library/files/tags/remove", "/library/files/tags/remove", 207,
+                                  {"tag": "ROTATE", "hashes": [only_hash]})
+            if removed[0]["status"] != expected:
+                raise RuntimeError(f"Tag removal idempotence differs: {removed}")
+        require_file_tags(only_hash, [])
+        tag_request("DELETE", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 204)
+        require_file_tags(duplicate_hash, [])
+        tag_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "ROTATE"})
+        require_file_tags(duplicate_hash, [])
+        report["libraryTags"] = {"orderedMixedOutcomes": True, "unavailableContentRetained": True,
+                                 "persistedAcrossReopen": True, "idempotentRemoval": True,
+                                 "deletionClearedAssignments": True, "recreatedNameHasNoAssignments": True}
         report["categoryNames"] = {"deleted": "Alpha", "survivor": "Second-2", "recreated": "ALPHA"}
         report["assignmentsAfterReopen"] = [None, "Second-2", None]
         report["downloadIds"] = job_ids

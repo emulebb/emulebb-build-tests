@@ -146,3 +146,28 @@ paths:
     assert document["openapi"] == "3.1.0"
     with pytest.raises(RuntimeError, match="OpenAPI operation response is missing: GET /app 200"):
         get_openapi_operation_response_schema("GET", "/app", 200, openapi_yaml)
+
+
+@pytest.mark.parametrize("payload", [None, {}, "", []])
+def test_operation_no_content_response_requires_absent_payload(tmp_path: Path, payload) -> None:
+    contract = write(tmp_path / "contract.yaml", """
+openapi: 3.1.0
+paths:
+  /item:
+    delete:
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+components:
+  responses:
+    NoContent:
+      description: Deleted
+""")
+    if payload is None:
+        validate_openapi_operation_response_payload("DELETE", "/item", 204, payload, contract)
+    else:
+        with pytest.raises(RuntimeError, match="no body"):
+            validate_openapi_operation_response_payload("DELETE", "/item", 204, payload, contract)
+    contract.write_text(contract.read_text(encoding="utf-8").replace("description: Deleted", "content: {application/json: {schema: {type: object}}}"), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="no body"):
+        validate_openapi_operation_response_payload("DELETE", "/item", 204, None, contract)

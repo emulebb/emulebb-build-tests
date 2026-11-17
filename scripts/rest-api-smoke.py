@@ -360,6 +360,9 @@ TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrComp
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
 DIAGNOSTIC_BUNDLE_MIN_BYTES = 64 * 1024
 UNSAFE_OPENAPI_OPERATIONS = {
+    "deleteLibraryTag",
+    "addLibraryFileTags",
+    "removeLibraryFileTags",
     "bootstrapKad",
     "captureDiagnosticBundle",
     "captureDiagnosticDump",
@@ -447,6 +450,7 @@ REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "deleteFriend": (404,),
 }
 OPENAPI_TAG_FAMILIES = {
+    "Library": "library",
     "App": "app",
     "Diagnostics": "diagnostics",
     "Stats": "status",
@@ -3694,7 +3698,11 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             openapi_response_path = str(
                 route.get("openapiPath") or normalize_contract_path_for_openapi(str(route["path"]))
             )
-            if 200 <= status < 300:
+            if status == 204:
+                assert result.get("body_text") == "" and result.get("raw_json") is None, "HTTP 204 must have an empty body"
+                validate_openapi_operation_response_payload(str(route["method"]), openapi_response_path, status, None)
+                outcome = "success"
+            elif 200 <= status < 300:
                 require_success_envelope(result)
                 validate_openapi_operation_response_payload(
                     str(route["method"]),

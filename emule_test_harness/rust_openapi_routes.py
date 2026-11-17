@@ -1437,7 +1437,7 @@ def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dic
             or set(meta.get("required", [])) != {"apiVersion", "nextCursor", "hasMore"}
             or not isinstance(meta_properties.get("nextCursor"), dict)
             or meta_properties["nextCursor"].get("type") != ["string", "null"]
-            or meta_properties["nextCursor"].get("maxLength") != 1024
+            or meta_properties["nextCursor"].get("maxLength") != 512
             or meta_properties.get("hasMore") != {"type": "boolean"}):
         drift.append(SchemaComponentDrift("DownloadPageMeta", "cursor page must expose bounded cursor and hasMore"))
     item = schemas.get("DownloadBatchItem")
@@ -3030,7 +3030,7 @@ def append_download_parameter_schema_drift(
         "DownloadCategory": ("category", "query", {"$ref": "#/components/schemas/CategoryName"}),
         "DownloadView": ("view", "query", {"type": "string", "enum": ["unfinished", "completed", "all"],
                                                "default": "unfinished"}),
-        "DownloadCursor": ("cursor", "query", {"type": "string", "minLength": 1, "maxLength": 1024}),
+        "DownloadCursor": ("cursor", "query", {"type": "string", "minLength": 1, "maxLength": 512}),
         "DownloadLimit": ("limit", "query", {"type": "integer", "minimum": 1, "maximum": 200,
                                                 "default": 100}),
     }.get(component_name)
@@ -3087,6 +3087,7 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     overrides: dict[Route, str | tuple[str, ...]] = {}
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
+        (r'\("GET",\s*\["library", "files", _, "tags"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/tags"),
         (r'\("GET",\s*\["searches", _\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}"),
     ):
         match = re.search(pattern, parameterized)
@@ -3402,6 +3403,10 @@ def openapi_response_component_drift(openapi_yaml: Path) -> tuple[ResponseCompon
                         )
                     )
         content = response.get("content", {})
+        if name == "NoContentResponse":
+            if content:
+                drift.append(ResponseComponentDrift(component=name, issue="HTTP 204 response must not define content"))
+            continue
         expected_media_types = ("text/event-stream",) if name == EVENT_STREAM_RESPONSE_COMPONENT else ("application/json",)
         actual_media_types = tuple(sorted(content)) if isinstance(content, dict) else ()
         if actual_media_types != expected_media_types:
@@ -3462,6 +3467,11 @@ def openapi_success_response_drift(openapi_yaml: Path) -> tuple[SuccessResponseD
                     continue
                 component_name = reference.rsplit("/", 1)[-1]
                 component = component_responses.get(component_name)
+                if str(status) == "204" and isinstance(component, dict):
+                    if component.get("content"):
+                        drift.append(SuccessResponseDrift(method=method.upper(), path=path, status=str(status),
+                                                          issue="HTTP 204 response must not define content"))
+                    continue
                 if not response_component_has_media_schema(component):
                     drift.append(
                         SuccessResponseDrift(
