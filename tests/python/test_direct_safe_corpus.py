@@ -21,6 +21,8 @@ def test_prepare_corpus_matches_known_met_identity_and_preserves_existing(tmp_pa
         lambda _path: [SimpleNamespace(
             name=document.name, size_bytes=stat.st_size, modified_s=int(stat.st_mtime),
             ed2k_hash="b" * 32, md4_hashset=[],
+            last_upload_requested_at_s=None, all_time_upload_accepts=0,
+            all_time_upload_requests=0, all_time_uploaded_bytes=0,
         )],
     )
     prior = tmp_path / "prior.json"
@@ -52,6 +54,8 @@ def test_prepare_corpus_rejects_ambiguous_known_met_hash(tmp_path: Path, monkeyp
         lambda _path: [SimpleNamespace(
             name=document.name, size_bytes=stat.st_size, modified_s=int(stat.st_mtime),
             ed2k_hash=value * 32, md4_hashset=[],
+            last_upload_requested_at_s=None, all_time_upload_accepts=0,
+            all_time_upload_requests=0, all_time_uploaded_bytes=0,
         ) for value in ("b", "d")],
     )
 
@@ -72,6 +76,8 @@ def test_matched_candidates_excludes_non_linux_and_oversized_pdfs(tmp_path: Path
             name=path.name, size_bytes=stat.st_size, modified_s=int(stat.st_mtime),
             ed2k_hash=f"{index + 1:032x}",
             md4_hashset=[b"\0" * 16] * direct_safe_corpus.mfc_known_met.expected_md4_hash_count(stat.st_size),
+            last_upload_requested_at_s=None, all_time_upload_accepts=0,
+            all_time_upload_requests=0, all_time_uploaded_bytes=0,
         ))
     known_met = tmp_path / "known.met"
     known_met.write_bytes(b"fixture")
@@ -92,7 +98,7 @@ def test_prepare_corpus_prefers_recent_upload_activity(tmp_path: Path, monkeypat
             name=path.name, size_bytes=stat.st_size, modified_s=int(stat.st_mtime),
             ed2k_hash=f"{index + 1:032x}",
             md4_hashset=[b"\0" * 16] * direct_safe_corpus.mfc_known_met.expected_md4_hash_count(stat.st_size),
-            last_upload_request_ms=(index + 1) * 1000,
+            last_upload_requested_at_s=index + 1,
             all_time_upload_accepts=index + 1,
             all_time_upload_requests=index + 1,
             all_time_uploaded_bytes=index + 1,

@@ -145,7 +145,10 @@ def test_parse_known_met_reads_stock_upload_stats_and_priority(tmp_path: Path) -
     assert entry.all_time_uploaded_bytes == 0x1_0000_0123
     assert entry.all_time_upload_requests == 7
     assert entry.all_time_upload_accepts == 3
-    assert entry.last_upload_request_ms == 1_700_000_111_000
+    assert entry.last_upload_requested_at_s == 1_700_000_111
+    from dataclasses import asdict
+    from emule_test_harness.emule_profile_export import _manifest_known_file
+    assert _manifest_known_file(asdict(entry))["lastUploadRequestedAtSeconds"] == 1_700_000_111
 
 
 def test_import_known_met_uses_known2_aich_hashset(tmp_path: Path) -> None:

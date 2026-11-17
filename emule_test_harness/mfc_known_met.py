@@ -65,7 +65,7 @@ class KnownMetEntry:
     all_time_uploaded_bytes: int
     all_time_upload_requests: int
     all_time_upload_accepts: int
-    last_upload_request_ms: int
+    last_upload_requested_at_s: int | None
 
 
 @dataclass(frozen=True)
@@ -231,7 +231,7 @@ def build_imported_known_rows(
             entry.all_time_uploaded_bytes > 0
             or entry.all_time_upload_requests > 0
             or entry.all_time_upload_accepts > 0
-            or entry.last_upload_request_ms > 0
+            or entry.last_upload_requested_at_s is not None
         ):
             stats_records += 1
         imported_rows.append(
@@ -248,7 +248,7 @@ def build_imported_known_rows(
                 "all_time_uploaded_bytes": entry.all_time_uploaded_bytes,
                 "all_time_upload_requests": entry.all_time_upload_requests,
                 "all_time_upload_accepts": entry.all_time_upload_accepts,
-                "last_upload_request_ms": entry.last_upload_request_ms,
+                "last_upload_requested_at_s": entry.last_upload_requested_at_s,
             }
         )
 
@@ -380,7 +380,7 @@ def import_mfc_known_met_hashes(
             entry.all_time_uploaded_bytes > 0
             or entry.all_time_upload_requests > 0
             or entry.all_time_upload_accepts > 0
-            or entry.last_upload_request_ms > 0
+            or entry.last_upload_requested_at_s is not None
         )
         if has_stats:
             stats_records += 1
@@ -494,7 +494,7 @@ def import_mfc_shared_file_rows_hashes(
             if entry.all_time_uploaded_bytes > 0
             or entry.all_time_upload_requests > 0
             or entry.all_time_upload_accepts > 0
-            or entry.last_upload_request_ms > 0
+            or entry.last_upload_requested_at_s is not None
         ),
         "dryRun": dry_run,
         "skipped": reason_counts,
@@ -687,7 +687,7 @@ def _read_known_met_record(reader: BinaryReader) -> KnownMetEntry:
         all_time_uploaded_bytes=all_time_uploaded_bytes,
         all_time_upload_requests=all_time_upload_requests,
         all_time_upload_accepts=all_time_upload_accepts,
-        last_upload_request_ms=last_request_s * 1000,
+        last_upload_requested_at_s=last_request_s or None,
     )
 
 

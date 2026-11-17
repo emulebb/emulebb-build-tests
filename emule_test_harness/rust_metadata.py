@@ -442,7 +442,7 @@ def seed_download_job(
     all_time_uploaded_bytes: int = 0,
     all_time_upload_requests: int = 0,
     all_time_upload_accepts: int = 0,
-    last_upload_request_ms: int = 0,
+    last_upload_requested_at_s: int | None = None,
     comment: str = "",
     rating: int = 0,
 ) -> str:
@@ -507,10 +507,10 @@ def seed_download_job(
                 """INSERT INTO known_files(
                    ed2k_hash, display_name, aich_root, aich_root_origin,
                    all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
-                   last_upload_requested_at_ms, first_seen_at_ms, last_seen_at_ms, updated_at_ms)
+                   last_upload_requested_at_s, first_seen_at_ms, last_seen_at_ms, updated_at_ms)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (hash_blob, name, root_blob, aich_root_origin, all_time_uploaded_bytes,
-                 all_time_upload_requests, all_time_upload_accepts, last_upload_request_ms,
+                 all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_s,
                  now_ms, now_ms, now_ms),
             )
         known_file_id = conn.execute(
@@ -637,7 +637,7 @@ def read_download_job_manifest(db_path: Path, job_id: str) -> dict | None:
                       jobs.aich_root_origin, jobs.aich_trust_generation,
                       jobs.upload_priority, jobs.comment, jobs.rating, jobs.auto_upload_priority,
                       known.all_time_uploaded_bytes, known.all_time_upload_requests,
-                      known.all_time_upload_accepts, known.last_upload_requested_at_ms,
+                      known.all_time_upload_accepts, known.last_upload_requested_at_s,
                       jobs.execution_generation, jobs.selected_temp_path_id, jobs.storage_path_id,
                       jobs.storage_directory_marker_id, jobs.terminal_completed_at_s,
                       jobs.internal_storage_retired, jobs.visible_state, jobs.intent,
@@ -704,7 +704,7 @@ def read_download_job_manifest(db_path: Path, job_id: str) -> dict | None:
         "upload_priority": row[11], "comment": row[12], "rating": row[13],
         "auto_upload_priority": bool(row[14]), "all_time_uploaded_bytes": row[15],
         "all_time_upload_requests": row[16], "all_time_upload_accepts": row[17],
-        "last_upload_request_ms": row[18], "execution_generation": row[19],
+        "last_upload_requested_at_s": row[18], "execution_generation": row[19],
         "selected_temp_path_id": row[20], "storage_path_id": row[21],
         "storage_directory_marker_id": row[22], "terminal_completed_at_s": row[23],
         "internal_storage_retired": bool(row[24]), "visible_state": row[25], "intent": row[26],

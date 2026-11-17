@@ -413,6 +413,16 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Upload accounting lost the known library hash")
         return int(row[0]), int(row[1])
 
+    def upload_timestamps(hash_value: str) -> tuple[int | None, int | None]:
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            row = connection.execute(
+                "SELECT last_upload_requested_at_s,last_uploaded_at_s FROM known_files WHERE ed2k_hash=?",
+                (bytes.fromhex(hash_value),),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Upload timestamps lost the known library hash")
+        return row[0], row[1]
+
     def require_upload_checkpoint(hash_value: str, expected: tuple[int, int]) -> tuple[int, int]:
         def settled() -> tuple[int, int] | None:
             current = upload_counts(hash_value)
@@ -651,6 +661,10 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         # Both physical copies are eligible here. Keep one connection and its
         # cached complete reader across REST rotation; a fresh request must fail.
         counts_before = upload_counts(duplicate_hash)
+        timestamps_before = upload_timestamps(duplicate_hash)
+        if timestamps_before != (None, None):
+            raise RuntimeError("A never-uploaded fixture fabricated an upload timestamp")
+        upload_started_at = int(time.time())
         peer = Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining()))
         with peer:
             if not peer.filename_available(duplicate_hash) or not peer.start_upload(duplicate_hash):
@@ -673,6 +687,9 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                 raise RuntimeError("Re-enable duplicated acceptance within the same upload stint")
             sharing_wire = list(peer.transcript)
         require_upload_checkpoint(duplicate_hash, (counts_before[0] + 4, counts_before[1] + 1))
+        first_timestamps = upload_timestamps(duplicate_hash)
+        if not all(value is not None and upload_started_at <= value <= int(time.time()) for value in first_timestamps):
+            raise RuntimeError("Upload request/actual-upload timestamps are not Unix seconds")
 
         request("DELETE", "/api/v1/categories/ALPHA")
         if assignments() != [None, "Second-2", None]:
@@ -732,6 +749,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         with peer:
             if peer.filename_available(duplicate_hash) or peer.request_range(duplicate_hash, 0, 10) is not None:
                 raise RuntimeError("Restarted disabled hash accepted a new peer request")
+            if upload_timestamps(duplicate_hash)[1] != first_timestamps[1]:
+                raise RuntimeError("A refused post-restart request changed last actual upload time")
             sharing(True, [only_hash, duplicate_hash], ["accepted", "accepted"])
             if not peer.filename_available(duplicate_hash) or not peer.start_upload(duplicate_hash):
                 raise RuntimeError("Re-enabled hash was not visible to the new peer")
@@ -739,6 +758,11 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                 raise RuntimeError("Re-enabled restarted hash returned different bytes")
             sharing_wire.extend(peer.transcript)
         counts_after = require_upload_checkpoint(duplicate_hash, (counts_before[0] + 6, counts_before[1] + 2))
+        final_timestamps = upload_timestamps(duplicate_hash)
+        if not all(value is not None and first_timestamps[index] <= value <= int(time.time()) for index, value in enumerate(final_timestamps)):
+            raise RuntimeError("Upload timestamps did not persist and advance across reopen")
+        report["uploadTimestamps"] = {"before": list(timestamps_before), "firstCheckpoint": list(first_timestamps),
+            "afterRestart": list(final_timestamps), "unixSeconds": True, "refusedRequestRetainsLastUpload": True}
         report["uploadAccounting"] = {"before": list(counts_before), "after": list(counts_after),
             "multiplePacketsOneAcceptedStint": True, "refusedDemandCounted": True,
             "reEnableKeepsSameStint": True, "newSessionAfterRestart": True}
