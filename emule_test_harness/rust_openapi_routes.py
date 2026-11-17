@@ -1319,7 +1319,7 @@ def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dic
     summary_fields = {"id", "hash", "name", "category", "sizeBytes", "progress", "intent",
                       "state", "createdAt", "updatedAt", "completedAt"}
     for component, expected in (("DownloadSummary", summary_fields),
-                                ("Download", summary_fields | {"payloadVerified", "delivery"})):
+                                ("Download", summary_fields | {"payloadVerified", "delivery", "failure"})):
         schema = schemas.get(component)
         properties = schema.get("properties") if isinstance(schema, dict) else None
         if (not isinstance(schema, dict) or schema.get("type") != "object"

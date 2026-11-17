@@ -4284,3 +4284,21 @@ def test_selected_download_parts_are_a_bounded_independent_page(selected_rust_op
     validate_openapi_schema(document, schema, {
         "data": [], "meta": {"apiVersion": "2.0.0", "nextCursor": None, "hasMore": False},
     })
+
+
+def test_selected_download_detail_and_nonempty_parts_match_checkpointed_projection(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    detail = {
+        "id": "1", "hash": "a" * 32, "name": "Sample.bin", "category": None,
+        "sizeBytes": 4096, "progress": 0, "intent": "started", "state": "failed",
+        "createdAt": 1, "updatedAt": 2, "completedAt": None, "payloadVerified": False,
+        "delivery": {"path": None, "state": "pending", "ownership": "none"},
+        "failure": {"code": "STORAGE_UNAVAILABLE", "message": "Storage is unavailable", "failedAt": 2},
+    }
+    validate_openapi_schema(document, openapi_schema_component(document, "Download"), detail)
+    schema = response_json_schema(openapi_operation_response(document, "get", "/downloads/{id}/parts", "200"), "download parts")
+    validate_openapi_schema(document, schema, {
+        "data": [{"index": 0, "start": 0, "end": 4095, "sizeBytes": 4096,
+                  "presentBytes": 1024, "complete": False, "corrupted": False}],
+        "meta": {"apiVersion": "2.0.0", "nextCursor": None, "hasMore": False},
+    })
