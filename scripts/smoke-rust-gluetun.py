@@ -145,28 +145,6 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def container_delivery_matches(
-    container: str, expected_size: int, expected_sha256: str
-) -> bool:
-    candidates = docker(
-        "exec",
-        container,
-        "find",
-        "/data/ed2k",
-        "-type",
-        "f",
-        "-size",
-        f"{expected_size}c",
-        "-print0",
-    ).stdout.split("\0")
-    for candidate in filter(None, candidates):
-        digest = docker(
-            "exec", container, "sha256sum", "--", candidate
-        ).stdout.split()[0].lower()
-        if digest == expected_sha256:
-            return True
-    return False
-
 
 def container_logs(container: str) -> str:
     result = docker("logs", container)
@@ -408,17 +386,17 @@ def main() -> int:
             transfer = vpn_transfer_completion.load_exact_transfer(args.inputs)
             report["transferCompletion"] = vpn_transfer_completion.wait_for_completion(
                 row=transfer,
-                create_transfer=lambda payload: request_json(
-                    api + "/transfers",
+                create_download=lambda payload: response_data(request_json(
+                    api + "/downloads",
                     api_key,
                     method="POST",
                     payload=payload,
+                )),
+                read_download=lambda download_id: response_data(
+                    request_json(api + f"/downloads/{download_id}", api_key)
                 ),
-                read_transfer=lambda file_hash: response_data(
-                    request_json(api + f"/transfers/{file_hash}", api_key)
-                ),
-                verify_delivered_sha256=lambda size, digest: container_delivery_matches(
-                    rust, size, digest
+                verify_delivered_sha256=lambda path, size, digest: vpn_transfer_completion.container_delivery_matches(
+                    docker, rust, path, size, digest
                 ),
                 read_daemon_logs=lambda: container_logs(rust),
                 timeout_seconds=args.transfer_timeout_seconds,
