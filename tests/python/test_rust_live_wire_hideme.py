@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from tests.python.diagnostic_fixtures import ed2k_tcp_clear_frame
 
 
@@ -330,50 +332,98 @@ def test_client_udp_summary_uses_unified_packet_events_only() -> None:
 
 def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
     module = load_live_wire_module()
-    transfer_hashes = [
-        "00112233445566778899aabbccddeeff",
-        "ffeeddccbbaa99887766554433221100",
-    ]
-
-    def fake_retry_http_json(label, *_args, **_kwargs):
-        assert label in {"download", "resume", "transfers"}
-        if label == "transfers":
-            fake_retry_http_json.transfer_calls += 1
-            assert fake_retry_http_json.transfer_calls == 1
-            return {
-                "transfers": [
-                    {
-                        "hash": transfer_hashes[0],
-                        "completedBytes": 10,
-                        "sizeBytes": 10,
-                        "sources": 1,
-                        "state": "completed",
-                    },
-                    {
-                        "hash": transfer_hashes[1],
-                        "completedBytes": 0,
-                        "sizeBytes": 10,
-                        "sources": 1,
-                        "state": "downloading",
-                    },
-                ]
-            }
-        return {"ok": True}
-
-    fake_retry_http_json.transfer_calls = 0
-    monkeypatch.setattr(module, "retry_http_json", fake_retry_http_json)
+    hashes = ["00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100"]
+    ids = {hashes[0]: "7", hashes[1]: "8"}
+    def create(label, *_args, **kwargs):
+        assert label == "download"
+        assert kwargs["body"] == {"intent": "started", "category": None}
+        file_hash = _args[2].split("/")[-3]
+        return {"data": {"id": ids[file_hash], "hash": file_hash}}
+    detail_calls = []
+    def detail(_base, _key, job_id, *, expected_hash):
+        detail_calls.append(job_id)
+        assert ids[expected_hash] == job_id
+        return {"id": job_id, "hash": expected_hash, "sizeBytes": 10,
+                "state": "completed" if job_id == "7" else "downloading",
+                "payloadVerified": job_id == "7", "progress": 1 if job_id == "7" else 0,
+                "delivery": {"state": "delivered" if job_id == "7" else "pending"}}
+    monkeypatch.setattr(module, "retry_http_json", create)
+    monkeypatch.setattr(module, "download_detail", detail)
+    monkeypatch.setattr(module, "download_part_totals", lambda *_args: {"verifiedBytes": 0})
+    monkeypatch.setattr(module, "_source_count_lower_bound", lambda *_args: 1)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    result = module.run_downloads("http://192.0.2.10:4731", [
+        {"hash": hashes[0], "sizeBytes": 10, "_searchId": "1"},
+        {"hash": hashes[1], "sizeBytes": 10, "_searchId": "1"},
+    ], 60, max_concurrent=2)
+    assert result["completed"] is True and result["completedCount"] == 1
+    assert detail_calls == ["7", "8"]
 
-    result = module.run_downloads(
-        "http://192.0.2.10:4731",
-        [
-            {"hash": transfer_hashes[0], "sources": 1, "sizeBytes": 10, "_searchId": "1"},
-            {"hash": transfer_hashes[1], "sources": 1, "sizeBytes": 10, "_searchId": "1"},
-        ],
-        60,
-        max_concurrent=2,
-    )
 
-    assert result["completed"] is True
-    assert result["completedCount"] == 1
-    assert fake_retry_http_json.transfer_calls == 1
+def test_download_completion_does_not_infer_payload_verification_from_bytes(monkeypatch):
+    module = load_live_wire_module()
+    monkeypatch.setattr(module, "retry_http_json", lambda *_args, **_kwargs: {"data": {"id": "7", "hash": "a" * 32}})
+    observations = []
+    def detail(_base, _key, job_id, *, expected_hash):
+        observations.append(job_id)
+        done = len(observations) == 2
+        return {"id": job_id, "hash": expected_hash, "sizeBytes": 1000, "progress": 1,
+                "state": "completed" if done else "verifying", "payloadVerified": done,
+                "delivery": {"state": "delivered" if done else "pending"}}
+    source_counts = iter([1, 2])
+    monkeypatch.setattr(module, "download_detail", detail)
+    monkeypatch.setattr(module, "download_part_totals", lambda *_args: {"verifiedBytes": 1000})
+    monkeypatch.setattr(module, "_source_count_lower_bound", lambda *_args: next(source_counts))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    result = module.run_downloads("http://192.0.2.10", [{"hash": "a" * 32, "sizeBytes": 1000, "_searchId": "1"}], 60, max_concurrent=1)
+    assert observations == ["7", "7"]
+    assert result["sourceGrowthObserved"] is True
+    assert result["sourceExchangeObserved"] is False
+
+
+def test_all_failed_creations_do_not_poll_global_history(monkeypatch):
+    module = load_live_wire_module()
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("admission unavailable")
+    monkeypatch.setattr(module, "retry_http_json", fail)
+    monkeypatch.setattr(module, "download_detail", lambda *_args, **_kwargs: pytest.fail("no captured job"))
+    result = module.run_downloads("http://192.0.2.10", [{"hash": "a" * 32, "sizeBytes": 1, "_searchId": "1"}], 60, max_concurrent=1)
+    assert result["started"] == 0 and result["completed"] is False
+
+
+def test_source_observation_is_one_bounded_window(monkeypatch):
+    module = load_live_wire_module()
+    calls = []
+    def read(_base, method, path, _key):
+        calls.append((method, path))
+        return {"data": [{}] * 200, "meta": {"hasMore": True, "nextCursor": "another-page"}}
+    monkeypatch.setattr(module, "request_json", read)
+    assert module._source_count_lower_bound("http://192.0.2.10", "7") == 201
+    assert calls == [("GET", "/api/v1/downloads/7/sources?limit=200")]
+
+
+def test_hold_soak_reads_fixed_counts_instead_of_download_history(monkeypatch):
+    module = load_live_wire_module()
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "time", lambda: clock[0])
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(module, "get_stats", lambda _base: {"ed2kConnected": True, "activeUploads": 2})
+    monkeypatch.setattr(module, "get_kad", lambda _base: {"connected": True, "contactCount": 3})
+    calls = []
+    def read(label, attempts, base, path, **kwargs):
+        calls.append(path)
+        return {"data": {"downloads": {"unfinished": 1000, "completed": 100000}}}
+    monkeypatch.setattr(module, "retry_http_json", read)
+    result = module.hold_soak("http://192.0.2.10", 1)
+    assert calls == ["/api/v1/snapshot?limit=1"]
+    assert result["snapshots"][0]["downloadCount"] == 101000
+    assert result["snapshots"][0]["activeUploads"] == 2
+
+
+
+def test_candidate_filter_uses_current_search_display_name_and_size():
+    module = load_live_wire_module()
+    row = {"displayName": "Sample Manual.txt", "hash": "a" * 32,
+           "sizeBytes": min(4096, module.MAX_DOWNLOAD_BYTES), "sources": module.MIN_DOWNLOAD_SOURCES}
+    assert module.safe_download_rejection_reason(row) is None
+    assert module.safe_download_rejection_reason({**row, "displayName": "setup.exe"}) == "unsafeNameToken"

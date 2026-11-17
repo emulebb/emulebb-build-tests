@@ -41,6 +41,9 @@ from emule_test_harness.rust_client import (
     stop_process_tree,
     write_rust_profile,
 )
+from emule_test_harness.rust_local_ed2k import (
+    download_detail, download_part_totals, require_download_id, request_json,
+)
 from emule_test_harness.soak_launch import load_live_wire_shared_root_entries
 from emule_test_harness.vm_guest_profiles import (
     api_data,
@@ -431,23 +434,23 @@ def count_protocol_marker(text: str, marker: str) -> int:
 
 
 def safe_download_rejection_reason(row: dict[str, Any]) -> str | None:
-    name = str(row.get("name") or "").casefold()
+    name = str(row.get("displayName") or "").casefold()
     if not name:
         return "missingName"
     if any(token in name for token in UNSAFE_NAME_TOKENS):
         return "unsafeNameToken"
     file_hash = str(row.get("hash") or "")
-    size = row.get("sizeBytes", row.get("size"))
+    size = row.get("sizeBytes")
     sources = row.get("sources")
     if len(file_hash) != 32 or not all(ch in "0123456789abcdef" for ch in file_hash.casefold()):
         return "invalidHash"
-    if not isinstance(size, int):
+    if type(size) is not int:
         return "missingSize"
     if size <= 0:
         return "emptySize"
     if size > MAX_DOWNLOAD_BYTES:
         return "tooLarge"
-    if not isinstance(sources, int):
+    if type(sources) is not int:
         return "missingSources"
     if sources < MIN_DOWNLOAD_SOURCES:
         return "tooFewSources"
@@ -471,7 +474,7 @@ def run_search_corpus(
     query each (no retry bursts), and at least ~60s between searches. The search
     is async (eMuleBB contract): POST /searches returns status "running" with no
     items, so each term is created once and then the search page is POLLED over
-    the LOCAL REST API (no extra server traffic) until it reports "complete",
+    the LOCAL REST API (no extra server traffic) until it reports "completed",
     and the paged ``items`` are read as the results.
     """
 
@@ -504,7 +507,7 @@ def run_search_corpus(
                 )
                 page_data = api_data(page)
                 status = str(page_data.get("status") if isinstance(page_data, dict) else "")
-                return page if status in {"complete", "completed"} else None
+                return page if status == "completed" else None
 
             try:
                 page = wait_until(f"search {term!r} results", 60.0, _completed_page)
@@ -529,7 +532,7 @@ def run_search_corpus(
     # (smallest size breaks ties) so the healthiest files lead.
     ranked = sorted(
         candidates.values(),
-        key=lambda r: (int(r.get("sources") or 0), -int(r.get("sizeBytes") or r.get("size") or 0)),
+        key=lambda r: (r["sources"], -r["sizeBytes"]),
         reverse=True,
     )
     return {
@@ -546,98 +549,78 @@ def run_search_corpus(
     }
 
 
-_COMPLETE_STATES = {"complete", "completed", "shared", "seeding", "finished"}
+def _source_count_lower_bound(base_url: str, download_id: str) -> int:
+    """Observe one bounded source window, without draining source history."""
+    page = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}/sources?limit=200", API_KEY)
+    rows, meta = page.get("data"), page.get("meta")
+    if (not isinstance(rows, list) or len(rows) > 200 or not isinstance(meta, dict)
+            or type(meta.get("hasMore")) is not bool):
+        raise RuntimeError("Download sources did not return a bounded page")
+    return len(rows) + int(meta["hasMore"])
 
 
-def run_downloads(
-    base_url: str,
-    candidates: list[dict[str, Any]],
-    timeout_seconds: float,
-    *,
-    max_concurrent: int,
-) -> dict[str, Any]:
-    """Starts many unpaused downloads at once and tracks completion + source growth.
-
-    Passes as soon as at least one file fully completes; reports aggregate
-    progress, source exchange, and bytes pulled across all started transfers.
-    """
-
+def run_downloads(base_url: str, candidates: list[dict[str, Any]], timeout_seconds: float, *,
+                  max_concurrent: int) -> dict[str, Any]:
+    """Start a bounded candidate set and observe only its captured download jobs."""
     selected = candidates[:max_concurrent]
-    initial_sources: dict[str, int] = {}
-    sizes: dict[str, int] = {}
-    ordinals: dict[str, int] = {}
-    started = 0
+    jobs: dict[str, dict[str, Any]] = {}
     start_errors: list[str] = []
     for index, candidate in enumerate(selected, start=1):
-        file_hash = candidate["hash"]
         try:
-            retry_http_json(
+            admission = api_data(retry_http_json(
                 "download", 3, base_url,
-                f"/api/v1/searches/{candidate['_searchId']}/results/{file_hash}/operations/download",
-                api_key=API_KEY, method="POST", body={"paused": False, "categoryId": 0},
-            )
-            # download_search_result only inserts a "queued" transfer; resume is
-            # what actually starts the download driver + ED2K source acquisition.
-            retry_http_json(
-                "resume", 2, base_url,
-                f"/api/v1/transfers/{file_hash}/operations/resume",
-                api_key=API_KEY, method="POST", body={},
-            )
-        except Exception as exc:  # noqa: BLE001
+                f"/api/v1/searches/{candidate['_searchId']}/results/{candidate['hash']}/operations/download",
+                api_key=API_KEY, method="POST", body={"intent": "started", "category": None},
+            ))
+            download_id = require_download_id(admission, expected_hash=candidate["hash"])
+        except Exception as exc:  # noqa: BLE001 - preserve candidate failures without private metadata
             start_errors.append(f"candidate {index}: {type(exc).__name__}")
             continue
-        started += 1
-        initial_sources[file_hash] = int(candidate.get("sources") or 0)
-        sizes[file_hash] = int(candidate.get("sizeBytes") or candidate.get("size") or 0)
-        ordinals[file_hash] = index
-    log(f"started {started}/{len(selected)} concurrent downloads")
-
-    peak_sources: dict[str, int] = dict(initial_sources)
-    best_progress: dict[str, float] = {h: 0.0 for h in initial_sources}
+        if download_id not in jobs:
+            jobs[download_id] = {"hash": candidate["hash"].lower(), "size": int(candidate["sizeBytes"]), "ordinal": index}
+    log(f"started {len(jobs)}/{len(selected)} concurrent downloads")
+    initial_sources: dict[str, int] = {}
+    peak_sources: dict[str, int] = {}
+    best_progress: dict[str, float] = {}
     completed: dict[str, dict[str, Any]] = {}
     aggregate_verified_bytes = 0
     deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline and not completed:
-        rows = api_rows(
-            retry_http_json("transfers", 4, base_url, "/api/v1/transfers", api_key=API_KEY), "transfers",
-        )
+    while time.monotonic() < deadline and jobs and not completed:
         snapshot_bytes = 0
-        for row in rows:
-            file_hash = str(row.get("hash"))
-            if file_hash not in initial_sources:
-                continue
-            peak_sources[file_hash] = max(peak_sources.get(file_hash, 0), int(row.get("sources") or 0))
-            completed_bytes = int(row.get("completedBytes") or 0)
-            snapshot_bytes += completed_bytes
-            size = sizes.get(file_hash, 0)
-            if size:
-                best_progress[file_hash] = max(best_progress[file_hash], 100.0 * completed_bytes / size)
-            state = str(row.get("state") or "").casefold()
-            if file_hash not in completed and ((size and completed_bytes >= size) or state in _COMPLETE_STATES):
-                ordinal = ordinals.get(file_hash, 0)
-                completed[file_hash] = {"candidateIndex": ordinal, "sizeBytes": size}
-                log(f"completed candidate {ordinal}")
+        for download_id, job in jobs.items():
+            row = download_detail(base_url, API_KEY, download_id, expected_hash=job["hash"])
+            if row.get("sizeBytes") != job["size"]:
+                raise RuntimeError("Captured download size changed during observation")
+            sources = _source_count_lower_bound(base_url, download_id)
+            initial_sources.setdefault(download_id, sources)
+            peak_sources[download_id] = max(peak_sources.get(download_id, 0), sources)
+            if row.get("payloadVerified") is True:
+                verified_bytes = job["size"]
+            else:
+                verified_bytes = download_part_totals(base_url, API_KEY, download_id)["verifiedBytes"]
+            snapshot_bytes += verified_bytes
+            progress = row.get("progress")
+            if type(progress) in (float, int):
+                best_progress[download_id] = max(best_progress.get(download_id, 0), 100 * max(0, min(1, progress)))
+            delivery = row.get("delivery")
+            if (row.get("state") == "completed" and row.get("payloadVerified") is True
+                    and isinstance(delivery, dict) and delivery.get("state") == "delivered"):
+                completed[download_id] = {"candidateIndex": job["ordinal"], "sizeBytes": job["size"]}
+                log(f"completed candidate {job['ordinal']}")
         aggregate_verified_bytes = max(aggregate_verified_bytes, snapshot_bytes)
-        if completed:
-            break
-        time.sleep(5.0)
-
-    source_exchange = any(peak_sources.get(h, 0) > initial_sources.get(h, 0) for h in initial_sources)
+        if not completed:
+            time.sleep(5.0)
     completed_files_total_bytes = sum(item["sizeBytes"] for item in completed.values())
     return {
-        "candidatesAvailable": len(candidates),
-        "started": started,
-        "startErrors": start_errors,
-        "completedCount": len(completed),
-        "completedFiles": list(completed.values()),
-        "anyCompleted": bool(completed),
+        "candidatesAvailable": len(candidates), "started": len(jobs), "startErrors": start_errors,
+        "completedCount": len(completed), "completedFiles": list(completed.values()), "anyCompleted": bool(completed),
         "maxProgressPercent": round(max(best_progress.values(), default=0.0), 1),
-        "completedFilesTotalBytes": completed_files_total_bytes,
-        "aggregateVerifiedBytes": aggregate_verified_bytes,
+        "completedFilesTotalBytes": completed_files_total_bytes, "aggregateVerifiedBytes": aggregate_verified_bytes,
         "totalCompletedBytes": completed_files_total_bytes,
-        "peakSourcesTotal": sum(peak_sources.values()),
-        "initialSourcesTotal": sum(initial_sources.values()),
-        "sourceExchangeObserved": source_exchange,
+        "peakSourcesTotalLowerBound": sum(peak_sources.values()),
+        "initialSourcesTotalLowerBound": sum(initial_sources.values()),
+        "sourceGrowthObserved": any(peak_sources[job_id] > initial_sources[job_id] for job_id in initial_sources),
+        "sourceExchangeObserved": False,
         "completed": bool(completed),
     }
 
@@ -645,7 +628,7 @@ def run_downloads(
 def hold_soak(base_url: str, soak_seconds: float) -> dict[str, Any]:
     """Hold the live session open for ``soak_seconds``, polling read-only state.
 
-    Gentle by construction: only GETs (/stats, /kad, /transfers); never a new
+    Gentle by construction: only status, Kad and bounded snapshot GETs; never a new
     search or reconnect. The point is wall-clock dwell so the slow protocol legs
     (UDP reask cadence, organic uploads, Kad zone maintenance) actually occur and
     land in the packet dumps. Returns periodic snapshots for the evidence report.
@@ -660,22 +643,23 @@ def hold_soak(base_url: str, soak_seconds: float) -> dict[str, Any]:
         try:
             stats = get_stats(base_url)
             kad = get_kad(base_url)
-            transfers = retry_http_json("transfers", 2, base_url, "/api/v1/transfers", api_key=API_KEY)
-            transfer_items = api_data(transfers).get("items", []) if isinstance(api_data(transfers), dict) else []
-            uploading = sum(1 for t in transfer_items if isinstance(t, dict) and (t.get("uploadedBytes") or 0) > 0)
+            counts = api_data(retry_http_json("snapshot", 2, base_url, "/api/v1/snapshot?limit=1", api_key=API_KEY)).get("downloads")
+            if (not isinstance(counts, dict) or any(type(counts.get(key)) is not int or counts[key] < 0
+                                                  for key in ("unfinished", "completed"))):
+                raise RuntimeError("Snapshot download counts are invalid")
             snapshot = {
                 "tSecondsLeft": int(max(0.0, deadline - time.time())),
                 "ed2kConnected": bool(stats.get("ed2kConnected")),
                 "kadConnected": bool(kad.get("connected")),
                 "kadContactCount": int(kad.get("contactCount") or 0),
-                "transferCount": len(transfer_items),
-                "transfersWithUpload": uploading,
+                "downloadCount": counts["unfinished"] + counts["completed"],
+                "activeUploads": int(stats.get("activeUploads") or 0),
             }
             snapshots.append(snapshot)
             log(
                 f"soak: t-{snapshot['tSecondsLeft']}s ed2k={snapshot['ed2kConnected']} "
-                f"kadContacts={snapshot['kadContactCount']} transfers={snapshot['transferCount']} "
-                f"uploads={snapshot['transfersWithUpload']}"
+                f"kadContacts={snapshot['kadContactCount']} downloads={snapshot['downloadCount']} "
+                f"uploads={snapshot['activeUploads']}"
             )
         except Exception as exc:  # noqa: BLE001 - soak polling is best-effort
             log(f"soak: poll error (continuing): {type(exc).__name__}: {exc}")
