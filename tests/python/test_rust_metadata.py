@@ -247,6 +247,8 @@ def test_download_seed_owns_job_identity_hashsets_and_ranges(tmp_path: Path) -> 
     )
     rust_metadata.require_current_profile_database(rust_repo(), metadata_db)
     with sqlite3.connect(metadata_db) as conn:
+        assert conn.execute("SELECT prefix_bytes,present_bytes FROM download_job_pieces WHERE job_id=?", (job_id,)).fetchall() == [(8, 8)]
+        assert conn.execute("SELECT checkpointed_bytes FROM download_jobs WHERE id=?", (job_id,)).fetchone() == (8,)
         conn.execute("PRAGMA foreign_keys = ON")
         assert conn.execute("SELECT count(*) FROM verified_local_content").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM local_file_instances").fetchone() == (0,)

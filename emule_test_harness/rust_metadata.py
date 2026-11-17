@@ -534,11 +534,12 @@ def seed_download_job(
             "UPDATE known_files SET latest_download_job_id = ? WHERE id = ?", (job_id, known_file_id)
         )
         for piece_index in range(piece_count):
+            present_bytes = expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0
             conn.execute(
-                """INSERT INTO download_job_pieces(job_id, piece_index, state, bytes_written, updated_at_s)
-                   VALUES (?, ?, ?, ?, ?)""",
+                """INSERT INTO download_job_pieces(job_id, piece_index, state, prefix_bytes, present_bytes, updated_at_s)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
                 (job_id, piece_index, "Verified" if completed else "Missing",
-                 expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0, now_s),
+                 present_bytes, present_bytes, now_s),
             )
         for index, part_hash in enumerate(md4_hashset):
             conn.execute(
