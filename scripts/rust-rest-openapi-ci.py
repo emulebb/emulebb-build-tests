@@ -1133,15 +1133,31 @@ def run_settings_cli_phase(executable: Path, profile: Path) -> dict[str, object]
     before = snapshot()
     if before[0] != 5:
         raise RuntimeError("Offline command revisions include unexpected read-time writes")
-    command("set", "network.ed2kEnabled", "invalid", succeeds=False)
-    command("set", "network.hostnameLookup.enabled", "true", succeeds=False)
+    if "network.ed2kEnabled" not in command("set", "network.ed2kEnabled", "invalid", succeeds=False):
+        raise RuntimeError("Offline syntax failure did not identify the canonical setting")
+    if "network.hostnameLookup.dnsServers" not in command("set", "network.hostnameLookup.enabled", "true", succeeds=False):
+        raise RuntimeError("Offline validation did not report its canonical dependent field")
     if snapshot() != before:
         raise RuntimeError("Invalid offline settings changed the document or revision")
     saved = json.loads(before[1])
     if saved["network"]["nickname"]["mode"] != "default" or saved["network"]["nat"]["backendOrder"]["mode"] != "custom":
         raise RuntimeError("Offline edits lost saved default/custom modes")
-    return {"status": "passed", "revision": before[0], "plainSingleKeyOutput": True,
-            "inlineJsonLists": True, "invalidWritesPreserved": True, "explicitProfileRequired": True}
+    # A typed stored combination can become invalid after resolving defaults.
+    # Reads must not repair it, while an explicit reset may restore validity.
+    saved["network"]["hostnameLookup"]["enabled"] = {"mode": "custom", "value": True}
+    saved["network"]["hostnameLookup"]["dnsServers"] = {"mode": "default", "value": ["192.0.2.1:53"]}
+    with closing(sqlite3.connect(profile / rust_metadata.RUST_PROFILE_METADATA_FILE)) as connection:
+        with connection:
+            connection.execute("UPDATE app_settings SET document_json=? WHERE id=1", (json.dumps(saved),))
+    unresolved = snapshot()
+    command("get", "network.hostnameLookup.enabled", succeeds=False)
+    if snapshot() != unresolved:
+        raise RuntimeError("Offline read repaired invalid resolved settings")
+    if command("reset", "network.hostnameLookup.enabled") != "" or command("get", "network.hostnameLookup.enabled") != "false" or snapshot()[0] != 6:
+        raise RuntimeError("An explicit offline reset could not restore valid settings")
+    return {"status": "passed", "revision": snapshot()[0], "plainSingleKeyOutput": True,
+            "inlineJsonLists": True, "invalidWritesPreserved": True, "explicitProfileRequired": True,
+            "canonicalFieldDiagnostics": True, "explicitDefaultResolutionRecovery": True}
 
 
 def staged_executable(output_root: Path) -> Path:
