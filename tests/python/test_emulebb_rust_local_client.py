@@ -478,7 +478,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         missing_upload_status, missing_upload_error = request_json_status(
             base_url,
             "GET",
-            "/api/v1/upload-queue/00000000000000000000000000000000",
+            "/api/v1/upload-queue/12345678-1234-4234-8234-123456789abc",
         )
         assert missing_upload_status == 404
         assert missing_upload_error["error"]["code"] == "NOT_FOUND"

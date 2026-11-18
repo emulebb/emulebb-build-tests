@@ -713,14 +713,14 @@ def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
         "data": {
             "items": [
                 {
-                    "clientId": "wrong-port",
+                    "id": "wrong-port",
                     "address": "127.0.0.20",
                     "port": 4663,
                     "requestedFileHash": FILE_HASH,
                     "waitingQueue": True,
                 },
                 {
-                    "clientId": "exact-waiter",
+                    "id": "exact-waiter",
                     "address": "127.0.0.20",
                     "port": 4662,
                     "requestedFileHash": FILE_HASH.upper(),
@@ -735,7 +735,7 @@ def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
         file_hash=FILE_HASH,
         requester_tcp_endpoint="127.0.0.20:4662",
     ) == {
-        "clientId": "exact-waiter",
+        "id": "exact-waiter",
         "address": "127.0.0.20",
         "requestedFileHash": FILE_HASH,
         "waitingQueue": True,
@@ -760,7 +760,7 @@ def test_upload_waiter_removal_requires_confirmed_absence(monkeypatch) -> None:
         lambda *_args, **_kwargs: {"data": {"items": []}},
     )
     waiter = {
-        "clientId": "127.0.0.20:4662",
+        "id": "12345678-1234-4234-8234-123456789abc",
         "address": "127.0.0.20",
         "requestedFileHash": FILE_HASH,
         "waitingQueue": True,
@@ -781,7 +781,7 @@ def test_upload_waiter_removal_requires_confirmed_absence(monkeypatch) -> None:
         },
         "verifiedAbsent": True,
     }
-    assert calls == ["/api/v1/upload-queue/127.0.0.20%3A4662/operations/remove"]
+    assert calls == ["/api/v1/upload-queue/12345678-1234-4234-8234-123456789abc/operations/remove"]
 
 
 def test_queue_pressure_receipt_uses_exact_requester_udp_endpoint(monkeypatch) -> None:

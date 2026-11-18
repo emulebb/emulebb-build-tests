@@ -304,7 +304,7 @@ def friend_fixture(tmp_path):
     return module, database, document
 
 
-@pytest.mark.parametrize("template", ["/uploads/{clientId}", "/upload-queue/{clientId}",
+@pytest.mark.parametrize("template", ["/uploads/{id}", "/upload-queue/{id}",
                                      "/downloads/{id}/sources/{clientId}"])
 def test_frontdoor_evidence_requires_sql_failure_consistency_and_retry(friend_fixture, template):
     """Exercise evidence qualification with independent SQLite connections, not live peer coverage."""
@@ -355,7 +355,7 @@ def test_frontdoor_unexpected_response_still_removes_fixture_faults(friend_fixtu
 
     with pytest.raises(RuntimeError, match="Peer vanished"):
         module.prove_friend_frontdoor(
-            request=request, database=database, prefix="/api/v1/uploads/peer", route_template="/uploads/{clientId}",
+            request=request, database=database, prefix="/api/v1/uploads/peer", route_template="/uploads/{id}",
             ready=lambda: None, user_hash="0123456789abcdef0123456789abcdef", document=document,
         )
     with closing(sqlite3.connect(database)) as connection:

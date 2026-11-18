@@ -129,7 +129,7 @@ def test_selected_friend_frontdoors_document_current_persistence_errors(selected
     codes = schema["properties"]["error"]["properties"]["code"]["enum"]
     assert {code for code in codes if code.startswith("PERSISTENCE_")} == set(PERSISTENCE_ERROR_STATUSES)
     mutations = [("post", "/friends"), ("delete", "/friends/{userHash}")]
-    for prefix in ("/downloads/{id}/sources/{clientId}", "/uploads/{clientId}", "/upload-queue/{clientId}"):
+    for prefix in ("/downloads/{id}/sources/{clientId}", "/uploads/{id}", "/upload-queue/{id}"):
         mutations.extend(("post", f"{prefix}/operations/{operation}")
                          for operation in ("add-friend", "remove-friend"))
     assert len(mutations) == 8

@@ -427,8 +427,8 @@ def find_upload_waiter(
         and row.get("port") == requester_port
         and str(row.get("requestedFileHash") or "").casefold() == normalized_hash
         and row.get("waitingQueue") is True
-        and isinstance(row.get("clientId"), str)
-        and bool(str(row["clientId"]).strip())
+        and isinstance(row.get("id"), str)
+        and bool(str(row["id"]).strip())
     ]
     if len(matches) > 1:
         raise RuntimeError("multiple exact upload waiters matched the requester")
@@ -436,7 +436,7 @@ def find_upload_waiter(
         return None
     waiter = matches[0]
     return {
-        "clientId": waiter["clientId"],
+        "id": waiter["id"],
         "address": requester_host,
         "requestedFileHash": normalized_hash,
         "waitingQueue": True,
@@ -506,9 +506,9 @@ def remove_upload_waiter(
     requester_tcp_endpoint: str,
     timeout: float,
 ) -> dict[str, object]:
-    client_id = str(waiter.get("clientId") or "")
+    client_id = str(waiter.get("id") or "")
     if not client_id:
-        raise RuntimeError("upload waiter clientId is missing")
+        raise RuntimeError("upload waiter id is missing")
     response = dtt.retry_rest_request(
         base_url,
         f"/api/v1/upload-queue/{quote(client_id, safe='')}/operations/remove",

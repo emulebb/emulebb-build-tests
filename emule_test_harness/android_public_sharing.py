@@ -1058,9 +1058,9 @@ def public_upload_evidence(document: dict, catalog: list, previous: dict):
         if not public:
             continue
         count = row.get("uploadedBytes")
-        if type(count) is not int or count < 0 or not isinstance(row.get("clientId"), str):
+        if type(count) is not int or count < 0 or not isinstance(row.get("id"), str):
             raise RuntimeError("Public upload payload counters are unavailable")
-        key = _digest([row["clientId"], row["address"], file_hash.lower()])
+        key = _digest([row["id"], row["address"], file_hash.lower()])
         current[key] = count
         requested += 1
         if key in previous and count >= previous[key]:

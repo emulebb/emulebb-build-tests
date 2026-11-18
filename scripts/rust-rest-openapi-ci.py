@@ -1136,7 +1136,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             active = data(seeder, "GET", "/api/v1/uploads")["items"]
             queued = data(seeder, "GET", "/api/v1/upload-queue")["items"]
             def valid(row):
-                return row.get("clientId") and row.get("userHash") and row.get("requestedFileHash") == file_hash
+                return row.get("id") and row.get("userHash") and row.get("requestedFileHash") == file_hash
             active = next((row for row in active if valid(row) and row.get("uploading")), None)
             queued = next((row for row in queued if valid(row) and row.get("waitingQueue")), None)
             if active and queued:
@@ -1146,9 +1146,9 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             return None
 
         active, queued = poll("one active and one waiting local upload", populated)
-        report["readiness"] = {"active": active["clientId"], "queued": queued["clientId"], "fileHash": file_hash}
+        report["readiness"] = {"active": active["id"], "queued": queued["id"], "fileHash": file_hash}
         for collection, row in (("uploads", active), ("upload-queue", queued)):
-            prefix = f"/api/v1/{collection}/{row['clientId']}"
+            prefix = f"/api/v1/{collection}/{row['id']}"
             def ready(prefix=prefix, row=row):
                 observed = data(seeder, "GET", prefix)
                 if observed.get("userHash") != row["userHash"]:
@@ -1156,7 +1156,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             report["frontdoors"].append(prove_friend_frontdoor(
                 request=lambda method, path, **kwargs: request(seeder, method, path, **kwargs),
                 database=seeder["database"], prefix=prefix,
-                route_template=f"/{collection}/{{clientId}}", ready=ready,
+                route_template=f"/{collection}/{{id}}", ready=ready,
                 user_hash=row["userHash"], document=document))
         leecher = peers[1]
         source_path = f"/api/v1/downloads/{leecher['downloadId']}/sources"

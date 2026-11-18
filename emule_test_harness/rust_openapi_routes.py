@@ -47,6 +47,7 @@ CLIENT_ID_PATTERN = rf"^([0-9a-f]{{32}}|[^/]+:({ENDPOINT_PORT_PATTERN}))$"
 PATH_TOKEN_PARAMETER_SCHEMAS = {
     "ServerId": ("serverId", SERVER_ID_PATTERN),
     "ClientId": ("clientId", CLIENT_ID_PATTERN),
+    "UploadId": ("id", r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\s\S])"),
 }
 QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
     "IncludeScoreBreakdown": "includeScoreBreakdown",

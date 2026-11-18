@@ -162,7 +162,7 @@ def test_guest_entries_still_rejects_nonempty_unterminated_output():
 
 def test_public_request_is_distinct_from_increasing_payload_and_local_peer():
     catalog = [{"hash": "a" * 32}]
-    row = {"clientId": "peer", "address": "93.184.216.34", "requestedFileHash": "a" * 32, "uploadedBytes": 100}
+    row = {"id": "peer", "address": "93.184.216.34", "requestedFileHash": "a" * 32, "uploadedBytes": 100}
     first, previous = subject.public_upload_evidence({"items": [row]}, catalog, {})
     assert first["requests"] == "observed" and first["bytesVerdict"] == "not-observed"
     second, _ = subject.public_upload_evidence({"items": [{**row, "uploadedBytes": 150}]}, catalog, previous)
