@@ -110,6 +110,7 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         "listLibraryFileTags": (404,),
         "listSearchResultObservations": (404,),
         "listSearchResults": (404,),
+        "stopSearch": (404,),
         "getSearchResult": (404,),
         **{name: (404,) for name in (
             "getDownload", "patchDownload", "listDownloadParts", "listDownloadComments",

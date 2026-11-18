@@ -1081,6 +1081,13 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
                 raise RuntimeError("Live-search proof lost its matching indexed fixture")
             if connection.execute("SELECT count(*) FROM content_claims").fetchone()[0] != 0:
                 raise RuntimeError("Live-search lookup fabricated a permanent network claim")
+        stopped = request(seeder, "POST", f"/api/v1/searches/{search_id}/stop", expected=204)
+        if stopped["json"] is not None:
+            raise RuntimeError("Search stop returned a body")
+        request(seeder, "POST", f"/api/v1/searches/{search_id}/stop", expected=204)
+        stopped_session = data(seeder, "GET", f"/api/v1/searches/{search_id}")
+        if stopped_session["status"] != "stopped" or stopped_session["resultCount"] != 0:
+            raise RuntimeError("Search stop failed to preserve frozen session metadata")
         request(seeder, "DELETE", f"/api/v1/searches/{search_id}")
         request(seeder, "GET", f"/api/v1/searches/{search_id}", expected=404)
         second_search = request(seeder, "POST", "/api/v1/searches",
@@ -1090,7 +1097,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         request(seeder, "DELETE", f"/api/v1/searches/{second_search['id']}")
         report["searchIdentityPhase"] = {"status": "passed", "stringIds": True,
                                          "beyondJavaScriptSafeInteger": True, "deletedIdNotReused": True,
-                                         "networkResultsOnly": True, "indexLookupCreatesNoClaim": True}
+                                         "networkResultsOnly": True, "indexLookupCreatesNoClaim": True, "stopPreservedSession": True}
         core = data(seeder, "GET", "/api/v1/app/settings")["core"]
         if (core.get("baseUploadSlots"), core.get("uploadSlotElasticPercent"), core.get("uploadLimitKiBps")) != (1, 0, 8):
             raise RuntimeError("Local seeder did not admit the required single-slot upload policy")

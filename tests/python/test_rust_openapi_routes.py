@@ -1230,7 +1230,7 @@ components:
       properties:
         status:
           type: string
-          enum: [queued, running, completed, error]
+          enum: [queued, running, completed, error, stopped]
         statusReason:
           type: string
 """,
@@ -1261,7 +1261,7 @@ components:
       properties:
         status:
           type: string
-          enum: [queued, running, completed, error]
+          enum: [queued, running, completed, error, stopped]
         statusReason:
           type: [string, "null"]
 """,
@@ -1292,7 +1292,7 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
             component="SearchSession.properties.status",
-            issue="search session schema status enum must be queued, running, completed, error",
+            issue="search session schema status enum must be queued, running, completed, error, stopped",
         ),
     )
 

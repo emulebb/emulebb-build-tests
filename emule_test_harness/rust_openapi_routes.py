@@ -85,7 +85,7 @@ SEARCH_SESSION_COMPONENT = "SearchSession"
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 SEARCH_METHOD_VALUES = ("automatic", "server", "global", "kad")
-SEARCH_STATUS_VALUES = ("queued", "running", "completed", "error")
+SEARCH_STATUS_VALUES = ("queued", "running", "completed", "error", "stopped")
 SEARCH_TYPE_VALUES = (
     "",
     "arc",
