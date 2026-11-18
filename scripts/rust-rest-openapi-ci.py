@@ -722,6 +722,13 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         sharing(False, selected_sharing, ["unchanged", "failed", "unchanged"])
         if sharing_flags(selected_sharing) != [False, None, False]:
             raise RuntimeError("Sharing mutations changed unknown or durable hash policy unexpectedly")
+        # A refused-only connection owns no upload session. Its demand must
+        # reach SQLite through final drain even without a session-release flush.
+        with Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining())) as refused_peer:
+            if refused_peer.request_range(duplicate_hash, 0, 10) is not None:
+                raise RuntimeError("Disabled content admitted refused-only shutdown fixture")
+        if live_upload_counts(duplicate_hash) != (counts_before[0] + 5, counts_before[1] + 1):
+            raise RuntimeError("Refused-only demand was absent from live accounting")
         request("POST", "/api/v1/app/shutdown", body={"confirmShutdown": True})
         process.wait(timeout=min(20.0, remaining()))
         if process.returncode != 0:
@@ -730,6 +737,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         handle = None
         process, handle = package._start_daemon(executable, profile, root / "restart.log")
         wait_until("restarted category REST readiness", remaining(), ready)
+        if upload_counts(duplicate_hash) != (counts_before[0] + 5, counts_before[1] + 1):
+            raise RuntimeError("Clean shutdown did not persist refused-only demand")
         request("POST", "/api/v1/servers/operations/connect")
         request("POST", "/api/v1/shared-directories/operations/reload")
         wait_until("restarted category root reload", remaining(), reload_settled)
@@ -763,7 +772,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             if peer.request_range(duplicate_hash, 0, 10) != duplicate_bytes[:10]:
                 raise RuntimeError("Re-enabled restarted hash returned different bytes")
             sharing_wire.extend(peer.transcript)
-        counts_after = require_upload_checkpoint(duplicate_hash, (counts_before[0] + 6, counts_before[1] + 2))
+        counts_after = require_upload_checkpoint(duplicate_hash, (counts_before[0] + 7, counts_before[1] + 2))
         final_timestamps = upload_timestamps(duplicate_hash)
         if not all(value is not None and first_timestamps[index] <= value <= int(time.time()) for index, value in enumerate(final_timestamps)):
             raise RuntimeError("Upload timestamps did not persist and advance across reopen")
@@ -772,6 +781,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         report["uploadAccounting"] = {"before": list(counts_before), "after": list(counts_after),
             "multiplePacketsOneAcceptedStint": True, "refusedDemandCounted": True,
             "reEnableKeepsSameStint": True, "newSessionAfterRestart": True}
+        report["uploadAccounting"]["refusedOnlyDemandFlushedOnShutdown"] = True
         report["librarySharing"] = {"orderedMixedOutcomes": True, "idempotentWrites": True,
             "hashPolicyAcrossCopies": True, "tagsAndFilesPreserved": True, "unknownHashNotCreated": True,
             "persistedAcrossReopen": True, "cachedReaderRefusedOnNewRequest": True,
