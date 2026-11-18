@@ -42,14 +42,14 @@ def test_api_key_meets_daemon_production_validation() -> None:
     assert not any(character.isspace() for character in module.API_KEY)
 
 
-@pytest.mark.parametrize("rows,meta", [
-    ([], {"hasMore": False, "nextCursor": None}),
-    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}),
-    ([{"id": "3"}], {"hasMore": False, "nextCursor": None}),
-    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}),
-    ([{"id": 3}], {"hasMore": False, "nextCursor": None}),
+@pytest.mark.parametrize("rows,meta,error", [
+    ([], {"hasMore": False, "nextCursor": None}, "invalid page length"),
+    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
+    ([{"id": "3"}], {"hasMore": False, "nextCursor": None}, "omitted jobs"),
+    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}, "Final retained-scale page"),
+    ([{"id": 3}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
 ])
-def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monkeypatch, rows, meta):
+def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monkeypatch, rows, meta, error):
     from types import SimpleNamespace
     module = load_module()
     shutdowns = []
@@ -74,7 +74,7 @@ def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monk
     def response(base, path, **kwargs):
         assert kwargs["api_key"] == package.API_KEY
         if path == "/api/v1/status":
-            return {"data": {"transfers": {"active": 1, "completed": 2, "total": 3}}}
+            return {"data": {"stats": {"activeDownloads": 1, "downloadCount": 3}}}
         return {"data": [dict(row, hash=f"{int(row['id']):032x}") for row in rows], "meta": meta}
     monkeypatch.setattr(module, "http_json", response)
     root = tmp_path / "scale"
@@ -83,6 +83,7 @@ def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monk
                                                  root=root, openapi_contract=tmp_path / "openapi")
     report = json.loads((root / "report.json").read_text(encoding="utf-8"))
     assert report["status"] == "failed"
+    assert error in report["error"]
     assert report["teardown"] == "graceful"
     assert report["physicalLibraryQualified"] is False
     assert report["memoryLimitQualified"] is False
