@@ -557,6 +557,21 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                 or second_observations["meta"]["nextCursor"] is not None):
             raise RuntimeError("Observation continuation repeated or lost session provenance")
         report["searchObservations"] = {"status":"passed", "pages":2, "rows":2, "sessionLocalCounts":True}
+        capture = smoke.http_request(base_url, "/api/v1/diagnostics/bundles", method="POST",
+                                     api_key=package.API_KEY, json_body={"confirmCapture": True, "maxBytes": 4194304},
+                                     request_timeout_seconds=min(5.0, remaining()))
+        if capture["status"] != 200:
+            raise RuntimeError(f"Diagnostic capture expected HTTP 200: {capture['status']}")
+        bundle = capture["raw_json"]
+        bundle_schema = response_json_schema(openapi_operation_response(document, "POST", "/diagnostics/bundles", 200),
+                                             "diagnostic capture")
+        validate_openapi_schema(document, bundle_schema, bundle)
+        snapshot = next(item for item in bundle["operationalSnapshots"]["searches"]["items"]
+                        if item["session"]["id"] == search_fixture["sessionId"])
+        if snapshot["session"] != session_metadata["data"] or snapshot["results"]["items"] != summaries["data"]:
+            raise RuntimeError("Diagnostic search snapshot disagrees with canonical metadata/results")
+        report["searchDiagnosticCapture"] = {"status": "passed", "canonicalSummaries": True,
+                                             "bundleSchema": bundle["schema"]}
 
         # WHY: allocation is owned by the bounded network scheduler. Start its
         # loopback-only runtime before asking this fixture to prove storage;
