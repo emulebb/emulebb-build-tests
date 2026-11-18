@@ -921,7 +921,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             result_row = search_panel.locator("tbody tr").filter(has_text=result_name).first
             result_row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
             with page.expect_response(lambda response: response.request.method == "POST"
-                    and re.fullmatch(r"/api/v1/searches/[^/]+/results/[0-9a-fA-F]{32}/operations/download",
+                    and re.fullmatch(r"/api/v1/searches/[^/]+/results/[1-9][0-9]{0,18}/download",
                         urlparse(response.url).path) is not None,
                     timeout=int(options.network_timeout_seconds * 1000)) as download_response:
                 result_row.get_by_role("button", name="Download", exact=True).click()

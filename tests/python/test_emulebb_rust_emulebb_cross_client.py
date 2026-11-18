@@ -1455,7 +1455,7 @@ def test_cross_client_rust_download_captures_search_job_id(
     })
     monkeypatch.setattr(module.ed2k_harness, "wait_for_server_file", lambda *args: {})
     monkeypatch.setattr(module.rust_local_ed2k, "wait_for_server_search_result",
-                        lambda *args, **kwargs: {"search": {"id": "search-1"}})
+                        lambda *args, **kwargs: {"search": {"id": "1", "items": [{"id": "13", "hash": file_hash}]}})
     monkeypatch.setattr(module, "decoded_ed2k_link_name", lambda info: "fixture.bin")
     calls: list[tuple[str, int]] = []
 
@@ -1489,7 +1489,7 @@ def test_cross_client_rust_download_captures_search_job_id(
     else:
         with pytest.raises(RuntimeError, match="did not accept the captured job"):
             run()
-    expected_calls = [(f"/api/v1/searches/search-1/results/{file_hash}/operations/download", 201)]
+    expected_calls = [("/api/v1/searches/1/results/13/download", 201)]
     if intent == "stopped":
         expected_calls.append(("/api/v1/downloads/start", 207))
     assert calls == expected_calls

@@ -68,10 +68,11 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     contract_body = smoke.get_contract_route_body
 
     def rust_concrete_path(path: str, operation_id: str) -> str:
-        concrete = concrete_path(path, operation_id).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME).replace("{tagName}", RUST_MISSING_TAG_NAME)
+        concrete = concrete_path(path, operation_id).replace("{resultId}", RUST_MISSING_DOWNLOAD_ID).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME).replace("{tagName}", RUST_MISSING_TAG_NAME)
         return concrete.replace("{id}", RUST_MISSING_DOWNLOAD_ID) if path.startswith("/downloads/") else concrete
 
     def rust_normalize_path(path: str) -> str:
+        path = path.replace(f"/results/{RUST_MISSING_DOWNLOAD_ID}/download", "/results/{resultId}/download")
         path = path.replace(f"/library/tags/{RUST_MISSING_TAG_NAME}", "/library/tags/{tagName}")
         return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
                                            "/categories/{categoryName}")

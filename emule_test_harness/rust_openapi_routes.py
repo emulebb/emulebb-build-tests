@@ -3216,9 +3216,9 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
         (r'\("PATCH",\s*\["servers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/servers/{serverId}"),
         (r'\("PATCH",\s*\["categories", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/categories/{categoryName}"),
         (
-            r'\("POST",\s*\["searches", _, "results", _, "operations", "download"\]\)\s*=>\s*\{\s*Some\((\w+)\)',
+            r'\("POST",\s*\["searches", _, "results", _, "download"\]\)\s*=>\s*\{\s*Some\((\w+)\)',
             "POST",
-            "/searches/{searchId}/results/{hash}/operations/download",
+            "/searches/{searchId}/results/{resultId}/download",
         ),
     ):
         match = re.search(pattern, route_body_fields)

@@ -719,10 +719,11 @@ def download_emulebb_fixture_to_rust(
         timeout_seconds=server_publish_timeout_seconds,
     )
     search_payload = search["search"]
+    result = next(row for row in search_payload["items"] if row["hash"] == transfer_hash.lower())
     download = request_json(
         rust_base_url,
         "POST",
-        f"/api/v1/searches/{search_payload['id']}/results/{transfer_hash}/operations/download",
+        f"/api/v1/searches/{search_payload['id']}/results/{result['id']}/download",
         api_key,
         {"intent": "started"},
         expected_status=201,

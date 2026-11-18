@@ -569,7 +569,7 @@ def run_downloads(base_url: str, candidates: list[dict[str, Any]], timeout_secon
         try:
             admission = api_data(retry_http_json(
                 "download", 3, base_url,
-                f"/api/v1/searches/{candidate['_searchId']}/results/{candidate['hash']}/operations/download",
+                f"/api/v1/searches/{candidate['_searchId']}/results/{candidate['id']}/download",
                 api_key=API_KEY, method="POST", body={"intent": "started", "category": None},
             ))
             download_id = require_download_id(admission, expected_hash=candidate["hash"])

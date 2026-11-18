@@ -4146,7 +4146,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
             .route("/api/v1/downloads/start", post(start_downloads))
             .route("/api/v1/shared-directories/ignores/defaults/{ruleKey}", patch(update_ignore))
             .route("/api/v1/servers/operations/import-met-url", post(import_servers))
-            .route("/api/v1/searches/{searchId}/results/{hash}/operations/download", post(download));
+            .route("/api/v1/searches/{searchId}/results/{resultId}/download", post(download));
         ''',
     )
     route_body_metadata_rs = write(
@@ -4174,7 +4174,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
                 ("PATCH", ["shared-directories", "ignores", "defaults", _]) => {
                     Some(SHARED_FILE_IGNORE_RULE)
                 }
-                ("POST", ["searches", _, "results", _, "operations", "download"]) => {
+                ("POST", ["searches", _, "results", _, "download"]) => {
                     Some(SEARCH_RESULT_DOWNLOAD)
                 }
                 _ => None,
@@ -4197,7 +4197,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
         Route("PATCH", "/downloads/{id}"): ("category", "name", "sizeBytes"),
         Route("POST", "/downloads/start"): ("ids",),
         Route("POST", "/servers/operations/import-met-url"): ("url",),
-        Route("POST", "/searches/{searchId}/results/{hash}/operations/download"): (
+        Route("POST", "/searches/{searchId}/results/{resultId}/download"): (
             "category",
             "intent",
             "redownload",
