@@ -791,9 +791,9 @@ def seed_search_observation_fixture(rust_repo: Path, db_path: Path) -> dict[str,
                 (bytes.fromhex("ab" * 16), (4096).to_bytes(8, "big")),
             ).fetchone()[0]
             connection.execute(
-                "INSERT INTO search_results(session_id,claim_id,size_sort_key,name,ed2k_source_count,file_type,media_artist,media_album,media_title,"
+                "INSERT INTO search_results(session_id,claim_id,size_sort_key,ed2k_hash,name,ed2k_source_count,file_type,media_artist,media_album,media_title,"
                 "media_length_seconds,media_bitrate_kbps,media_codec,rating,complete,directory) "
-                "SELECT ?,id,size_sort_key,'Beta.bin',9,'Pro','','','',0,0,'',0,0,'' FROM content_claims WHERE id=?", (session,claim),
+                "SELECT ?,id,size_sort_key,ed2k_hash,'Beta.bin',9,'Pro','','','',0,0,'',0,0,'' FROM content_claims WHERE id=?", (session,claim),
             )
             observations = []
             for name, sources, first, last, count, session_seen in [
