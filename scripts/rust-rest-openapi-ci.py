@@ -1068,8 +1068,8 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
                 raise RuntimeError("Live-search lookup fabricated a permanent network claim")
         request(seeder, "DELETE", f"/api/v1/searches/{search_id}")
         request(seeder, "GET", f"/api/v1/searches/{search_id}", expected=404)
-        second_search = data(seeder, "POST", "/api/v1/searches",
-                             body={"query": "Synthetic identity proof", "method": "server"}, expected=201)
+        second_search = request(seeder, "POST", "/api/v1/searches",
+                                body={"query": "Synthetic identity proof", "method": "server"}, expected=201)["json"]["data"]
         if second_search["id"] != "9007199254740994":
             raise RuntimeError("Search identity was reused after deletion")
         request(seeder, "DELETE", f"/api/v1/searches/{second_search['id']}")
