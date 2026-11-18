@@ -1131,7 +1131,7 @@ def retained_download_observation(client: RestClient) -> dict[str, object]:
 
 def start_daemon(
     paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int,
-    *, retained_downloads: int = 0,
+    *, retained_downloads: int = 0, trace_metadata: bool = False,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     rust_client.write_rust_profile(
         profile_dir,
@@ -1155,12 +1155,17 @@ def start_daemon(
         rust_metadata.seed_retained_download_scale(
             profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE, count=retained_downloads,
         )
+    process_env = None
+    if trace_metadata:
+        process_env = os.environ.copy()
+        process_env["RUST_LOG"] = process_env.get("RUST_LOG", "info") + ",emulebb_metadata=debug,emulebb_core::shared_file_api=debug"
     return start_configured_daemon(
         paths,
         profile_dir,
         log_path,
         rest_address="127.0.0.1",
         rest_port=port,
+        process_env=process_env,
     )
 
 
@@ -1171,12 +1176,16 @@ def start_configured_daemon(
     *,
     rest_address: str,
     rest_port: int,
+    process_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     """Start one already-configured profile and attach REST/resource observers."""
 
     if paths.staged_executable is None:
         raise RuntimeError("Campaign runtime bundle was not admitted")
-    process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
+    if process_env is None:
+        process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
+    else:
+        process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path, env=process_env)
     client = RestClient(f"http://{rest_address}:{rest_port}/api/v1", API_KEY)
     try:
         wait_for_rest(client, process, 60.0)
@@ -2925,6 +2934,7 @@ def run_campaign(
         process, client, sampler = start_daemon(
             paths, profile_dir, initial_log, choose_loopback_port(),
             retained_downloads=0 if replay else RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+            trace_metadata=replay,
         )
         clients.append(client)
         samplers.append(sampler)

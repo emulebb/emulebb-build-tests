@@ -26,9 +26,11 @@ def tiny_spec() -> subject.FixtureSpec:
     )
 
 
-def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path, monkeypatch):
+@pytest.mark.parametrize("trace_metadata", [False, True])
+def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path, monkeypatch, trace_metadata):
     rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
     profile = tmp_path / "profile"
+    inherited = dict(subject.os.environ)
     def prepare(path, **kwargs):
         subject.rust_metadata.create_metadata_db(rust_repo, path / subject.rust_metadata.RUST_PROFILE_METADATA_FILE)
     def launch(paths, path, log, **kwargs):
@@ -36,11 +38,20 @@ def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path
         assert rows["downloadJobs"] == 1000
         assert rows["unfinishedDownloads"] == 10
         assert rows["completedDownloads"] == 990
+        if trace_metadata:
+            env = kwargs["process_env"]
+            assert "emulebb_metadata=debug" in env["RUST_LOG"]
+            assert {key: value for key, value in env.items() if key != "RUST_LOG"} == {
+                key: value for key, value in inherited.items() if key != "RUST_LOG"
+            }
+        else:
+            assert kwargs["process_env"] is None
         return "launched"
     monkeypatch.setattr(subject.rust_client, "write_rust_profile", prepare)
     monkeypatch.setattr(subject, "start_configured_daemon", launch)
     assert subject.start_daemon(SimpleNamespace(rust_repo=rust_repo), profile, tmp_path / "log", 20017,
-                                retained_downloads=1000) == "launched"
+                                retained_downloads=1000, trace_metadata=trace_metadata) == "launched"
+    assert dict(subject.os.environ) == inherited
 
 
 @pytest.fixture
