@@ -848,7 +848,7 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
-def test_openapi_parameter_metadata_drift_requires_numeric_path_bounds(tmp_path: Path) -> None:
+def test_openapi_parameter_metadata_drift_requires_identity_schema_references(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -867,9 +867,7 @@ components:
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 1
-        maximum: 4294967295
+        type: boolean
 """,
     )
 
@@ -880,12 +878,12 @@ components:
         ),
         ParameterMetadataDrift(
             source="components.parameters.SearchId.schema",
-            issue="searchId path parameter range must be 0..4294967295",
+            issue="search ID parameter must reference SearchId",
         ),
     )
 
 
-def test_openapi_parameter_metadata_drift_accepts_numeric_path_bounds(tmp_path: Path) -> None:
+def test_openapi_parameter_metadata_drift_accepts_identity_schema_references(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -902,9 +900,7 @@ components:
       in: path
       required: true
       schema:
-        type: integer
-        minimum: 0
-        maximum: 4294967295
+        $ref: "#/components/schemas/SearchId"
 """,
     )
 

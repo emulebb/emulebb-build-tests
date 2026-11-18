@@ -35,9 +35,6 @@ QUERY_NUMERIC_PARAMETER_SCHEMAS = {
 QUERY_DEFAULT_PARAMETER_SCHEMAS = {
     "LogsLimit": ("limit", 200),
 }
-PATH_NUMERIC_PARAMETER_SCHEMAS = {
-    "SearchId": ("searchId", 0, 4_294_967_295),
-}
 PATH_LOWERCASE_MD4_PARAMETER_SCHEMAS = {
     "FileHash": "hash",
     "UserHash": "userHash",
@@ -68,7 +65,7 @@ DOWNLOAD_EVENT_REQUIRED_FIELDS = {
     "DownloadSyncResetEvent": ("epoch", "id", "reason", "type"),
 }
 DOWNLOAD_ID_COMPONENT = "DownloadId"
-DOWNLOAD_ID_PATTERN = r"^[1-9][0-9]{0,18}(?![\s\S])"
+DECIMAL_ID_PATTERN = r"^[1-9][0-9]{0,18}(?![\s\S])"
 DOWNLOAD_STATE_COMPONENT = "DownloadState"
 DOWNLOAD_STATE_VALUES = ("queued", "waiting-metadata", "downloading", "stopping", "stopped",
                          "verifying", "delivering", "completed", "removing", "failed")
@@ -1086,7 +1083,7 @@ def openapi_parameter_metadata_drift(openapi_yaml: Path) -> tuple[ParameterMetad
             append_parameter_metadata_drift(drift, source, parameter)
             append_query_numeric_parameter_schema_drift(drift, name, source, parameter)
             append_query_default_parameter_schema_drift(drift, name, source, parameter)
-            append_path_numeric_parameter_schema_drift(drift, name, source, parameter)
+            append_search_id_parameter_schema_drift(drift, name, source, parameter)
             append_category_name_parameter_schema_drift(drift, name, source, parameter)
             append_path_lowercase_md4_parameter_schema_drift(drift, name, source, parameter)
             append_path_token_parameter_schema_drift(drift, name, source, parameter)
@@ -1217,6 +1214,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         )
     if DOWNLOAD_ID_COMPONENT in schemas:
         append_download_schema_drift(drift, schemas)
+    if "SearchId" in schemas:
+        assert_decimal_id_schema(drift, "SearchId", schemas["SearchId"], "search session ID")
     if SHARED_FILE_PRIORITY_COMPONENT in schemas:
         assert_priority_enum_schema(
             drift,
@@ -1309,12 +1308,17 @@ def schema_rejects_empty_object(schema: dict[str, object]) -> bool:
     return False
 
 
-def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dict[str, object]) -> None:
-    identity = schemas.get("DownloadId")
+def assert_decimal_id_schema(drift: list[SchemaComponentDrift], component: str,
+                             identity: object, label: str) -> None:
+    """Both durable job and search identities remain exact decimal strings."""
     if (not isinstance(identity, dict) or identity.get("type") != "string"
             or identity.get("minLength") != 1 or identity.get("maxLength") != 19
-            or identity.get("pattern") != DOWNLOAD_ID_PATTERN):
-        drift.append(SchemaComponentDrift("DownloadId", "job ID must be a canonical positive decimal string"))
+            or identity.get("pattern") != DECIMAL_ID_PATTERN):
+        drift.append(SchemaComponentDrift(component, f"{label} must be a canonical positive decimal string"))
+
+
+def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dict[str, object]) -> None:
+    assert_decimal_id_schema(drift, "DownloadId", schemas.get("DownloadId"), "job ID")
 
     summary_fields = {"id", "hash", "name", "category", "sizeBytes", "progress", "intent",
                       "state", "createdAt", "updatedAt", "completedAt"}
@@ -2891,34 +2895,19 @@ def append_query_default_parameter_schema_drift(
         )
 
 
-def append_path_numeric_parameter_schema_drift(
+def append_search_id_parameter_schema_drift(
     drift: list[ParameterMetadataDrift],
     component_name: str,
     source: str,
     parameter: object,
 ) -> None:
-    expected = PATH_NUMERIC_PARAMETER_SCHEMAS.get(component_name)
-    if expected is None or not isinstance(parameter, dict):
+    if component_name != "SearchId" or not isinstance(parameter, dict):
         return
-    label, minimum, maximum = expected
-    schema = parameter.get("schema")
-    if not isinstance(schema, dict):
-        return
-    schema_source = f"{source}.schema"
-    if schema.get("type") != "integer":
-        drift.append(
-            ParameterMetadataDrift(
-                source=schema_source,
-                issue=f"{label} path parameter type must be integer",
-            )
-        )
-    if schema.get("minimum") != minimum or schema.get("maximum") != maximum:
-        drift.append(
-            ParameterMetadataDrift(
-                source=schema_source,
-                issue=f"{label} path parameter range must be {minimum}..{maximum}",
-            )
-        )
+    if parameter.get("schema") != {"$ref": "#/components/schemas/SearchId"}:
+        drift.append(ParameterMetadataDrift(
+            source=f"{source}.schema",
+            issue="search ID parameter must reference SearchId",
+        ))
 
 
 def append_category_name_parameter_schema_drift(

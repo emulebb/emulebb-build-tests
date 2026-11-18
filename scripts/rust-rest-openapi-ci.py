@@ -993,6 +993,12 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             peer["userHash"] = hashlib.sha256(f"local-friend-contract-{role}".encode("ascii")).digest()[:16]
             rust_metadata.seed_local_user_hash(peer["database"], peer["userHash"])
             if role == "seeder":
+                # Start above JSON's exact-integer range before any session exists.
+                # The HTTP contract must preserve these IDs as decimal strings.
+                with closing(sqlite3.connect(peer["database"])) as connection:
+                    connection.execute("INSERT INTO sqlite_sequence(name,seq) VALUES('search_sessions',?)",
+                                       (9_007_199_254_740_992,))
+                    connection.commit()
                 rust_metadata.replace_settings_section(peer["database"], "core", {
                     "autoConnect": False, "networkKademlia": False, "uploadLimitKiBps": 8,
                     "baseUploadSlots": 1, "uploadSlotElasticPercent": 0,
@@ -1008,6 +1014,24 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             poll(f"{role} REST readiness", ready)
             request(peer, "POST", "/api/v1/servers/operations/connect")
         seeder = peers[0]
+        first_search = request(seeder, "POST", "/api/v1/searches",
+                               body={"query": "Synthetic identity proof", "method": "server"})
+        search_id = first_search["json"]["data"]["id"]
+        if search_id != "9007199254740993":
+            raise RuntimeError("Search identity was not an exact SQLite-allocated decimal string")
+        schema = response_json_schema(openapi_operation_response(document, "POST", "/searches", 200), "search create")
+        validate_openapi_schema(document, schema, first_search["json"])
+        if data(seeder, "GET", f"/api/v1/searches/{search_id}")["id"] != search_id:
+            raise RuntimeError("Full-width search identity did not roundtrip through its resource path")
+        request(seeder, "DELETE", f"/api/v1/searches/{search_id}")
+        request(seeder, "GET", f"/api/v1/searches/{search_id}", expected=404)
+        second_search = data(seeder, "POST", "/api/v1/searches",
+                             body={"query": "Synthetic identity proof", "method": "server"})
+        if second_search["id"] != "9007199254740994":
+            raise RuntimeError("Search identity was reused after deletion")
+        request(seeder, "DELETE", f"/api/v1/searches/{second_search['id']}")
+        report["searchIdentityPhase"] = {"status": "passed", "stringIds": True,
+                                         "beyondJavaScriptSafeInteger": True, "deletedIdNotReused": True}
         core = data(seeder, "GET", "/api/v1/app/settings")["core"]
         if (core.get("baseUploadSlots"), core.get("uploadSlotElasticPercent"), core.get("uploadLimitKiBps")) != (1, 0, 8):
             raise RuntimeError("Local seeder did not admit the required single-slot upload policy")
