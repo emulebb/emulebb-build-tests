@@ -2929,14 +2929,17 @@ def run_campaign(
         clients.append(client)
         samplers.append(sampler)
         report["downloadSnapshots"].append(retained_download_observation(client))
-        client.request(
-            "PATCH",
-            "/shared-directories",
-            {
-                "confirmReplaceRoots": True,
-                "roots": [{"path": str(paths.fixture_root) + os.sep}],
-            },
-        )
+        if replay:
+            client.request("POST", "/shared-directories/operations/reload", {})
+        else:
+            client.request(
+                "PATCH",
+                "/shared-directories",
+                {
+                    "confirmReplaceRoots": True,
+                    "roots": [{"path": str(paths.fixture_root) + os.sep}],
+                },
+            )
         initial = wait_for_reload(
             label="watcherReplayBaseline" if replay else "bestEffortInitial",
             client=client,
