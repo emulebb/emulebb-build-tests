@@ -283,7 +283,7 @@ def test_observer_preserves_primary_closed_failure_through_stop_and_cleanup_erro
     stop_error = subject.AdbOperationFailure(("shell", "input", "tap", "private-coordinate"),
         exit_code=1, stderr="permission denied: synthetic-private-device")
     cleanup_error = subject.RustRestFailure("synthetic-private-response", status=400,
-        detail=json.dumps({"error": {"code": "BAD_REQUEST",
+        detail=json.dumps({"error": {"code": "INVALID_ARGUMENT",
             "message": "failed to bind eD2k TCP listener: synthetic-private-address"}}))
     def stop():
         phone.failed_rest_operation = "settings-update"
@@ -602,7 +602,7 @@ def test_private_failure_receipt_reuses_only_closed_rest_projection(tmp_path, mo
     def fail_settings(*args, **kwargs):
         phone.failed_rest_operation = "settings-update"
         raise subject.RustRestFailure("private-response-text", status=status,
-            detail=json.dumps({"error": {"code": "BAD_REQUEST", "message": "failed to bind eD2k TCP listener: private-response-text"}}))
+            detail=json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": "failed to bind eD2k TCP listener: private-response-text"}}))
     monkeypatch.setattr(subject, "_settings", fail_settings)
     if mode == "prepare":
         source = tmp_path / "source"
@@ -621,7 +621,7 @@ def test_private_failure_receipt_reuses_only_closed_rest_projection(tmp_path, mo
         path = tmp_path / "session.json"
     assert value["failedRestOperation"] == "settings-update"
     if type(status) is int and 100 <= status <= 599:
-        assert value["failedRestSafeFailure"] == {"httpStatus": status, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-listener-bind"}
+        assert value["failedRestSafeFailure"] == {"httpStatus": status, "apiCode": "INVALID_ARGUMENT", "coreContext": "ed2k-listener-bind"}
     else:
         assert "failedRestSafeFailure" not in value
     assert "private-response" not in path.read_text() and "PRIVATE" not in path.read_text()
