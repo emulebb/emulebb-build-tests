@@ -2883,8 +2883,11 @@ def run_campaign(
     storage.remove_tree(paths.scenario_root / "watcher-staging")
     restored = {"fileCount": 0, "totalBytes": 0}
     if manifest.get("contentGeneration") == "mutation-v2":
-        restored = restore_fixture_baseline(paths.fixture_root)
-        update_fixture_generation(paths, "base-v2")
+        # A replay reuses the current physical generation and its matching
+        # snapshot. Restoring bytes would invalidate that snapshot's proofs.
+        if args.watcher_replay_from is None:
+            restored = restore_fixture_baseline(paths.fixture_root)
+            update_fixture_generation(paths, "base-v2")
     elif manifest.get("contentGeneration") != "base-v2":
         raise RuntimeError(
             "fixture content generation is unknown; rerun prepare after cleanup"
@@ -3047,6 +3050,21 @@ def run_campaign(
             "process": sampler.summary(read_start),
         }
 
+        root_update_started = time.monotonic()
+        updated = client.request("PATCH", "/shared-directories", {
+            "confirmReplaceRoots": True,
+            "roots": [{"path": str(paths.fixture_root) + os.sep}],
+        })
+        roots = updated.get("roots", [])
+        report["populatedRootUpdate"] = {
+            "elapsedSeconds": round(time.monotonic() - root_update_started, 3),
+            "rootCount": len(roots),
+            "ok": len(roots) == 1 and _normalized_path_key(roots[0]["path"])
+                == _normalized_path_key(paths.fixture_root),
+        }
+        if not report["populatedRootUpdate"]["ok"]:
+            raise RuntimeError("populated root replacement returned different roots")
+
         report["watcherStaging"] = fixture.stage_watcher_cohort(staging_root)
         created_paths = _expected_watcher_paths(paths.fixture_root, renamed=False)
         renamed_paths = _expected_watcher_paths(paths.fixture_root, renamed=True)
@@ -3127,6 +3145,7 @@ def run_campaign(
             rows = deleted["storage"]["rowCounts"]
             checks = {
                 "baseline": initial["acceptance"]["ok"],
+                "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
                 "watcherLifecycle": len(report["watcherLifecycle"]) == 4
                     and all(phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]),
                 "downloadRowsPreserved": all(rows.get(key) == value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()),
@@ -3325,6 +3344,7 @@ def run_campaign(
         }
         storage_snapshots = [phase["storage"] for phase in report["phases"]] + [warm["storage"], final["storage"]]
         global_checks = {
+            "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
             "resourceSamplesPresent": len(samplers) == 4
                 and all(sampler.summary().get("sampleCount", 0) > 0 for sampler in samplers),
             "gracefulShutdowns": graceful_shutdowns(report, (
