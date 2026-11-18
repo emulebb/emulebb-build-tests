@@ -736,7 +736,7 @@ PROGRESS_FIELDS = (
     "reusedCount",
     "newCount",
     "changedCount",
-    "missingMtimeCount",
+    "missingFingerprintCount",
     "statFailedCount",
     "skippedFailedCount",
     "skippedIntakeCount",
@@ -816,6 +816,40 @@ def wait_for_shared_catalog_hydration(
     )
 
 
+def reload_log_offsets(profile_dir: Path) -> dict[Path, int]:
+    """Mark existing log bytes before starting a campaign phase."""
+    return {path: path.stat().st_size for path in (profile_dir / "logs").glob("emulebb-rust*.jsonl")}
+
+
+def completed_reload_from_logs(
+    profile_dir: Path, offsets: dict[Path, int], expected_scanned: int,
+) -> dict[str, object] | None:
+    """Stream the first current completion, retaining only numeric counters."""
+    fields = [field for field in PROGRESS_FIELDS if field not in {
+        "phase", "running", "pending", "readRateBytesPerSec",
+    }]
+    for path in sorted((profile_dir / "logs").glob("emulebb-rust*.jsonl")):
+        with path.open("rb") as handle:
+            handle.seek(offsets.get(path, 0))
+            for line in handle:
+                if b'shared-directory reload completed' not in line:
+                    continue
+                if not line.endswith(b"\n"):
+                    continue  # The existing log worker may still be flushing.
+                event = json.loads(line)
+                data = event.get("fields", {})
+                if (event.get("target") != "emulebb_core::shared_directories"
+                        or data.get("message") != "shared-directory reload completed"):
+                    continue
+                if any(type(data.get(field)) is not int or data[field] < 0 for field in fields):
+                    raise RuntimeError("reload completion log has invalid counters")
+                if data["startedAtMs"] <= 0 or data["updatedAtMs"] < data["startedAtMs"]:
+                    raise RuntimeError("reload completion log has invalid timing")
+                if data["scannedCount"] == expected_scanned:
+                    return {field: data[field] for field in fields} | {"phase": "idle"}
+    return None
+
+
 def wait_for_reload(
     *,
     label: str,
@@ -826,6 +860,7 @@ def wait_for_reload(
     expected_scanned: int,
     timeout_seconds: float,
     poll_seconds: float,
+    completion_logs: tuple[Path, dict[Path, int]] | None = None,
 ) -> dict[str, object]:
     """Poll one reload to completion while retaining only sanitized counters."""
 
@@ -848,17 +883,6 @@ def wait_for_reload(
             "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
-        # WHY: a queued reconciliation may replace completed scan counters
-        # before the worker becomes idle. Retain the first completed reload,
-        # but still require the entire worker to settle before accepting it.
-        if (
-            completed_reload is None
-            and progress.get("phase") == "idle"
-            and int(progress.get("scannedCount") or 0) == expected_scanned
-            and int(progress.get("activeHashCount") or 0) == 0
-            and int(data.get("hashingCount") or 0) == 0
-        ):
-            completed_reload = progress
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
             max_disk_active,
@@ -876,6 +900,11 @@ def wait_for_reload(
             and int(data.get("hashingCount") or 0) == 0
             and int(progress.get("scannedCount") or 0) == expected_scanned
         ):
+            if completion_logs is not None:
+                completed_reload = completed_reload_from_logs(*completion_logs, expected_scanned)
+                if completed_reload is None:
+                    time.sleep(poll_seconds)
+                    continue
             final = progress
             break
         time.sleep(poll_seconds)
@@ -894,6 +923,7 @@ def wait_for_reload(
         "sharedFilesTotal": shared.get("total"),
         "progress": completed_reload if completed_reload is not None else final,
         "settledProgress": final,
+        "completionSource": "structuredLog" if completion_logs is not None else "liveProgress",
         "maxActiveHashCount": max_active,
         "maxPerDiskActiveCount": max_disk_active,
         "process": sampler.summary(process_start),
@@ -2930,6 +2960,7 @@ def run_campaign(
         replay = args.watcher_replay_from is not None
         if replay:
             report["replay"] = copy_replay_database(paths, args.watcher_replay_from, profile_dir)
+        initial_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         initial_log = run_root / "initial.log"
         log_paths.append(initial_log)
         process, client, sampler = start_daemon(
@@ -2960,6 +2991,7 @@ def run_campaign(
             expected_scanned=PRODUCTION_SPEC.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
+            completion_logs=initial_completion_logs,
         )
         initial["storage"] = profile_storage_snapshot(profile_dir)
         initial["acceptance"] = phase_acceptance(
@@ -3122,6 +3154,7 @@ def run_campaign(
             poll_seconds=args.poll_seconds,
         )
 
+        no_change_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         client.request("POST", "/shared-directories/operations/reload", {})
         no_change = wait_for_reload(
             label="noChangeReload",
@@ -3132,6 +3165,7 @@ def run_campaign(
             expected_scanned=PRODUCTION_SPEC.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
+            completion_logs=no_change_completion_logs,
         )
         no_change["storage"] = profile_storage_snapshot(profile_dir)
         no_change["acceptance"] = phase_acceptance(
@@ -3167,6 +3201,7 @@ def run_campaign(
         report["mutation"] = mutation
         mutation_log = run_root / "mutation.log"
         log_paths.append(mutation_log)
+        mutation_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         process, client, sampler = start_daemon(
             paths, profile_dir, mutation_log, choose_loopback_port()
         )
@@ -3183,6 +3218,7 @@ def run_campaign(
             expected_scanned=PRODUCTION_SPEC.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
+            completion_logs=mutation_completion_logs,
         )
         changed["storage"] = profile_storage_snapshot(profile_dir)
         changed["acceptance"] = phase_acceptance(

@@ -140,7 +140,25 @@ def test_process_summary_distinguishes_sampled_memory_from_lifetime_peak():
     assert value["lifetimeCpuSeconds"] == 1
 
 
-def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settles(monkeypatch):
+def completion_event(**overrides):
+    fields = {field: 0 for field in subject.PROGRESS_FIELDS if field not in {
+        "phase", "running", "pending", "readRateBytesPerSec",
+    }}
+    fields.update(scannedCount=100000, hashedCount=100000, startedAtMs=1, updatedAtMs=2)
+    fields.update(overrides)
+    return {"target": "emulebb_core::shared_directories",
+            "fields": fields | {"message": "shared-directory reload completed"}}
+
+
+def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settles(monkeypatch, tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / "emulebb-rust.test.jsonl"
+    path.write_text(json.dumps(completion_event(hashedCount=5)) + "\n", encoding="utf-8")
+    offsets = subject.reload_log_offsets(tmp_path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(completion_event()) + "\n")
+        handle.write(json.dumps(completion_event(hashedCount=0, reusedCount=100000)) + "\n")
     def response(*, phase, running, pending, hashed, reused):
         return {"hashingCount": 0, "reloadProgress": {
             "phase": phase, "running": running, "pending": pending,
@@ -148,7 +166,6 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
             "hashedCount": hashed, "reusedCount": reused, "disks": [],
         }}
     responses = [
-        response(phase="idle", running=True, pending=True, hashed=100000, reused=0),
         response(phase="hashing", running=True, pending=False, hashed=0, reused=100000),
         response(phase="idle", running=False, pending=False, hashed=0, reused=100000),
     ]
@@ -168,12 +185,37 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
                                 summary=lambda _: {}),
         disk_counter_key=None, expected_scanned=100000, timeout_seconds=1,
         poll_seconds=0,
+        completion_logs=(tmp_path, offsets),
     )
     assert result["progress"]["hashedCount"] == 100000
     assert result["progress"]["reusedCount"] == 0
     assert result["settledProgress"]["hashedCount"] == 0
     assert result["settledProgress"]["reusedCount"] == 100000
     assert result["settledProgress"]["running"] is False
+    assert result["completionSource"] == "structuredLog"
+
+
+@pytest.mark.parametrize("value", [True, -1, "100000", None])
+def test_reload_completion_refuses_invalid_counters(tmp_path, value):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "emulebb-rust.test.jsonl").write_text(
+        json.dumps(completion_event(hashedCount=value)) + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid counters"):
+        subject.completed_reload_from_logs(tmp_path, {}, 100000)
+
+
+def test_reload_completion_waits_for_terminated_record_and_matches_its_target(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / "emulebb-rust.new.jsonl"
+    wrong_target = completion_event()
+    wrong_target["target"] = "unrelated"
+    path.write_text(json.dumps(wrong_target) + "\n" + json.dumps(completion_event()), encoding="utf-8")
+    assert subject.completed_reload_from_logs(tmp_path, {}, 100000) is None
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\n")
+    assert subject.completed_reload_from_logs(tmp_path, {}, 100000)["hashedCount"] == 100000
 
 
 def test_startup_failure_cleans_up_the_child_before_ownership_transfers(tmp_path, monkeypatch):
