@@ -1100,7 +1100,7 @@ def storage_acceptance(
 
 def retained_download_observation(client: RestClient) -> dict[str, object]:
     """Capture the combined workload's public counts without timing promises."""
-    counts = client.request("GET", "/downloads/counts")
+    counts = client.request("GET", "/snapshot")["downloads"]
     stats = client.request("GET", "/stats")
     observed = {
         "unfinished": counts.get("unfinished"), "completed": counts.get("completed"),

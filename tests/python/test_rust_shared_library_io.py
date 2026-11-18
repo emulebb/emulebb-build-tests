@@ -46,9 +46,11 @@ def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path
 def test_retained_download_observation_requires_the_realistic_counts():
     class Client:
         def request(self, method, path):
-            return {"unfinished": 1000, "completed": 99000} if path == "/downloads/counts" else {
-                "downloadCount": 100000, "activeDownloads": 100,
-            }
+            assert method == "GET"
+            return {
+                "/snapshot": {"downloads": {"unfinished": 1000, "completed": 99000}},
+                "/stats": {"downloadCount": 100000, "activeDownloads": 100},
+            }[path]
     assert subject.retained_download_observation(Client())["ok"] is True
     class IncompleteClient(Client):
         def request(self, method, path):
