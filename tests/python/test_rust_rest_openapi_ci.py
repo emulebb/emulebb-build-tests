@@ -42,14 +42,7 @@ def test_api_key_meets_daemon_production_validation() -> None:
     assert not any(character.isspace() for character in module.API_KEY)
 
 
-@pytest.mark.parametrize("rows,meta,error", [
-    ([], {"hasMore": False, "nextCursor": None}, "invalid page length"),
-    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
-    ([{"id": "3"}], {"hasMore": False, "nextCursor": None}, "omitted jobs"),
-    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}, "Final retained-scale page"),
-    ([{"id": 3}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
-])
-def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monkeypatch, rows, meta, error):
+def retained_scale_subject(tmp_path, monkeypatch):
     from types import SimpleNamespace
     module = load_module()
     shutdowns = []
@@ -63,7 +56,7 @@ def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monk
     monkeypatch.setattr(module.rust_client, "write_rust_profile", lambda *args, **kwargs: None)
     monkeypatch.setattr(module.rust_client, "rust_network_settings_patch", lambda **kwargs: {})
     monkeypatch.setattr(module.rust_metadata, "seed_retained_download_scale", lambda *args: {
-        "jobs": 3, "completed": 2, "stopped": 1, "queued": 0,
+        "jobs": 1000, "completed": 990, "stopped": 9, "queued": 1,
     })
     monkeypatch.setattr(module, "load_openapi_document", lambda path: {})
     monkeypatch.setattr(module, "openapi_operation_response", lambda *args: {})
@@ -72,12 +65,53 @@ def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monk
     monkeypatch.setattr(module, "verify_listener_receipt", lambda *args: {})
     monkeypatch.setattr(module, "wait_until", lambda name, timeout, predicate: predicate())
     def response(base, path, **kwargs):
+        from urllib.parse import urlsplit, parse_qs
         assert kwargs["api_key"] == package.API_KEY
         if path == "/api/v1/status":
-            return {"data": {"stats": {"activeDownloads": 1, "downloadCount": 3}}}
-        return {"data": [dict(row, hash=f"{int(row['id']):032x}") for row in rows], "meta": meta}
+            return {"data": {"stats": {"activeDownloads": 1, "downloadCount": 1000}}}
+        query = parse_qs(urlsplit(path).query)
+        view = query["view"][0]
+        identities = [value for value in range(1000, 0, -1)
+                      if view == "all" or (value % 1000 >= 10) == (view == "completed")]
+        start = int(query.get("cursor", ["0"])[0])
+        page = identities[start:start + 2]  # Shorter than the requested maximum is valid.
+        more = start + 2 < len(identities)
+        return {"data": [{"id": str(value), "hash": f"{value:032x}"} for value in page],
+                "meta": {"hasMore": more, "nextCursor": str(start + 2) if more else None}}
     monkeypatch.setattr(module, "http_json", response)
     root = tmp_path / "scale"
+    return module, root, shutdowns
+
+
+def test_retained_scale_proof_accepts_short_pages_and_reopens_the_profile(tmp_path, monkeypatch):
+    module, root, shutdowns = retained_scale_subject(tmp_path, monkeypatch)
+    report = module.run_retained_download_scale_phase(executable=tmp_path / "daemon", rust_repo=tmp_path,
+                                                      root=root, openapi_contract=tmp_path / "openapi")
+    assert report["status"] == "passed"
+    assert report["dashboardCounts"] == {"activeDownloads": 1, "downloadCount": 1000}
+    assert {view: (value["rows"], value["pages"]) for view, value in report["views"].items()} == {
+        "all": (1000, 500), "completed": (990, 495), "unfinished": (10, 5),
+    }
+    assert report["restartCountsPreserved"] is True
+    assert report["teardown"] == "graceful"
+    assert len(shutdowns) == 2
+
+
+@pytest.mark.parametrize("rows,meta,error", [
+    ([], {"hasMore": False, "nextCursor": None}, "invalid page length"),
+    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
+    ([{"id": "3"}], {"hasMore": False, "nextCursor": None}, "omitted jobs"),
+    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}, "Final retained-scale page"),
+    ([{"id": 3}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
+])
+def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monkeypatch, rows, meta, error):
+    module, root, shutdowns = retained_scale_subject(tmp_path, monkeypatch)
+    valid_response = module.http_json
+    def response(base, path, **kwargs):
+        if path == "/api/v1/status":
+            return valid_response(base, path, **kwargs)
+        return {"data": [dict(row, hash=f"{int(row['id']):032x}") for row in rows], "meta": meta}
+    monkeypatch.setattr(module, "http_json", response)
     with pytest.raises(RuntimeError, match="scale proof failed"):
         module.run_retained_download_scale_phase(executable=tmp_path / "daemon", rust_repo=tmp_path,
                                                  root=root, openapi_contract=tmp_path / "openapi")

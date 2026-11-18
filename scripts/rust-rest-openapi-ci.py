@@ -1329,14 +1329,15 @@ def run_retained_download_scale_phase(*, executable: Path, rust_repo: Path, root
 
         wait_until("retained-scale REST readiness", 120.0, ready)
         report["listener"] = verify_listener_receipt(profile, base_url)
-        expected_counts = {"activeDownloads": fixture["queued"] + fixture["stopped"],
+        expected_counts = {"activeDownloads": fixture["queued"],
                            "downloadCount": fixture["jobs"]}
         stats = ready()["data"]["stats"]
+        report["dashboardCounts"] = {key: stats[key] for key in expected_counts}
         if {key: stats[key] for key in expected_counts} != expected_counts:
             raise RuntimeError("Retained-scale dashboard counts differ from the seeded jobs")
         views = {}
         for view, expected in (("all", fixture["jobs"]), ("completed", fixture["completed"]),
-                               ("unfinished", expected_counts["activeDownloads"])):
+                               ("unfinished", fixture["queued"] + fixture["stopped"])):
             cursor, previous_id, seen, pages = None, fixture["jobs"] + 1, 0, 0
             started = time.monotonic()
             while True:
