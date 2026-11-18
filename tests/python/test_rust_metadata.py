@@ -495,3 +495,18 @@ def test_download_manifest_read_holds_one_snapshot_across_retirement(
     with real_connect(metadata_db) as conn:
         assert conn.execute("SELECT count(*) FROM download_job_sources").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM download_job_md4_part_hashes").fetchone() == (0,)
+
+
+def test_search_observation_fixture_preserves_session_and_global_count_boundaries(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    fixture = rust_metadata.seed_search_observation_fixture(rust_repo(), database)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        counts = connection.execute(
+            "SELECT o.observation_count,m.observation_count,o.first_seen_at_s,m.first_seen_at_s "
+            "FROM search_result_observations m JOIN content_claim_observations o ON o.id=m.observation_id "
+            "WHERE m.session_id=? ORDER BY o.id", (int(fixture["sessionId"]),),
+        ).fetchall()
+        assert counts == [(3,1,10,20),(1,1,30,30)]
+        assert connection.execute("SELECT result_count FROM search_sessions WHERE id=?",(int(fixture["sessionId"]),)).fetchone() == (1,)

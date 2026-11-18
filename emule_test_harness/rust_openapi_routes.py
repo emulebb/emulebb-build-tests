@@ -3078,6 +3078,7 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     for pattern, method, path in (
         (r'\("GET",\s*\["library", "files", _, "tags"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/tags"),
         (r'\("GET",\s*\["searches", _\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}"),
+        (r'\("GET",\s*\["searches", _, "results", _, "observations"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results/{resultId}/observations"),
     ):
         match = re.search(pattern, parameterized)
         if match is not None:

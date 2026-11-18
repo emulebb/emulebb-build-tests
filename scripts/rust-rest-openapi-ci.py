@@ -527,8 +527,27 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             ed2k_port=tcp_port, kad_port=udp_port, runtime_server_port=server_port,
             p2p_ip=REST_ADDR,
         )
+        search_fixture = rust_metadata.seed_search_observation_fixture(rust_repo, database)
         process, handle = package._start_daemon(executable, profile, root / "daemon.log")
         wait_until("category REST readiness", remaining(), ready)
+        observation_path = f"/api/v1/searches/{search_fixture['sessionId']}/results/{search_fixture['resultId']}/observations"
+        observation_contract = "/searches/{searchId}/results/{resultId}/observations"
+        first_observations = validated_read(observation_path + "?limit=1", observation_contract)
+        if (first_observations["data"][0]["rawName"] != "Alpha.bin"
+                or first_observations["data"][0]["observationCount"] != 1
+                or first_observations["data"][0]["firstSeenAt"] != 20
+                or first_observations["data"][0]["completeSources"] is not None):
+            raise RuntimeError("Observation page mixed global occurrences or invented reported values")
+        observation_cursor = first_observations["meta"]["nextCursor"]
+        if not first_observations["meta"]["hasMore"] or not observation_cursor:
+            raise RuntimeError("Observation first page omitted its bounded continuation")
+        second_observations = validated_read(observation_path + "?limit=1&cursor=" + observation_cursor, observation_contract)
+        if (second_observations["data"][0]["rawName"] != "Beta.bin"
+                or second_observations["meta"]["hasMore"]
+                or second_observations["meta"]["nextCursor"] is not None):
+            raise RuntimeError("Observation continuation repeated or lost session provenance")
+        report["searchObservations"] = {"status":"passed", "pages":2, "rows":2, "sessionLocalCounts":True}
+
         # WHY: allocation is owned by the bounded network scheduler. Start its
         # loopback-only runtime before asking this fixture to prove storage;
         # a fully disabled profile records intent without running that worker.

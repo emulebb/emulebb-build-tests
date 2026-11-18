@@ -14,6 +14,7 @@ schema change in the client is picked up automatically. Only the small set of se
 from __future__ import annotations
 
 import re
+import hashlib
 import json
 import os
 import sqlite3
@@ -767,3 +768,62 @@ def current_platform() -> str:
     if sys.platform == "win32":
         return "windows"
     return "unix"
+
+
+def seed_search_observation_fixture(rust_repo: Path, db_path: Path) -> dict[str, object]:
+    """Stage frozen session provenance for native page/serialization conformance.
+
+    The first observation has three global occurrences but only one in the
+    selected session, so the HTTP proof detects accidental global accounting.
+    """
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT schema_id,schema_version FROM metadata_schema").fetchall() != [_schema_marker(rust_repo)]:
+                raise RuntimeError("search fixture requires the current metadata schema marker")
+            session = connection.execute(
+                "INSERT INTO search_sessions(query,normalized_query,requested_method,resolved_method,status,created_at_s,updated_at_s,completed_at_s) "
+                "VALUES('Sample provenance','sample provenance','server','server','completed',1,30,30) RETURNING id"
+            ).fetchone()[0]
+            claim = connection.execute(
+                "INSERT INTO content_claims(ed2k_hash,size_bytes,first_seen_at_s,last_seen_at_s) VALUES(?,?,10,30) RETURNING id",
+                (bytes.fromhex("ab" * 16), (4096).to_bytes(8, "big")),
+            ).fetchone()[0]
+            connection.execute(
+                "INSERT INTO search_results(session_id,claim_id,name,ed2k_source_count,file_type,media_artist,media_album,media_title,"
+                "media_length_seconds,media_bitrate_kbps,media_codec,rating,complete,directory) "
+                "VALUES(?,?,'Beta.bin',9,'Pro','','','',0,0,'',0,0,'')", (session,claim),
+            )
+            observations = []
+            for name, sources, first, last, count, session_seen in [
+                ("Alpha.bin",7,10,20,3,20), ("Beta.bin",9,30,30,1,30),
+            ]:
+                observation = connection.execute(
+                    "INSERT INTO content_claim_observations(claim_id,fingerprint,origin,reporter_endpoint,name,source_count,file_type,"
+                    "first_seen_at_s,last_seen_at_s,observation_count) VALUES(?,?,'server','192.0.2.10:4661',?,?,'Pro',?,?,?) RETURNING id",
+                    (claim, hashlib.sha256(json.dumps(["server", "192.0.2.10:4661", {"name":name,"source_count":sources,"file_type":"Pro"}],separators=(",",":"),ensure_ascii=False).encode("utf-8")).digest(),name,sources,first,last,count),
+                ).fetchone()[0]
+                observations.append(str(observation))
+                connection.execute(
+                    "INSERT INTO search_result_observations(session_id,claim_id,observation_id,first_seen_at_s,last_seen_at_s,observation_count) "
+                    "VALUES(?,?,?,?,?,1)",(session,claim,observation,session_seen,session_seen),
+                )
+                connection.execute(
+                    "INSERT INTO search_name_reporters(session_id,claim_id,normalized_name,reporter_endpoint,unknown_origin,"
+                    "quality_useful,quality_sources,quality_complete_sources,quality_rating) VALUES(?,?,?,'192.0.2.10:4661','',1,?,0,0)",
+                    (session,claim,name,sources),
+                )
+                connection.execute(
+                    "INSERT INTO search_name_totals(session_id,claim_id,normalized_name,vote_count,quality_useful,quality_sources,"
+                    "quality_complete_sources,quality_rating) VALUES(?,?,?,1,1,?,0,0)",(session,claim,name,sources),
+                )
+            connection.execute(
+                "INSERT INTO search_ed2k_reporter_maxima(session_id,claim_id,reporter_endpoint,unknown_origin,source_count,complete_source_count) "
+                "VALUES(?,?,'192.0.2.10:4661','',9,0)",(session,claim),
+            )
+            connection.execute(
+                "INSERT INTO search_field_quality(session_id,claim_id,field,quality_useful,quality_sources,quality_complete_sources,quality_rating) "
+                "VALUES(?,?,'file_type',1,9,0,0)",(session,claim),
+            )
+    return {"sessionId":str(session),"resultId":str(claim),"observationIds":observations}
