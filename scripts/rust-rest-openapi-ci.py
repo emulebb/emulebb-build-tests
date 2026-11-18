@@ -1093,6 +1093,57 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
     return report
 
 
+def run_settings_cli_phase(executable: Path, profile: Path) -> dict[str, object]:
+    """Use the packaged offline command and inspect only its canonical row."""
+    def command(*args: str, succeeds: bool = True, selected_profile: bool = True) -> str:
+        argv = [str(executable)]
+        if selected_profile:
+            argv.extend(["--profile", str(profile)])
+        argv.extend(["settings", *args])
+        result = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        if (result.returncode == 0) != succeeds:
+            raise RuntimeError(f"Offline settings command outcome differs: {result.stderr}")
+        if succeeds:
+            return result.stdout.rstrip("\r\n")
+        return result.stderr
+
+    def snapshot() -> tuple[int, str]:
+        database = profile / rust_metadata.RUST_PROFILE_METADATA_FILE
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            row = connection.execute("SELECT revision,document_json FROM app_settings WHERE id=1").fetchone()
+        if row is None:
+            raise RuntimeError("Offline command did not initialize the typed settings row")
+        return int(row[0]), str(row[1])
+
+    if "--profile is required" not in command("get", "network.ed2kEnabled", succeeds=False, selected_profile=False):
+        raise RuntimeError("Offline settings did not require an explicit profile")
+    if command("get", "network.ed2kEnabled") != "true" or snapshot()[0] != 1:
+        raise RuntimeError("Fresh offline settings did not resolve the compiled default at revision 1")
+    if command("set", "network.nickname", "Sample") != "":
+        raise RuntimeError("Successful settings set emitted unexpected stdout")
+    if command("get", "network.nickname") != "Sample":
+        raise RuntimeError("Settings get did not emit the single plain-text value")
+    if command("set", "network.nickname", "Sample") != "" or snapshot()[0] != 3:
+        raise RuntimeError("Explicit unchanged settings set did not advance its revision")
+    backends = '["upnp","pcp-natpmp"]'
+    if command("set", "network.nat.backendOrder", backends) != "" or command("get", "network.nat.backendOrder") != backends:
+        raise RuntimeError("Offline list values did not use one inline JSON argument")
+    if command("reset", "network.nickname") != "" or command("get", "network.nickname") != "eMule":
+        raise RuntimeError("Offline reset did not select the compiled default")
+    before = snapshot()
+    if before[0] != 5:
+        raise RuntimeError("Offline command revisions include unexpected read-time writes")
+    command("set", "network.ed2kEnabled", "invalid", succeeds=False)
+    command("set", "network.hostnameLookup.enabled", "true", succeeds=False)
+    if snapshot() != before:
+        raise RuntimeError("Invalid offline settings changed the document or revision")
+    saved = json.loads(before[1])
+    if saved["network"]["nickname"]["mode"] != "default" or saved["network"]["nat"]["backendOrder"]["mode"] != "custom":
+        raise RuntimeError("Offline edits lost saved default/custom modes")
+    return {"status": "passed", "revision": before[0], "plainSingleKeyOutput": True,
+            "inlineJsonLists": True, "invalidWritesPreserved": True, "explicitProfileRequired": True}
+
+
 def staged_executable(output_root: Path) -> Path:
     """Returns the orchestrator-staged regular daemon for this host OS."""
 
@@ -1207,6 +1258,7 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
     handle = daemon_log.open("w", encoding="utf-8", newline="\n")
     process = None
     try:
+        report["settingsCliPhase"] = run_settings_cli_phase(executable, profile_dir / "settings-cli-proof")
         process = rust_client.spawn_rust_daemon(executable, profile_dir, output_handle=handle)
 
         def rest_ready() -> object | None:
@@ -1218,6 +1270,13 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
                 return None
 
         wait_until("Rust REST ready", ready_timeout_seconds, rest_ready)
+        refused = subprocess.run(
+            [str(executable), "--profile", str(profile_dir), "settings", "get", "network.ed2kEnabled"],
+            capture_output=True, text=True, encoding="utf-8", timeout=20,
+        )
+        if refused.returncode == 0 or "profile is already in use" not in refused.stderr:
+            raise RuntimeError("Offline settings command bypassed the running daemon's profile lease")
+        report["settingsCliPhase"]["runningProfileRefused"] = True
         previous_contract_shared_root = os.environ.get("EMULEBB_REST_CONTRACT_SHARED_ROOT")
         os.environ["EMULEBB_REST_CONTRACT_SHARED_ROOT"] = str(contract_shared_root)
         try:
