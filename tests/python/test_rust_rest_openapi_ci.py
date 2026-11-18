@@ -302,8 +302,16 @@ def test_peer_launch_failure_preserves_report_and_closes_owned_fixture(friend_fi
         with closing(sqlite3.connect(database)) as source:
             with closing(sqlite3.connect(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)) as target:
                 source.backup(target)
+        module.rust_metadata.put_setting_json(
+            profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE, "kad", "listenPort", 4665)
 
     def fail_start(*args):
+        profile = args[1]
+        with closing(sqlite3.connect(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)) as connection:
+            values = {key: json.loads(value) for key, value in connection.execute(
+                "SELECT key,value_json FROM settings WHERE section='kad'")}
+        assert values["listenPort"] == 4665
+        assert values["passiveReplayEnabled"] is True
         raise RuntimeError("Daemon launch failed")
 
     package = SimpleNamespace(_available_unique_port=lambda *args, **kwargs: next(ports),
@@ -315,7 +323,6 @@ def test_peer_launch_failure_preserves_report_and_closes_owned_fixture(friend_fi
     with pytest.raises(RuntimeError, match="Local friend-peer proof failed"):
         module.run_friend_peer_phase(executable=tmp_path / "daemon", rust_repo=tmp_path / "rust",
                                      root=fixture_root, openapi_contract=tmp_path / "contract.yaml")
-    import json
     report = json.loads((fixture_root / "report.json").read_text())
     assert report["status"] == "failed" and "Daemon launch failed" in report["error"]
     assert report["finalDatabases"][0]["reopenedAfterShutdown"]

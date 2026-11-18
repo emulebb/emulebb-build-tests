@@ -1001,7 +1001,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
                     connection.commit()
                 rust_metadata.seed_indexed_file(peer["database"], ed2k_hash="99" * 16,
                     name="Synthetic.Identity.Proof.bin", size_bytes=4096, origin="passive_cache")
-                rust_metadata.replace_settings_section(peer["database"], "kad", {"passiveReplayEnabled": True})
+                rust_metadata.put_setting_json(peer["database"], "kad", "passiveReplayEnabled", True)
                 rust_metadata.replace_settings_section(peer["database"], "core", {
                     "autoConnect": False, "networkKademlia": False, "uploadLimitKiBps": 8,
                     "baseUploadSlots": 1, "uploadSlotElasticPercent": 0,
