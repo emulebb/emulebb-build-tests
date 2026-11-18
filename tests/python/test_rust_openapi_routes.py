@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -76,6 +77,17 @@ def selected_rust_openapi():
     tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
     path = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
     return path, load_openapi_document(path)
+
+
+def test_diagnostic_bundle_producer_and_webui_match_the_published_schema(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "DiagnosticBundle")
+    expected = schema["properties"]["schema"]["const"]
+    rust_repo = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    for relative in ("crates/emulebb-rest/src/diagnostic_bundle.rs", "webui/src/api.ts"):
+        path = rust_repo / relative
+        identifiers = set(re.findall(r"\bemulebb\.diagnostic-bundle\.v\d+\b", path.read_text(encoding="utf-8")))
+        assert identifiers == {expected}, f"{relative}: {identifiers} differs from OpenAPI {expected}"
 
 
 PERSISTENCE_ERROR_STATUSES = {
