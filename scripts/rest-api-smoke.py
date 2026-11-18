@@ -216,6 +216,7 @@ REST_SURFACE_TEST_SERVER = {
     "name": "REST surface smoke disposable",
 }
 REST_SURFACE_MISSING_HASH = "0123456789abcdef0123456789abcdef"
+REST_SURFACE_MISSING_UPLOAD_ID = "12345678-1234-4234-8234-123456789abc"
 REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
 REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
@@ -777,6 +778,8 @@ def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
     """Converts one OpenAPI path template to a live-smoke safe concrete path."""
 
     path = "/api/v1" + openapi_path
+    if openapi_path.startswith(("/uploads/", "/upload-queue/")):
+        path = path.replace("{id}", REST_SURFACE_MISSING_UPLOAD_ID)
     path = path.replace("{hash}", REST_SURFACE_MISSING_HASH)
     path = path.replace("{clientId}", REST_SURFACE_MISSING_HASH)
     path = path.replace("{userHash}", REST_SURFACE_MISSING_HASH)
@@ -865,6 +868,7 @@ def normalize_contract_path_for_openapi(path: str) -> str:
     """Converts one concrete smoke path back to its OpenAPI template form."""
 
     normalized = path.split("?", 1)[0]
+    normalized = normalized.replace(REST_SURFACE_MISSING_UPLOAD_ID, "{id}")
     normalized = normalized.replace(REST_SURFACE_MISSING_HASH, "{hash}")
     normalized = normalized.replace("/api/v1", "", 1) or "/"
     normalized = normalized.replace("/categories/999999", "/categories/{categoryId}")

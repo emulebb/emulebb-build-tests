@@ -38,6 +38,19 @@ def load_rest_api_smoke_module():
     return module
 
 
+@pytest.mark.parametrize("template", ["/uploads/{id}", "/upload-queue/{id}",
+                                     "/uploads/{id}/operations/remove",
+                                     "/upload-queue/{id}/operations/remove"])
+def test_upload_uuid_fixture_paths_round_trip_to_openapi(template):
+    import uuid
+
+    module = load_rest_api_smoke_module()
+    path = module.concrete_contract_path(template, "uploadFixture")
+    token = path.split("/")[4]
+    assert str(uuid.UUID(token)) == token
+    assert module.normalize_contract_path_for_openapi(path) == template
+
+
 def section_text(text: str, section: str) -> str:
     start = text.index(f"[{section}]")
     next_section = text.find("\n[", start + 1)
