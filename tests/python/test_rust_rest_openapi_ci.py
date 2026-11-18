@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import sqlite3
@@ -39,6 +40,40 @@ def test_api_key_meets_daemon_production_validation() -> None:
     assert module.API_KEY.isascii()
     assert module.API_KEY.isprintable()
     assert not any(character.isspace() for character in module.API_KEY)
+
+
+def test_listener_receipt_matches_actual_endpoint_and_instance(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    module = load_module()
+    token = "a" * 32
+    (tmp_path / module.LISTENER_RECEIPT_FILE).write_text(json.dumps({
+        "boundAddress": "127.0.0.1:32123", "probeHost": "127.0.0.1",
+        "probePort": 32123, "instanceId": token,
+    }), encoding="utf-8")
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.status, response.headers = 204, {"X-Emulebb-Instance": token}
+    def probe(request, *, timeout):
+        assert request.full_url == "http://127.0.0.1:32123/healthz"
+        assert timeout == 2.0
+        return response
+    monkeypatch.setattr(module.urllib.request, "urlopen", probe)
+    assert module.verify_listener_receipt(tmp_path, "http://127.0.0.1:32123")["instanceMatched"]
+    response.headers = {"X-Emulebb-Instance": "b" * 32}
+    with pytest.raises(RuntimeError, match="stale"):
+        module.verify_listener_receipt(tmp_path, "http://127.0.0.1:32123")
+
+
+def test_listener_receipt_wrong_endpoint_fails_before_connecting(tmp_path, monkeypatch):
+    module = load_module()
+    (tmp_path / module.LISTENER_RECEIPT_FILE).write_text(json.dumps({
+        "probeHost": "192.0.2.1", "probePort": 32123, "instanceId": "a" * 32,
+    }), encoding="utf-8")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Unverified receipt caused a connection")
+    monkeypatch.setattr(module.urllib.request, "urlopen", forbidden)
+    with pytest.raises(RuntimeError, match="actual fixture endpoint"):
+        module.verify_listener_receipt(tmp_path, "http://127.0.0.1:32123")
 
 
 def test_source_revision_prefers_ci_revision(tmp_path: Path, monkeypatch) -> None:

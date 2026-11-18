@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
@@ -46,7 +47,26 @@ REST_ADDR = "127.0.0.1"
 FRIEND_PEER_BUDGET_SECONDS = 180.0
 KAD_IMPORT_BUDGET_SECONDS = 90.0
 CATEGORY_BUDGET_SECONDS = 120.0
+LISTENER_RECEIPT_FILE = ".emulebb-rest-listener.json"
 FRIEND_FAULT_TRIGGERS = tuple(f"harness_friend_failure_{operation}" for operation in ("insert", "update", "delete"))
+
+
+def verify_listener_receipt(profile: Path, base_url: str) -> dict[str, object]:
+    """Match the owned profile's actual listener to its unauthenticated probe."""
+    receipt = json.loads((profile / LISTENER_RECEIPT_FILE).read_text(encoding="utf-8"))
+    expected = urllib.parse.urlsplit(base_url)
+    if (not isinstance(receipt, dict)
+            or receipt.get("probeHost") != expected.hostname
+            or type(receipt.get("probePort")) is not int
+            or receipt["probePort"] != expected.port
+            or not isinstance(receipt.get("instanceId"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", receipt["instanceId"]) is None):
+        raise RuntimeError("Listener receipt does not identify the actual fixture endpoint")
+    request = urllib.request.Request(base_url + "/healthz")
+    with urllib.request.urlopen(request, timeout=2.0) as response:
+        if response.status != 204 or response.headers.get("X-Emulebb-Instance") != receipt["instanceId"]:
+            raise RuntimeError("Listener receipt is stale or health endpoint is not ready")
+    return {"status": "passed", "configuredPort": receipt["probePort"], "instanceMatched": True}
 
 
 def require_download_id(row: dict[str, Any], *, hash_value: str) -> str:
@@ -1286,6 +1306,7 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
                 return None
 
         wait_until("Rust REST ready", ready_timeout_seconds, rest_ready)
+        report["listenerReceiptPhase"] = verify_listener_receipt(profile_dir, base_url)
         refused = subprocess.run(
             [str(executable), "--profile", str(profile_dir), "settings", "get", "network.ed2kEnabled"],
             capture_output=True, text=True, encoding="utf-8", timeout=20,
@@ -1338,6 +1359,11 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
                 )
                 process.wait(timeout=20.0)
                 report["teardown"] = "graceful"
+                if (profile_dir / LISTENER_RECEIPT_FILE).exists():
+                    report["status"] = "failed"
+                    report["error"] = "REST listener receipt survived graceful daemon shutdown"
+                elif "listenerReceiptPhase" in report:
+                    report["listenerReceiptPhase"]["removedOnShutdown"] = True
             except Exception as exc:  # noqa: BLE001 - teardown evidence must survive
                 report["teardown"] = f"forced: {type(exc).__name__}: {exc}"
                 rust_client.stop_process_tree(process)

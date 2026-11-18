@@ -22,6 +22,31 @@ def docker(*arguments: str, check: bool = True, input: str | None = None) -> sub
     )
 
 
+def verify_listener_health(container: str) -> dict[str, bool]:
+    """Exercise the image's real health helper against missing and stale receipts."""
+    helper = "/usr/local/bin/emulebb-rust-healthcheck"
+    receipt_file = ".emulebb-rest-listener.json"
+    current = docker("exec", container, "cat", "/config/emulebb-rust/" + receipt_file).stdout
+    if len(current) > 4096:
+        raise RuntimeError("Image listener receipt exceeds the runtime bound")
+    receipt = json.loads(current)
+    if (not isinstance(receipt, dict) or not isinstance(receipt.get("instanceId"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", receipt["instanceId"]) is None):
+        raise RuntimeError("Image listener receipt has no valid instance identity")
+    docker("exec", container, helper)
+    proof = "/tmp/emulebb-health-" + uuid4().hex
+    docker("exec", container, "mkdir", "-m", "700", proof)
+    for fault in ("missing", "malformed", "stale"):
+        if fault != "missing":
+            stale = {**receipt, "instanceId": "0" * 32 if receipt["instanceId"] != "0" * 32 else "1" * 32}
+            value = "{" if fault == "malformed" else json.dumps(stale)
+            docker("exec", "--interactive", container, "tee", proof + "/" + receipt_file, input=value)
+        if docker("exec", container, helper, proof, check=False).returncode == 0:
+            raise RuntimeError(f"Image health helper accepted a {fault} listener receipt")
+    docker("exec", container, helper)
+    return {"missingRejected": True, "malformedRejected": True, "staleRejected": True}
+
+
 def authenticated_app(container: str, architecture: str) -> dict[str, object]:
     """Prove the configured key works without placing it in argv or evidence."""
     try:
@@ -181,7 +206,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             expected_architecture = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
         else:
             raise RuntimeError("Image smoke requires an explicit Ubuntu or Alpine variant label")
-        docker("exec", container, "/usr/local/bin/emulebb-rust-healthcheck")
+        listener_health = verify_listener_health(container)
         auth_status = docker("exec", container, "curl", "--silent", "--max-time", "2", "--output", "/dev/null",
                              "--write-out", "%{http_code}", "http://127.0.0.1:20017/api/v1/status").stdout.strip()
         if ((uid, gid) != ("1234", "1235") or owners != ["1234:1235", "1234:1235"]
@@ -203,6 +228,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             "imageManifestDigest": actual_manifest, "imageConfigDigest": expected_identity["configDigest"],
             "unauthenticatedStatus": 401, **app, "restAuthentication": True, "gracefulShutdown": True,
             "networkIsolation": "internal-bridge", "dns": "loopback-only",
+            "listenerReceiptHealth": listener_health,
         }
     finally:
         original_error = sys.exception()
