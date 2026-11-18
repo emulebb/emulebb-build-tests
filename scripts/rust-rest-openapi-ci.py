@@ -760,8 +760,13 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Reusing a deleted name changed transfer assignments")
         if sharing_flags(selected_sharing) != [False, None, False]:
             raise RuntimeError("Sharing policy changed across profile reopen or hydration")
+        unavailable_counts_before = upload_counts(only_hash)
         peer = Ed2kFilePeerObserver(REST_ADDR, tcp_port, min(5.0, remaining()))
         with peer:
+            # This retained hash has no copy under a current root after reopen.
+            # Demand must still checkpoint without fabricating serving authority.
+            if peer.request_range(only_hash, 0, 10) is not None:
+                raise RuntimeError("Unavailable content gained payload authority from demand")
             if peer.filename_available(duplicate_hash) or peer.request_range(duplicate_hash, 0, 10) is not None:
                 raise RuntimeError("Restarted disabled hash accepted a new peer request")
             if upload_timestamps(duplicate_hash)[1] != first_timestamps[1]:
@@ -773,6 +778,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                 raise RuntimeError("Re-enabled restarted hash returned different bytes")
             sharing_wire.extend(peer.transcript)
         counts_after = require_upload_checkpoint(duplicate_hash, (counts_before[0] + 7, counts_before[1] + 2))
+        require_upload_checkpoint(only_hash, (unavailable_counts_before[0] + 1, unavailable_counts_before[1]))
         final_timestamps = upload_timestamps(duplicate_hash)
         if not all(value is not None and first_timestamps[index] <= value <= int(time.time()) for index, value in enumerate(final_timestamps)):
             raise RuntimeError("Upload timestamps did not persist and advance across reopen")
@@ -782,6 +788,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             "multiplePacketsOneAcceptedStint": True, "refusedDemandCounted": True,
             "reEnableKeepsSameStint": True, "newSessionAfterRestart": True}
         report["uploadAccounting"]["refusedOnlyDemandFlushedOnShutdown"] = True
+        report["uploadAccounting"]["unavailableHashDemandCheckpointed"] = True
         report["librarySharing"] = {"orderedMixedOutcomes": True, "idempotentWrites": True,
             "hashPolicyAcrossCopies": True, "tagsAndFilesPreserved": True, "unknownHashNotCreated": True,
             "persistedAcrossReopen": True, "cachedReaderRefusedOnNewRequest": True,
