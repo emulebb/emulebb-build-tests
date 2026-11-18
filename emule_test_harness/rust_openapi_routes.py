@@ -50,8 +50,6 @@ PATH_TOKEN_PARAMETER_SCHEMAS = {
 }
 QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
     "IncludeScoreBreakdown": "includeScoreBreakdown",
-    "IncludeEvidence": "includeEvidence",
-    "ExactTotal": "exactTotal",
 }
 DOWNLOAD_EVENT_COMPONENT = "DownloadEvent"
 DOWNLOAD_EVENT_VARIANTS = {
@@ -83,12 +81,11 @@ SHARED_FILE_PRIORITY_VALUES = (
     "high",
     "release",
 )
-SEARCH_COMPONENT = "Search"
 SEARCH_SESSION_COMPONENT = "SearchSession"
 SEARCH_CREATE_REQUEST_COMPONENT = "SearchCreateRequest"
 SEARCH_QUERY_PATTERN = r"^(?=.*\S)[^\x00-\x08\x0E-\x1F\x7F-\x9F]*$"
 SEARCH_METHOD_VALUES = ("automatic", "server", "global", "kad")
-SEARCH_STATUS_VALUES = ("queued", "running", "stopped", "complete", "error")
+SEARCH_STATUS_VALUES = ("queued", "running", "completed", "error")
 SEARCH_TYPE_VALUES = (
     "",
     "arc",
@@ -1228,8 +1225,6 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_shared_file_patch_schema_drift(drift, schemas)
     if SEARCH_CREATE_REQUEST_COMPONENT in schemas:
         append_search_create_schema_drift(drift, schemas)
-    if SEARCH_COMPONENT in schemas:
-        append_search_response_schema_drift(drift, schemas)
     if SEARCH_SESSION_COMPONENT in schemas:
         append_search_session_schema_drift(drift, schemas)
     if SEARCH_RESULT_COMPONENT in schemas:
@@ -1844,23 +1839,6 @@ def assert_search_unsigned_integer_schema(
                 issue=f"{label} maximum must be {maximum}",
             )
         )
-
-
-def append_search_response_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
-) -> None:
-    schema = schemas.get(SEARCH_COMPONENT)
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=SEARCH_COMPONENT,
-                issue="missing search response schema component",
-            )
-        )
-        return
-    assert_search_status_enum_schema(drift, SEARCH_COMPONENT, "search response", schema)
-    assert_search_status_reason_schema(drift, SEARCH_COMPONENT, "search response", schema)
 
 
 def append_search_session_schema_drift(
@@ -3077,7 +3055,7 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
         (r'\("GET",\s*\["library", "files", _, "tags"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/tags"),
-        (r'\("GET",\s*\["searches", _\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}"),
+        (r'\("GET",\s*\["searches", _, "results"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results"),
         (r'\("GET",\s*\["searches", _, "results", _, "observations"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results/{resultId}/observations"),
     ):
         match = re.search(pattern, parameterized)

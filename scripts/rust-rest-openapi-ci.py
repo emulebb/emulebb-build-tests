@@ -530,6 +530,16 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         search_fixture = rust_metadata.seed_search_observation_fixture(rust_repo, database)
         process, handle = package._start_daemon(executable, profile, root / "daemon.log")
         wait_until("category REST readiness", remaining(), ready)
+        session_path = f"/api/v1/searches/{search_fixture['sessionId']}"
+        session_metadata = validated_read(session_path, "/searches/{searchId}")
+        if session_metadata["data"]["resultCount"] != 1 or session_metadata["data"]["status"] != "completed":
+            raise RuntimeError("Search metadata lost retained result cardinality or terminal state")
+        summaries = validated_read(session_path + "/results?limit=1&sort=sources&order=desc", "/searches/{searchId}/results")
+        if summaries["data"][0]["id"] != search_fixture["resultId"] or summaries["data"][0]["displayName"] != "Beta.bin":
+            raise RuntimeError("Sorted result summary lost its permanent claim identity or selected name")
+        selected = validated_read(session_path + "/results/" + search_fixture["resultId"], "/searches/{searchId}/results/{resultId}")
+        if selected["data"] != summaries["data"][0]:
+            raise RuntimeError("Selected and paged result summaries disagree")
         observation_path = f"/api/v1/searches/{search_fixture['sessionId']}/results/{search_fixture['resultId']}/observations"
         observation_contract = "/searches/{searchId}/results/{resultId}/observations"
         first_observations = validated_read(observation_path + "?limit=1", observation_contract)
@@ -1037,17 +1047,20 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             request(peer, "POST", "/api/v1/servers/operations/connect")
         seeder = peers[0]
         first_search = request(seeder, "POST", "/api/v1/searches",
-                               body={"query": "Synthetic identity proof", "method": "server"})
+                               body={"query": "Synthetic identity proof", "method": "server"}, expected=201)
         search_id = first_search["json"]["data"]["id"]
         if search_id != "9007199254740993":
             raise RuntimeError("Search identity was not an exact SQLite-allocated decimal string")
-        schema = response_json_schema(openapi_operation_response(document, "POST", "/searches", 200), "search create")
+        schema = response_json_schema(openapi_operation_response(document, "POST", "/searches", 201), "search create")
         validate_openapi_schema(document, schema, first_search["json"])
         live_search = data(seeder, "GET", f"/api/v1/searches/{search_id}")
         if live_search["id"] != search_id:
             raise RuntimeError("Full-width search identity did not roundtrip through its resource path")
-        if live_search.get("total") != 0 or live_search.get("items") != []:
+        live_results = request(seeder, "GET", f"/api/v1/searches/{search_id}/results")["json"]
+        if live_search["resultCount"] != 0 or live_results["data"] != []:
             raise RuntimeError("Live search included results without a network observation")
+        result_schema = response_json_schema(openapi_operation_response(document, "GET", "/searches/{searchId}/results", 200), "search results")
+        validate_openapi_schema(document, result_schema, live_results)
         with closing(sqlite3.connect(seeder["database"].resolve().as_uri() + "?mode=ro", uri=True)) as connection:
             if connection.execute("SELECT count(*) FROM known_files WHERE ed2k_hash=?", (bytes.fromhex("99" * 16),)).fetchone()[0] != 1:
                 raise RuntimeError("Live-search proof lost its matching indexed fixture")
@@ -1056,7 +1069,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         request(seeder, "DELETE", f"/api/v1/searches/{search_id}")
         request(seeder, "GET", f"/api/v1/searches/{search_id}", expected=404)
         second_search = data(seeder, "POST", "/api/v1/searches",
-                             body={"query": "Synthetic identity proof", "method": "server"})
+                             body={"query": "Synthetic identity proof", "method": "server"}, expected=201)
         if second_search["id"] != "9007199254740994":
             raise RuntimeError("Search identity was reused after deletion")
         request(seeder, "DELETE", f"/api/v1/searches/{second_search['id']}")

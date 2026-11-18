@@ -1045,30 +1045,10 @@ components:
       required: false
       schema:
         type: string
-    IncludeEvidence:
-      name: includeEvidence
-      in: query
-      required: false
-      schema:
-        type: integer
-    ExactTotal:
-      name: exactTotal
-      in: query
-      required: false
-      schema:
-        type: string
 """,
     )
 
     assert openapi_parameter_metadata_drift(openapi_yaml) == (
-        ParameterMetadataDrift(
-            source="components.parameters.ExactTotal.schema",
-            issue="exactTotal query parameter type must be boolean",
-        ),
-        ParameterMetadataDrift(
-            source="components.parameters.IncludeEvidence.schema",
-            issue="includeEvidence query parameter type must be boolean",
-        ),
         ParameterMetadataDrift(
             source="components.parameters.IncludeScoreBreakdown.schema",
             issue="includeScoreBreakdown query parameter type must be boolean",
@@ -1089,20 +1069,6 @@ components:
       schema:
         type: boolean
         default: false
-    IncludeEvidence:
-      name: includeEvidence
-      in: query
-      required: false
-      schema:
-        type: boolean
-        default: true
-    ExactTotal:
-      name: exactTotal
-      in: query
-      required: false
-      schema:
-        type: boolean
-        default: true
 """,
     )
 
@@ -1251,59 +1217,6 @@ components:
     )
 
 
-def test_openapi_schema_component_drift_requires_search_status_reason(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  schemas:
-    Search:
-      type: object
-      unevaluatedProperties: false
-      required: [id, query, method, type, status, items]
-      properties:
-        status:
-          type: string
-          enum: [queued, running, stopped, complete, error]
-        statusReason:
-          type: string
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="Search",
-            issue="search response must require statusReason",
-        ),
-        SchemaComponentDrift(
-            component="Search.properties.statusReason",
-            issue="search response statusReason must be nullable string",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_search_status_reason(tmp_path: Path) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        """
-components:
-  schemas:
-    Search:
-      type: object
-      unevaluatedProperties: false
-      required: [id, query, method, type, status, statusReason, items]
-      properties:
-        status:
-          type: string
-          enum: [queued, running, stopped, complete, error]
-        statusReason:
-          type: [string, "null"]
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
-
-
 def test_openapi_schema_component_drift_requires_search_session_status_reason(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
@@ -1317,7 +1230,7 @@ components:
       properties:
         status:
           type: string
-          enum: [queued, running, stopped, complete, error]
+          enum: [queued, running, completed, error]
         statusReason:
           type: string
 """,
@@ -1348,7 +1261,7 @@ components:
       properties:
         status:
           type: string
-          enum: [queued, running, stopped, complete, error]
+          enum: [queued, running, completed, error]
         statusReason:
           type: [string, "null"]
 """,
@@ -1363,16 +1276,6 @@ def test_openapi_schema_component_drift_requires_search_status_values(tmp_path: 
         """
 components:
   schemas:
-    Search:
-      type: object
-      unevaluatedProperties: false
-      required: [id, query, method, type, status, statusReason, items]
-      properties:
-        status:
-          type: string
-          enum: [running, stopped, complete, error]
-        statusReason:
-          type: [string, "null"]
     SearchSession:
       type: object
       additionalProperties: false
@@ -1380,7 +1283,7 @@ components:
       properties:
         status:
           type: string
-          enum: [running, complete]
+          enum: [running, error]
         statusReason:
           type: [string, "null"]
 """,
@@ -1388,12 +1291,8 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
-            component="Search.properties.status",
-            issue="search response status enum must be queued, running, stopped, complete, error",
-        ),
-        SchemaComponentDrift(
             component="SearchSession.properties.status",
-            issue="search session schema status enum must be queued, running, stopped, complete, error",
+            issue="search session schema status enum must be queued, running, completed, error",
         ),
     )
 
@@ -3363,7 +3262,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
             .route("/api/v1/snapshot", get(snapshot))
             .route("/api/v1/upload-queue", get(upload_queue))
             .route("/api/v1/downloads", get(downloads))
-            .route("/api/v1/searches/{searchId}", get(search));
+            .route("/api/v1/searches/{searchId}/results", get(search_results));
         ''',
     )
     route_metadata_rs = write(
@@ -3373,7 +3272,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
             const NONE: &[&str] = &[];
             const SNAPSHOT: &[&str] = &["limit"];
             const DOWNLOADS: &[&str] = &["view", "category", "cursor", "limit"];
-            const SEARCH: &[&str] = &["offset", "limit", "includeEvidence", "exactTotal"];
+            const SEARCH_RESULTS: &[&str] = &["limit", "cursor", "sort", "order"];
             const UPLOAD_QUEUE: &[&str] = &["offset", "limit", "includeScoreBreakdown"];
             match (method, path) {
                 ("GET", "/api/v1/app")
@@ -3392,10 +3291,10 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
             path: &str,
         ) -> Option<&'static [&'static str]> {
             const NONE: &[&str] = &[];
-            const SEARCH: &[&str] = &["offset", "limit", "includeEvidence", "exactTotal"];
+            const SEARCH_RESULTS: &[&str] = &["limit", "cursor", "sort", "order"];
             let segments = path.strip_prefix("/api/v1/")?.split('/').collect::<Vec<_>>();
             match (method, segments.as_slice()) {
-                ("GET", ["searches", _]) => Some(SEARCH),
+                ("GET", ["searches", _, "results"]) => Some(SEARCH_RESULTS),
                 _ => Some(NONE),
             }
         }
@@ -3407,7 +3306,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
         Route("GET", "/snapshot"): ("limit",),
         Route("GET", "/upload-queue"): ("includeScoreBreakdown", "limit", "offset"),
         Route("GET", "/downloads"): ("category", "cursor", "limit", "view"),
-        Route("GET", "/searches/{searchId}"): ("exactTotal", "includeEvidence", "limit", "offset"),
+        Route("GET", "/searches/{searchId}/results"): ("cursor", "limit", "order", "sort"),
     }
 
 
