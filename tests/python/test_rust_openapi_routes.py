@@ -4135,7 +4135,8 @@ components:
     assert openapi_contract_version_drift(openapi_yaml, responses_rs) == ()
 
 
-def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_path: Path) -> None:
+@pytest.mark.parametrize("braced_search_arm", [False, True])
+def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_path: Path, braced_search_arm: bool) -> None:
     routes_rs = write(
         tmp_path / "routes.rs",
         '''
@@ -4189,6 +4190,14 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
         }
         ''',
     )
+
+    if not braced_search_arm:
+        source = route_body_metadata_rs.read_text(encoding="utf-8")
+        source = source.replace(
+            '=> {\n                    Some(SEARCH_RESULT_DOWNLOAD)\n                }',
+            '=> Some(SEARCH_RESULT_DOWNLOAD)',
+        )
+        route_body_metadata_rs.write_text(source, encoding="utf-8", newline="\n")
 
     assert rust_body_field_inventory(route_body_metadata_rs, routes_rs) == {
         Route("GET", "/app"): (),

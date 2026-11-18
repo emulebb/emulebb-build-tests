@@ -337,7 +337,9 @@ def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
     def create(label, *_args, **kwargs):
         assert label == "download"
         assert kwargs["body"] == {"intent": "started", "category": None}
-        file_hash = _args[2].split("/")[-3]
+        result_id = _args[2].split("/")[-2]
+        assert _args[2].endswith("/download")
+        file_hash = {"11": hashes[0], "12": hashes[1]}[result_id]
         return {"data": {"id": ids[file_hash], "hash": file_hash}}
     detail_calls = []
     def detail(_base, _key, job_id, *, expected_hash):
@@ -353,8 +355,8 @@ def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
     monkeypatch.setattr(module, "_source_count_lower_bound", lambda *_args: 1)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     result = module.run_downloads("http://192.0.2.10:4731", [
-        {"hash": hashes[0], "sizeBytes": 10, "_searchId": "1"},
-        {"hash": hashes[1], "sizeBytes": 10, "_searchId": "1"},
+        {"id": "11", "hash": hashes[0], "sizeBytes": 10, "_searchId": "1"},
+        {"id": "12", "hash": hashes[1], "sizeBytes": 10, "_searchId": "1"},
     ], 60, max_concurrent=2)
     assert result["completed"] is True and result["completedCount"] == 1
     assert detail_calls == ["7", "8"]
@@ -375,7 +377,7 @@ def test_download_completion_does_not_infer_payload_verification_from_bytes(monk
     monkeypatch.setattr(module, "download_part_totals", lambda *_args: {"verifiedBytes": 1000})
     monkeypatch.setattr(module, "_source_count_lower_bound", lambda *_args: next(source_counts))
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
-    result = module.run_downloads("http://192.0.2.10", [{"hash": "a" * 32, "sizeBytes": 1000, "_searchId": "1"}], 60, max_concurrent=1)
+    result = module.run_downloads("http://192.0.2.10", [{"id": "11", "hash": "a" * 32, "sizeBytes": 1000, "_searchId": "1"}], 60, max_concurrent=1)
     assert observations == ["7", "7"]
     assert result["sourceGrowthObserved"] is True
     assert result["sourceExchangeObserved"] is False
@@ -387,7 +389,7 @@ def test_all_failed_creations_do_not_poll_global_history(monkeypatch):
         raise RuntimeError("admission unavailable")
     monkeypatch.setattr(module, "retry_http_json", fail)
     monkeypatch.setattr(module, "download_detail", lambda *_args, **_kwargs: pytest.fail("no captured job"))
-    result = module.run_downloads("http://192.0.2.10", [{"hash": "a" * 32, "sizeBytes": 1, "_searchId": "1"}], 60, max_concurrent=1)
+    result = module.run_downloads("http://192.0.2.10", [{"id": "11", "hash": "a" * 32, "sizeBytes": 1, "_searchId": "1"}], 60, max_concurrent=1)
     assert result["started"] == 0 and result["completed"] is False
 
 
