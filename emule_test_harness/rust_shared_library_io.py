@@ -830,7 +830,13 @@ def completed_reload_from_logs(
     }]
     for path in sorted((profile_dir / "logs").glob("emulebb-rust*.jsonl")):
         with path.open("rb") as handle:
-            handle.seek(offsets.get(path, 0))
+            offset = offsets.get(path, 0)
+            if offset:
+                handle.seek(offset - 1)
+                if handle.read(1) != b"\n":
+                    handle.readline()  # Discard a record already in flight at the phase boundary.
+            else:
+                handle.seek(0)
             for line in handle:
                 if b'shared-directory reload completed' not in line:
                     continue

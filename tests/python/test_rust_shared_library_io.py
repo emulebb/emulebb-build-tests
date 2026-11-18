@@ -218,6 +218,18 @@ def test_reload_completion_waits_for_terminated_record_and_matches_its_target(tm
     assert subject.completed_reload_from_logs(tmp_path, {}, 100000)["hashedCount"] == 100000
 
 
+def test_reload_completion_skips_a_record_in_flight_before_the_phase(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / "emulebb-rust.test.jsonl"
+    old = json.dumps(completion_event(hashedCount=5)) + "\n"
+    path.write_text(old[:40], encoding="utf-8")
+    offsets = subject.reload_log_offsets(tmp_path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(old[40:] + json.dumps(completion_event()) + "\n")
+    assert subject.completed_reload_from_logs(tmp_path, offsets, 100000)["hashedCount"] == 100000
+
+
 def test_startup_failure_cleans_up_the_child_before_ownership_transfers(tmp_path, monkeypatch):
     process = object()
     stopped = []
