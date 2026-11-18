@@ -1088,16 +1088,32 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         stopped_session = data(seeder, "GET", f"/api/v1/searches/{search_id}")
         if stopped_session["status"] != "stopped" or stopped_session["resultCount"] != 0:
             raise RuntimeError("Search stop failed to preserve frozen session metadata")
+        second_search_response = request(seeder, "POST", "/api/v1/searches",
+            body={"parentSearchId":search_id,"query":"Edited synthetic criteria","method":"server"},expected=201)["json"]
+        validate_openapi_schema(document, schema, second_search_response)
+        second_search=second_search_response["data"]
+        if (second_search["id"] != "9007199254740994" or second_search["parentSearchId"] != search_id
+                or second_search["query"] != "Edited synthetic criteria" or second_search["resultCount"] != 0):
+            raise RuntimeError("Linked creation lost exact identity, supplied criteria or independent membership")
         request(seeder, "DELETE", f"/api/v1/searches/{search_id}")
         request(seeder, "GET", f"/api/v1/searches/{search_id}", expected=404)
-        second_search = request(seeder, "POST", "/api/v1/searches",
-                                body={"query": "Synthetic identity proof", "method": "server"}, expected=201)["json"]["data"]
-        if second_search["id"] != "9007199254740994":
-            raise RuntimeError("Search identity was reused after deletion")
+        child_response=request(seeder,"GET",f"/api/v1/searches/{second_search['id']}")["json"]
+        child_schema=response_json_schema(openapi_operation_response(document,"GET","/searches/{searchId}",200),"linked session metadata")
+        validate_openapi_schema(document,child_schema,child_response)
+        if child_response["data"]["parentSearchId"] is not None or child_response["data"]["query"] != "Edited synthetic criteria":
+            raise RuntimeError("Parent deletion failed to preserve and unlink its child")
+        request(seeder,"POST","/api/v1/searches",expected=404,
+                body={"parentSearchId":search_id,"query":"Missing parent proof","method":"server"})
+        request(seeder,"POST",f"/api/v1/searches/{second_search['id']}/stop",expected=204)
         request(seeder, "DELETE", f"/api/v1/searches/{second_search['id']}")
+        third_search=request(seeder,"POST","/api/v1/searches",expected=201,
+                             body={"query":"Identity nonreuse proof","method":"server"})["json"]["data"]
+        if third_search["id"] != "9007199254740995":
+            raise RuntimeError("Deletion reused an ID or missing-parent creation consumed an ID")
+        request(seeder,"DELETE",f"/api/v1/searches/{third_search['id']}")
         report["searchIdentityPhase"] = {"status": "passed", "stringIds": True,
                                          "beyondJavaScriptSafeInteger": True, "deletedIdNotReused": True,
-                                         "networkResultsOnly": True, "indexLookupCreatesNoClaim": True, "stopPreservedSession": True}
+                                         "networkResultsOnly": True, "indexLookupCreatesNoClaim": True, "stopPreservedSession": True, "linkedCriteria": True, "parentDeletionPreservedChild": True, "missingParentNotAllocated": True}
         core = data(seeder, "GET", "/api/v1/app/settings")["core"]
         if (core.get("baseUploadSlots"), core.get("uploadSlotElasticPercent"), core.get("uploadLimitKiBps")) != (1, 0, 8):
             raise RuntimeError("Local seeder did not admit the required single-slot upload policy")
