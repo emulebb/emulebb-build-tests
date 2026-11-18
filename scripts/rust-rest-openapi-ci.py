@@ -413,6 +413,12 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Upload accounting lost the known library hash")
         return int(row[0]), int(row[1])
 
+    def live_upload_counts(hash_value: str) -> tuple[int, int]:
+        row = shared_file_or_none(hash_value)
+        if row is None:
+            raise RuntimeError("Live upload accounting lost the physical library entry")
+        return int(row["allTimeRequests"]), int(row["allTimeAccepts"])
+
     def upload_timestamps(hash_value: str) -> tuple[int | None, int | None]:
         with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
             row = connection.execute(
@@ -673,17 +679,17 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                 raise RuntimeError("Local peer received different verified bytes")
             if peer.request_range(duplicate_hash, 10, 20) != duplicate_bytes[10:20]:
                 raise RuntimeError("Second request in one upload stint returned different bytes")
-            if (counts := upload_counts(duplicate_hash))[0] != counts_before[0] + 2 or not counts_before[1] <= counts[1] <= counts_before[1] + 1:
+            if (counts := live_upload_counts(duplicate_hash)) != (counts_before[0] + 2, counts_before[1] + 1):
                 raise RuntimeError("Multiple payload requests did not count as one accepted upload stint")
             sharing(False, [duplicate_hash], ["accepted"])
             if peer.request_range(duplicate_hash, 20, 30) is not None:
                 raise RuntimeError("Disabled hash reused a complete reader on the established connection")
-            if (counts := upload_counts(duplicate_hash))[0] != counts_before[0] + 3 or not counts_before[1] <= counts[1] <= counts_before[1] + 1:
+            if (counts := live_upload_counts(duplicate_hash)) != (counts_before[0] + 3, counts_before[1] + 1):
                 raise RuntimeError("Refused demand changed the accepted-stint count")
             sharing(True, [duplicate_hash], ["accepted"])
             if not peer.start_upload(duplicate_hash) or peer.request_range(duplicate_hash, 30, 40) != duplicate_bytes[30:40]:
                 raise RuntimeError("Re-enabled content did not resume the established peer")
-            if (counts := upload_counts(duplicate_hash))[0] != counts_before[0] + 4 or not counts_before[1] <= counts[1] <= counts_before[1] + 1:
+            if (counts := live_upload_counts(duplicate_hash)) != (counts_before[0] + 4, counts_before[1] + 1):
                 raise RuntimeError("Re-enable duplicated acceptance within the same upload stint")
             sharing_wire = list(peer.transcript)
         require_upload_checkpoint(duplicate_hash, (counts_before[0] + 4, counts_before[1] + 1))
