@@ -2930,7 +2930,7 @@ def test_selected_download_shapes_use_job_ids_nullable_metadata_and_per_id_resul
         validate_openapi_schema(document, batch, {"id": "2", "status": "failed", "httpStatus": 200})
     observation = openapi_schema_component(document, "DownloadFileNameObservation")
     reported = {"rawName": "raw", "normalizedName": "normalized", "origin": "peer",
-                "serverEndpoint": None, "observedAt": 1}
+                "reporterEndpoint": None, "observedAt": 1}
     validate_openapi_schema(document, observation, reported)
     for field, size in (("rawName", 65_537), ("normalizedName", 4_097)):
         with pytest.raises(jsonschema.ValidationError):
