@@ -36,7 +36,7 @@ from .paths import (
 )
 from .script_modules import load_script_module
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v7"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v8"
 RETAINED_DOWNLOAD_EXPECTED = {
     "downloadJobs": 100_000,
     "unfinishedDownloads": 1_000,
@@ -836,6 +836,7 @@ def wait_for_reload(
     max_disk_active = 0
     observations: list[dict[str, object]] = []
     final: dict[str, object] | None = None
+    completed_reload: dict[str, object] | None = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -846,6 +847,17 @@ def wait_for_reload(
             "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
+        # WHY: a queued reconciliation may replace completed scan counters
+        # before the worker becomes idle. Retain the first completed reload,
+        # but still require the entire worker to settle before accepting it.
+        if (
+            completed_reload is None
+            and progress.get("phase") == "idle"
+            and int(progress.get("scannedCount") or 0) == expected_scanned
+            and int(progress.get("activeHashCount") or 0) == 0
+            and int(data.get("hashingCount") or 0) == 0
+        ):
+            completed_reload = progress
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
             max_disk_active,
@@ -879,7 +891,8 @@ def wait_for_reload(
         "label": label,
         "elapsedSeconds": round(time.monotonic() - started, 3),
         "sharedFilesTotal": shared.get("total"),
-        "progress": final,
+        "progress": completed_reload if completed_reload is not None else final,
+        "settledProgress": final,
         "maxActiveHashCount": max_active,
         "maxPerDiskActiveCount": max_disk_active,
         "process": sampler.summary(process_start),

@@ -73,6 +73,42 @@ def test_process_summary_distinguishes_sampled_memory_from_lifetime_peak():
     assert value["lifetimeCpuSeconds"] == 1
 
 
+def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settles(monkeypatch):
+    def response(*, phase, running, pending, hashed, reused):
+        return {"hashingCount": 0, "reloadProgress": {
+            "phase": phase, "running": running, "pending": pending,
+            "scannedCount": 100000, "activeHashCount": 0,
+            "hashedCount": hashed, "reusedCount": reused, "disks": [],
+        }}
+    responses = [
+        response(phase="idle", running=True, pending=True, hashed=100000, reused=0),
+        response(phase="hashing", running=True, pending=False, hashed=0, reused=100000),
+        response(phase="idle", running=False, pending=False, hashed=0, reused=100000),
+    ]
+    def request(method, path, **kwargs):
+        assert method == "GET"
+        if path == "/shared-directories":
+            return responses.pop(0)
+        assert path == subject.SHARED_FILES_PROBE_PATH
+        assert not responses, "catalog checked before the queued worker settled"
+        return {"total": 100000}
+    monkeypatch.setattr(subject, "disk_io_snapshot", lambda _: {})
+    monkeypatch.setattr(subject.time, "sleep", lambda _: None)
+    result = subject.wait_for_reload(
+        label="initial", client=SimpleNamespace(request=request),
+        process=SimpleNamespace(poll=lambda: None),
+        sampler=SimpleNamespace(samples=[], maybe_sample=lambda **kwargs: None,
+                                summary=lambda _: {}),
+        disk_counter_key=None, expected_scanned=100000, timeout_seconds=1,
+        poll_seconds=0,
+    )
+    assert result["progress"]["hashedCount"] == 100000
+    assert result["progress"]["reusedCount"] == 0
+    assert result["settledProgress"]["hashedCount"] == 0
+    assert result["settledProgress"]["reusedCount"] == 100000
+    assert result["settledProgress"]["running"] is False
+
+
 def test_startup_failure_cleans_up_the_child_before_ownership_transfers(tmp_path, monkeypatch):
     process = object()
     stopped = []
