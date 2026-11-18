@@ -2437,6 +2437,16 @@ def media_no_change_acceptance(
     return {"ok": all(checks.values()), "checks": checks}
 
 
+def graceful_shutdowns(report: dict[str, object], phases: tuple[str, ...]) -> bool:
+    """Require a graceful zero exit for every expected process lifetime."""
+    for phase in phases:
+        result = report.get(phase)
+        if (not isinstance(result, dict) or result.get("method") != "rest"
+                or type(result.get("exitCode")) is not int or result["exitCode"] != 0):
+            return False
+    return True
+
+
 def rest_summary(clients: list[RestClient]) -> dict[str, object]:
     samples = [sample for client in clients for sample in client.samples]
     errors = [error for client in clients for error in client.errors]
@@ -3121,8 +3131,7 @@ def run_campaign(
                     and all(phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]),
                 "downloadRowsPreserved": all(rows.get(key) == value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()),
                 "downloadRestCounts": all(value["ok"] for value in report["downloadSnapshots"]),
-                "gracefulShutdown": report["initialShutdown"].get("method") == "rest"
-                    and report["initialShutdown"].get("exitCode") == 0,
+                "gracefulShutdown": graceful_shutdowns(report, ("initialShutdown",)),
                 "noWatcherErrors": watcher_log_summary(log_paths)["watcherErrors"] == 0,
                 "noRestErrors": rest_summary(clients)["errorCount"] == 0,
             }
@@ -3318,6 +3327,9 @@ def run_campaign(
         global_checks = {
             "resourceSamplesPresent": len(samplers) == 4
                 and all(sampler.summary().get("sampleCount", 0) > 0 for sampler in samplers),
+            "gracefulShutdowns": graceful_shutdowns(report, (
+                "initialShutdown", "preMutationShutdown", "mutationShutdown", "finalShutdown",
+            )),
             "retainedDownloadRowsPreserved": all(
                 snapshot["rowCounts"].get(key) == expected
                 for snapshot in storage_snapshots for key, expected in RETAINED_DOWNLOAD_EXPECTED.items()

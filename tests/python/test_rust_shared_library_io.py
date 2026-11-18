@@ -140,6 +140,17 @@ def test_process_summary_distinguishes_sampled_memory_from_lifetime_peak():
     assert value["lifetimeCpuSeconds"] == 1
 
 
+@pytest.mark.parametrize("bad", [None, {"method": "forcedFallback", "exitCode": 0},
+                                  {"method": "rest", "exitCode": 1},
+                                  {"method": "rest", "exitCode": False}])
+def test_every_process_lifetime_requires_graceful_zero_exit(bad):
+    phases = ("initialShutdown", "preMutationShutdown", "mutationShutdown", "finalShutdown")
+    report = {phase: {"method": "rest", "exitCode": 0} for phase in phases}
+    assert subject.graceful_shutdowns(report, phases)
+    for phase in phases:
+        assert not subject.graceful_shutdowns(report | {phase: bad}, phases)
+
+
 def completion_event(**overrides):
     fields = {field: 0 for field in subject.PROGRESS_FIELDS if field not in {
         "phase", "running", "pending", "readRateBytesPerSec",
