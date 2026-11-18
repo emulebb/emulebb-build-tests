@@ -571,6 +571,65 @@ def seed_download_job(
         return str(job_id)
 
 
+def seed_retained_download_scale(db_path: Path, *, count: int = 100_000) -> dict[str, int]:
+    """Seed a stopped profile with retained history and sparse unfinished work.
+
+    This metadata-only fixture grants no deletion authority and creates no
+    output files. It qualifies retained-job browsing, not payload verification
+    or a physical shared library. One transaction and a streaming loop keep
+    fixture construction independent of per-job connection overhead.
+    """
+    if type(count) is not int or count <= 0:
+        raise ValueError("retained download count must be a positive integer")
+    now_ms = _now_ms()
+    now_s = now_ms // 1000
+    result = {"jobs": count, "completed": 0, "stopped": 0, "queued": 0}
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM download_jobs LIMIT 1").fetchone():
+            raise ValueError("retained scale fixture requires an empty download collection")
+        for index in range(1, count + 1):
+            hash_blob = index.to_bytes(16, "big")
+            name = f"retained-{index:09d}.bin"
+            bucket = index % 1000
+            state = "queued" if bucket == 0 else "stopped" if bucket < 10 else "completed"
+            complete = state == "completed"
+            result[state] += 1
+            known_id = conn.execute(
+                """INSERT INTO known_files(ed2k_hash,display_name,size_bytes,
+                   first_seen_at_ms,last_seen_at_ms,updated_at_ms) VALUES(?,?,1024,?,?,?)""",
+                (hash_blob, name, now_ms, now_ms, now_ms),
+            ).lastrowid
+            path_id = None
+            if complete:
+                path_id = _upsert_local_path(
+                    conn, str(db_path.parent / "absent-scale-outputs" / name), now_ms
+                )
+                conn.execute(
+                    """INSERT INTO download_history(ed2k_hash,size_bytes,display_name,
+                       first_completed_at_s,last_completed_at_s) VALUES(?,1024,?,?,?)""",
+                    (hash_blob, name, now_s, now_s),
+                )
+            job_id = conn.execute(
+                """INSERT INTO download_jobs(known_file_id,expected_size_bytes,display_name,
+                   part_size_bytes,part_count,completed,visible_state,intent,delivery_state,
+                   delivery_ownership,delivered_path_id,terminal_completed_at_s,
+                   internal_storage_retired,created_at_s,updated_at_s,completed_at_s)
+                   VALUES(?,1024,?,9728000,1,?,?,?,?,?,?,?,?,?,?,?)""",
+                (known_id, name, int(complete), "completed" if complete else "queued",
+                 "stopped" if state == "stopped" else "started",
+                 "delivered" if complete else "pending", "unowned" if complete else "none",
+                 path_id, now_s if complete else None, int(complete), now_s, now_s,
+                 now_s if complete else None),
+            ).lastrowid
+            conn.execute("UPDATE known_files SET latest_download_job_id=? WHERE id=?", (job_id, known_id))
+        if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise RuntimeError("retained scale fixture violates metadata references")
+        conn.commit()
+    return result
+
+
 def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> None:
     """Seed Rust shared-directory roots before daemon startup.
 

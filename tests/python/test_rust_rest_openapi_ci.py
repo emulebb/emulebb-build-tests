@@ -42,6 +42,53 @@ def test_api_key_meets_daemon_production_validation() -> None:
     assert not any(character.isspace() for character in module.API_KEY)
 
 
+@pytest.mark.parametrize("rows,meta", [
+    ([], {"hasMore": False, "nextCursor": None}),
+    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}),
+    ([{"id": "3"}], {"hasMore": False, "nextCursor": None}),
+    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}),
+    ([{"id": 3}], {"hasMore": False, "nextCursor": None}),
+])
+def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monkeypatch, rows, meta):
+    from types import SimpleNamespace
+    module = load_module()
+    shutdowns = []
+    process = SimpleNamespace(poll=lambda: None, returncode=0)
+    package = SimpleNamespace(
+        API_KEY="scale-test-key",
+        _start_daemon=lambda exe, profile, log: (process, log.open("w", encoding="utf-8")),
+        _graceful_shutdown=lambda base, child: shutdowns.append(child),
+    )
+    monkeypatch.setattr(module, "load_script_module", lambda *args: package)
+    monkeypatch.setattr(module.rust_client, "write_rust_profile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.rust_client, "rust_network_settings_patch", lambda **kwargs: {})
+    monkeypatch.setattr(module.rust_metadata, "seed_retained_download_scale", lambda *args: {
+        "jobs": 3, "completed": 2, "stopped": 1, "queued": 0,
+    })
+    monkeypatch.setattr(module, "load_openapi_document", lambda path: {})
+    monkeypatch.setattr(module, "openapi_operation_response", lambda *args: {})
+    monkeypatch.setattr(module, "response_json_schema", lambda *args: {})
+    monkeypatch.setattr(module, "validate_openapi_schema", lambda *args: None)
+    monkeypatch.setattr(module, "verify_listener_receipt", lambda *args: {})
+    monkeypatch.setattr(module, "wait_until", lambda name, timeout, predicate: predicate())
+    def response(base, path, **kwargs):
+        assert kwargs["api_key"] == package.API_KEY
+        if path == "/api/v1/status":
+            return {"data": {"transfers": {"active": 1, "completed": 2, "total": 3}}}
+        return {"data": [dict(row, hash=f"{int(row['id']):032x}") for row in rows], "meta": meta}
+    monkeypatch.setattr(module, "http_json", response)
+    root = tmp_path / "scale"
+    with pytest.raises(RuntimeError, match="scale proof failed"):
+        module.run_retained_download_scale_phase(executable=tmp_path / "daemon", rust_repo=tmp_path,
+                                                 root=root, openapi_contract=tmp_path / "openapi")
+    report = json.loads((root / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert report["teardown"] == "graceful"
+    assert report["physicalLibraryQualified"] is False
+    assert report["memoryLimitQualified"] is False
+    assert len(shutdowns) == 1
+
+
 def test_listener_receipt_matches_actual_endpoint_and_instance(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     module = load_module()

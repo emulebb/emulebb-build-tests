@@ -13,6 +13,40 @@ def rust_repo() -> Path:
     return resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
 
 
+def test_retained_download_scale_fixture_has_consistent_counts_and_no_storage_authority(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    counts = rust_metadata.seed_retained_download_scale(database, count=1000)
+    assert counts == {"jobs": 1000, "completed": 990, "stopped": 9, "queued": 1}
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("SELECT unfinished,completed FROM download_job_counts").fetchone() == (10, 990)
+        assert conn.execute("SELECT count(*) FROM download_history").fetchone() == (990,)
+        assert conn.execute("SELECT count(*) FROM download_jobs WHERE storage_path_id IS NOT NULL OR delivery_ownership='owned'").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM known_files k JOIN download_jobs j ON k.latest_download_job_id=j.id AND j.known_file_id=k.id").fetchone() == (1000,)
+        before = conn.execute("SELECT count(*) FROM known_files").fetchone()
+    assert not (tmp_path / "absent-scale-outputs").exists()
+    with pytest.raises(ValueError, match="empty download collection"):
+        rust_metadata.seed_retained_download_scale(database, count=1000)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT count(*) FROM known_files").fetchone() == before
+
+
+def test_retained_scale_fixture_rolls_back_the_whole_batch_on_a_write_failure(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    with sqlite3.connect(database) as conn:
+        conn.executescript("""CREATE TRIGGER fail_scale BEFORE INSERT ON download_jobs
+                            WHEN new.display_name='retained-000000050.bin'
+                            BEGIN SELECT RAISE(ABORT,'fixture fault'); END;""")
+    with pytest.raises(sqlite3.IntegrityError, match="fixture fault"):
+        rust_metadata.seed_retained_download_scale(database, count=1000)
+    with sqlite3.connect(database) as conn:
+        for table in ("download_jobs", "known_files", "local_paths", "download_history"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
+        assert conn.execute("SELECT unfinished,completed FROM download_job_counts").fetchone() == (0, 0)
+
+
 def test_local_discovery_initializes_both_current_schema_domains(tmp_path):
     database = tmp_path / "metadata.db"
     rust_metadata.create_metadata_db(rust_repo(), database)

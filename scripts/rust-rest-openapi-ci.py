@@ -1286,6 +1286,130 @@ def run_settings_cli_phase(executable: Path, profile: Path) -> dict[str, object]
             "canonicalFieldDiagnostics": True, "explicitDefaultResolutionRecovery": True}
 
 
+def run_retained_download_scale_phase(*, executable: Path, rust_repo: Path, root: Path,
+                                      openapi_contract: Path) -> dict[str, object]:
+    """Browse 100k retained jobs and reopen them through the packaged daemon.
+
+    Reuse the existing profile, launch, shutdown and schema helpers. This is
+    metadata-scale evidence, not the combined physical-library/container gate.
+    """
+    root.mkdir(parents=True, exist_ok=False)
+    profile = root / "profile"
+    port = choose_loopback_port()
+    base_url = f"http://{REST_ADDR}:{port}"
+    package = load_script_module("package_helpers_for_retained_scale", "smoke-rust-release-package.py")
+    api_key = package.API_KEY
+    process = handle = None
+    report: dict[str, Any] = {"status": "failed", "fixture": "metadata-only",
+                              "physicalLibraryQualified": False, "memoryLimitQualified": False}
+    try:
+        rust_client.write_rust_profile(
+            profile, rust_repo=rust_repo, incoming_dir=profile / "incoming",
+            rest_addr=REST_ADDR, rest_port=port, api_key=api_key, nat_enabled=False,
+            initial_shared_directory_reload=False, local_only_discovery=True, vpn_guard_mode="off",
+        )
+        database = profile / rust_metadata.RUST_PROFILE_METADATA_FILE
+        for section, values in rust_client.rust_network_settings_patch(
+            auto_connect=False, reconnect_enabled=False, network_ed2k=False, network_kademlia=False,
+        ).items():
+            rust_metadata.replace_settings_section(database, section, values)
+        fixture = rust_metadata.seed_retained_download_scale(database)
+        report["fixtureCounts"] = fixture
+        document = load_openapi_document(openapi_contract)
+        schema = response_json_schema(openapi_operation_response(document, "GET", "/downloads", 200), "/downloads")
+        process, handle = package._start_daemon(executable, profile, root / "daemon.log")
+
+        def ready():
+            if process.poll() is not None:
+                raise RuntimeError(f"Retained-scale daemon exited: {process.returncode}")
+            try:
+                return http_json(base_url, "/api/v1/status", api_key=api_key, timeout_seconds=2.0)
+            except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+                return None
+
+        wait_until("retained-scale REST readiness", 120.0, ready)
+        report["listener"] = verify_listener_receipt(profile, base_url)
+        expected_counts = {"active": fixture["queued"] + fixture["stopped"],
+                           "completed": fixture["completed"], "total": fixture["jobs"]}
+        if ready()["data"]["transfers"] != expected_counts:
+            raise RuntimeError("Retained-scale dashboard counts differ from the seeded jobs")
+        views = {}
+        for view, expected in (("all", fixture["jobs"]), ("completed", fixture["completed"]),
+                               ("unfinished", expected_counts["active"])):
+            cursor, previous_id, seen, pages = None, fixture["jobs"] + 1, 0, 0
+            started = time.monotonic()
+            while True:
+                query = {"view": view, "limit": 200}
+                if cursor is not None:
+                    query["cursor"] = cursor
+                payload = http_json(base_url, "/api/v1/downloads?" + urllib.parse.urlencode(query),
+                                    api_key=api_key, timeout_seconds=30.0)
+                if pages == 0:
+                    validate_openapi_schema(document, schema, payload)
+                rows, meta = payload["data"], payload["meta"]
+                if not isinstance(rows, list) or not 1 <= len(rows) <= 200:
+                    raise RuntimeError(f"Retained-scale {view} returned an invalid page length")
+                for row in rows:
+                    identity = row.get("id")
+                    if (not isinstance(identity, str) or re.fullmatch(r"[1-9][0-9]*", identity) is None
+                            or not 0 < int(identity) < previous_id):
+                        raise RuntimeError(f"Retained-scale {view} repeated, skipped ordering or lost exact IDs")
+                    previous_id = int(identity)
+                    complete = previous_id % 1000 >= 10
+                    if (row.get("hash") != f"{previous_id:032x}"
+                            or (view == "completed" and not complete)
+                            or (view == "unfinished" and complete)):
+                        raise RuntimeError(f"Retained-scale {view} returned another fixture's content or view")
+                pages += 1
+                seen += len(rows)
+                if seen > expected:
+                    raise RuntimeError(f"Retained-scale {view} did not terminate at its fixture bound")
+                if meta["hasMore"] is False:
+                    if meta["nextCursor"] is not None:
+                        raise RuntimeError("Final retained-scale page returned a continuation")
+                    break
+                next_cursor = meta["nextCursor"]
+                if (meta["hasMore"] is not True or not isinstance(next_cursor, str)
+                        or not next_cursor or next_cursor == cursor):
+                    raise RuntimeError("Retained-scale continuation did not advance")
+                cursor = next_cursor
+            if seen != expected:
+                raise RuntimeError(f"Retained-scale {view} omitted jobs: {seen}/{expected}")
+            views[view] = {"rows": seen, "pages": pages, "elapsedSeconds": time.monotonic() - started}
+        report["views"] = views
+        package._graceful_shutdown(base_url, process)
+        handle.close()
+        handle = None
+        if (profile / LISTENER_RECEIPT_FILE).exists():
+            raise RuntimeError("Retained-scale listener receipt survived shutdown")
+        process, handle = package._start_daemon(executable, profile, root / "restart.log")
+        wait_until("reopened retained-scale REST readiness", 120.0, ready)
+        if ready()["data"]["transfers"] != expected_counts:
+            raise RuntimeError("Retained job counts changed across clean restart")
+        report["restartCountsPreserved"] = True
+        report["status"] = "passed"
+    except Exception as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        try:
+            if process is not None and process.poll() is None:
+                package._graceful_shutdown(base_url, process)
+            if process is not None and process.returncode != 0:
+                raise RuntimeError(f"Retained-scale daemon exited {process.returncode}")
+            report["teardown"] = "graceful" if process is not None else "not-started"
+        except Exception as error:
+            report.update(status="failed", teardown=f"forced: {error}")
+            if process is not None:
+                rust_client.stop_process_tree(process)
+        finally:
+            if handle is not None:
+                handle.close()
+        write_report(root / "report.json", report)
+    if report["status"] != "passed":
+        raise RuntimeError(f"Retained download scale proof failed; evidence: {root / 'report.json'}")
+    return report
+
+
 def staged_executable(output_root: Path) -> Path:
     """Returns the orchestrator-staged regular daemon for this host OS."""
 
@@ -1444,6 +1568,10 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
         )
         report["categoryPersistencePhase"] = run_category_persistence_phase(
             executable=executable, rust_repo=rust_repo, root=profile_dir / "category-persistence-phase",
+            openapi_contract=openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH,
+        )
+        report["retainedDownloadScalePhase"] = run_retained_download_scale_phase(
+            executable=executable, rust_repo=rust_repo, root=profile_dir / "retained-download-scale-phase",
             openapi_contract=openapi_contract or rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH,
         )
         report["status"] = "passed"
