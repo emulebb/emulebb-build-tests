@@ -43,6 +43,62 @@ def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path
                                 retained_downloads=1000) == "launched"
 
 
+@pytest.fixture
+def replay_baseline(tmp_path, monkeypatch):
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    paths = SimpleNamespace(runs_root=tmp_path / "runs", reports_root=tmp_path / "reports",
+                            fixture_root=tmp_path / "fixture", rust_repo=rust_repo)
+    profile = paths.runs_root / "verified-run" / "profile"
+    profile.mkdir(parents=True)
+    paths.reports_root.mkdir()
+    database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
+    subject.rust_metadata.create_metadata_db(rust_repo, database)
+    subject.rust_metadata.seed_retained_download_scale(database, count=1000)
+    monkeypatch.setattr(subject, "RETAINED_DOWNLOAD_EXPECTED", {
+        "downloadJobs": 1000, "unfinishedDownloads": 10, "completedDownloads": 990,
+        "startedDownloads": 1, "stoppedDownloads": 9,
+    })
+    report = {"schema": subject.REPORT_SCHEMA, "runId": "verified-run",
+              "paths": {"fixtureFingerprint": subject.path_fingerprint(paths.fixture_root)},
+              "phases": [{"acceptance": {"checks": {key: True for key in (
+                  "databaseActiveBytes", "databaseActiveShares", "databaseHashIntegrity",
+                  "databaseKnownFiles", "databaseLongPathShares", "databaseScanFailures",
+              )}}}]}
+    receipt = paths.reports_root / "rust-shared-library-io-verified-run.json"
+    receipt.write_text(json.dumps(report), encoding="utf-8")
+    return paths, database, receipt
+
+
+def test_replay_copies_current_sqlite_snapshot_and_preserves_its_source(replay_baseline, tmp_path):
+    paths, database, receipt = replay_baseline
+    original = database.read_bytes()
+    target = tmp_path / "replay"
+    result = subject.copy_replay_database(paths, "verified-run", target)
+    assert database.read_bytes() == original
+    assert result["sourceRunId"] == "verified-run"
+    assert result["sourceReportSha256"] == subject.hashlib.sha256(receipt.read_bytes()).hexdigest()
+    assert subject.profile_storage_snapshot(target)["rowCounts"]["downloadJobs"] == 1000
+    with pytest.raises(RuntimeError, match="already exists"):
+        subject.copy_replay_database(paths, "verified-run", target)
+
+
+def test_replay_refuses_an_unverified_baseline_before_copying(replay_baseline, tmp_path):
+    paths, _, receipt = replay_baseline
+    report = json.loads(receipt.read_text())
+    report["phases"][0]["acceptance"]["checks"]["databaseHashIntegrity"] = False
+    receipt.write_text(json.dumps(report), encoding="utf-8")
+    target = tmp_path / "replay"
+    with pytest.raises(RuntimeError, match="no verified complete library baseline"):
+        subject.copy_replay_database(paths, "verified-run", target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("run_id", ["..", "../outside", "", "one/two"])
+def test_replay_refuses_paths_outside_owned_runs(tmp_path, run_id):
+    with pytest.raises(RuntimeError, match="one path segment"):
+        subject.copy_replay_database(SimpleNamespace(), run_id, tmp_path)
+
+
 def test_retained_download_observation_requires_the_realistic_counts():
     class Client:
         def request(self, method, path):

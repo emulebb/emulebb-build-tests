@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2780,6 +2781,42 @@ def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
     return marker_counts
 
 
+def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path) -> dict[str, object]:
+    """Snapshot a current owned baseline without modifying the failed original."""
+    if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        raise RuntimeError("replay run ID must be one path segment")
+    source_run = (paths.runs_root / run_id).resolve(strict=True)
+    if source_run.parent != paths.runs_root.resolve(strict=True):
+        raise RuntimeError("replay source escaped the owned runs root")
+    report_path = paths.reports_root / f"rust-shared-library-io-{run_id}.json"
+    report_bytes = report_path.read_bytes()
+    report = json.loads(report_bytes)
+    if (report.get("schema") != REPORT_SCHEMA or report.get("runId") != run_id
+            or report.get("paths", {}).get("fixtureFingerprint") != path_fingerprint(paths.fixture_root)):
+        raise RuntimeError("replay source identity does not match this fixture")
+    phases = report.get("phases", [])
+    checks = phases[0].get("acceptance", {}).get("checks", {}) if phases else {}
+    if not all(checks.get(key) is True for key in (
+        "databaseActiveBytes", "databaseActiveShares", "databaseHashIntegrity",
+        "databaseKnownFiles", "databaseLongPathShares", "databaseScanFailures",
+    )):
+        raise RuntimeError("replay source has no verified complete library baseline")
+    source_db = source_run / "profile" / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.require_current_profile_database(paths.rust_repo, source_db)
+    storage.make_directories(profile_dir)
+    target_db = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    if target_db.exists():
+        raise RuntimeError("replay destination database already exists")
+    with closing(sqlite3.connect(source_db.resolve().as_uri() + "?mode=ro", uri=True)) as source:
+        with closing(sqlite3.connect(target_db)) as target:
+            source.backup(target)
+    rust_metadata.require_current_profile_database(paths.rust_repo, target_db)
+    rows = profile_storage_snapshot(profile_dir)["rowCounts"]
+    if any(rows.get(key) != value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()):
+        raise RuntimeError("replay download fixture differs from the combined workload")
+    return {"sourceRunId": run_id, "sourceReportSha256": hashlib.sha256(report_bytes).hexdigest()}
+
+
 def run_campaign(
     paths: HarnessPaths, args: argparse.Namespace
 ) -> tuple[Path, dict[str, object]]:
@@ -2851,6 +2888,7 @@ def run_campaign(
         "qualificationScope": {
             "physicalLibrary": True, "downloadHistory": "metadata-only",
             "containerLimitsEnforced": False,
+            "initialPayloadHashing": args.watcher_replay_from is None,
         },
         "preRunBaselineRestore": restored,
         "targetRoots": [item.sanitized(path_fingerprint) for item in storage_targets],
@@ -2879,11 +2917,14 @@ def run_campaign(
         return min(args.watcher_timeout_seconds, remaining_seconds())
 
     try:
+        replay = args.watcher_replay_from is not None
+        if replay:
+            report["replay"] = copy_replay_database(paths, args.watcher_replay_from, profile_dir)
         initial_log = run_root / "initial.log"
         log_paths.append(initial_log)
         process, client, sampler = start_daemon(
             paths, profile_dir, initial_log, choose_loopback_port(),
-            retained_downloads=RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+            retained_downloads=0 if replay else RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
         )
         clients.append(client)
         samplers.append(sampler)
@@ -2897,7 +2938,7 @@ def run_campaign(
             },
         )
         initial = wait_for_reload(
-            label="bestEffortInitial",
+            label="watcherReplayBaseline" if replay else "bestEffortInitial",
             client=client,
             process=process,
             sampler=sampler,
@@ -2912,12 +2953,12 @@ def run_campaign(
             {
                 "sharedFilesTotal": PRODUCTION_SPEC.file_count,
                 "scannedCount": PRODUCTION_SPEC.file_count,
-                "plannedHashCount": PRODUCTION_SPEC.file_count,
-                "hashedCount": PRODUCTION_SPEC.file_count,
-                "reusedCount": 0,
-                "plannedReadBytes": PRODUCTION_SPEC.total_bytes,
-                "diskCount": 1,
-                "newCount": PRODUCTION_SPEC.file_count,
+                "plannedHashCount": 0 if replay else PRODUCTION_SPEC.file_count,
+                "hashedCount": 0 if replay else PRODUCTION_SPEC.file_count,
+                "reusedCount": PRODUCTION_SPEC.file_count if replay else 0,
+                "plannedReadBytes": 0 if replay else PRODUCTION_SPEC.total_bytes,
+                "diskCount": 0 if replay else 1,
+                "newCount": 0 if replay else PRODUCTION_SPEC.file_count,
             },
         )
         initial["acceptance"]["checks"].update(
@@ -2926,7 +2967,7 @@ def run_campaign(
                 expected_active=PRODUCTION_SPEC.file_count,
                 expected_bytes=PRODUCTION_SPEC.total_bytes,
                 expected_minimum_long=fixture.baseline_long_path_count(),
-                expected_known=PRODUCTION_SPEC.file_count + RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+                expected_known=None if replay else PRODUCTION_SPEC.file_count + RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
             )
         )
         initial["acceptance"]["ok"] = all(initial["acceptance"]["checks"].values())
@@ -3709,6 +3750,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WATCHER_POLL_SECONDS,
     )
     run.add_argument("--allow-non-ssd", action="store_true")
+    run.add_argument("--watcher-replay-from", help="copy an owned verified baseline for focused watcher/restart proof; excludes initial hashing qualification")
     lan_startup = subparsers.add_parser(
         "lan-startup",
         help=(
