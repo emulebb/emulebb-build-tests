@@ -2898,6 +2898,7 @@ def run_campaign(
             "physicalLibrary": True, "downloadHistory": "metadata-only",
             "containerLimitsEnforced": False,
             "initialPayloadHashing": args.watcher_replay_from is None,
+            "fullCampaign": args.watcher_replay_from is None,
         },
         "preRunBaselineRestore": restored,
         "targetRoots": [item.sanitized(path_fingerprint) for item in storage_targets],
@@ -3067,10 +3068,29 @@ def run_campaign(
             previous_hashes=renamed_hashes,
         )
         report["watcherLifecycle"].append(deleted)
+        if replay:
+            report["downloadSnapshots"].append(retained_download_observation(client))
         sampler.maybe_sample(force=True)
         report["initialShutdown"] = stop_daemon(process, client)
         process = None
         client = None
+
+        if replay:
+            rows = deleted["storage"]["rowCounts"]
+            checks = {
+                "baseline": initial["acceptance"]["ok"],
+                "watcherLifecycle": len(report["watcherLifecycle"]) == 4
+                    and all(phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]),
+                "downloadRowsPreserved": all(rows.get(key) == value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()),
+                "downloadRestCounts": all(value["ok"] for value in report["downloadSnapshots"]),
+                "gracefulShutdown": report["initialShutdown"].get("method") == "rest"
+                    and report["initialShutdown"].get("exitCode") == 0,
+                "noWatcherErrors": watcher_log_summary(log_paths)["watcherErrors"] == 0,
+                "noRestErrors": rest_summary(clients)["errorCount"] == 0,
+            }
+            report["acceptance"] = {"scope": "watcherReplay", "ok": all(checks.values()), "checks": checks}
+            report["status"] = "passed" if report["acceptance"]["ok"] else "failed"
+            return report_path, report
 
         restart_log = run_root / "restart.log"
         log_paths.append(restart_log)
