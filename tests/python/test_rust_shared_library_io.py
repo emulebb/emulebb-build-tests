@@ -26,6 +26,65 @@ def tiny_spec() -> subject.FixtureSpec:
     )
 
 
+def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path, monkeypatch):
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    profile = tmp_path / "profile"
+    def prepare(path, **kwargs):
+        subject.rust_metadata.create_metadata_db(rust_repo, path / subject.rust_metadata.RUST_PROFILE_METADATA_FILE)
+    def launch(paths, path, log, **kwargs):
+        rows = subject.profile_storage_snapshot(path)["rowCounts"]
+        assert rows["downloadJobs"] == 1000
+        assert rows["unfinishedDownloads"] == 10
+        assert rows["completedDownloads"] == 990
+        return "launched"
+    monkeypatch.setattr(subject.rust_client, "write_rust_profile", prepare)
+    monkeypatch.setattr(subject, "start_configured_daemon", launch)
+    assert subject.start_daemon(SimpleNamespace(rust_repo=rust_repo), profile, tmp_path / "log", 20017,
+                                retained_downloads=1000) == "launched"
+
+
+def test_retained_download_observation_requires_the_realistic_counts():
+    class Client:
+        def request(self, method, path):
+            return {"unfinished": 1000, "completed": 99000} if path == "/downloads/counts" else {
+                "downloadCount": 100000, "activeDownloads": 100,
+            }
+    assert subject.retained_download_observation(Client())["ok"] is True
+    class IncompleteClient(Client):
+        def request(self, method, path):
+            value = super().request(method, path)
+            if path == "/stats":
+                value["downloadCount"] = 0
+            return value
+    assert subject.retained_download_observation(IncompleteClient())["ok"] is False
+
+
+def test_process_summary_distinguishes_sampled_memory_from_lifetime_peak():
+    sampler = object.__new__(subject.ProcessSampler)
+    sampler.samples = [{"workingSetBytes": 100, "privateBytes": 90,
+                        "lifetimePeakWorkingSetBytes": 500, "handleCount": 1,
+                        "cpuSeconds": 1, "readBytes": 0, "writeBytes": 0,
+                        "readCount": 0, "writeCount": 0}]
+    value = sampler.summary()
+    assert value["peakWorkingSetBytes"] == 100
+    assert value["lifetimePeakWorkingSetBytes"] == 500
+    assert value["lifetimeCpuSeconds"] == 1
+
+
+def test_startup_failure_cleans_up_the_child_before_ownership_transfers(tmp_path, monkeypatch):
+    process = object()
+    stopped = []
+    monkeypatch.setattr(subject.rust_client, "start_rust_client_executable", lambda *args: process)
+    def failed(*args):
+        raise RuntimeError("readiness fixture failed")
+    monkeypatch.setattr(subject, "wait_for_rest", failed)
+    monkeypatch.setattr(subject, "stop_daemon", lambda child, client: stopped.append(child))
+    with pytest.raises(RuntimeError, match="readiness fixture failed"):
+        subject.start_configured_daemon(SimpleNamespace(staged_executable=tmp_path / "daemon"),
+            tmp_path / "profile", tmp_path / "log", rest_address="127.0.0.1", rest_port=20017)
+    assert stopped == [process]
+
+
 def harness_paths(tmp_path: Path) -> subject.HarnessPaths:
     scenario = tmp_path / "output/profiles/emulebb-rust-shared-library-io"
     return subject.HarnessPaths(
@@ -842,129 +901,59 @@ def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
 @pytest.mark.unit
 def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
-    profile.mkdir()
     database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    subject.rust_metadata.create_metadata_db(rust_repo, database)
+    for hash_value, name in (("11", "watch-probe-0000.bin"), ("33", "watch-probe-0001.bin")):
+        subject.rust_metadata.seed_indexed_file(database, ed2k_hash=hash_value * 16,
+            name=name, size_bytes=16, origin="local_share")
     with sqlite3.connect(database) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY, ed2k_hash BLOB, size_bytes INTEGER
-            );
-            CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE verified_local_content (
-                known_file_id INTEGER, display_name TEXT,
-                part_count INTEGER, aich_root BLOB
-            );
-            CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
-            CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
-            CREATE TABLE local_file_instances (
-                path_id INTEGER, known_file_id INTEGER,
-                file_size INTEGER, verified_fingerprint BLOB
-            );
-            CREATE TABLE shared_directory_roots (
-                id INTEGER, enabled INTEGER, deleted_at_ms INTEGER,
-                accessible INTEGER, shareable INTEGER
-            );
-            CREATE TABLE shared_file_memberships (
-                root_id INTEGER, path_id INTEGER, removed_at_ms INTEGER
-            );
-            """
-        )
-        connection.execute(
-            "INSERT INTO known_files VALUES (1, ?, 16)",
-            (bytes.fromhex("11" * 16),),
-        )
-        connection.execute(
-            "INSERT INTO known_files VALUES (2, ?, 16)",
-            (bytes.fromhex("33" * 16),),
-        )
-        connection.execute("INSERT INTO local_paths VALUES (1, ?)", (str(tmp_path / "watch-probe-0000.bin"),))
-        connection.execute("INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "watch-probe-0001.bin"),))
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 'watch-probe-0000.bin', 0, ?)", (bytes.fromhex("22" * 20),))
-        connection.execute("INSERT INTO verified_local_content VALUES (2, 'watch-probe-0001.bin', 0, ?)", (bytes.fromhex("44" * 20),))
-        connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
-        connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 16, zeroblob(47))")
-        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 1, NULL)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 2, 123)")
+        connection.execute("PRAGMA foreign_keys=ON")
+        root_path = subject.rust_metadata._upsert_local_path(connection, str(tmp_path), 0)
+        root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_ms) VALUES(?,0)", (root_path,)).lastrowid
+        connection.execute("INSERT INTO shared_directory_root_origins VALUES(?,'explicit',0,1,1)", (root,))
+        for hash_value, name, removed in (("11", "watch-probe-0000.bin", None), ("33", "watch-probe-0001.bin", 123)):
+            known = connection.execute("SELECT id FROM known_files WHERE ed2k_hash=?", (bytes.fromhex(hash_value * 16),)).fetchone()[0]
+            path_id = subject.rust_metadata._upsert_local_path(connection, str(tmp_path / name), 0)
+            connection.execute("INSERT INTO verified_local_content(known_file_id,display_name,part_size_bytes,part_count,aich_root) VALUES(?,?,16,1,?)", (known, name, bytes.fromhex("22" * 20)))
+            connection.execute("INSERT INTO verified_local_md4_hashes VALUES(?,0,?)", (known, bytes(16)))
+            connection.execute("INSERT INTO verified_local_aich_hashes VALUES(?,0,?)", (known, bytes(20)))
+            connection.execute("INSERT INTO local_file_instances(path_id,known_file_id,size_bytes,native_identity,verified_fingerprint,verified_at_ms) VALUES(?,?,16,?,?,0)", (path_id, known, b"identity" + bytes([known]), bytes(47)))
+            connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_ms,last_seen_at_ms,removed_at_ms) VALUES(?,?,?,?,0,0,?)", (root, path_id, known, name, removed))
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
     assert next(iter(rows.values()))["hash"] == "11" * 16
+    assert next(iter(rows.values()))["md4Acquired"] == 1
+    assert next(iter(rows.values()))["aichAcquired"] == 1
+    snapshot = subject.profile_storage_snapshot(profile)
+    assert snapshot["rowCounts"]["activeShareSources"] == 1
+    assert snapshot["rowCounts"]["activeShareBytes"] == 16
+    assert snapshot["rowCounts"]["invalidActiveShareIntegrity"] == 0
 
 
 @pytest.mark.unit
-def test_storage_snapshot_counts_active_shared_sources_not_transfers(
-    tmp_path: Path,
-) -> None:
+def test_storage_snapshot_distinguishes_verified_shares_and_download_jobs(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
-    profile.mkdir()
     database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
-    long_path = str(tmp_path / ("long-segment-" * 30) / "active.bin")
-    with sqlite3.connect(database) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY, size_bytes INTEGER
-            );
-            CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE verified_local_content (
-                known_file_id INTEGER, part_size INTEGER,
-                part_count INTEGER, aich_root BLOB
-            );
-            CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
-            CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
-            CREATE TABLE local_file_instances (
-                path_id INTEGER, known_file_id INTEGER,
-                file_size INTEGER, verified_fingerprint BLOB
-            );
-            CREATE TABLE shared_directory_roots (
-                id INTEGER, enabled INTEGER, deleted_at_ms INTEGER,
-                accessible INTEGER, shareable INTEGER
-            );
-            CREATE TABLE transfers (removed_at_ms INTEGER);
-            CREATE TABLE shared_file_memberships (
-                root_id INTEGER, path_id INTEGER, removed_at_ms INTEGER
-            );
-            CREATE TABLE shared_file_scan_failures (id INTEGER);
-            """
-        )
-        connection.execute("INSERT INTO known_files VALUES (1, 16)")
-        connection.execute("INSERT INTO known_files VALUES (2, 32)")
-        connection.execute("INSERT INTO local_paths VALUES (1, ?)", (long_path,))
-        connection.execute(
-            "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "hidden.bin"),)
-        )
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 16, 0, ?)", (bytes.fromhex("11" * 20),))
-        connection.execute("INSERT INTO verified_local_content VALUES (2, 16, 0, ?)", (bytes.fromhex("22" * 20),))
-        connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
-        connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 32, zeroblob(47))")
-        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
-        connection.execute("INSERT INTO shared_directory_roots VALUES (2, 1, NULL, 1, 1)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 1, NULL)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (2, 1, NULL)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 2, 123)")
-        connection.execute("INSERT INTO transfers VALUES (NULL)")
-
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    subject.rust_metadata.create_metadata_db(rust_repo, database)
+    subject.rust_metadata.seed_retained_download_scale(database, count=1000)
+    subject.rust_metadata.seed_indexed_file(database, ed2k_hash="ff" * 16,
+        name="unverified.bin", size_bytes=16, origin="local_share")
     snapshot = subject.profile_storage_snapshot(profile)
     counts = snapshot["rowCounts"]
-    assert counts["localInstanceRows"] == 2
-    assert counts["verifiedContentRows"] == 2
-    assert counts["activeShareSources"] == 1
-    assert counts["activeShareBytes"] == 16
-    assert counts["activeLongPathSources"] == 1
-    assert counts["invalidActiveShareIntegrity"] == 0
-    assert subject.storage_acceptance(
-        snapshot,
-        expected_active=1,
-        expected_bytes=16,
-        expected_minimum_long=1,
-    ) == {
-        "databaseActiveShares": True,
-        "databaseActiveBytes": True,
-        "databaseHashIntegrity": True,
-        "databaseLongPathShares": True,
-        "databaseScanFailures": True,
+    assert counts["knownFiles"] == 1001
+    assert counts["verifiedContentRows"] == 0
+    assert counts["activeShareSources"] == 0
+    assert counts["activeShareBytes"] == 0
+    assert {key: counts[key] for key in subject.RETAINED_DOWNLOAD_EXPECTED} == {
+        "downloadJobs": 1000, "unfinishedDownloads": 10, "completedDownloads": 990,
+        "startedDownloads": 1, "stoppedDownloads": 9,
     }
+    assert all(subject.storage_acceptance(snapshot, expected_active=0, expected_bytes=0,
+        expected_minimum_long=0, expected_known=1001).values())
+    assert not subject.storage_acceptance(snapshot, expected_active=0, expected_bytes=0,
+        expected_minimum_long=0, expected_known=1000)["databaseKnownFiles"]
 
 
 @pytest.mark.unit
@@ -1096,12 +1085,15 @@ def test_media_initial_acceptance_requires_cross_disk_serial_hashing() -> None:
                 "activeShareSources": 100,
                 "invalidActiveShareIntegrity": 0,
                 "scanFailures": 0,
-                "activeTransferRows": 0,
+                "downloadJobs": 0,
             }
         },
     }
 
     assert subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
+    del phase["storage"]["rowCounts"]["downloadJobs"]
+    assert not subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
+    phase["storage"]["rowCounts"]["downloadJobs"] = 0
     phase["maxPerDiskActiveCount"] = 2
     assert not subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
 
@@ -1174,7 +1166,7 @@ def test_partial_media_inspector_accepts_duplicate_source_paths(
                 "activeShareSources": 3,
                 "invalidActiveShareIntegrity": 0,
                 "scanFailures": 0,
-                "activeTransferRows": 0,
+                "downloadJobs": 0,
             }
         },
     )

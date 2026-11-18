@@ -1335,50 +1335,10 @@ def run_retained_download_scale_phase(*, executable: Path, rust_repo: Path, root
         report["dashboardCounts"] = {key: stats[key] for key in expected_counts}
         if {key: stats[key] for key in expected_counts} != expected_counts:
             raise RuntimeError("Retained-scale dashboard counts differ from the seeded jobs")
-        views = {}
-        for view, expected in (("all", fixture["jobs"]), ("completed", fixture["completed"]),
-                               ("unfinished", fixture["queued"] + fixture["stopped"])):
-            cursor, previous_id, seen, pages = None, fixture["jobs"] + 1, 0, 0
-            started = time.monotonic()
-            while True:
-                query = {"view": view, "limit": 200}
-                if cursor is not None:
-                    query["cursor"] = cursor
-                payload = http_json(base_url, "/api/v1/downloads?" + urllib.parse.urlencode(query),
-                                    api_key=api_key, timeout_seconds=30.0)
-                if pages == 0:
-                    validate_openapi_schema(document, schema, payload)
-                rows, meta = payload["data"], payload["meta"]
-                if not isinstance(rows, list) or not 1 <= len(rows) <= 200:
-                    raise RuntimeError(f"Retained-scale {view} returned an invalid page length")
-                for row in rows:
-                    identity = row.get("id")
-                    if (not isinstance(identity, str) or re.fullmatch(r"[1-9][0-9]*", identity) is None
-                            or not 0 < int(identity) < previous_id):
-                        raise RuntimeError(f"Retained-scale {view} repeated, skipped ordering or lost exact IDs")
-                    previous_id = int(identity)
-                    complete = previous_id % 1000 >= 10
-                    if (row.get("hash") != f"{previous_id:032x}"
-                            or (view == "completed" and not complete)
-                            or (view == "unfinished" and complete)):
-                        raise RuntimeError(f"Retained-scale {view} returned another fixture's content or view")
-                pages += 1
-                seen += len(rows)
-                if seen > expected:
-                    raise RuntimeError(f"Retained-scale {view} did not terminate at its fixture bound")
-                if meta["hasMore"] is False:
-                    if meta["nextCursor"] is not None:
-                        raise RuntimeError("Final retained-scale page returned a continuation")
-                    break
-                next_cursor = meta["nextCursor"]
-                if (meta["hasMore"] is not True or not isinstance(next_cursor, str)
-                        or not next_cursor or next_cursor == cursor):
-                    raise RuntimeError("Retained-scale continuation did not advance")
-                cursor = next_cursor
-            if seen != expected:
-                raise RuntimeError(f"Retained-scale {view} omitted jobs: {seen}/{expected}")
-            views[view] = {"rows": seen, "pages": pages, "elapsedSeconds": time.monotonic() - started}
-        report["views"] = views
+        report["views"] = rust_rest_conformance.prove_retained_download_pages(
+            lambda path: http_json(base_url, "/api/v1" + path, api_key=api_key, timeout_seconds=30.0),
+            fixture, validate_first_page=lambda payload: validate_openapi_schema(document, schema, payload),
+        )
         package._graceful_shutdown(base_url, process)
         handle.close()
         handle = None

@@ -25,6 +25,7 @@ from . import (
     rust_client,
     rust_local_ed2k,
     rust_metadata,
+    rust_rest_conformance,
     rust_shared_library_fixture as fixture,
     rust_shared_library_storage as storage,
 )
@@ -35,8 +36,15 @@ from .paths import (
 )
 from .script_modules import load_script_module
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v6"
-MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v2"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v7"
+RETAINED_DOWNLOAD_EXPECTED = {
+    "downloadJobs": 100_000,
+    "unfinishedDownloads": 1_000,
+    "completedDownloads": 99_000,
+    "startedDownloads": 100,
+    "stoppedDownloads": 900,
+}
+MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v3"
 LAN_STARTUP_REPORT_SCHEMA = "emulebb.rust-shared-library-lan-startup.v1"
 OFFERFILES_SCALE_REPORT_SCHEMA = "emulebb.rust-offerfiles-scale.v1"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
@@ -58,7 +66,7 @@ OFFERFILES_SCALE_PACING_TOLERANCE_SECONDS = 2.0
 ACTIVE_LOCAL_SOURCES_SQL = """
     SELECT DISTINCT local_file_instances.path_id,
            local_file_instances.known_file_id,
-           local_file_instances.file_size,
+           local_file_instances.size_bytes,
            local_file_instances.verified_fingerprint
     FROM local_file_instances
     JOIN shared_file_memberships
@@ -675,6 +683,8 @@ class ProcessSampler:
                 {
                     "cpuSeconds": round(float(cpu.user + cpu.system), 3),
                     "workingSetBytes": int(memory.rss),
+                    "lifetimePeakWorkingSetBytes": int(memory.peak_wset)
+                    if hasattr(memory, "peak_wset") else None,
                     "privateBytes": int(
                         getattr(memory, "private", getattr(memory, "vms", 0))
                     ),
@@ -698,10 +708,15 @@ class ProcessSampler:
         first, last = rows[0], rows[-1]
         return {
             "sampleCount": len(rows),
+            "lifetimeCpuSeconds": float(last["cpuSeconds"]),
             "cpuSecondsDelta": round(
                 float(last["cpuSeconds"]) - float(first["cpuSeconds"]), 3
             ),
             "peakWorkingSetBytes": max(int(row["workingSetBytes"]) for row in rows),
+            "lifetimePeakWorkingSetBytes": max(
+                (int(row["lifetimePeakWorkingSetBytes"]) for row in rows
+                 if row.get("lifetimePeakWorkingSetBytes") is not None), default=None,
+            ),
             "peakPrivateBytes": max(int(row["privateBytes"]) for row in rows),
             "peakHandleCount": max(int(row["handleCount"] or 0) for row in rows),
             "readBytesDelta": int(last["readBytes"]) - int(first["readBytes"]),
@@ -839,6 +854,9 @@ def wait_for_reload(
         )
         if not observations or time.monotonic() - started >= len(observations) * 30:
             observations.append(progress)
+            print(f"{label}: scanned={progress.get('scannedCount')} hashed={progress.get('hashedCount')} "
+                  f"active={progress.get('activeHashCount')} readBytes={progress.get('completedReadBytes')}",
+                  file=sys.stderr, flush=True)
         if (
             progress.get("running") is False
             and progress.get("pending") is False
@@ -1013,12 +1031,13 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
                 "knownFiles": "SELECT COUNT(*) FROM known_files",
                 "verifiedContentRows": "SELECT COUNT(*) FROM verified_local_content",
                 "localInstanceRows": "SELECT COUNT(*) FROM local_file_instances",
-                "transferRows": "SELECT COUNT(*) FROM transfers",
-                "activeTransferRows": (
-                    "SELECT COUNT(*) FROM transfers WHERE removed_at_ms IS NULL"
-                ),
+                "downloadJobs": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL",
+                "unfinishedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NULL",
+                "completedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NOT NULL",
+                "startedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NULL AND intent='started' AND delete_requested_at_s IS NULL",
+                "stoppedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NULL AND intent='stopped' AND delete_requested_at_s IS NULL",
                 "activeShareSources": f"WITH active_sources AS ({active_sources}) SELECT COUNT(*) FROM active_sources",
-                "activeShareBytes": f"WITH active_sources AS ({active_sources}) SELECT coalesce(sum(file_size), 0) FROM active_sources",
+                "activeShareBytes": f"WITH active_sources AS ({active_sources}) SELECT coalesce(sum(size_bytes), 0) FROM active_sources",
                 "activeLongPathSources": f"""
                     WITH active_sources AS ({active_sources})
                     SELECT COUNT(*) FROM active_sources
@@ -1033,8 +1052,8 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
                       ON verified_local_content.known_file_id = known_files.id
                     WHERE verified_local_content.known_file_id IS NULL
                        OR length(verified_local_content.aich_root) != 20
-                       OR verified_local_content.part_size <= 0
-                       OR known_files.size_bytes != active_sources.file_size
+                       OR verified_local_content.part_size_bytes <= 0
+                       OR known_files.size_bytes != active_sources.size_bytes
                        OR length(active_sources.verified_fingerprint) = 0
                        OR (SELECT COUNT(*) FROM verified_local_md4_hashes
                            WHERE known_file_id = known_files.id) != verified_local_content.part_count
@@ -1061,7 +1080,7 @@ def storage_acceptance(
     expected_active: int,
     expected_bytes: int,
     expected_minimum_long: int,
-    require_known_exact: bool = False,
+    expected_known: int | None = None,
 ) -> dict[str, bool]:
     counts = (
         snapshot.get("rowCounts") if isinstance(snapshot.get("rowCounts"), dict) else {}
@@ -1074,13 +1093,31 @@ def storage_acceptance(
         >= expected_minimum_long,
         "databaseScanFailures": counts.get("scanFailures") == 0,
     }
-    if require_known_exact:
-        checks["databaseKnownFiles"] = counts.get("knownFiles") == expected_active
+    if expected_known is not None:
+        checks["databaseKnownFiles"] = counts.get("knownFiles") == expected_known
     return checks
 
 
+def retained_download_observation(client: RestClient) -> dict[str, object]:
+    """Capture the combined workload's public counts without timing promises."""
+    counts = client.request("GET", "/downloads/counts")
+    stats = client.request("GET", "/stats")
+    observed = {
+        "unfinished": counts.get("unfinished"), "completed": counts.get("completed"),
+        "total": stats.get("downloadCount"), "started": stats.get("activeDownloads"),
+    }
+    observed["ok"] = observed == {
+        "unfinished": RETAINED_DOWNLOAD_EXPECTED["unfinishedDownloads"],
+        "completed": RETAINED_DOWNLOAD_EXPECTED["completedDownloads"],
+        "total": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+        "started": RETAINED_DOWNLOAD_EXPECTED["startedDownloads"],
+    }
+    return observed
+
+
 def start_daemon(
-    paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int
+    paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int,
+    *, retained_downloads: int = 0,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     rust_client.write_rust_profile(
         profile_dir,
@@ -1100,6 +1137,10 @@ def start_daemon(
         "core",
         {"autoConnect": False, "networkEd2k": False, "networkKademlia": False},
     )
+    if retained_downloads:
+        rust_metadata.seed_retained_download_scale(
+            profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE, count=retained_downloads,
+        )
     return start_configured_daemon(
         paths,
         profile_dir,
@@ -1123,10 +1164,15 @@ def start_configured_daemon(
         raise RuntimeError("Campaign runtime bundle was not admitted")
     process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
     client = RestClient(f"http://{rest_address}:{rest_port}/api/v1", API_KEY)
-    wait_for_rest(client, process, 60.0)
-    sampler = ProcessSampler(process, 2.0)
-    sampler.maybe_sample(force=True)
-    return process, client, sampler
+    try:
+        wait_for_rest(client, process, 60.0)
+        sampler = ProcessSampler(process, 2.0)
+        sampler.maybe_sample(force=True)
+        return process, client, sampler
+    except BaseException:
+        # Ownership transfers to the caller only on a successful return.
+        stop_daemon(process, client)
+        raise
 
 
 def stop_daemon(
@@ -2295,7 +2341,7 @@ def media_initial_acceptance(
         "databaseHashIntegrity": int(counts.get("invalidActiveShareIntegrity") or 0)
         == 0,
         "databaseScanFailures": int(counts.get("scanFailures") or 0) == 0,
-        "noTransferRows": int(counts.get("activeTransferRows") or 0) == 0,
+        "noDownloadJobs": counts.get("downloadJobs") == 0,
     }
     return {"ok": all(checks.values()), "checks": checks}
 
@@ -2788,15 +2834,22 @@ def run_campaign(
             "outputRootFingerprint": path_fingerprint(paths.output_root),
         },
         "fixture": validation,
+        "retainedDownloadFixture": dict(RETAINED_DOWNLOAD_EXPECTED),
+        "qualificationScope": {
+            "physicalLibrary": True, "downloadHistory": "metadata-only",
+            "containerLimitsEnforced": False,
+        },
         "preRunBaselineRestore": restored,
         "targetRoots": [item.sanitized(path_fingerprint) for item in storage_targets],
         "diskInventory": sanitized_disk_inventory(inventory),
         "phases": [],
         "watcherLifecycle": [],
+        "downloadSnapshots": [],
     }
     process: subprocess.Popen[str] | None = None
     client: RestClient | None = None
     clients: list[RestClient] = []
+    samplers: list[ProcessSampler] = []
     log_paths: list[Path] = []
     overall_started = time.monotonic()
     overall_deadline = overall_started + args.timeout_seconds
@@ -2816,9 +2869,12 @@ def run_campaign(
         initial_log = run_root / "initial.log"
         log_paths.append(initial_log)
         process, client, sampler = start_daemon(
-            paths, profile_dir, initial_log, choose_loopback_port()
+            paths, profile_dir, initial_log, choose_loopback_port(),
+            retained_downloads=RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
         )
         clients.append(client)
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
         client.request(
             "PATCH",
             "/shared-directories",
@@ -2857,11 +2913,23 @@ def run_campaign(
                 expected_active=PRODUCTION_SPEC.file_count,
                 expected_bytes=PRODUCTION_SPEC.total_bytes,
                 expected_minimum_long=fixture.baseline_long_path_count(),
-                require_known_exact=True,
+                expected_known=PRODUCTION_SPEC.file_count + RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
             )
         )
         initial["acceptance"]["ok"] = all(initial["acceptance"]["checks"].values())
         report["phases"].append(initial)
+        read_start = len(sampler.samples)
+        report["downloadTraversal"] = {
+            "views": rust_rest_conformance.prove_retained_download_pages(
+                lambda path: client.request("GET", path, timeout_seconds=30.0),
+                {"jobs": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+                 "completed": RETAINED_DOWNLOAD_EXPECTED["completedDownloads"],
+                 "stopped": RETAINED_DOWNLOAD_EXPECTED["stoppedDownloads"],
+                 "queued": RETAINED_DOWNLOAD_EXPECTED["startedDownloads"]},
+                sample=lambda: sampler.maybe_sample(),
+            ),
+            "process": sampler.summary(read_start),
+        }
 
         report["watcherStaging"] = fixture.stage_watcher_cohort(staging_root)
         created_paths = _expected_watcher_paths(paths.fixture_root, renamed=False)
@@ -2932,6 +3000,7 @@ def run_campaign(
             previous_hashes=renamed_hashes,
         )
         report["watcherLifecycle"].append(deleted)
+        sampler.maybe_sample(force=True)
         report["initialShutdown"] = stop_daemon(process, client)
         process = None
         client = None
@@ -2942,6 +3011,8 @@ def run_campaign(
             paths, profile_dir, restart_log, choose_loopback_port()
         )
         clients.append(client)
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
         warm_shared = client.request(
             "GET",
             SHARED_FILES_PROBE_PATH,
@@ -2999,6 +3070,7 @@ def run_campaign(
         )
         no_change["acceptance"]["ok"] = all(no_change["acceptance"]["checks"].values())
         report["phases"].append(no_change)
+        sampler.maybe_sample(force=True)
         report["preMutationShutdown"] = stop_daemon(process, client)
         process = None
         client = None
@@ -3012,6 +3084,8 @@ def run_campaign(
             paths, profile_dir, mutation_log, choose_loopback_port()
         )
         clients.append(client)
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
         client.request("POST", "/shared-directories/operations/reload", {})
         changed = wait_for_reload(
             label="onePercentMutation",
@@ -3048,16 +3122,19 @@ def run_campaign(
         )
         changed["acceptance"]["ok"] = all(changed["acceptance"]["checks"].values())
         report["phases"].append(changed)
+        sampler.maybe_sample(force=True)
         report["mutationShutdown"] = stop_daemon(process, client)
         process = None
         client = None
 
         final_log = run_root / "final-restart.log"
         log_paths.append(final_log)
-        process, client, _ = start_daemon(
+        process, client, sampler = start_daemon(
             paths, profile_dir, final_log, choose_loopback_port()
         )
         clients.append(client)
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
         final_shared = client.request(
             "GET",
             SHARED_FILES_PROBE_PATH,
@@ -3079,6 +3156,7 @@ def run_campaign(
             timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
             poll_seconds=args.poll_seconds,
         )
+        sampler.maybe_sample(force=True)
         report["finalShutdown"] = stop_daemon(process, client)
         process = None
         client = None
@@ -3107,7 +3185,16 @@ def run_campaign(
                 bool(value) for value in watcher_results
             ),
         }
+        storage_snapshots = [phase["storage"] for phase in report["phases"]] + [warm["storage"], final["storage"]]
         global_checks = {
+            "resourceSamplesPresent": len(samplers) == 4
+                and all(sampler.summary().get("sampleCount", 0) > 0 for sampler in samplers),
+            "retainedDownloadRowsPreserved": all(
+                snapshot["rowCounts"].get(key) == expected
+                for snapshot in storage_snapshots for key, expected in RETAINED_DOWNLOAD_EXPECTED.items()
+            ),
+            "retainedDownloadRestCounts": len(report["downloadSnapshots"]) == 4
+                and all(value["ok"] is True for value in report["downloadSnapshots"]),
             "fixtureExact": validation["ok"] is True,
             "longPathBaselineExact": validation["longPathFileCount"]
             == fixture.baseline_long_path_count(),
@@ -3180,6 +3267,7 @@ def run_campaign(
         storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
         report["rest"] = rest_summary(clients)
         report["watcherLogs"] = watcher_log_summary(log_paths)
+        report["processes"] = [sampler.summary() for sampler in samplers]
         report["finishedAtUtc"] = utc_now()
         report["elapsedSeconds"] = round(time.monotonic() - overall_started, 3)
         write_json(report_path, report)
@@ -3474,7 +3562,7 @@ def inspect_partial_media_run(
         "hashIntegrity": int(counts.get("invalidActiveShareIntegrity") or 0) == 0,
         "scanFailures": int(counts.get("scanFailures") or 0) == 0,
         "noUnexpectedErrors": error_lines == probe_errors,
-        "noTransferRows": int(counts.get("activeTransferRows") or 0) == 0,
+        "noDownloadJobs": counts.get("downloadJobs") == 0,
     }
     return {
         "schema": MEDIA_REPORT_SCHEMA,
