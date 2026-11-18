@@ -757,3 +757,14 @@ def test_sharing_mutation_is_explicitly_unsafe_for_generic_profile_probes():
     row = next(route for route in module.REST_CONTRACT_ROUTES if route["operationId"] == "setLibrarySharing")
     assert row["safe"] is False
     assert module.get_contract_route_body("setLibrarySharing") == {"enabled": False, "hashes": ["ff" * 16]}
+
+
+def test_search_result_resources_keep_their_template_and_expected_missing_lookup():
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    smoke = rust_rest_conformance.load_rest_smoke_module(
+        tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    for resource, operation in [("observations", "listSearchResultObservations"), ("download", "downloadSearchResult")]:
+        template = "/searches/{searchId}/results/{resultId}/" + resource
+        path = smoke.concrete_contract_path(template, operation)
+        assert smoke.normalize_contract_path_for_openapi(path) == template
+    assert smoke.REST_CONTRACT_EXPECTED_ERROR_STATUSES["listSearchResultObservations"] == (404,)

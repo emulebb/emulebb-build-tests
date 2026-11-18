@@ -72,7 +72,7 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         return concrete.replace("{id}", RUST_MISSING_DOWNLOAD_ID) if path.startswith("/downloads/") else concrete
 
     def rust_normalize_path(path: str) -> str:
-        path = path.replace(f"/results/{RUST_MISSING_DOWNLOAD_ID}/download", "/results/{resultId}/download")
+        path = path.replace(f"/results/{RUST_MISSING_DOWNLOAD_ID}", "/results/{resultId}")
         path = path.replace(f"/library/tags/{RUST_MISSING_TAG_NAME}", "/library/tags/{tagName}")
         return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
                                            "/categories/{categoryName}")
@@ -108,6 +108,7 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         "createLibraryTag": (400,),
         "getLibraryTag": (404,),
         "listLibraryFileTags": (404,),
+        "listSearchResultObservations": (404,),
         **{name: (404,) for name in (
             "getDownload", "patchDownload", "listDownloadParts", "listDownloadComments",
             "listDownloadSources", "getDownloadSource", "browseDownloadSource",
