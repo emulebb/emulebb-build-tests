@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -18,6 +19,30 @@ CARGO_TARGET_DIR_ENV = "CARGO_TARGET_DIR"
 RUST_PROFILE_SETTINGS_FILE = "emulebb-rust-settings.toml"
 RUST_PROFILE_METADATA_FILE = rust_metadata.RUST_PROFILE_METADATA_FILE
 STOCK_SERVER_KEEPALIVE_MINUTES = 20
+
+
+def container_profile_setup_script(settings: dict[str, str], *, uid: int = 1000, gid: int = 1000) -> str:
+    """Prepare a fresh campaign-owned volume through the packaged offline owners.
+
+    Existing final profiles are refused. These explicit fixture writes finish
+    before any daemon or P2P process starts; they are not runtime overrides.
+    """
+    if type(uid) is not int or type(gid) is not int or uid < 0 or gid < 0:
+        raise ValueError("Container fixture ownership requires nonnegative numeric IDs")
+    binary = "/usr/lib/emulebb-rust/emulebb-rust"
+    profile = "/config/emulebb-rust"
+    lines = [f"test ! -e {profile}", "mkdir -p /config /data/incoming /data/temp",
+             "/usr/lib/emulebb-rust/emulebb-profile-init"]
+    lines.extend(shlex.join([binary, "--profile", profile, "settings", "set", key, value])
+                 for key, value in settings.items())
+    lines.extend([f"chown -R {uid}:{gid} /config", f"chown {uid}:{gid} /data/incoming /data/temp"])
+    return "\n".join(lines)
+
+
+def prepare_container_profile(run, compose: tuple[str, ...], *, env: dict[str, str], settings: dict[str, str]) -> None:
+    """Use the existing Compose owner and its unique campaign volumes for setup."""
+    run(*compose, "run", "--rm", "--no-deps", "--entrypoint", "/bin/sh", "emulebb-rust", "-ec",
+        container_profile_setup_script(settings), env=env, timeout=120)
 
 
 def staged_executable(output_root: Path) -> Path:

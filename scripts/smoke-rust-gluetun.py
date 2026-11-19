@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import (
     nat_live_matrix,
+    rust_client,
     server_failure_accounting,
     vpn_transfer_completion,
 )
@@ -254,8 +255,13 @@ def main() -> int:
         report["captureImageId"] = docker("image", "inspect", args.capture_image,
                                            "--format", "{{.Id}}").stdout.strip()
         started = True
-        command(*compose, "up", "--detach", "--no-build", "--pull", "never",
+        command(*compose, "up", "--detach", "--no-build", "--pull", "never", "gluetun",
                 env=env, timeout=300)
+        rust_client.prepare_container_profile(command, compose, env=env, settings={
+            "network.p2p.bindInterface": "tun0", "security.vpnGuard.mode": "block",
+        })
+        command(*compose, "up", "--detach", "--no-build", "--pull", "never",
+                "emulebb-rust", env=env, timeout=300)
         gluetun = command(*compose, "ps", "--quiet", "gluetun", env=env).stdout.strip()
         rust = command(*compose, "ps", "--quiet", "emulebb-rust", env=env).stdout.strip()
         if not gluetun or not rust:
@@ -299,11 +305,8 @@ def main() -> int:
             time.sleep(2)
         health = docker("inspect", "--format", "{{.State.Health.Status}}", gluetun).stdout.strip()
         tun = docker("exec", gluetun, "ip", "-4", "-o", "addr", "show", "dev", "tun0")
-        processes = docker("top", rust).stdout
         if health != "healthy" or not tun.stdout.strip():
             raise RuntimeError("Gluetun is not healthy with an IPv4 tun0")
-        if "--p2p-bind-interface tun0" not in processes:
-            raise RuntimeError("Rust daemon was not pinned to tun0")
         tun_ip = nat_live_matrix.tunnel_ipv4(tun.stdout)
         tun_route_table = docker(
             "exec", gluetun, "ip", "-4", "route", "show", "dev", "tun0"
@@ -315,6 +318,10 @@ def main() -> int:
         settings = docker("exec", rust, "cat",
                           "/config/emulebb-rust/emulebb-rust-settings.toml").stdout
         api_key = tomllib.loads(settings)["rest"]["api_key"]
+        effective = response_data(request_json("http://127.0.0.1:20017/api/v1/settings", api_key))["effective"]
+        if (effective["network"]["p2p"]["bindInterface"] != "tun0"
+                or effective["security"]["vpnGuard"]["mode"] != "block"):
+            raise RuntimeError("Rust effective settings do not bind and guard tun0")
         status = request_json("http://127.0.0.1:20017/api/v1/status", api_key)
         report["tunnelHealthy"] = True
         report["p2pInterfacePinned"] = True

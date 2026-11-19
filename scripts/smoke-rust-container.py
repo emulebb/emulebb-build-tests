@@ -15,6 +15,12 @@ import tomllib
 from pathlib import Path
 from uuid import uuid4
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.rust_client import container_profile_setup_script
+
 
 def docker(*arguments: str, check: bool = True, input: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -156,10 +162,13 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             "--network", network, "--dns", "127.0.0.1", "--dns-option", "attempts:1", "--dns-option", "timeout:1",
             "--tmpfs", "/config", "--tmpfs", "/data",
             "--env", "PUID=1234", "--env", "PGID=1235", "--env", "TZ=UTC",
-            "--env", "EMULEBB_RUST_P2P_INTERFACE=eth0",
+            "--entrypoint", "/bin/sh",
             # Explicitly contain first-run HTTP discovery, including client proxy defaults.
             "--env", "HTTP_PROXY=", "--env", "HTTPS_PROXY=", "--env", "ALL_PROXY=",
             "--env", "http_proxy=", "--env", "https_proxy=", "--env", "all_proxy=", image,
+            "-ec", container_profile_setup_script(
+                {"network.p2p.bindInterface": "eth0"}, uid=1234, gid=1235
+            ) + "\nexec /init",
         )
         # The containerd image store's .Image is an index ID, not a config ID.
         # Its platform descriptor binds the running container to exact CPU bytes.
@@ -189,7 +198,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             time.sleep(1)
         uid = docker("exec", container, "id", "-u", "abc").stdout.strip()
         gid = docker("exec", container, "id", "-g", "abc").stdout.strip()
-        owners = docker("exec", container, "stat", "-c", "%u:%g", "/config", "/data/ed2k").stdout.splitlines()
+        owners = docker("exec", container, "stat", "-c", "%u:%g", "/config", "/data/incoming", "/data/temp").stdout.splitlines()
         docker("exec", container, "test", "-f", "/config/emulebb-rust/emulebb-rust-settings.toml")
         daemon = docker("exec", container, "pgrep", "-f", "/usr/lib/emulebb-rust/emulebb-rust")
         pid = daemon.stdout.strip()
@@ -209,7 +218,7 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
         listener_health = verify_listener_health(container)
         auth_status = docker("exec", container, "curl", "--silent", "--max-time", "2", "--output", "/dev/null",
                              "--write-out", "%{http_code}", "http://127.0.0.1:20017/api/v1/status").stdout.strip()
-        if ((uid, gid) != ("1234", "1235") or owners != ["1234:1235", "1234:1235"]
+        if ((uid, gid) != ("1234", "1235") or owners != ["1234:1235"] * 3
                 or daemon_owner != ["1234", "1235"] or ports or actual_architecture != expected_architecture):
             raise RuntimeError(f"image PUID/PGID or volume contract failed: uid={uid}, gid={gid}, daemonOwner={daemon_owner}, owners={owners}")
         if auth_status != "401":
@@ -224,7 +233,8 @@ def smoke_platform(image: str, platform: str, expected_identity: dict[str, str],
             "imageVariant": variant, "osPackageArchitecture": actual_architecture,
             "firstRunProfile": True, "webui": True, "uid": int(uid), "gid": int(gid),
             "daemonUid": int(daemon_owner[0]), "daemonGid": int(daemon_owner[1]),
-            "configOwner": owners[0], "dataOwner": owners[1], "publishedPorts": 0,
+            "configOwner": owners[0], "incomingOwner": owners[1], "tempOwner": owners[2], "publishedPorts": 0,
+            "networkFixture": "saved-eth0-interface-before-s6",
             "imageManifestDigest": actual_manifest, "imageConfigDigest": expected_identity["configDigest"],
             "unauthenticatedStatus": 401, **app, "restAuthentication": True, "gracefulShutdown": True,
             "networkIsolation": "internal-bridge", "dns": "loopback-only",

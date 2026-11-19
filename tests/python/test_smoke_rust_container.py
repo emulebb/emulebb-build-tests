@@ -66,7 +66,7 @@ def test_wrong_local_tag_cannot_pass_and_its_container_is_removed(monkeypatch):
     assert calls[-1][0:2] == ("network", "rm")
     assert "--internal" in next(call for call in calls if call[:2] == ("network", "create"))
     assert launch[launch.index("--dns") + 1] == "127.0.0.1"
-    assert "EMULEBB_RUST_P2P_INTERFACE=eth0" in launch
+    assert "settings set network.p2p.bindInterface eth0" in launch[-1]
 
 
 def test_cleanup_failure_does_not_hide_original_image_mismatch(monkeypatch):
@@ -133,7 +133,7 @@ def image_runtime(monkeypatch):
             elif "ps" in args:
                 stdout = runtime.owner
             elif "stat" in args:
-                stdout = "1234:1235\n1234:1235\n"
+                stdout = "1234:1235\n1234:1235\n1234:1235\n"
             elif "id" in args:
                 stdout = "1234" if "-u" in args else "1235"
             elif "dpkg" in args:

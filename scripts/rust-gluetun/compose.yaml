@@ -34,7 +34,6 @@ services:
       PGID: "1000"
       TZ: UTC
       RUST_LOG: ${EMULEBB_TEST_RUST_LOG-info}
-      EMULEBB_RUST_P2P_INTERFACE: tun0
     volumes:
       - emulebb-rust-config:/config
       - emulebb-rust-data:/data

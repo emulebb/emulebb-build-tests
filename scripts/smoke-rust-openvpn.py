@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness.rust_rest_contract import settings_patch
 from emule_test_harness import (
     nat_live_matrix,
+    rust_client,
     server_failure_accounting,
     vpn_transfer_completion,
 )
@@ -472,7 +473,6 @@ def main() -> int:
     env = {
         **os.environ,
         "EMULEBB_TEST_VPN_PRIVATE_ROOT": str(args.private_root.resolve()),
-        "EMULEBB_TEST_P2P_INTERFACE": "" if args.binding_mode == "none" else "tun0",
         "EMULEBB_TEST_RUST_LOG": args.rust_log,
         "EMULEBB_TEST_RUST_IMAGE": args.image,
     }
@@ -530,6 +530,13 @@ def main() -> int:
             "image", "inspect", args.capture_image, "--format", "{{.Id}}"
         ).stdout.strip()
         started = True
+        command(*compose, "up", "--detach", "--no-build", "--pull", "never", "openvpn",
+                env=env, timeout=180)
+        rust_client.prepare_container_profile(command, compose, env=env, settings=(
+            {} if args.binding_mode == "none" else {
+                "network.p2p.bindInterface": "tun0", "security.vpnGuard.mode": "block",
+            }
+        ))
         command(
             *compose,
             "up",
@@ -537,6 +544,7 @@ def main() -> int:
             "--no-build",
             "--pull",
             "never",
+            "emulebb-rust",
             env=env,
             timeout=180,
         )
@@ -588,13 +596,8 @@ def main() -> int:
             re.search(rf"^{re.escape(prefix)}(?:\s+.*)?\s+dev tun0(?:\s|$)", route_table, re.MULTILINE)
             for prefix in ("0.0.0.0/1", "128.0.0.0/1")
         )
-        processes = docker("top", rust).stdout
-        interface_pinned = "--p2p-bind-interface tun0" in processes
-        if interface_pinned != (args.binding_mode != "none"):
-            raise RuntimeError("Rust daemon P2P interface arguments did not match the requested mode")
         report["tun0Present"] = True
         report["publicRouteUsesTun0"] = True
-        report["p2pInterfacePinned"] = interface_pinned
 
         deadline = time.monotonic() + 120
         while True:
@@ -622,6 +625,13 @@ def main() -> int:
         ).stdout
         api_key = tomllib.loads(settings)["rest"]["api_key"]
         api = "http://127.0.0.1:14712/api/v1"
+        effective = response_data(request_json(api + "/settings", api_key))["effective"]
+        wanted_interface = None if args.binding_mode == "none" else "tun0"
+        if effective["network"]["p2p"]["bindInterface"] != wanted_interface:
+            raise RuntimeError("Rust effective interface does not match the requested binding mode")
+        if wanted_interface and effective["security"]["vpnGuard"]["mode"] != "block":
+            raise RuntimeError("Rust effective VPN guard is not blocking")
+        report["p2pInterfacePinned"] = wanted_interface is not None
         settings_values: dict[str, object] = {}
         if args.disable_protocol_obfuscation or args.nat_matrix:
             settings_values["security"] = {"obfuscationEnabled": False}

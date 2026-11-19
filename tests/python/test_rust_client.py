@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import sqlite3
 import stat
 import subprocess
@@ -15,6 +16,41 @@ import pytest
 from emule_test_harness import rust_client
 from emule_test_harness.kad_nodes import BootstrapContact
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
+
+def test_container_setup_uses_offline_settings_before_publishing_fixture_ownership() -> None:
+    value = "sample name; $(sample) 'quoted'"
+    script = rust_client.container_profile_setup_script({"network.nickname": value}, uid=1234, gid=1235)
+    lines = script.splitlines()
+    assert lines[0] == "test ! -e /config/emulebb-rust"
+    assert lines[2] == "/usr/lib/emulebb-rust/emulebb-profile-init"
+    assert shlex.split(lines[3]) == [
+        "/usr/lib/emulebb-rust/emulebb-rust", "--profile", "/config/emulebb-rust",
+        "settings", "set", "network.nickname", value,
+    ]
+    assert lines[4:] == ["chown -R 1234:1235 /config", "chown 1234:1235 /data/incoming /data/temp"]
+
+
+@pytest.mark.parametrize("uid,gid", [(-1, 1), (1, "bad"), (True, 1)])
+def test_container_setup_requires_numeric_fixture_ownership(uid, gid) -> None:
+    with pytest.raises(ValueError, match="numeric IDs"):
+        rust_client.container_profile_setup_script({}, uid=uid, gid=gid)
+
+
+def test_container_profile_preparation_propagates_failure_without_retry() -> None:
+    calls = []
+    environment = {"SYNTHETIC": "fixture"}
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise subprocess.CalledProcessError(1, args)
+    with pytest.raises(subprocess.CalledProcessError):
+        rust_client.prepare_container_profile(run, ("docker", "compose"), env=environment,
+                                              settings={"network.p2p.bindInterface": "tun0"})
+    assert len(calls) == 1
+    arguments, options = calls[0]
+    assert arguments[:9] == ("docker", "compose", "run", "--rm", "--no-deps", "--entrypoint", "/bin/sh", "emulebb-rust", "-ec")
+    assert "settings set network.p2p.bindInterface tun0" in arguments[-1]
+    assert options == {"env": environment, "timeout": 120}
 
 
 def test_registered_stage_admission_uses_persisted_source_verifier(monkeypatch, tmp_path):
