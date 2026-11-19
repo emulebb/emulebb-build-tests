@@ -19,6 +19,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .paths import get_workspace_output_root
+from .rust_rest_contract import restore_settings_patch, settings_patch
 
 DEFAULT_API_KEY = "converged-soak"
 DEFAULT_STEADY_SECONDS = 18.0
@@ -367,6 +368,138 @@ def _wait_for_api(description: str, timeout_seconds: float, probe) -> Any:
         time.sleep(min(1.0, max(0.1, deadline - time.monotonic())))
     suffix = f": {last_error}" if last_error is not None else ""
     raise RuntimeError(f"timed out waiting for {description}{suffix}")
+
+
+def _saved_setting(snapshot: dict, key: str) -> dict:
+    leaf = snapshot["data"]["saved"]
+    for part in key.split("."):
+        leaf = leaf[part]
+    if leaf["mode"] not in {"default", "custom"} or "value" not in leaf:
+        raise RuntimeError(f"Invalid saved setting: {key}")
+    return leaf
+
+
+def _settings_form_check(surface: dict, snapshot: dict, rows: list[dict]) -> dict:
+    """Require every current daemon field, saved mode and value in the rendered form."""
+    # Reuse the shared exact revision validator without sending any request.
+    settings_patch(snapshot, reset=("transfers.uploadLimitBytesPerSecond",))
+    fields = surface["fields"]
+    keys = [field["key"] for field in fields]
+    rendered = [row["key"] for row in rows]
+    if not keys or len(set(keys)) != len(keys) or len(set(rendered)) != len(rendered) or set(rendered) != set(keys):
+        raise RuntimeError("Rendered settings fields differ from the daemon surface")
+    defaults = 0
+    for row in rows:
+        leaf = _saved_setting(snapshot, row["key"])
+        value = leaf["value"]
+        text = ("" if value is None else "\n".join(value) if isinstance(value, list)
+                else str(value).lower() if isinstance(value, bool) else str(value))
+        default = leaf["mode"] == "default"
+        if row["default"] is not default or row["text"] != text:
+            raise RuntimeError(f"Rendered setting differs from the saved snapshot: {row['key']}")
+        if leaf["mode"] == "custom" and (row["unset"] is True) != (value is None):
+            raise RuntimeError(f"Rendered nullable setting differs: {row['key']}")
+        defaults += default
+    return {"ok": True, "fieldCount": len(keys), "defaultCount": defaults}
+
+
+def _wait_for_settings_form(page, surface: dict, snapshot: dict, timeout_seconds: float) -> dict:
+    def probe():
+        rows = page.locator("fieldset.setting-editor").evaluate_all("""elements => elements.map(element => {
+            const defaults = element.querySelector('input[aria-label^="Use default for "]');
+            const unset = element.querySelector('input[aria-label^="Not set for "]');
+            const control = element.querySelector('input.form-control, textarea, select')
+                ?? Array.from(element.querySelectorAll('input[type="checkbox"]'))
+                    .find(input => input !== defaults && input !== unset);
+            return {key: element.querySelector('code.setting-key')?.textContent,
+                default: defaults?.checked, unset: unset?.checked ?? null,
+                text: control?.type === 'checkbox' ? String(control.checked) : control?.value};
+        })""")
+        return _settings_form_check(surface, snapshot, rows)
+    return _wait_for_api("complete canonical settings form", timeout_seconds, probe)
+
+
+def _settings_editor(page, key: str):
+    return page.locator("fieldset.setting-editor").filter(
+        has=page.locator("code.setting-key").filter(has_text=re.compile("^" + re.escape(key) + "$")))
+
+
+def _save_settings_form(page, expected: dict, timeout_seconds: float) -> dict:
+    """Submit once; an unconfirmed response never authorizes a compensating write."""
+    writes = []
+
+    def observe(request):
+        if request.method == "PATCH" and urlparse(request.url).path == "/api/v1/settings":
+            writes.append(request.post_data_json)
+
+    page.on("request", observe)
+    try:
+        with page.expect_response(lambda response: response.request.method == "PATCH"
+                                  and urlparse(response.url).path == "/api/v1/settings",
+                                  timeout=int(timeout_seconds * 1000)) as observed:
+            page.get_by_role("button", name="Save", exact=True).click()
+        response = observed.value
+        if response.status != 200 or writes != [expected]:
+            raise RuntimeError("Settings form did not confirm exactly one expected revisioned write")
+        snapshot = response.json()
+        revision = settings_patch(snapshot, reset=("transfers.uploadLimitBytesPerSecond",))["expectedRevision"]
+        if int(revision) != int(expected["expectedRevision"]) + 1:
+            raise RuntimeError("Settings form write did not advance its revision exactly once")
+        return snapshot
+    finally:
+        page.remove_listener("request", observe)
+
+
+def _verify_settings_form(page, *, base_url: str, api_key: str,
+                          timeout_seconds: float, verify_edits: bool) -> dict:
+    """Read all native fields; optional writes belong only to disposable package profiles."""
+    surface = api_data(base_url, "settings/surface", api_key)
+    with page.expect_response(lambda response: response.request.method == "GET"
+                              and urlparse(response.url).path == "/api/v1/settings",
+                              timeout=int(timeout_seconds * 1000)) as observed:
+        _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
+    response = observed.value
+    if response.status != 200:
+        raise RuntimeError("Settings navigation did not load the native snapshot")
+    snapshot = response.json()
+    result = _wait_for_settings_form(page, surface, snapshot, timeout_seconds)
+    result["writes"] = 0
+    if not verify_edits:
+        return result
+
+    key = "transfers.uploadLimitBytesPerSecond"
+    field = next(item for item in surface["fields"] if item["key"] == key)
+    original = _saved_setting(snapshot, key)
+    rule = field["rule"]
+    if field["application"] != "live" or rule["kind"] != "integer":
+        raise RuntimeError("Disposable settings proof requires a live integer upload limit")
+    step = rule["step"]
+    value = original["value"]
+    temporary = next((candidate for candidate in (value + step, value - step, value + 2 * step)
+                      if rule["min"] <= candidate <= rule["max"] and candidate != field["defaultValue"]), None)
+    if temporary is None:
+        raise RuntimeError("Upload limit has no alternate valid proof value")
+    editor = _settings_editor(page, key)
+    editor.locator('input[aria-label^="Use default for "]').uncheck()
+    editor.locator("input.form-control").fill(str(temporary))
+    changed = _save_settings_form(page, settings_patch(snapshot, set_values={
+        "transfers": {"uploadLimitBytesPerSecond": temporary}}), timeout_seconds)
+    _wait_for_settings_form(page, surface, changed, timeout_seconds)
+    if _saved_setting(changed, key) != {"mode": "custom", "value": temporary}:
+        raise RuntimeError("Temporary upload limit was not saved")
+    if changed["data"]["effective"]["transfers"]["uploadLimitBytesPerSecond"] != temporary:
+        raise RuntimeError("Temporary live upload limit was not applied")
+    restore = restore_settings_patch(changed, {key: original})
+    if original["mode"] == "default":
+        editor.locator('input[aria-label^="Use default for "]').check()
+    else:
+        editor.locator("input.form-control").fill(str(value))
+    restored = _save_settings_form(page, restore, timeout_seconds)
+    _wait_for_settings_form(page, surface, restored, timeout_seconds)
+    leaf = _saved_setting(restored, key)
+    if leaf["mode"] != original["mode"] or (leaf["mode"] == "custom" and leaf["value"] != value):
+        raise RuntimeError("Settings form did not restore the original saved mode/value")
+    return {**result, "writes": 2, "restored": True, "key": key}
 
 
 def _integer_field(value: Any, name: str) -> int:
@@ -1515,6 +1648,7 @@ def run_webui_live_proof(
     max_main_thread_busy_ratio: float,
     navigation_only: bool = False,
     verify_stale_key_recovery: bool = False,
+    verify_settings_edits: bool = False,
     consumer_workflow: ConsumerNetworkWorkflow | None = None,
     configure_best_effort_upnp: bool = False,
     shutdown_after_proof: bool = False,
@@ -1666,6 +1800,11 @@ def run_webui_live_proof(
                     "api": recorder.snapshot(),
                     "ok": [row["label"] for row in visited_tabs] == list(TAB_LABELS),
                 }
+
+                report["checks"]["settingsForm"] = _verify_settings_form(
+                    page, base_url=base_url, api_key=api_key,
+                    timeout_seconds=timeout_seconds, verify_edits=verify_settings_edits,
+                )
 
                 if configure_best_effort_upnp:
                     report["checks"]["upnpConfiguration"] = _configure_best_effort_upnp(

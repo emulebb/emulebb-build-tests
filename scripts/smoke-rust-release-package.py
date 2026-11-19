@@ -637,6 +637,7 @@ def _smoke_binary(
                 max_main_thread_busy_ratio=0.25,
                 navigation_only=True,
                 verify_stale_key_recovery=True,
+                verify_settings_edits=True,
                 expected_app_identity=expected_identity,
                 public_capture_path=public_capture_path,
             )

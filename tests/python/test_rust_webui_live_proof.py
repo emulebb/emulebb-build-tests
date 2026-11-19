@@ -597,11 +597,109 @@ def test_profile_settings_api_key_reads_generated_secret(tmp_path) -> None:
     assert rust_webui_live_proof.profile_settings_api_key(settings) == "generated-key"
 
 
-def test_profile_settings_api_key_rejects_retired_bootstrap_spelling(tmp_path) -> None:
+def test_profile_settings_api_key_requires_a_string(tmp_path) -> None:
     settings = tmp_path / "emulebb-rust-settings.toml"
-    settings.write_text('[rest]\napiKey = "synthetic-retired-key"\n', encoding="utf-8")
+    settings.write_text('[rest]\napi_key = 42\n', encoding="utf-8")
     with pytest.raises(RuntimeError, match="REST API key is missing"):
         rust_webui_live_proof.profile_settings_api_key(settings)
+
+
+@pytest.fixture
+def native_settings_form():
+    values = {"enabled": True, "limit": 123, "path": "sample", "list": ["one", "two"], "optional": None}
+    fields = [{"key": "sample." + key} for key in values]
+    snapshot = {"meta": {"settingsRevision": "9007199254740993"}, "data": {"saved": {"sample": {
+        key: {"mode": "default" if key == "enabled" else "custom", "value": value}
+        for key, value in values.items()}}}}
+    rows = [{"key": "sample." + key, "default": key == "enabled", "unset": value is None,
+             "text": "" if value is None else "\n".join(value) if isinstance(value, list)
+             else str(value).lower() if isinstance(value, bool) else str(value)} for key, value in values.items()]
+    return {"fields": fields}, snapshot, rows
+
+
+def test_native_settings_form_requires_all_emitted_fields_and_saved_modes(native_settings_form):
+    surface, snapshot, rows = native_settings_form
+    assert rust_webui_live_proof._settings_form_check(surface, snapshot, list(reversed(rows))) == {
+        "ok": True, "fieldCount": 5, "defaultCount": 1}
+
+
+@pytest.mark.parametrize("fault", ["missing", "duplicate", "unexpected", "mode", "value", "null", "revision"])
+def test_native_settings_form_rejects_incomplete_or_incorrect_rendering(native_settings_form, fault):
+    surface, snapshot, rows = native_settings_form
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows.append(dict(rows[0]))
+    elif fault == "unexpected":
+        rows[0]["key"] = "sample.other"
+    elif fault == "mode":
+        rows[0]["default"] = False
+    elif fault == "value":
+        rows[1]["text"] = "124"
+    elif fault == "null":
+        rows[-1]["unset"] = False
+    else:
+        snapshot["meta"]["settingsRevision"] = 123
+    with pytest.raises(RuntimeError):
+        rust_webui_live_proof._settings_form_check(surface, snapshot, rows)
+
+
+@pytest.mark.parametrize("fault", [None, "conflict", "duplicate", "wrong_body", "unchanged_revision"])
+def test_native_settings_save_requires_one_confirmed_owned_write(fault):
+    from types import SimpleNamespace
+
+    body = {"expectedRevision": "9007199254740993", "reset": ["sample.limit"]}
+    writes = []
+    response = SimpleNamespace(status=409 if fault == "conflict" else 200,
+                               request=SimpleNamespace(method="PATCH"),
+                               url="http://127.0.0.1/api/v1/settings",
+                               json=lambda: {"meta": {"settingsRevision": "9007199254740993"
+                                             if fault == "unchanged_revision" else "9007199254740994"}})
+
+    class Observed:
+        value = response
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class Page:
+        listener = None
+
+        def on(self, event, callback):
+            assert event == "request"
+            self.listener = callback
+
+        def remove_listener(self, event, callback):
+            assert event == "request" and self.listener == callback
+            self.listener = None
+
+        def expect_response(self, predicate, *, timeout):
+            assert predicate(response) and timeout == 1000
+            return Observed()
+
+        def get_by_role(self, role, *, name, exact):
+            assert (role, name, exact) == ("button", "Save", True)
+            return self
+
+        def click(self):
+            writes.append("click")
+            request = SimpleNamespace(method="PATCH", url=response.url,
+                                      post_data_json={} if fault == "wrong_body" else body)
+            self.listener(request)
+            if fault == "duplicate":
+                self.listener(request)
+
+    page = Page()
+    if fault is None:
+        assert rust_webui_live_proof._save_settings_form(page, body, 1) == response.json()
+    else:
+        with pytest.raises(RuntimeError):
+            rust_webui_live_proof._save_settings_form(page, body, 1)
+    assert writes == ["click"]
+    assert page.listener is None
 
 
 def test_sanitize_report_text_applies_runtime_redactions() -> None:
