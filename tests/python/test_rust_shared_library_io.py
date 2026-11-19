@@ -460,7 +460,8 @@ def test_lan_startup_profile_seeds_only_local_sqlite_endpoints(tmp_path):
                                            "contactCount": 0, "bootstrapEndpointCount": 1}
     with sqlite3.connect(profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE) as connection:
         assert connection.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchall() == [("127.0.0.1:24673",)]
-        assert connection.execute("SELECT value_json FROM settings WHERE section='core' AND key='networkKademlia'").fetchone() == ("true",)
+    _, settings = subject.rust_metadata.read_app_settings(profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE)
+    assert settings["network"]["kadEnabled"]["value"] is True
     assert not (profile / "nodes.dat").exists()
 
 

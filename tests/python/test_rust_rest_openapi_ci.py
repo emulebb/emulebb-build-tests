@@ -54,7 +54,7 @@ def retained_scale_subject(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(module, "load_script_module", lambda *args: package)
     monkeypatch.setattr(module.rust_client, "write_rust_profile", lambda *args, **kwargs: None)
-    monkeypatch.setattr(module.rust_client, "rust_network_settings_patch", lambda **kwargs: {})
+    monkeypatch.setattr(module.rust_metadata, "edit_app_settings", lambda *args, **kwargs: None)
     monkeypatch.setattr(module.rust_metadata, "seed_retained_download_scale", lambda *args: {
         "jobs": 1000, "completed": 990, "stopped": 9, "queued": 1,
     })
@@ -384,16 +384,16 @@ def test_peer_launch_failure_preserves_report_and_closes_owned_fixture(friend_fi
         with closing(sqlite3.connect(database)) as source:
             with closing(sqlite3.connect(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)) as target:
                 source.backup(target)
-        module.rust_metadata.put_setting_json(
-            profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE, "kad", "listenPort", 4665)
+        module.rust_metadata.edit_app_settings(
+            resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust"),
+            profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE, {"network.p2p.udpPort": 4665})
 
     def fail_start(*args):
         profile = args[1]
-        with closing(sqlite3.connect(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)) as connection:
-            values = {key: json.loads(value) for key, value in connection.execute(
-                "SELECT key,value_json FROM settings WHERE section='kad'")}
-        assert values["listenPort"] == 4665
-        assert values["passiveReplayEnabled"] is True
+        _, values = module.rust_metadata.read_app_settings(profile / module.rust_metadata.RUST_PROFILE_METADATA_FILE)
+        assert values["network"]["p2p"]["udpPort"]["value"] == 4665
+        assert values["transfers"]["uploadLimitBytesPerSecond"]["value"] == 8192
+        assert values["transfers"]["upload"]["baseSlots"]["value"] == 1
         raise RuntimeError("Daemon launch failed")
 
     package = SimpleNamespace(_available_unique_port=lambda *args, **kwargs: next(ports),
@@ -403,7 +403,7 @@ def test_peer_launch_failure_preserves_report_and_closes_owned_fixture(friend_fi
     monkeypatch.setattr(module.rust_rest_conformance, "load_rest_smoke_module", lambda *args: None)
     monkeypatch.setattr(module, "load_openapi_document", lambda *args: document)
     with pytest.raises(RuntimeError, match="Local friend-peer proof failed"):
-        module.run_friend_peer_phase(executable=tmp_path / "daemon", rust_repo=tmp_path / "rust",
+        module.run_friend_peer_phase(executable=tmp_path / "daemon", rust_repo=resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust"),
                                      root=fixture_root, openapi_contract=tmp_path / "contract.yaml")
     report = json.loads((fixture_root / "report.json").read_text())
     assert report["status"] == "failed" and "Daemon launch failed" in report["error"]

@@ -274,19 +274,22 @@ def run_rust_side(
 
     write_rust_profile(
         profile_dir,
-        rust_repo=REPO_ROOT.parent / "emulebb-rust",
+        rust_repo=REPO_ROOT.parent / 'emulebb-rust',
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=RUST_API_KEY,
-        p2p_bind_ip=bind_ip,
-        p2p_bind_interface="hide.me",
-        ed2k_port=ED2K_PORT,
-        kad_port=KAD_PORT,
         server_endpoint=OPERATOR_SERVER,
-        obfuscation_enabled=scenario.obfuscation,
         kad_bootstrap_nodes=bootstrap_nodes,
-        kad_bootstrap_min_routing_contacts=2,
-        nat_enabled=not scenario.low_id,
+        settings={
+            'network.p2p.bindIp': bind_ip,
+            'network.p2p.bindInterface': 'hide.me',
+            'network.p2p.tcpPort': ED2K_PORT,
+            'network.p2p.udpPort': KAD_PORT,
+            'security.obfuscationEnabled': scenario.obfuscation,
+            'network.nat.enabled': not scenario.low_id,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     # HighID needs UPnP to map the high ports on the hide.me IGD; the
     # firewalled/LowID scenario deliberately leaves NAT/UPnP off so no port

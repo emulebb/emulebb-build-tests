@@ -108,24 +108,24 @@ def write_profile(
     ed2k_listen_port: int | None = None,
     kad_listen_port: int | None = None,
     kad_bootstrap_nodes: list[str] | None = None,
-    kad_bootstrap_min_routing_contacts: int = 10,
-    kad_passive_replay_enabled: bool | None = None,
 ) -> None:
     rust_client.write_rust_profile(
         profile_dir,
-        rust_repo=resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust"),
+        rust_repo=resolve_selected_workspace_repo(Path(__file__).parents[2], 'emulebb-rust'),
         rest_addr=lan_host,
         rest_port=port,
         api_key=API_KEY,
-        p2p_bind_ip=lan_host if ed2k_server_endpoint is not None else None,
-        ed2k_port=ed2k_listen_port,
-        kad_port=kad_listen_port,
         server_endpoint=ed2k_server_endpoint,
         kad_bootstrap_nodes=kad_bootstrap_nodes,
-        kad_bootstrap_min_routing_contacts=kad_bootstrap_min_routing_contacts,
-        kad_passive_replay_enabled=kad_passive_replay_enabled,
-        network_kademlia=True,
         local_only_discovery=True,
+        settings={
+            'network.p2p.bindIp': lan_host if ed2k_server_endpoint is not None else None,
+            **({'network.p2p.tcpPort': ed2k_listen_port} if ed2k_listen_port is not None else {}),
+            **({'network.p2p.udpPort': kad_listen_port} if kad_listen_port is not None else {}),
+            'network.kadEnabled': True,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
 
@@ -362,8 +362,6 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         ed2k_server_endpoint=f"{lan_host}:{free_lan_port(lan_host)}",
         ed2k_listen_port=free_lan_port(lan_host),
         kad_listen_port=free_lan_port(lan_host),
-        kad_passive_replay_enabled=True,
-        kad_bootstrap_min_routing_contacts=1,
     )
     seed_index(repo, rust_metadata_path(profile_dir))
 

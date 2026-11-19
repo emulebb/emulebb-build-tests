@@ -1199,20 +1199,21 @@ def start_daemon(
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=paths.rust_repo,
-        incoming_dir=profile_dir / "incoming",
-        rest_addr="127.0.0.1",
+        rest_addr='127.0.0.1',
         rest_port=port,
         api_key=API_KEY,
-        auto_connect=False,
-        nat_enabled=False,
-        initial_shared_directory_reload=False,
         local_only_discovery=True,
         replace_servers=True,
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.autoConnect': False,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': False,
+        },
     )
-    rust_metadata.replace_settings_section(
-        profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
-        "core",
-        {"autoConnect": False, "networkEd2k": False, "networkKademlia": False},
+    rust_metadata.edit_app_settings(
+        paths.rust_repo, profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        {"network.autoConnect": False, "network.ed2kEnabled": False, "network.kadEnabled": False},
     )
     if retained_downloads:
         rust_metadata.seed_retained_download_scale(
@@ -1312,32 +1313,30 @@ def _configure_lan_startup_profile(
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=paths.rust_repo,
-        incoming_dir=profile_dir / "incoming",
         rest_addr=lan_bind_addr,
         rest_port=spec.rest_port,
         api_key=API_KEY,
-        auto_connect=True,
-        p2p_bind_ip=lan_bind_addr,
-        ed2k_port=spec.tcp_port,
-        kad_port=spec.udp_port,
         server_endpoint=server_endpoint,
-        network_kademlia=True,
         local_kad_seed=kad_nodes.BootstrapContact(lan_bind_addr, peer_spec.udp_port, peer_spec.tcp_port),
-        kad_bootstrap_min_routing_contacts=1,
-        nat_enabled=False,
-        initial_shared_directory_reload=initial_reload,
         local_only_discovery=True,
         replace_servers=True,
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.autoConnect': True,
+            'network.p2p.bindIp': lan_bind_addr,
+            'network.p2p.tcpPort': spec.tcp_port,
+            'network.p2p.udpPort': spec.udp_port,
+            'network.kadEnabled': True,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': initial_reload,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     metadata_path = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
-    rust_metadata.replace_settings_section(
-        metadata_path,
-        "core",
-        {
-            "autoConnect": True,
-            "networkEd2k": True,
-            "networkKademlia": True,
-        },
+    rust_metadata.edit_app_settings(
+        paths.rust_repo, metadata_path,
+        {"network.autoConnect": True, "network.ed2kEnabled": True, "network.kadEnabled": True},
     )
     if shared_root is not None:
         rust_metadata.seed_shared_directory_roots(
@@ -1969,26 +1968,29 @@ def _configure_offerfiles_scale_profile(
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=paths.rust_repo,
-        incoming_dir=profile_dir / "incoming",
         rest_addr=lan_bind_addr,
         rest_port=rest_port,
         api_key=API_KEY,
-        auto_connect=True,
-        network_kademlia=False,
-        p2p_bind_ip=p2p_bind_ip,
-        ed2k_port=ed2k_port,
-        ed2k_nickname=client_nick,
-        kad_port=kad_port,
         server_endpoint=server_endpoint,
-        nat_enabled=False,
-        initial_shared_directory_reload=False,
         local_only_discovery=True,
         replace_servers=True,
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.autoConnect': True,
+            'network.kadEnabled': False,
+            'network.p2p.bindIp': p2p_bind_ip,
+            'network.p2p.tcpPort': ed2k_port,
+            'network.nickname': client_nick,
+            'network.p2p.udpPort': kad_port,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': False,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
-    rust_metadata.replace_settings_section(
-        profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
-        "core",
-        {"autoConnect": True, "networkEd2k": True, "networkKademlia": False},
+    rust_metadata.edit_app_settings(
+        paths.rust_repo, profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        {"network.autoConnect": True, "network.ed2kEnabled": True, "network.kadEnabled": False},
     )
 
 

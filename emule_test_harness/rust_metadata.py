@@ -236,48 +236,6 @@ def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
         raise RuntimeError(f"invalid current Rust profile database {db_path}: {exc}") from exc
 
 
-def put_setting_json(db_path: Path, section: str, key: str, value: object) -> None:
-    """Upsert one Rust profile settings row using the canonical JSON row shape."""
-
-    if not section.strip():
-        raise ValueError("settings section must not be empty")
-    if not key.strip():
-        raise ValueError("settings key must not be empty")
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute(
-            """
-            INSERT INTO settings(section, key, value_json, updated_at_ms)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(section, key) DO UPDATE SET
-                value_json = excluded.value_json,
-                updated_at_ms = excluded.updated_at_ms
-            """,
-            (section, key, json.dumps(value), _now_ms()),
-        )
-        conn.commit()
-
-
-def replace_settings_section(db_path: Path, section: str, values: dict[str, object]) -> None:
-    """Replace one Rust settings section with scalar JSON setting rows."""
-
-    if not section.strip():
-        raise ValueError("settings section must not be empty")
-    now = _now_ms()
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("DELETE FROM settings WHERE section = ?", (section,))
-        for key, value in sorted(values.items()):
-            if not key.strip():
-                raise ValueError("settings key must not be empty")
-            conn.execute(
-                """
-                INSERT INTO settings(section, key, value_json, updated_at_ms)
-                VALUES (?, ?, ?, ?)
-                """,
-                (section, key, json.dumps(value), now),
-            )
-        conn.commit()
-
-
 def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None:
     """Replace the ordered Rust Kad bootstrap endpoint list."""
 

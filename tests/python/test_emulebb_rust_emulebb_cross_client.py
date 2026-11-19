@@ -1664,5 +1664,5 @@ def test_cross_client_uses_shared_ed2k_harness_launcher_and_stops_it_on_failure(
     assert calls["report"]["network"]["lan_bind_addr"] == "192.0.2.10"
     assert calls["report"]["network"]["p2p_bind_interface_address"] == "198.51.100.20"
     assert calls["report"]["network"]["server_endpoint"] == "172.17.142.32:4661"
-    assert calls["rust_profile"]["p2p_bind_ip"] == "172.17.128.1"
-    assert calls["rust_profile"]["ed2k_nickname"] == module.CLIENT_RUST.nick
+    assert calls["rust_profile"]["settings"]["network.p2p.bindIp"] == "172.17.128.1"
+    assert calls["rust_profile"]["settings"]["network.nickname"] == module.CLIENT_RUST.nick

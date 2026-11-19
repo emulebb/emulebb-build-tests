@@ -742,22 +742,23 @@ def run_pass(
 
     write_rust_profile(
         profile_dir,
-        rust_repo=REPO_ROOT.parent / "emulebb-rust",
+        rust_repo=REPO_ROOT.parent / 'emulebb-rust',
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=API_KEY,
-        p2p_bind_ip=bind_ip,
-        p2p_bind_interface="hide.me",
-        ed2k_port=ED2K_PORT,
-        kad_port=KAD_PORT,
         server_endpoint=OPERATOR_SERVER,
-        obfuscation_enabled=obfuscation,
-        reconnect_interval_secs=int(CONNECT_COOLDOWN_SECONDS),
-        server_keepalive_minutes=STOCK_SERVER_KEEPALIVE_MINUTES,
         kad_bootstrap_nodes=bootstrap_nodes,
-        kad_bootstrap_min_routing_contacts=2,
-        enable_udp_reask=enable_reask,
-        nat_enabled=True,
+        settings={
+            'network.p2p.bindIp': bind_ip,
+            'network.p2p.bindInterface': 'hide.me',
+            'network.p2p.tcpPort': ED2K_PORT,
+            'network.p2p.udpPort': KAD_PORT,
+            'security.obfuscationEnabled': obfuscation,
+            'network.servers.reconnectIntervalSeconds': int(CONNECT_COOLDOWN_SECONDS),
+            'network.servers.keepaliveMinutes': STOCK_SERVER_KEEPALIVE_MINUTES,
+            'network.nat.enabled': True,
+            'network.connections.connectTimeoutSeconds': 10,
+        },
     )
     # Enable UPnP so the P2P stack maps ports on the hide.me IGD (needed for
     # HighID + inbound sources over the tunnel).

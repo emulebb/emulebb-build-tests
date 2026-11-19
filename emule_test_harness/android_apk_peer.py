@@ -337,13 +337,29 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
             campaign.record(peerOwnership={"nonce": PurePosixPath(home).name.removeprefix("emulebb-apk-peer-"),
                                            "executableSha256": digest, "creationVerified": False})
         stage("peer-profile-seed")
-        write_rust_profile(profile, rust_repo=rust_source, incoming_dir=Path(home) / "incoming",
-                           rest_addr="127.0.0.1", rest_port=20027, api_key=PEER_KEY,
-                           auto_connect=False, network_kademlia=False,
-                           p2p_bind_ip=bind_ip if bind_interface is None else None, p2p_bind_interface=bind_interface,
-                           ed2k_port=20029, kad_port=20030, server_endpoint="127.0.0.1:20031",
-                           nat_enabled=False, replace_servers=True, initial_shared_directory_reload=False,
-                           local_only_discovery=True)
+        write_rust_profile(
+            profile,
+            rust_repo=rust_source,
+            rest_addr='127.0.0.1',
+            rest_port=20027,
+            api_key=PEER_KEY,
+            server_endpoint='127.0.0.1:20031',
+            replace_servers=True,
+            local_only_discovery=True,
+            settings={
+                'storage.incomingDirectory': str(Path(home) / 'incoming'),
+                'network.autoConnect': False,
+                'network.kadEnabled': False,
+                'network.p2p.bindIp': bind_ip if bind_interface is None else None,
+                'network.p2p.bindInterface': bind_interface,
+                'network.p2p.tcpPort': 20029,
+                'network.p2p.udpPort': 20030,
+                'network.nat.enabled': False,
+                'sharing.scanOnStartup': False,
+                'network.connections.connectTimeoutSeconds': 10,
+                'network.servers.reconnectIntervalSeconds': 60,
+            },
+        )
         stage("peer-home-create")
         command(*prefix, "shell", "mkdir", "-m", "700", home)
         home_created = True

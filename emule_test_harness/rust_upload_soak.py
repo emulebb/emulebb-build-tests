@@ -680,19 +680,22 @@ def run(argv: list[str] | None = None) -> int:
         rust_client.write_rust_profile(
             seeder_profile,
             rust_repo=rust_repo,
-            incoming_dir=seeder_profile / "incoming",
-            rest_addr="127.0.0.1",
+            rest_addr='127.0.0.1',
             rest_port=seeder_rest_port,
             api_key=args.api_key,
-            p2p_bind_ip=seeder_addr,
-            ed2k_port=seeder_ed2k_port,
-            kad_port=seeder_kad_port,
-            server_endpoint=f"{ed2k_server.ed2k_host}:{server_port}",
+            server_endpoint=f'{ed2k_server.ed2k_host}:{server_port}',
             local_only_discovery=True,
-            network_kademlia=True if kad_wsl else None,
             local_kad_seed=kad_nodes.BootstrapContact(seeder_addr, leecher_kad_port, leecher_ed2k_port) if kad_wsl else None,
-            kad_bootstrap_min_routing_contacts=1 if kad_wsl else 10,
-            obfuscation_enabled=not kad_wsl,
+            settings={
+                'storage.incomingDirectory': str(seeder_profile / 'incoming'),
+                'network.p2p.bindIp': seeder_addr,
+                'network.p2p.tcpPort': seeder_ed2k_port,
+                'network.p2p.udpPort': seeder_kad_port,
+                'network.kadEnabled': kad_wsl,
+                'security.obfuscationEnabled': not kad_wsl,
+                'network.connections.connectTimeoutSeconds': 10,
+                'network.servers.reconnectIntervalSeconds': 60,
+            },
         )
         if kad_wsl:
             # WHY: plain DrvFs reports 0777 for the API key file, which Linux
@@ -701,35 +704,38 @@ def run(argv: list[str] | None = None) -> int:
             wsl_mountpoint = mount_wsl_output_with_metadata(artifacts_dir.name, artifacts_dir)
             seeder_settings = wsl_metadata_path(wsl_mountpoint, seeder_profile / rust_client.RUST_PROFILE_SETTINGS_FILE)
             subprocess.run(["wsl.exe", "--", "chmod", "600", seeder_settings], check=True)
-            rust_metadata.replace_settings_section(
-                seeder_profile / rust_metadata.RUST_PROFILE_METADATA_FILE,
-                "daemon",
-                {"incomingDir": wsl_metadata_path(wsl_mountpoint, seeder_profile / "incoming"), "p2pBindIp": seeder_addr},
+            rust_metadata.edit_app_settings(
+                rust_repo, seeder_profile / rust_metadata.RUST_PROFILE_METADATA_FILE,
+                {"storage.incomingDirectory": wsl_metadata_path(wsl_mountpoint, seeder_profile / "incoming"),
+                 "network.p2p.bindIp": seeder_addr},
             )
         rust_client.write_rust_profile(
             leecher_profile,
             rust_repo=rust_repo,
-            incoming_dir=leecher_profile / "incoming",
-            rest_addr="127.0.0.1",
+            rest_addr='127.0.0.1',
             rest_port=leecher_rest_port,
             api_key=args.api_key,
-            p2p_bind_ip=seeder_addr if kad_wsl else lan,
-            ed2k_port=leecher_ed2k_port,
-            kad_port=leecher_kad_port,
-            server_endpoint=f"{ed2k_server.ed2k_host}:{server_port}",
+            server_endpoint=f'{ed2k_server.ed2k_host}:{server_port}',
             local_only_discovery=True,
-            network_kademlia=True if kad_wsl else None,
             local_kad_seed=kad_nodes.BootstrapContact(seeder_addr, seeder_kad_port, seeder_ed2k_port) if kad_wsl else None,
-            kad_bootstrap_min_routing_contacts=1 if kad_wsl else 10,
-            obfuscation_enabled=not kad_wsl,
+            settings={
+                'storage.incomingDirectory': str(leecher_profile / 'incoming'),
+                'network.p2p.bindIp': seeder_addr if kad_wsl else lan,
+                'network.p2p.tcpPort': leecher_ed2k_port,
+                'network.p2p.udpPort': leecher_kad_port,
+                'network.kadEnabled': kad_wsl,
+                'security.obfuscationEnabled': not kad_wsl,
+                'network.connections.connectTimeoutSeconds': 10,
+                'network.servers.reconnectIntervalSeconds': 60,
+            },
         )
         if kad_wsl:
             leecher_settings = wsl_metadata_path(wsl_mountpoint, leecher_profile / rust_client.RUST_PROFILE_SETTINGS_FILE)
             subprocess.run(["wsl.exe", "--", "chmod", "600", leecher_settings], check=True)
-            rust_metadata.replace_settings_section(
-                leecher_profile / rust_metadata.RUST_PROFILE_METADATA_FILE,
-                "daemon",
-                {"incomingDir": wsl_metadata_path(wsl_mountpoint, leecher_profile / "incoming"), "p2pBindIp": seeder_addr},
+            rust_metadata.edit_app_settings(
+                rust_repo, leecher_profile / rust_metadata.RUST_PROFILE_METADATA_FILE,
+                {"storage.incomingDirectory": wsl_metadata_path(wsl_mountpoint, leecher_profile / "incoming"),
+                 "network.p2p.bindIp": seeder_addr},
             )
             # Include the product's 5 GiB free-space reserve. This is virtual
             # tmpfs capacity; pages are allocated only for the small fixture.

@@ -244,28 +244,19 @@ def test_write_profile_isolated_before_first_launch(monkeypatch, tmp_path) -> No
         p2p_ip="192.0.2.10",
     )
 
-    assert calls == [
-        (
-            profile,
-            {
-                "rust_repo": rust_repo,
-                "incoming_dir": incoming,
-                "rest_addr": "127.0.0.1",
-                "rest_port": 4711,
-                "api_key": smoke.API_KEY,
-                "auto_connect": False,
-                "network_kademlia": False,
-                "p2p_bind_ip": "192.0.2.10",
-                "ed2k_port": 4662,
-                "kad_port": 4672,
-                "server_endpoint": "127.0.0.1:4661",
-                "nat_enabled": False,
-                "replace_servers": True,
-                "initial_shared_directory_reload": False,
-                "local_only_discovery": True,
-            },
-        )
-    ]
+    assert calls == [(profile, {
+        "rust_repo": rust_repo, "rest_addr": "127.0.0.1", "rest_port": 4711,
+        "api_key": smoke.API_KEY, "server_endpoint": "127.0.0.1:4661",
+        "replace_servers": True, "local_only_discovery": True,
+        "settings": {
+            "storage.incomingDirectory": str(incoming), "network.autoConnect": False,
+            "network.kadEnabled": False, "network.p2p.bindIp": "192.0.2.10",
+            "network.p2p.tcpPort": 4662, "network.p2p.udpPort": 4672,
+            "network.nat.enabled": False, "sharing.scanOnStartup": False,
+            "network.connections.connectTimeoutSeconds": 10,
+            "network.servers.reconnectIntervalSeconds": 60,
+        },
+    })]
 
 
 def test_webui_asset_paths_accepts_rooted_history_routing_assets() -> None:

@@ -218,11 +218,13 @@ def import_stock_mfc_profile(
             rest_addr=resolved_rest_addr,
             rest_port=rest_port,
             api_key=api_key,
-            p2p_bind_ip=resolved_p2p_bind_ip,
-            p2p_bind_interface=resolved_p2p_bind_interface,
-            ed2k_port=ed2k_port,
-            kad_port=kad_port,
-            initial_shared_directory_reload=False,
+            settings={
+                'network.p2p.bindIp': resolved_p2p_bind_ip,
+                'network.p2p.bindInterface': resolved_p2p_bind_interface,
+                'network.p2p.tcpPort': ed2k_port,
+                'network.p2p.udpPort': kad_port,
+                'sharing.scanOnStartup': False,
+            },
         )
         rust_metadata.seed_shared_directory_roots(metadata_db, seed_roots)
         for server in servers:

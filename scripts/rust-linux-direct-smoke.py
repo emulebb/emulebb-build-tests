@@ -708,23 +708,24 @@ def main(argv: list[str] | None = None) -> int:
     write_rust_profile(
         profile_dir,
         rust_repo=rust_repo,
-        incoming_dir=incoming_dir,
         rest_addr=rest_addr,
         rest_port=REST_PORT,
         api_key=API_KEY,
-        p2p_bind_ip=direct_bind_ip,
-        ed2k_port=ED2K_PORT,
-        kad_port=KAD_PORT,
         server_endpoint=None,
         replace_servers=False,
-        kad_bootstrap_min_routing_contacts=2,
-        nat_enabled=args.enable_upnp,
-        nat_require_initial_mapping=args.enable_upnp and not args.nat_matrix,
-        nat_backend_order=[nat_live_matrix.MINIUPNPC_BACKEND]
-        if args.nat_backend == "miniupnpc"
-        else None,
-        initial_shared_directory_reload=False,
-        vpn_guard_mode="off",
+        settings={
+            'storage.incomingDirectory': str(incoming_dir),
+            'network.p2p.bindIp': direct_bind_ip,
+            'network.p2p.tcpPort': ED2K_PORT,
+            'network.p2p.udpPort': KAD_PORT,
+            'network.nat.enabled': args.enable_upnp,
+            'network.nat.requireInitialMapping': args.enable_upnp and (not args.nat_matrix),
+            **({'network.nat.backendOrder': ['upnp']} if args.nat_backend == 'miniupnpc' else {}),
+            'sharing.scanOnStartup': False,
+            'security.vpnGuard.mode': 'off',
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
     base_url = f"http://{rest_addr}:{REST_PORT}"

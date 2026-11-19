@@ -214,15 +214,25 @@ def run_kad_persistence_phase(*, executable: Path, rust_repo: Path, root: Path,
         rest_port = package._available_unique_port(ports)
         base_url = f"http://127.0.0.1:{rest_port}"
         rust_client.write_rust_profile(
-            profile, rust_repo=rust_repo, rest_addr=REST_ADDR, rest_port=rest_port, api_key=API_KEY,
-            network_kademlia=True, p2p_bind_ip=REST_ADDR,
-            ed2k_port=package._available_unique_port(ports),
-            kad_port=package._available_unique_port(ports, socket_type=socket.SOCK_DGRAM),
-            server_endpoint=f"127.0.0.1:{package._available_unique_port(ports)}",
-            local_only_discovery=True, local_kad_seed=rust_client.kad_nodes.BootstrapContact(
-                REST_ADDR, fixture.udp_port, fixture.tcp_port),
-            kad_bootstrap_min_routing_contacts=1, nat_enabled=False,
-            obfuscation_enabled=False, initial_shared_directory_reload=False,
+            profile,
+            rust_repo=rust_repo,
+            rest_addr=REST_ADDR,
+            rest_port=rest_port,
+            api_key=API_KEY,
+            server_endpoint=f'127.0.0.1:{package._available_unique_port(ports)}',
+            local_only_discovery=True,
+            local_kad_seed=rust_client.kad_nodes.BootstrapContact(REST_ADDR, fixture.udp_port, fixture.tcp_port),
+            settings={
+                'network.kadEnabled': True,
+                'network.p2p.bindIp': REST_ADDR,
+                'network.p2p.tcpPort': package._available_unique_port(ports),
+                'network.p2p.udpPort': package._available_unique_port(ports, socket_type=socket.SOCK_DGRAM),
+                'network.nat.enabled': False,
+                'security.obfuscationEnabled': False,
+                'sharing.scanOnStartup': False,
+                'network.connections.connectTimeoutSeconds': 10,
+                'network.servers.reconnectIntervalSeconds': 60,
+            },
         )
         process, handle = package._start_daemon(executable, profile, root / "daemon.log")
         wait_until("Kad persistence REST readiness", remaining(), ready)
@@ -1044,10 +1054,10 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
                     connection.commit()
                 rust_metadata.seed_indexed_file(peer["database"], ed2k_hash="99" * 16,
                     name="Synthetic.Identity.Proof.bin", size_bytes=4096, origin="passive_cache")
-                rust_metadata.put_setting_json(peer["database"], "kad", "passiveReplayEnabled", True)
-                rust_metadata.replace_settings_section(peer["database"], "core", {
-                    "autoConnect": False, "networkKademlia": False, "uploadLimitKiBps": 8,
-                    "baseUploadSlots": 1, "uploadSlotElasticPercent": 0,
+                rust_metadata.edit_app_settings(rust_repo, peer["database"], {
+                    "network.autoConnect": False, "network.kadEnabled": False,
+                    "transfers.uploadLimitBytesPerSecond": 8192,
+                    "transfers.upload.baseSlots": 1, "transfers.upload.elasticPercent": 0,
                 })
             peers.append(peer)
             peer["process"], peer["log"] = package._start_daemon(executable, profile, root / f"{role}.log")
@@ -1303,15 +1313,24 @@ def run_retained_download_scale_phase(*, executable: Path, rust_repo: Path, root
                               "physicalLibraryQualified": False, "memoryLimitQualified": False}
     try:
         rust_client.write_rust_profile(
-            profile, rust_repo=rust_repo, incoming_dir=profile / "incoming",
-            rest_addr=REST_ADDR, rest_port=port, api_key=api_key, nat_enabled=False,
-            initial_shared_directory_reload=False, local_only_discovery=True, vpn_guard_mode="off",
+            profile,
+            rust_repo=rust_repo,
+            rest_addr=REST_ADDR,
+            rest_port=port,
+            api_key=api_key,
+            local_only_discovery=True,
+            settings={
+                'storage.incomingDirectory': str(profile / 'incoming'),
+                'network.nat.enabled': False,
+                'sharing.scanOnStartup': False,
+                'security.vpnGuard.mode': 'off',
+            },
         )
         database = profile / rust_metadata.RUST_PROFILE_METADATA_FILE
-        for section, values in rust_client.rust_network_settings_patch(
-            auto_connect=False, reconnect_enabled=False, network_ed2k=False, network_kademlia=False,
-        ).items():
-            rust_metadata.replace_settings_section(database, section, values)
+        rust_metadata.edit_app_settings(rust_repo, database, {
+            "network.autoConnect": False, "network.servers.autoReconnect": False,
+            "network.ed2kEnabled": False, "network.kadEnabled": False,
+        })
         fixture = rust_metadata.seed_retained_download_scale(database)
         report["fixtureCounts"] = fixture
         document = load_openapi_document(openapi_contract)
@@ -1448,23 +1467,22 @@ def run_campaign(*, ready_timeout_seconds: float = 60.0, rust_repo: Path | None 
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo,
-        incoming_dir=profile_dir / "incoming",
         rest_addr=REST_ADDR,
         rest_port=port,
         api_key=API_KEY,
-        nat_enabled=False,
-        initial_shared_directory_reload=False,
         local_only_discovery=True,
-        vpn_guard_mode="off",
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': False,
+            'security.vpnGuard.mode': 'off',
+        },
     )
     metadata_path = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
-    for section, settings in rust_client.rust_network_settings_patch(
-        auto_connect=False,
-        reconnect_enabled=False,
-        network_ed2k=False,
-        network_kademlia=False,
-    ).items():
-        rust_metadata.replace_settings_section(metadata_path, section, settings)
+    rust_metadata.edit_app_settings(rust_repo, metadata_path, {
+        "network.autoConnect": False, "network.servers.autoReconnect": False,
+        "network.ed2kEnabled": False, "network.kadEnabled": False,
+    })
 
     report: dict[str, Any] = {
         "schema": "emulebb.rust-rest-openapi-ci.v1",

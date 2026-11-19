@@ -894,19 +894,21 @@ def start_rust(
         rest_addr=lan_bind_addr,
         rest_port=rest_port,
         api_key=api_key,
-        p2p_bind_ip=p2p_address,
-        ed2k_port=ed2k_port,
-        ed2k_nickname=nickname,
-        kad_port=kad_port,
         server_endpoint=server_endpoint,
-        enable_udp_reask=enable_reask,
-        # The hairpin server reports each client's actual TEST-NET bind address,
-        # so this selects the production clear or user-hash-keyed UDP path.
-        obfuscation_enabled=obfuscation_enabled,
         local_only_discovery=True,
-        upload_limit_kibps=upload_limit_kibps,
-        base_upload_slots=base_upload_slots,
-        upload_slot_elastic_percent=upload_slot_elastic_percent,
+        settings={
+            'network.p2p.bindIp': p2p_address,
+            'network.p2p.tcpPort': ed2k_port,
+            'network.nickname': nickname,
+            'network.p2p.udpPort': kad_port,
+            'security.obfuscationEnabled': obfuscation_enabled,
+            'transfers.uploadLimitBytesPerSecond': (upload_limit_kibps) * 1024,
+            **({'transfers.upload.baseSlots': base_upload_slots} if base_upload_slots is not None else {}),
+            **({'transfers.upload.elasticPercent': upload_slot_elastic_percent}
+               if upload_slot_elastic_percent is not None else {}),
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
     executable = converged_live_wire.resolve_rust_diagnostics_exe(

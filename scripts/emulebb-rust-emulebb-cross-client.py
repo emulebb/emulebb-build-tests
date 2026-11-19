@@ -1692,17 +1692,23 @@ def main(argv: list[str] | None = None) -> int:
             rest_addr=args.lan_bind_addr,
             rest_port=rust_rest_port,
             api_key=args.api_key,
-            max_connections=1 if args.verify_completed_download_release else None,
-            network_kademlia=bool(args.rust_kad_enabled),
-            p2p_bind_ip=client_p2p_address,
-            ed2k_port=rust_ed2k_port,
-            ed2k_nickname=rust_spec.nick,
-            kad_port=rust_kad_port,
             server_endpoint=server_endpoint,
             local_only_discovery=True,
-            local_kad_seed=kad_nodes.BootstrapContact(client_p2p_address, mfc_spec.udp_port, mfc_spec.tcp_port)
-            if args.rust_kad_enabled else None,
-            kad_bootstrap_min_routing_contacts=1 if args.rust_kad_enabled else 10,
+            local_kad_seed=kad_nodes.BootstrapContact(client_p2p_address, mfc_spec.udp_port, mfc_spec.tcp_port) if args.rust_kad_enabled else None,
+            settings={
+                **({'network.connections.maxConnections': 1,
+                    'network.connections.maxHalfOpenConnections': 1,
+                    'network.connections.maxNewConnectionsPerFiveSeconds': 1,
+                    'transfers.upload.baseSlots': 1}
+                   if args.verify_completed_download_release else {}),
+                'network.kadEnabled': bool(args.rust_kad_enabled),
+                'network.p2p.bindIp': client_p2p_address,
+                'network.p2p.tcpPort': rust_ed2k_port,
+                'network.nickname': rust_spec.nick,
+                'network.p2p.udpPort': rust_kad_port,
+                'network.connections.connectTimeoutSeconds': 10,
+                'network.servers.reconnectIntervalSeconds': 60,
+            },
         )
         report["checks"]["rust_local_discovery"] = rust_metadata.read_discovery_snapshot(
             rust_repo, rust_profile / rust_metadata.RUST_PROFILE_METADATA_FILE)

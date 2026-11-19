@@ -79,14 +79,11 @@ def metadata_path(profile_dir: Path) -> Path:
     return profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
 
 
-def setting_value(profile_dir: Path, section: str, key: str) -> object:
-    with sqlite3.connect(metadata_path(profile_dir)) as conn:
-        row = conn.execute(
-            "SELECT value_json FROM settings WHERE section = ? AND key = ?",
-            (section, key),
-        ).fetchone()
-    assert row is not None
-    return json.loads(row[0])
+def setting_value(profile_dir: Path, key: str) -> object:
+    _, document = rust_client.rust_metadata.read_app_settings(metadata_path(profile_dir))
+    for segment in key.split("."):
+        document = document[segment]
+    return document["value"]
 
 
 def test_rust_network_settings_patch_keeps_server_reconnect_under_ed2k() -> None:
@@ -139,19 +136,13 @@ def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     assert 'bind_addr = "192.0.2.10:4711"' in text
     assert 'api_key = "key"' in text
     assert tomllib.loads(text) == {"rest": {"bind_addr": "192.0.2.10:4711", "api_key": "key"}}
-    assert "[ed2k]" not in text
-    assert "runtimeDir" not in text
     assert metadata_path(profile_dir).is_file()
-    assert setting_value(profile_dir, "core", "autoConnect") is False
-    assert setting_value(profile_dir, "nat", "enabled") is False
+    assert setting_value(profile_dir, 'network.autoConnect') is False
+    assert setting_value(profile_dir, 'network.nat.enabled') is False
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
             ("kad", "pending"), ("servers", "pending")
         ]
-        keepalive = conn.execute(
-            "SELECT value_json FROM settings WHERE section = 'ed2k' AND key = 'serverKeepaliveMinutes'"
-        ).fetchone()
-    assert keepalive is None
     if os.name == "posix":
         mode = stat.S_IMODE((profile_dir / rust_client.RUST_PROFILE_SETTINGS_FILE).stat().st_mode)
         assert mode == 0o600
@@ -163,13 +154,15 @@ def test_write_rust_profile_persists_ed2k_nickname(tmp_path: Path) -> None:
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        ed2k_nickname="cl-emulebb-rust-005",
+        api_key='key',
+        settings={
+            'network.nickname': 'cl-emulebb-rust-005',
+        },
     )
 
-    assert setting_value(profile_dir, "ed2k", "nickname") == "cl-emulebb-rust-005"
+    assert setting_value(profile_dir, 'network.nickname') == "cl-emulebb-rust-005"
 
 
 def test_write_rust_profile_persists_connection_cap(tmp_path: Path) -> None:
@@ -178,15 +171,20 @@ def test_write_rust_profile_persists_connection_cap(tmp_path: Path) -> None:
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        max_connections=1,
-        network_kademlia=False,
+        api_key='key',
+        settings={
+            'network.connections.maxConnections': 1,
+            'network.connections.maxHalfOpenConnections': 1,
+            'network.connections.maxNewConnectionsPerFiveSeconds': 1,
+            'transfers.upload.baseSlots': 1,
+            'network.kadEnabled': False,
+        },
     )
 
-    assert setting_value(profile_dir, "core", "maxConnections") == 1
-    assert setting_value(profile_dir, "core", "networkKademlia") is False
+    assert setting_value(profile_dir, 'network.connections.maxConnections') == 1
+    assert setting_value(profile_dir, 'network.kadEnabled') is False
 
 
 def test_write_rust_profile_persists_production_upload_policy(tmp_path: Path) -> None:
@@ -195,43 +193,33 @@ def test_write_rust_profile_persists_production_upload_policy(tmp_path: Path) ->
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        upload_limit_kibps=4,
-        base_upload_slots=1,
-        upload_slot_elastic_percent=0,
+        api_key='key',
+        settings={
+            'transfers.uploadLimitBytesPerSecond': (4) * 1024,
+            'transfers.upload.baseSlots': 1,
+            'transfers.upload.elasticPercent': 0,
+        },
     )
 
-    assert setting_value(profile_dir, "core", "uploadLimitKiBps") == 4
-    assert setting_value(profile_dir, "core", "baseUploadSlots") == 1
-    assert setting_value(profile_dir, "core", "uploadSlotElasticPercent") == 0
+    assert setting_value(profile_dir, 'transfers.uploadLimitBytesPerSecond') == 4096
+    assert setting_value(profile_dir, 'transfers.upload.baseSlots') == 1
+    assert setting_value(profile_dir, 'transfers.upload.elasticPercent') == 0
 
-
-def test_write_rust_profile_persists_kad_passive_replay_switch(tmp_path: Path) -> None:
-    profile_dir = tmp_path / "profile"
-
-    rust_client.write_rust_profile(
-        profile_dir,
-        rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
-        rest_port=4711,
-        api_key="key",
-        kad_passive_replay_enabled=True,
-    )
-
-    assert setting_value(profile_dir, "kad", "passiveReplayEnabled") is True
 
 
 def test_write_rust_profile_rejects_zero_connection_cap(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="at least 1"):
+    with pytest.raises(ValueError, match="Invalid canonical profile setting"):
         rust_client.write_rust_profile(
-            tmp_path / "profile",
+            tmp_path / 'profile',
             rust_repo=rust_repo(),
-            rest_addr="192.0.2.10",
+            rest_addr='192.0.2.10',
             rest_port=4711,
-            api_key="key",
-            max_connections=0,
+            api_key='key',
+            settings={
+                'network.connections.maxConnections': 0,
+            },
         )
 
 
@@ -253,22 +241,16 @@ def test_write_rust_profile_can_preserve_consumer_auto_connect_default(tmp_path:
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        auto_connect=None,
-        nat_enabled=None,
+        api_key='key',
+        reset=('network.autoConnect', 'network.nat.enabled'),
     )
 
-    with sqlite3.connect(metadata_path(profile_dir)) as conn:
-        auto_connect = conn.execute(
-            "SELECT value_json FROM settings WHERE section = 'core' AND key = 'autoConnect'"
-        ).fetchone()
-        nat_enabled = conn.execute(
-            "SELECT value_json FROM settings WHERE section = 'nat' AND key = 'enabled'"
-        ).fetchone()
-    assert auto_connect is None
-    assert nat_enabled is None
+    _, document = rust_client.rust_metadata.read_app_settings(metadata_path(profile_dir))
+    defaults = rust_client.rust_metadata.saved_settings_defaults(rust_repo())
+    assert document["network"]["autoConnect"] == defaults["network"]["autoConnect"]
+    assert document["network"]["nat"]["enabled"] == defaults["network"]["nat"]["enabled"]
 
 
 def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_path: Path) -> None:
@@ -280,7 +262,7 @@ def test_write_rust_profile_local_discovery_blocks_public_first_run_import(tmp_p
     )
 
     assert not (profile_dir / "nodes.dat").exists()
-    assert setting_value(profile_dir, "core", "networkKademlia") is False
+    assert setting_value(profile_dir, 'network.kadEnabled') is False
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
             ("kad", "initialized"), ("servers", "initialized")
@@ -299,9 +281,18 @@ def test_explicit_server_fixture_claims_only_server_bootstrap(tmp_path, explicit
         "empty": {"replace_servers": True},
     }[explicit]
     rust_client.write_rust_profile(
-        profile_dir, rust_repo=rust_repo(), rest_addr="127.0.0.1", rest_port=4711,
-        api_key="key", local_only_discovery=False,
-        p2p_bind_ip="127.0.0.1", ed2k_port=24662, kad_port=24672, **options,
+        profile_dir,
+        rust_repo=rust_repo(),
+        rest_addr='127.0.0.1',
+        rest_port=4711,
+        api_key='key',
+        local_only_discovery=False,
+        **options,
+        settings={
+            'network.p2p.bindIp': '127.0.0.1',
+            'network.p2p.tcpPort': 24662,
+            'network.p2p.udpPort': 24672,
+        },
     )
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
@@ -326,12 +317,14 @@ def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Pat
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="127.0.0.1",
+        rest_addr='127.0.0.1',
         rest_port=4711,
-        api_key="key",
-        network_kademlia=True,
+        api_key='key',
         local_only_discovery=True,
-        local_kad_seed=BootstrapContact("127.0.0.1", 24672, 24662),
+        local_kad_seed=BootstrapContact('127.0.0.1', 24672, 24662),
+        settings={
+            'network.kadEnabled': True,
+        },
     )
 
     assert not (profile_dir / "nodes.dat").exists()
@@ -342,12 +335,12 @@ def test_write_rust_profile_local_seed_allows_isolated_running_kad(tmp_path: Pat
         assert conn.execute("SELECT domain, status FROM discovery_initialization ORDER BY domain").fetchall() == [
             ("kad", "initialized"), ("servers", "initialized")
         ]
-    assert setting_value(profile_dir, "core", "networkKademlia") is True
+    assert setting_value(profile_dir, 'network.kadEnabled') is True
     assert initialized == [metadata_path(profile_dir)]
 
 
 def test_write_rust_profile_rejects_implicit_local_kad_enablement(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="network_kademlia=True"):
+    with pytest.raises(ValueError, match="network.kadEnabled=true"):
         rust_client.write_rust_profile(
             tmp_path / "profile",
             rust_repo=rust_repo(),
@@ -365,13 +358,15 @@ def test_write_rust_profile_supports_incoming_dir(tmp_path: Path) -> None:
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        incoming_dir=tmp_path / "incoming",
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
+        api_key='key',
+        settings={
+            'storage.incomingDirectory': str(tmp_path / 'incoming'),
+        },
     )
 
-    assert setting_value(profile_dir, "daemon", "incomingDir") == (tmp_path / "incoming").as_posix()
+    assert setting_value(profile_dir, 'storage.incomingDirectory') == str(tmp_path / "incoming")
 
 
 def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -406,7 +401,7 @@ def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pyt
 
 
 def test_write_rust_profile_requires_complete_ed2k_settings(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="ED2K Rust profiles"):
+    with pytest.raises(ValueError, match="ED2K fixture requires explicit binding"):
         rust_client.write_rust_profile(
             tmp_path / "profile",
             rust_repo=rust_repo(),
@@ -423,20 +418,23 @@ def test_write_rust_profile_uses_configurable_ed2k_connect_timeout(tmp_path: Pat
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.10:4661",
-        connect_timeout_secs=15,
+        api_key='key',
+        server_endpoint='192.0.2.10:4661',
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.connections.connectTimeoutSeconds': 15,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
-    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "192.0.2.10"
-    assert setting_value(profile_dir, "ed2k", "connectTimeoutSecs") == 15
-    assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 60
-    assert setting_value(profile_dir, "ed2k", "obfuscationEnabled") is True
+    assert setting_value(profile_dir, 'network.p2p.bindIp') == "192.0.2.10"
+    assert setting_value(profile_dir, 'network.connections.connectTimeoutSeconds') == 15
+    assert setting_value(profile_dir, 'network.servers.reconnectIntervalSeconds') == 60
+    assert setting_value(profile_dir, 'security.obfuscationEnabled') is True
 
 
 def test_write_rust_profile_uses_configurable_reconnect_interval(tmp_path: Path) -> None:
@@ -445,17 +443,20 @@ def test_write_rust_profile_uses_configurable_reconnect_interval(tmp_path: Path)
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.10:4661",
-        reconnect_interval_secs=300,
+        api_key='key',
+        server_endpoint='192.0.2.10:4661',
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.servers.reconnectIntervalSeconds': 300,
+            'network.connections.connectTimeoutSeconds': 10,
+        },
     )
 
-    assert setting_value(profile_dir, "ed2k", "reconnectIntervalSecs") == 300
+    assert setting_value(profile_dir, 'network.servers.reconnectIntervalSeconds') == 300
 
 
 @pytest.mark.parametrize("minutes", [0, 20, 1_440])
@@ -467,27 +468,31 @@ def test_write_rust_profile_uses_explicit_server_keepalive_minutes(
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        server_keepalive_minutes=minutes,
+        api_key='key',
+        settings={
+            'network.servers.keepaliveMinutes': minutes,
+        },
     )
 
-    assert setting_value(profile_dir, "ed2k", "serverKeepaliveMinutes") == minutes
+    assert setting_value(profile_dir, 'network.servers.keepaliveMinutes') == minutes
 
 
 @pytest.mark.parametrize("minutes", [-1, 1_441, True, 20.5])
 def test_write_rust_profile_rejects_invalid_server_keepalive_minutes(
     tmp_path: Path, minutes: object
 ) -> None:
-    with pytest.raises(ValueError, match="integer in the range 0..1440"):
+    with pytest.raises(ValueError, match="Invalid canonical profile setting"):
         rust_client.write_rust_profile(
-            tmp_path / "profile",
+            tmp_path / 'profile',
             rust_repo=rust_repo(),
-            rest_addr="192.0.2.10",
+            rest_addr='192.0.2.10',
             rest_port=4711,
-            api_key="key",
-            server_keepalive_minutes=minutes,  # type: ignore[arg-type]
+            api_key='key',
+            settings={
+                'network.servers.keepaliveMinutes': minutes,
+            },
         )
 
 
@@ -497,17 +502,21 @@ def test_write_rust_profile_can_request_stock_server_list_on_connect(tmp_path: P
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.10:4661",
-        add_servers_from_server=True,
+        api_key='key',
+        server_endpoint='192.0.2.10:4661',
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.servers.acceptServerListUpdates': True,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
-    assert setting_value(profile_dir, "ed2k", "addServersFromServer") is True
+    assert setting_value(profile_dir, 'network.servers.acceptServerListUpdates') is True
 
 
 def test_write_rust_profile_supports_best_effort_initial_nat_mapping(tmp_path: Path) -> None:
@@ -516,35 +525,41 @@ def test_write_rust_profile_supports_best_effort_initial_nat_mapping(tmp_path: P
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_interface="hide.me",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.20:4661",
-        nat_enabled=True,
-        nat_require_initial_mapping=False,
+        api_key='key',
+        server_endpoint='192.0.2.20:4661',
+        settings={
+            'network.p2p.bindInterface': 'hide.me',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.nat.enabled': True,
+            'network.nat.requireInitialMapping': False,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
-    assert setting_value(profile_dir, "nat", "enabled") is True
-    assert setting_value(profile_dir, "nat", "requireInitialMapping") is False
+    assert setting_value(profile_dir, 'network.nat.enabled') is True
+    assert setting_value(profile_dir, 'network.nat.requireInitialMapping') is False
 
 
-def test_write_rust_profile_can_force_miniupnpc_backend(tmp_path: Path) -> None:
+def test_write_rust_profile_selects_the_upnp_backend(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        nat_enabled=True,
-        nat_backend_order=["upnp_miniupnpc"],
+        api_key='key',
+        settings={
+            'network.nat.enabled': True,
+            'network.nat.backendOrder': ['upnp'],
+        },
     )
 
-    assert setting_value(profile_dir, "nat", "backendOrder") == ["upnp_miniupnpc"]
+    assert setting_value(profile_dir, 'network.nat.backendOrder') == ["upnp"]
 
 
 def test_write_rust_profile_supports_interface_and_ip_binding(tmp_path: Path) -> None:
@@ -553,18 +568,22 @@ def test_write_rust_profile_supports_interface_and_ip_binding(tmp_path: Path) ->
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        p2p_bind_interface="hide.me",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.20:4661",
+        api_key='key',
+        server_endpoint='192.0.2.20:4661',
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.bindInterface': 'hide.me',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
-    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "192.0.2.10"
-    assert setting_value(profile_dir, "daemon", "p2pBindInterface") == "hide.me"
+    assert setting_value(profile_dir, 'network.p2p.bindIp') == "192.0.2.10"
+    assert setting_value(profile_dir, 'network.p2p.bindInterface') == "hide.me"
 
 
 def test_write_rust_profile_supports_interface_only_binding(tmp_path: Path) -> None:
@@ -573,21 +592,21 @@ def test_write_rust_profile_supports_interface_only_binding(tmp_path: Path) -> N
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_interface="hide.me",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.20:4661",
+        api_key='key',
+        server_endpoint='192.0.2.20:4661',
+        settings={
+            'network.p2p.bindInterface': 'hide.me',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
-    with sqlite3.connect(metadata_path(profile_dir)) as conn:
-        p2p_bind_ip = conn.execute(
-            "SELECT value_json FROM settings WHERE section = 'daemon' AND key = 'p2pBindIp'"
-        ).fetchone()
-    assert p2p_bind_ip is None
-    assert setting_value(profile_dir, "daemon", "p2pBindInterface") == "hide.me"
+    assert setting_value(profile_dir, 'network.p2p.bindIp') is None
+    assert setting_value(profile_dir, 'network.p2p.bindInterface') == "hide.me"
 
 
 def test_write_rust_profile_supports_direct_resolved_binding(tmp_path: Path) -> None:
@@ -596,20 +615,24 @@ def test_write_rust_profile_supports_direct_resolved_binding(tmp_path: Path) -> 
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="127.0.0.1",
+        rest_addr='127.0.0.1',
         rest_port=4731,
-        api_key="key",
-        p2p_bind_ip="172.30.0.2",
-        ed2k_port=41662,
-        kad_port=41672,
-        server_endpoint="192.0.2.20:4661",
-        vpn_guard_mode="off",
-        nat_enabled=False,
+        api_key='key',
+        server_endpoint='192.0.2.20:4661',
+        settings={
+            'network.p2p.bindIp': '172.30.0.2',
+            'network.p2p.tcpPort': 41662,
+            'network.p2p.udpPort': 41672,
+            'security.vpnGuard.mode': 'off',
+            'network.nat.enabled': False,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
-    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "172.30.0.2"
-    assert setting_value(profile_dir, "nat", "enabled") is False
-    assert setting_value(profile_dir, "vpn.guard", "enabled") is False
+    assert setting_value(profile_dir, 'network.p2p.bindIp') == "172.30.0.2"
+    assert setting_value(profile_dir, 'network.nat.enabled') is False
+    assert setting_value(profile_dir, 'security.vpnGuard.mode') == 'off'
 
 
 def test_write_rust_profile_can_disable_obfuscation_and_write_server_entry(tmp_path: Path) -> None:
@@ -618,28 +641,23 @@ def test_write_rust_profile_can_disable_obfuscation_and_write_server_entry(tmp_p
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.20:4661",
-        server_entry={
-            "host": "192.0.2.20",
-            "port": 4661,
-            "name": "emulebb-local-e2e",
-            "udpFlags": 0x78,
-            "udpKey": 0x11223344,
-            "udpKeyIp": 0,
-            "obfuscationPortTcp": 4661,
-            "obfuscationPortUdp": 4665,
+        api_key='key',
+        server_endpoint='192.0.2.20:4661',
+        server_entry={'host': '192.0.2.20', 'port': 4661, 'name': 'emulebb-local-e2e', 'udpFlags': 120, 'udpKey': 287454020, 'udpKeyIp': 0, 'obfuscationPortTcp': 4661, 'obfuscationPortUdp': 4665},
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'security.obfuscationEnabled': False,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
         },
-        obfuscation_enabled=False,
     )
 
-    assert setting_value(profile_dir, "daemon", "p2pBindIp") == "192.0.2.10"
-    assert setting_value(profile_dir, "ed2k", "obfuscationEnabled") is False
+    assert setting_value(profile_dir, 'network.p2p.bindIp') == "192.0.2.10"
+    assert setting_value(profile_dir, 'security.obfuscationEnabled') is False
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
         row = conn.execute(
             """
@@ -656,25 +674,33 @@ def test_write_rust_profile_can_replace_server_list(tmp_path: Path) -> None:
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.20:4661",
+        api_key='key',
+        server_endpoint='192.0.2.20:4661',
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.30:4661",
+        api_key='key',
+        server_endpoint='192.0.2.30:4661',
         replace_servers=True,
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
@@ -688,15 +714,18 @@ def test_write_rust_profile_uses_configured_kad_bootstrap_nodes(tmp_path: Path) 
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=rust_repo(),
-        rest_addr="192.0.2.10",
+        rest_addr='192.0.2.10',
         rest_port=4711,
-        api_key="key",
-        p2p_bind_ip="192.0.2.10",
-        ed2k_port=4662,
-        kad_port=4672,
-        server_endpoint="192.0.2.10:4661",
-        kad_bootstrap_nodes=["192.0.2.11:4672"],
-        kad_bootstrap_min_routing_contacts=1,
+        api_key='key',
+        server_endpoint='192.0.2.10:4661',
+        kad_bootstrap_nodes=['192.0.2.11:4672'],
+        settings={
+            'network.p2p.bindIp': '192.0.2.10',
+            'network.p2p.tcpPort': 4662,
+            'network.p2p.udpPort': 4672,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
     with sqlite3.connect(metadata_path(profile_dir)) as conn:
@@ -707,7 +736,6 @@ def test_write_rust_profile_uses_configured_kad_bootstrap_nodes(tmp_path: Path) 
             )
         ]
     assert endpoints == ["192.0.2.11:4672"]
-    assert setting_value(profile_dir, "kad", "bootstrapMinRoutingContacts") == 1
 
 
 def test_rust_cargo_env_requires_existing_workspace_target_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

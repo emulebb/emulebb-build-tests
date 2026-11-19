@@ -119,207 +119,76 @@ def rust_cargo_env() -> dict[str, str]:
 
 
 def write_rust_profile(
-    profile_dir: Path,
-    *,
-    rust_repo: Path,
-    incoming_dir: Path | None = None,
-    rest_addr: str,
-    rest_port: int,
-    api_key: str,
-    auto_connect: bool | None = False,
-    max_connections: int | None = None,
-    network_kademlia: bool | None = None,
-    p2p_bind_ip: str | None = None,
-    p2p_bind_interface: str | None = None,
-    ed2k_port: int | None = None,
-    ed2k_nickname: str | None = None,
-    kad_port: int | None = None,
-    kad_passive_replay_enabled: bool | None = None,
-    server_endpoint: str | None = None,
-    server_entry: dict[str, object] | None = None,
-    obfuscation_enabled: bool = True,
-    connect_timeout_secs: int = 10,
-    reconnect_interval_secs: int = 60,
-    add_servers_from_server: bool | None = None,
-    server_keepalive_minutes: int | None = None,
-    kad_bootstrap_nodes: list[str] | None = None,
-    kad_bootstrap_min_routing_contacts: int = 10,
-    enable_udp_reask: bool = False,
-    publish_emule_rust_identity: bool = False,
-    upload_limit_kibps: int | None = None,
-    base_upload_slots: int | None = None,
-    upload_slot_elastic_percent: int | None = None,
-    nat_enabled: bool | None = False,
-    nat_require_initial_mapping: bool | None = None,
-    nat_backend_order: list[str] | None = None,
-    replace_servers: bool = False,
-    vpn_guard_mode: str = "off",
-    vpn_guard_allowed_public_ip_cidrs: str = "",
-    initial_shared_directory_reload: bool | None = None,
-    local_only_discovery: bool = False,
+    profile_dir: Path, *, rust_repo: Path, rest_addr: str, rest_port: int,
+    api_key: str, settings: dict[str, object] | None = None,
+    reset: tuple[str, ...] = (), server_endpoint: str | None = None,
+    server_entry: dict[str, object] | None = None, replace_servers: bool = False,
+    kad_bootstrap_nodes: list[str] | None = None, local_only_discovery: bool = False,
     local_kad_seed: kad_nodes.BootstrapContact | None = None,
 ) -> None:
-    """Writes a minimal eMuleBB Rust profile for local harness runs.
+    """Prepare current canonical settings and separately owned discovery resources.
 
-    ``vpn_guard_mode`` (``off`` / ``block``) + ``vpn_guard_allowed_public_ip_cidrs``
-    populate the ``vpn.guard`` settings section: ``block`` fails the P2P data
-    plane closed when the tunnel binding is lost, and the CIDR allowlist
-    validates the public exit (VpnGuardSettings, emulebb-daemon/src/lib.rs).
+    Test profiles default to manual connection and disabled NAT. Explicit resets
+    select product defaults. All supplied settings use current dotted product keys.
     """
+    from .rust_openapi_responses import validate_openapi_schema_component_payload
+    from .workspace_layout import resolve_selected_workspace_repo
+    import jsonschema
 
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    if set(settings or {}).intersection(reset):
+        raise ValueError("Settings fixture cannot set and reset the same key")
+    values: dict[str, object] = {"network.autoConnect": False, "network.nat.enabled": False}
+    values.update(settings or {})
+    for key in reset:
+        values.pop(key, None)
     if local_only_discovery:
-        # Local-only discovery is completed explicitly in SQLite after staging
-        # fixture data, so an intentionally empty list cannot fetch public seeds.
         if local_kad_seed is not None:
-            if network_kademlia is not True:
-                raise ValueError(
-                    "local_kad_seed requires network_kademlia=True so the intent is explicit"
-                )
+            if values.get("network.kadEnabled") is not True:
+                raise ValueError("local_kad_seed requires explicit network.kadEnabled=true")
             if kad_bootstrap_nodes:
                 raise ValueError("Choose a local Kad seed or explicit bootstrap endpoints")
-            # An endpoint is not a known routing identity. Invented node IDs
-            # prevent the real responder from joining under the
-            # one-node-per-IP routing rule and make later REQ recipients wrong.
             kad_bootstrap_nodes = [local_kad_seed.endpoint]
-    settings_path = profile_dir / RUST_PROFILE_SETTINGS_FILE
+        else:
+            values["network.kadEnabled"] = False
+    if server_endpoint is not None:
+        bound = values.get("network.p2p.bindIp") or values.get("network.p2p.bindInterface")
+        if not bound or not values.get("network.p2p.tcpPort") or not values.get("network.p2p.udpPort"):
+            raise ValueError("ED2K fixture requires explicit binding and shared TCP/UDP ports")
+    if server_entry is not None:
+        if server_endpoint is None or "host" not in server_entry or "port" not in server_entry:
+            raise ValueError("Server fixture requires its endpoint, host and port")
+
+    partial: dict[str, object] = {}
+    for key, value in values.items():
+        branch = partial
+        *groups, leaf = key.split(".")
+        for group in groups:
+            branch = branch.setdefault(group, {})
+        branch[leaf] = value
+    tooling = resolve_selected_workspace_repo(Path(__file__).resolve().parents[1], "emulebb-tooling")
+    contract = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    try:
+        validate_openapi_schema_component_payload("SettingsPartial", partial, contract)
+    except jsonschema.ValidationError as error:
+        path = ".".join(map(str, error.absolute_path))
+        raise ValueError(f"Invalid canonical profile setting at {path}") from None
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = profile_dir / RUST_PROFILE_METADATA_FILE
     if not metadata_path.exists():
         rust_metadata.create_metadata_db(rust_repo, metadata_path)
-    core_settings: dict[str, object] = {}
-    if auto_connect is not None:
-        # Persisted harness profiles are deterministic and start networking only
-        # when their scenario asks for it. Consumer-default proofs opt in to the
-        # product's automatic first-run connection explicitly.
-        core_settings["autoConnect"] = auto_connect
-    if max_connections is not None:
-        if max_connections < 1:
-            raise ValueError("Rust profile max_connections must be at least 1.")
-        core_settings["maxConnections"] = max_connections
-    if upload_limit_kibps is not None:
-        if upload_limit_kibps < 1:
-            raise ValueError("Rust profile upload_limit_kibps must be at least 1.")
-        core_settings["uploadLimitKiBps"] = upload_limit_kibps
-    if base_upload_slots is not None:
-        if not 1 <= base_upload_slots <= 64:
-            raise ValueError("Rust profile base_upload_slots must be in the range 1..64.")
-        core_settings["baseUploadSlots"] = base_upload_slots
-    if upload_slot_elastic_percent is not None:
-        if not 0 <= upload_slot_elastic_percent <= 100:
-            raise ValueError(
-                "Rust profile upload_slot_elastic_percent must be in the range 0..100."
-            )
-        core_settings["uploadSlotElasticPercent"] = upload_slot_elastic_percent
-    if network_kademlia is not None:
-        core_settings["networkKademlia"] = network_kademlia
-    if local_only_discovery and local_kad_seed is None:
-        # ED2K-only lanes disable Kad; a supplied local seed explicitly enables
-        # its isolated protocol lane without public bootstrap discovery.
-        core_settings["networkKademlia"] = False
-    if core_settings:
-        rust_metadata.replace_settings_section(metadata_path, "core", core_settings)
-
-    lines = ["[rest]", f'bind_addr = "{rest_addr}:{rest_port}"', f'api_key = "{api_key}"', ""]
-    write_private_text(settings_path, "\n".join(lines))
-
-    daemon_settings: dict[str, object] = {}
-    if incoming_dir is not None:
-        daemon_settings["incomingDir"] = incoming_dir.as_posix()
-    if p2p_bind_ip is not None:
-        daemon_settings["p2pBindIp"] = p2p_bind_ip
-    if p2p_bind_interface is not None:
-        daemon_settings["p2pBindInterface"] = p2p_bind_interface
-    if initial_shared_directory_reload is not None:
-        daemon_settings["initialSharedDirectoryReload"] = initial_shared_directory_reload
-    if daemon_settings:
-        rust_metadata.replace_settings_section(metadata_path, "daemon", daemon_settings)
-
-    if kad_bootstrap_nodes:
+    rust_metadata.edit_app_settings(rust_repo, metadata_path, values, reset=reset)
+    lines = ["[rest]", f"bind_addr = {json.dumps(f'{rest_addr}:{rest_port}', ensure_ascii=False)}",
+             f"api_key = {json.dumps(api_key, ensure_ascii=False)}", ""]
+    write_private_text(profile_dir / RUST_PROFILE_SETTINGS_FILE, "\n".join(lines))
+    if kad_bootstrap_nodes is not None:
         rust_metadata.replace_kad_bootstrap_endpoints(metadata_path, kad_bootstrap_nodes)
-
-    kad_settings: dict[str, object] = {}
-    if kad_port is not None:
-        kad_settings["listenPort"] = kad_port
-    if kad_passive_replay_enabled is not None:
-        kad_settings["passiveReplayEnabled"] = kad_passive_replay_enabled
-    if kad_bootstrap_min_routing_contacts != 10:
-        kad_settings["bootstrapMinRoutingContacts"] = kad_bootstrap_min_routing_contacts
-    if kad_settings:
-        rust_metadata.replace_settings_section(metadata_path, "kad", kad_settings)
-
-    ed2k_settings: dict[str, object] = {}
-    if server_endpoint is not None:
-        if (p2p_bind_ip is None and p2p_bind_interface is None) or ed2k_port is None or kad_port is None:
-            raise ValueError("ED2K Rust profiles require p2p_bind_ip and/or p2p_bind_interface, ed2k_port, and kad_port.")
-    if server_entry is not None:
-        if server_endpoint is None:
-            raise ValueError("ED2K Rust serverEntry requires server_endpoint.")
-        if "host" not in server_entry or "port" not in server_entry:
-            raise ValueError("ED2K Rust serverEntry requires host and port.")
-    if ed2k_port is not None:
-        ed2k_settings["listenPort"] = ed2k_port
-    if ed2k_nickname is not None:
-        ed2k_settings["nickname"] = ed2k_nickname
-    if server_endpoint is not None:
-        ed2k_settings.update(
-            {
-                "obfuscationEnabled": obfuscation_enabled,
-                "connectTimeoutSecs": connect_timeout_secs,
-                "reconnectIntervalSecs": reconnect_interval_secs,
-                "enableUdpReask": enable_udp_reask,
-                # Client identity on the wire: false (default) impersonates a stock
-                # eMule Community 0.7-series client (6-tag hello, no CT_MOD_VERSION);
-                # true publishes the emulebb-rust mod identity. Kept explicit so the
-                # impersonation choice is visible + flippable per soak run.
-                "publishEmuleRustIdentity": publish_emule_rust_identity,
-            }
-        )
-    if add_servers_from_server is not None:
-        ed2k_settings["addServersFromServer"] = add_servers_from_server
-    if server_keepalive_minutes is not None:
-        if (
-            isinstance(server_keepalive_minutes, bool)
-            or not isinstance(server_keepalive_minutes, int)
-            or not 0 <= server_keepalive_minutes <= 1_440
-        ):
-            raise ValueError(
-                "Rust profile server_keepalive_minutes must be an integer in the range 0..1440."
-            )
-        ed2k_settings["serverKeepaliveMinutes"] = server_keepalive_minutes
-    if ed2k_settings:
-        rust_metadata.replace_settings_section(metadata_path, "ed2k", ed2k_settings)
-
     if replace_servers:
         rust_metadata.clear_servers(metadata_path)
-
     if server_entry is not None:
         rust_metadata.seed_server(metadata_path, server_entry)
     elif server_endpoint is not None:
         rust_metadata.seed_server(metadata_path, server_from_endpoint(server_endpoint))
-
-    nat_settings: dict[str, object] = {}
-    if nat_enabled is not None:
-        nat_settings["enabled"] = nat_enabled
-    if nat_require_initial_mapping is not None:
-        nat_settings["requireInitialMapping"] = nat_require_initial_mapping
-    if nat_backend_order is not None:
-        nat_settings["backendOrder"] = list(nat_backend_order)
-    if nat_settings:
-        rust_metadata.replace_settings_section(metadata_path, "nat", nat_settings)
-
-    # VPN Guard: activate the fail-closed data-plane guard + public-exit CIDR
-    # allowlist for public live-test runs (workspace Live Test Network Policy).
-    guard_mode = (vpn_guard_mode or "off").strip().lower()
-    guard_enabled = guard_mode == "block"
-    rust_metadata.replace_settings_section(
-        metadata_path,
-        "vpn.guard",
-        {
-            "enabled": guard_enabled,
-            "mode": "block" if guard_enabled else "off",
-            "allowedPublicIpCidrs": vpn_guard_allowed_public_ip_cidrs or "",
-        },
-    )
     if local_only_discovery:
         rust_metadata.initialize_local_discovery(rust_repo, metadata_path)
 

@@ -89,8 +89,10 @@ def start(output_root: Path, workspace_root: Path) -> int:
         rest_addr=REST_ADDR,
         rest_port=REST_PORT,
         api_key=API_KEY,
-        initial_shared_directory_reload=False,
-        vpn_guard_mode="off",
+        settings={
+            'sharing.scanOnStartup': False,
+            'security.vpnGuard.mode': 'off',
+        },
     )
     log_handle = log_path.open("wb", buffering=0)
     process = subprocess.Popen(

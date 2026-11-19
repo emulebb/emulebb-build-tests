@@ -3883,29 +3883,25 @@ def main(argv: list[str] | None = None) -> int:
         rust_client.write_rust_profile(
             rust_profile,
             rust_repo=rust_repo,
-            incoming_dir=rust_incoming,
             rest_addr=args.lan_bind_addr,
-            rest_port=ports["client1_rest"],
+            rest_port=ports['client1_rest'],
             api_key=args.api_key,
-            network_kademlia=(
-                args.transfer_scenario
-                in {DIRECT_CALLBACK, BUDDY_CALLBACK, RELAYED_REASK}
-            ),
-            p2p_bind_ip=p2p_address,
-            ed2k_port=ports["client1_tcp"],
-            ed2k_nickname=CLIENT01.nick,
-            kad_port=ports["client1_udp"],
             server_endpoint=f"{server_address}:{ports['ed2k_tcp']}",
             server_entry=rust_server_entry,
-            obfuscation_enabled=(
-                protocol_case.client_crypt_supported
-                if protocol_case is not None
-                else True
-            ),
-            enable_udp_reask=(args.transfer_scenario == RELAYED_REASK),
             local_only_discovery=True,
             local_kad_seed=rust_isolated_kad_seed,
-            add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
+            settings={
+                'storage.incomingDirectory': str(rust_incoming),
+                'network.kadEnabled': args.transfer_scenario in {DIRECT_CALLBACK, BUDDY_CALLBACK, RELAYED_REASK},
+                'network.p2p.bindIp': p2p_address,
+                'network.p2p.tcpPort': ports['client1_tcp'],
+                'network.nickname': CLIENT01.nick,
+                'network.p2p.udpPort': ports['client1_udp'],
+                'security.obfuscationEnabled': protocol_case.client_crypt_supported if protocol_case is not None else True,
+                'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA,
+                'network.connections.connectTimeoutSeconds': 10,
+                'network.servers.reconnectIntervalSeconds': 60,
+            },
         )
         if args.transfer_scenario == SERVER_UDP_METADATA:
             if metadata_server_address is None:
