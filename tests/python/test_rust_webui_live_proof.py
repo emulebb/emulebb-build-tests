@@ -417,10 +417,11 @@ def test_webui_download_inventory_requires_a_complete_native_page(monkeypatch, m
         rust_webui_live_proof._download_rows("http://127.0.0.1:1234", "key")
 
 
-def test_steady_request_load_allows_snapshot_polling_only() -> None:
+def test_steady_request_load_allows_snapshot_and_bounded_download_preview() -> None:
     check = rust_webui_live_proof.steady_request_load_check(
         {
             "snapshot?limit=500": 6,
+            "downloads?view=all&limit=12": 6,
             "app": 1,
             "capabilities": 1,
         }
@@ -429,13 +430,15 @@ def test_steady_request_load_allows_snapshot_polling_only() -> None:
     assert check == {"ok": True, "repeatedSecondaryEndpoints": {}}
 
 
-def test_steady_request_load_rejects_stale_bundle_secondary_polling() -> None:
+def test_steady_request_load_rejects_broad_secondary_polling() -> None:
     check = rust_webui_live_proof.steady_request_load_check(
         {
             "snapshot?limit=500": 6,
             "logs?limit=300": 6,
             "shared-files?limit=500": 6,
             "uploads": 6,
+            "downloads?view=all&limit=200": 6,
+            "downloads?view=all&limit=12&cursor=sample": 6,
         }
     )
 
@@ -445,6 +448,8 @@ def test_steady_request_load_rejects_stale_bundle_secondary_polling() -> None:
             "logs?limit=300": 6,
             "shared-files?limit=500": 6,
             "uploads": 6,
+            "downloads?view=all&limit=200": 6,
+            "downloads?view=all&limit=12&cursor=sample": 6,
         },
     }
 

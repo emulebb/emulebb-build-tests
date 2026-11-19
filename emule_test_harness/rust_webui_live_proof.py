@@ -247,6 +247,7 @@ def _click_primary_nav(page, label: str, *, timeout_ms: int | None = None) -> No
 
 
 ALLOWED_REPEATED_STEADY_PREFIXES = ("snapshot?",)
+ALLOWED_REPEATED_STEADY_PATHS = frozenset({"downloads?view=all&limit=12"})
 HASH_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
 FULL_PROGRESS_RE = re.compile(r"^100(?:\.0+)?%$")
 PERCENT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%$")
@@ -1489,7 +1490,8 @@ def steady_request_load_check(api_counts: dict[str, int]) -> dict[str, Any]:
     repeated_secondary = {
         path: count
         for path, count in sorted(api_counts.items())
-        if count > 1 and not any(path.startswith(prefix) for prefix in ALLOWED_REPEATED_STEADY_PREFIXES)
+        if count > 1 and path not in ALLOWED_REPEATED_STEADY_PATHS
+        and not any(path.startswith(prefix) for prefix in ALLOWED_REPEATED_STEADY_PREFIXES)
     }
     return {
         "ok": not repeated_secondary,
