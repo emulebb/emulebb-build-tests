@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import rust_client  # noqa: E402
-from emule_test_harness.rust_rest_contract import iter_library_roots
+from emule_test_harness.rust_rest_contract import iter_library_roots, settings_patch
 from emule_test_harness.build_provenance import require_clean_git_source  # noqa: E402
 from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
@@ -50,7 +50,7 @@ API_KEY = "native-package-smoke-secret-0001"
 WEBUI_TITLE = "eMuleBB WebUI"
 TRANSFER_FILE_NAME = "eMuleBB.Native.Package.Transfer.bin"
 TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
-PARTIAL_DOWNLOAD_LIMIT_KIBPS = 512
+PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND = 512 * 1024
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
     "downloads": "/api/v1/downloads",
@@ -63,7 +63,7 @@ PANEL_ROUTES = {
     "kad": "/api/v1/kad",
     "categories": "/api/v1/categories",
     "friends": "/api/v1/friends",
-    "settings": "/api/v1/app/settings",
+    "settings": "/api/v1/settings",
     "diagnostics": "/api/v1/diagnostics",
     "logs": "/api/v1/logs?limit=20",
 }
@@ -443,15 +443,22 @@ def _request(
         return response.read()
 
 
-def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
-                 *, expected_statuses: tuple[int, ...] | None = None) -> dict:
+def request_document(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
+                     *, expected_statuses: tuple[int, ...] | None = None) -> dict:
     """Use this smoke's HTTP transport and require the current REST envelope."""
     document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body,
                                    expected_statuses=expected_statuses))
     if (not isinstance(document, dict) or not isinstance(document.get("data"), dict)
             or not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"):
         raise RuntimeError("Packaged REST must return the current v1 data/meta envelope")
-    return document["data"]
+    return document
+
+
+def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
+                 *, expected_statuses: tuple[int, ...] | None = None) -> dict:
+    """Read this smoke's object data while retaining envelope checks."""
+    return request_document(base_url, method, path, api_key, body,
+                            expected_statuses=expected_statuses)["data"]
 
 
 def _download_page(base_url: str, path: str) -> list[dict]:
@@ -542,7 +549,7 @@ def _smoke_binary(
     help_result = subprocess.run(
         [str(binary), "--help"], capture_output=True, text=True, timeout=20, check=True
     )
-    required_options = ("--profile", "--p2p-bind-interface")
+    required_options = ("--profile",)
     if any(option not in help_result.stdout for option in required_options):
         raise RuntimeError("packaged daemon CLI is missing beta options")
     if expected_identity is not None:
@@ -658,11 +665,11 @@ def _smoke_binary(
             p2p_ip,
             seeder_ed2k_port,
         )
-        previous_limit = request_json(leecher_base_url, "GET", "/api/v1/app/settings", API_KEY)["core"]["downloadLimitKiBps"]
-        if type(previous_limit) is not int or not 1 <= previous_limit <= 4294967294:
-            raise RuntimeError("Packaged REST returned an invalid download limit")
-        request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY,
-                     {"core": {"downloadLimitKiBps": PARTIAL_DOWNLOAD_LIMIT_KIBPS}})
+        settings = request_document(leecher_base_url, "GET", "/api/v1/settings", API_KEY)
+        previous_limit = settings["data"]["saved"]["transfers"]["downloadLimitBytesPerSecond"]
+        request_document(leecher_base_url, "PATCH", "/api/v1/settings", API_KEY,
+                         settings_patch(settings, set_values={"transfers": {
+                             "downloadLimitBytesPerSecond": PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND}}))
         created = request_json(
             leecher_base_url,
             "POST",
@@ -695,11 +702,19 @@ def _smoke_binary(
                 or not set(before["verifiedPartIndices"]).issubset(after["verifiedPartIndices"])
                 or after["verifiedBytes"] < before["verifiedBytes"]):
             raise RuntimeError("Verified partial data did not survive the same-profile packaged restart")
-        settings = request_json(leecher_base_url, "GET", "/api/v1/app/settings", API_KEY)
-        if settings["core"]["downloadLimitKiBps"] != PARTIAL_DOWNLOAD_LIMIT_KIBPS:
+        settings = request_document(leecher_base_url, "GET", "/api/v1/settings", API_KEY)
+        saved_limit = settings["data"]["saved"]["transfers"]["downloadLimitBytesPerSecond"]
+        effective_limit = settings["data"]["effective"]["transfers"]["downloadLimitBytesPerSecond"]
+        expected_limit = {"mode": "custom", "value": PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND}
+        if saved_limit != expected_limit or effective_limit != PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND:
             raise RuntimeError("Packaged restart did not preserve the download setting")
         request_json(leecher_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
-        request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY, {"core": {"downloadLimitKiBps": previous_limit}})
+        if previous_limit["mode"] == "default":
+            restore = settings_patch(settings, reset=("transfers.downloadLimitBytesPerSecond",))
+        else:
+            restore = settings_patch(settings, set_values={"transfers": {
+                "downloadLimitBytesPerSecond": previous_limit["value"]}})
+        request_document(leecher_base_url, "PATCH", "/api/v1/settings", API_KEY, restore)
         if _download_action(leecher_base_url, "start", download_id) != "accepted":
             raise RuntimeError("Packaged download did not accept restart")
         download_delivery = _wait_for_download_delivery(

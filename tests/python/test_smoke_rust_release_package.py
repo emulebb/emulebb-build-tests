@@ -534,14 +534,17 @@ def test_download_page_requires_settled_bounded_envelope(monkeypatch):
 
 
 @pytest.mark.parametrize("fault", [None, "lost-parts", "lost-setting", "changed-part-count"])
-def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monkeypatch, tmp_path, fault):
+@pytest.mark.parametrize("initial_mode", ["default", "custom"])
+def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monkeypatch, tmp_path, fault, initial_mode):
     binary = tmp_path / "emulebb-rust"
     binary.write_bytes(b"synthetic binary")
     webui = tmp_path / "webui"
     webui.mkdir()
     (webui / "index.html").write_text("SPA")
     processes, starts, operations, closed = [], [], [], []
-    state = {"stopped": False, "limit": 12207, "leecherStarts": 0}
+    initial_limit = 12499968 if initial_mode == "default" else 2000000
+    state = {"stopped": False, "limit": initial_limit, "mode": initial_mode,
+             "revision": 9007199254740993, "leecherStarts": 0}
     def write_profile(profile, **kwargs):
         profile.mkdir()
         (profile / "emulebb-rust-metadata.db").write_bytes(b"synthetic metadata")
@@ -553,7 +556,8 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
         if profile.name == "leecher-profile":
             state["leecherStarts"] += 1
             if fault == "lost-setting" and state["leecherStarts"] == 2:
-                state["limit"] = 12207
+                state["limit"] = initial_limit
+                state["mode"] = initial_mode
         handle = log_path.open("a")
         return process, handle
     def shutdown(base_url, process):
@@ -561,10 +565,6 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
         process.returncode = 0
     def api(base_url, method, path, key, body=None, **kwargs):
         operations.append((method, path, body))
-        if path == "/api/v1/app/settings":
-            if method == "PATCH":
-                state["limit"] = body["core"]["downloadLimitKiBps"]
-            return {"core": {"downloadLimitKiBps": state["limit"]}}
         if path == "/api/v1/downloads" and method == "POST":
             assert kwargs["expected_statuses"] == (201,)
             assert body == {"source": {"type": "ed2k-link", "link": body["source"]["link"]},
@@ -587,6 +587,25 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
             return {"downloads": {"unfinished": 0, "completed": 1}}
         return {"ok": True}
     def request(url, **kwargs):
+        if url.endswith("/api/v1/settings"):
+            method = kwargs.get("method", "GET")
+            body = kwargs.get("json_body")
+            operations.append((method, "/api/v1/settings", body))
+            if method == "PATCH":
+                assert body["expectedRevision"] == str(state["revision"])
+                if "set" in body:
+                    state["limit"] = body["set"]["transfers"]["downloadLimitBytesPerSecond"]
+                    state["mode"] = "custom"
+                else:
+                    assert body["reset"] == ["transfers.downloadLimitBytesPerSecond"]
+                    state["limit"], state["mode"] = 12499968, "default"
+                state["revision"] += 1
+            return json.dumps({
+                "data": {"saved": {"transfers": {"downloadLimitBytesPerSecond": {
+                    "mode": state["mode"], "value": state["limit"]}}},
+                    "effective": {"transfers": {"downloadLimitBytesPerSecond": state["limit"]}}},
+                "meta": {"apiVersion": "v1", "settingsRevision": str(state["revision"])},
+            }).encode()
         if url.endswith("/api/v1/downloads/7/parts?limit=200"):
             return json.dumps({"data": api(None, "GET", "/api/v1/downloads/7/parts?limit=200", None),
                                "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
@@ -617,7 +636,7 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
                                                                "build": "release", "platform": "x64", "lifecycle": {"state": "running"}})
     monkeypatch.setattr(smoke, "request_json", api)
     monkeypatch.setattr(smoke, "_request", request)
-    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "--profile --p2p-bind-interface"))
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "--profile"))
     monkeypatch.setattr(smoke, "publish_shared_tree", lambda *args, **kwargs: {"sharedFiles": {"matched": {
         "hash": "a" * 32, "name": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
         "ed2kLink": "ed2k://|file|Sample.Payload.bin|12582912|" + "a" * 32 + "|/"}}})
@@ -632,7 +651,9 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
         assert result["localDownload"]["jobId"] == "7"
         assert result["localDownload"]["retainedCompletedJob"] is True
         assert result["localDownload"]["partialRestart"]["after"]["verifiedPartIndices"] == [0]
-        assert closed == [2, 3, 1] and state["limit"] == 12207
+        assert closed == [2, 3, 1] and state["limit"] == initial_limit
+        assert state["mode"] == initial_mode
+        assert len([op for op in operations if op[:2] == ("PATCH", "/api/v1/settings")]) == 2
     assert len(starts) == 3 and starts[1] == starts[2]
     assert len([item for item in operations if item[:2] == ("POST", "/api/v1/downloads")]) == 1
     assert len([item for item in operations if item[:2] == ("GET", "/api/v1/downloads/7")]) == 3

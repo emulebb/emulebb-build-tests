@@ -10,6 +10,29 @@ REST_CONTRACT_VERSION = "2.0.0"
 REST_CONTRACT_VERSION_HEADER = "X-Contract-Version"
 
 
+def settings_patch(snapshot: dict[str, Any], *, set_values: dict[str, Any] | None = None,
+                   reset: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Build one canonical write against the caller's observed settings revision.
+
+    The request owner submits once and exposes conflicts; this helper performs
+    no HTTP calls, retries, or conversion of setting names or values.
+    """
+    meta = snapshot.get("meta")
+    revision = meta.get("settingsRevision") if isinstance(meta, dict) else None
+    if (not isinstance(revision, str) or not 1 <= len(revision) <= 19
+            or not revision.isascii() or not revision.isdecimal()
+            or revision != str(int(revision)) or not 1 <= int(revision) <= 9223372036854775807):
+        raise RuntimeError("Settings response requires an exact positive decimal-string revision")
+    if not set_values and not reset:
+        raise ValueError("Settings patch requires a set or reset")
+    body: dict[str, Any] = {"expectedRevision": revision}
+    if set_values:
+        body["set"] = set_values
+    if reset:
+        body["reset"] = list(reset)
+    return body
+
+
 def iter_library_roots(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
     """Stream ID-ordered root pages using an existing authenticated request owner."""
     cursor: str | None = None
