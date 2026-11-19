@@ -672,9 +672,9 @@ def counter_delta(
 class ProcessSampler:
     """Collect compact process CPU, memory, handle, and I/O observations."""
 
-    def __init__(self, process: subprocess.Popen[str], interval_seconds: float) -> None:
+    def __init__(self, process: subprocess.Popen[str], interval_seconds: float, *, observed_pid: int | None = None) -> None:
         psutil = _load_psutil()
-        self.process = psutil.Process(process.pid)
+        self.process = psutil.Process(process.pid if observed_pid is None else observed_pid)
         self.controller = psutil.Process(os.getpid())
         self.metric_errors: dict[str, str] = {}
         self.interval_seconds = interval_seconds
@@ -1193,7 +1193,7 @@ def retained_download_observation(client: RestClient) -> dict[str, object]:
 
 def start_daemon(
     paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int,
-    *, retained_downloads: int = 0, trace_metadata: bool = False,
+    *, retained_downloads: int = 0, trace_metadata: bool = False, heap_profile_dir: Path | None = None,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     rust_client.write_rust_profile(
         profile_dir,
@@ -1228,6 +1228,7 @@ def start_daemon(
         rest_address="127.0.0.1",
         rest_port=port,
         process_env=process_env,
+        heap_profile_dir=heap_profile_dir,
     )
 
 
@@ -1239,19 +1240,34 @@ def start_configured_daemon(
     rest_address: str,
     rest_port: int,
     process_env: dict[str, str] | None = None,
+    heap_profile_dir: Path | None = None,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     """Start one already-configured profile and attach REST/resource observers."""
 
     if paths.staged_executable is None:
         raise RuntimeError("Campaign runtime bundle was not admitted")
-    if process_env is None:
+    if heap_profile_dir is not None:
+        heap_profile_dir.mkdir(parents=True, exist_ok=False)
+        with log_path.open("w", encoding="utf-8") as output:
+            process = rust_client.spawn_rust_daemon(paths.staged_executable, profile_dir,
+                output_handle=output, env=process_env,
+                command_prefix=("heaptrack", "-o", str(heap_profile_dir / "daemon")))
+    elif process_env is None:
         process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
     else:
         process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path, env=process_env)
     client = RestClient(f"http://{rest_address}:{rest_port}/api/v1", API_KEY)
     try:
-        wait_for_rest(client, process, 60.0)
-        sampler = ProcessSampler(process, 2.0)
+        wait_for_rest(client, process, 300.0 if heap_profile_dir is not None else 60.0)
+        observed_pid = None
+        if heap_profile_dir is not None:
+            # Observe the daemon, not heaptrack's shell/interpreter processes.
+            children = _load_psutil().Process(process.pid).children(recursive=True)
+            matches = [child.pid for child in children if Path(child.exe()).resolve() == paths.staged_executable.resolve()]
+            if len(matches) != 1:
+                raise RuntimeError("Heap profiler did not expose one admitted daemon child")
+            observed_pid = matches[0]
+        sampler = ProcessSampler(process, 2.0, observed_pid=observed_pid)
         sampler.maybe_sample(force=True)
         return process, client, sampler
     except BaseException:
@@ -2879,14 +2895,14 @@ def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
     }}
 
 
-def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path) -> dict[str, object]:
+def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path, *, source_report: Path | None = None) -> dict[str, object]:
     """Snapshot a current owned baseline without modifying the failed original."""
     if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
         raise RuntimeError("replay run ID must be one path segment")
     source_run = (paths.runs_root / run_id).resolve(strict=True)
     if source_run.parent != paths.runs_root.resolve(strict=True):
         raise RuntimeError("replay source escaped the owned runs root")
-    report_path = paths.reports_root / f"rust-shared-library-io-{run_id}.json"
+    report_path = source_report if source_report is not None else paths.reports_root / f"rust-shared-library-io-{run_id}.json"
     report_bytes = report_path.read_bytes()
     report = json.loads(report_bytes)
     if (report.get("schema") != REPORT_SCHEMA or report.get("runId") != run_id
@@ -2916,7 +2932,8 @@ def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path) ->
 
 
 def run_campaign(
-    paths: HarnessPaths, args: argparse.Namespace
+    paths: HarnessPaths, args: argparse.Namespace, *, replay_report: Path | None = None,
+    heap_profile_dir: Path | None = None, stop_after_watcher_create: bool = False,
 ) -> tuple[Path, dict[str, object]]:
     """Run initial scan, watcher lifecycle, reload, and persistence phases."""
 
@@ -3022,7 +3039,7 @@ def run_campaign(
     try:
         replay = args.watcher_replay_from is not None
         if replay:
-            report["replay"] = copy_replay_database(paths, args.watcher_replay_from, profile_dir)
+            report["replay"] = copy_replay_database(paths, args.watcher_replay_from, profile_dir, source_report=replay_report)
         initial_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         initial_log = run_root / "initial.log"
         log_paths.append(initial_log)
@@ -3030,6 +3047,7 @@ def run_campaign(
             paths, profile_dir, initial_log, choose_loopback_port(),
             retained_downloads=0 if replay else RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
             trace_metadata=replay,
+            heap_profile_dir=heap_profile_dir,
         )
         clients.append(client)
         samplers.append(sampler)
@@ -3129,6 +3147,12 @@ def run_campaign(
             poll_seconds=args.watcher_poll_seconds,
         )
         report["watcherLifecycle"].append(created)
+        if stop_after_watcher_create:
+            # This diagnostic deliberately omits the remaining qualification phases.
+            report.update(status="diagnosticComplete", acceptance={"ok": False},
+                          diagnostic={"watcherCreateComplete": True, "workloadQualified": False})
+            report["qualificationScope"]["fullCampaign"] = False
+            return report_path, report
         modified, modified_hashes = run_watcher_phase(
             label="watcherModify",
             action=lambda: fixture.modify_watcher_cohort(paths.fixture_root),
@@ -3873,6 +3897,24 @@ def cleanup(paths: HarnessPaths, *, confirmed: bool) -> dict[str, object]:
     }
 
 
+def extract_container_archive(archive: Path, unpacked: Path) -> Path:
+    """Extract an admitted portable archive into a fresh native directory."""
+    package = load_script_module("shared_library_portable_package", "smoke-rust-release-package.py")
+    unpacked.mkdir(parents=True, exist_ok=False)
+    with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(archive)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            package._extract_portable_stream(process.stdout, unpacked)
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+        _, errors = process.communicate()
+        if process.returncode:
+            raise RuntimeError(f"Campaign archive decompression failed: {errors.decode(errors='replace')[-2000:]}")
+    return unpacked / "emulebb-rust/emulebb-rust"
+
+
 def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
     """Admit a verified archive and reuse the full campaign inside a capped container."""
     from .build_provenance import require_clean_git_source
@@ -3901,18 +3943,7 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
         manifest = package._verify_package_manifest(archive, args.source_sha, args.version,
                                                     "x86_64-unknown-linux-gnu")
         unpacked = native / "runtime"
-        unpacked.mkdir()
-        with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(archive)],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-            try:
-                package._extract_portable_stream(process.stdout, unpacked)
-            except BaseException:
-                process.kill()
-                process.communicate()
-                raise
-            _, errors = process.communicate()
-            if process.returncode:
-                raise RuntimeError(f"Campaign archive decompression failed: {errors.decode(errors='replace')[-2000:]}")
+        executable = extract_container_archive(archive, unpacked)
         scenario = native / "scenario"
         paths = HarnessPaths(
             workspace_root=get_required_emule_workspace_root(), output_root=output, rust_repo=rust_repo,
@@ -3920,7 +3951,7 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
             manifest_path=scenario / "fixture-manifest.json",
             owner_path=scenario / ".emulebb-rust-shared-library-io-owner.json",
             runs_root=scenario / "runs", reports_root=reports / "campaign",
-            staged_executable=unpacked / "emulebb-rust/emulebb-rust",
+            staged_executable=executable,
         )
         # Docker's physical backing may be opaque. Retain the actual inventory;
         # this campaign qualifies resource limits and correctness, not SSD speed.
@@ -3979,6 +4010,12 @@ def build_parser() -> argparse.ArgumentParser:
     container.add_argument("--version", required=True)
     container.add_argument("--native-root", type=Path, required=True)
     container.add_argument("--report-root", type=Path, required=True)
+    heap = subparsers.add_parser("container-heap-profile", help="diagnostic copied-profile watcher replay; never workload qualification")
+    heap.add_argument("--archive", type=Path, required=True)
+    heap.add_argument("--source-sha", required=True)
+    heap.add_argument("--version", required=True)
+    heap.add_argument("--source-receipt", type=Path, required=True)
+    heap.add_argument("--report-root", type=Path, required=True)
     lan_startup = subparsers.add_parser(
         "lan-startup",
         help=(
@@ -4052,6 +4089,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "container-heap-profile":
+            from .rust_library_heap_profile import run
+            result = run(args)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["status"] == "diagnosticComplete" else 1
         if args.command == "container-run":
             result = run_container_campaign(args)
             print(json.dumps(result, indent=2, sort_keys=True))

@@ -401,6 +401,7 @@ def spawn_rust_daemon(
     detached: bool = False,
     new_process_group: bool = False,
     text: bool = True,
+    command_prefix: tuple[str, ...] = (),
 ) -> subprocess.Popen:
     """Spawns the `emulebb-rust` daemon with the shared argv/stdio wiring.
 
@@ -415,7 +416,7 @@ def spawn_rust_daemon(
         if detached:
             creationflags |= subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
     return subprocess.Popen(
-        [str(executable), "--profile", str(profile_dir)],
+        [*command_prefix, str(executable), "--profile", str(profile_dir)],
         cwd=cwd if cwd is not None else executable.parent,
         env=env if env is not None else os.environ.copy(),
         stdout=output_handle,
