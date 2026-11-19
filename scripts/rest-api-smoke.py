@@ -383,6 +383,9 @@ UNSAFE_OPENAPI_OPERATIONS = {
     "refreshNat",
     "reloadIpFilter",
     "reloadSharedDirectories",
+    # WHY: a full-library scan can hash payloads. Generic probes leave that I/O
+    # to the explicitly controlled library qualification phases.
+    "scanLibrary",
     "replaceSharedDirectories",
     "triggerDiagnosticCrashTest",
     "shutdownApp",
@@ -3657,7 +3660,8 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
     }
 
 
-def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str) -> dict[str, object]:
+def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str, *,
+                                       request_bodies: dict[str, dict[str, object]] | None = None) -> dict[str, object]:
     """Exercises and reports the safe broadband REST contract surface."""
 
     routes: list[dict[str, object]] = []
@@ -3689,7 +3693,9 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             continue
         start = time.monotonic()
         try:
-            request_body = get_contract_route_body(str(route["name"])) if bool(route["hasRequestBody"]) else None
+            request_body = ((request_bodies or {}).get(operation_id)
+                            if operation_id in (request_bodies or {}) else
+                            get_contract_route_body(str(route["name"]))) if bool(route["hasRequestBody"]) else None
             if bool(route["requestBodyRequired"]) and request_body is None:
                 raise RuntimeError(f"OpenAPI operation requires a request body but no safe contract payload is registered: {route['name']}")
             result = http_request(

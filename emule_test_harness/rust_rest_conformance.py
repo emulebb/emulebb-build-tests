@@ -16,7 +16,8 @@ from typing import Any, Callable
 import jsonschema
 
 from emule_test_harness import rust_openapi_responses
-from emule_test_harness.paths import get_emule_workspace_root
+from emule_test_harness.rust_rest_contract import settings_patch
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 from emule_test_harness.script_modules import load_script_module
 from emule_test_harness.rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEADER
 
@@ -28,9 +29,7 @@ DOWNLOAD_EVENT_SCHEMA_COMPONENT = "DownloadEvent"
 OPENAPI_CONTRACT_ENV = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUST_OPENAPI_CONTRACT_PATH = (
-    get_emule_workspace_root(REPO_ROOT)
-    / "repos"
-    / "emulebb-tooling"
+    resolve_selected_workspace_repo(REPO_ROOT, "emulebb-tooling")
     / "docs"
     / "products"
     / "emulebb-rust"
@@ -85,6 +84,8 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
                                        "/downloads/{id}"))
 
     def rust_contract_body(operation_id: str) -> dict[str, object] | None:
+        if operation_id == "patchSettings":
+            return {"expectedRevision": "1", "set": {"network": {"servers": {"safeConnect": True}}}}
         if operation_id == "createLibraryRoot":
             return {}
         if operation_id == "updateLibraryRoot":
@@ -133,6 +134,17 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         )},
     })
     smoke.REST_CONTRACT_ROUTES = smoke.build_openapi_contract_routes()
+    exercise = smoke.exercise_rest_contract_completeness
+
+    def rust_exercise(base_url: str, api_key: str, budget: str) -> dict[str, object]:
+        # WHY: settings writes require the observed profile revision. Prepare a
+        # live fixture rather than treating a stale or invalid write as success.
+        snapshot = smoke.http_request(base_url, "/api/v1/settings", api_key=api_key)
+        smoke.require_json_object(snapshot, 200)
+        body = settings_patch(snapshot["raw_json"], set_values={"network": {"servers": {"safeConnect": True}}})
+        return exercise(base_url, api_key, budget, request_bodies={"patchSettings": body})
+
+    smoke.exercise_rest_contract_completeness = rust_exercise
     return smoke
 
 

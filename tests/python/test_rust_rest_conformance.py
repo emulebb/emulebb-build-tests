@@ -185,46 +185,21 @@ def test_rust_openapi_network_tags_are_mapped_to_rest_families() -> None:
     assert module.OPENAPI_TAG_FAMILIES["IpFilter"] == "ip-filter"
 
 
-def test_rust_openapi_shared_root_routes_use_controlled_external_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    shared_root = tmp_path / "contract-shared-root"
-    monkeypatch.setenv("EMULEBB_REST_CONTRACT_SHARED_ROOT", str(shared_root))
+def test_rust_library_routes_use_resource_ids_and_current_body_shapes() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
-    routes_by_operation = {
-        route["operationId"]: route for route in module.REST_CONTRACT_ROUTES
-    }
-
-    assert routes_by_operation["addSharedDirectoryRoot"]["path"] == (
-        "/api/v1/shared-directories/roots"
-    )
-    assert routes_by_operation["removeSharedDirectoryRoot"]["path"] == (
-        "/api/v1/shared-directories/roots?"
-        + urllib.parse.urlencode({"path": str(shared_root.resolve())})
-    )
-    assert routes_by_operation["removeSharedFileIgnorePattern"]["path"] == (
-        "/api/v1/shared-directories/ignores?"
-        + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"})
-    )
-    assert routes_by_operation["updateSharedFileIgnoreRule"]["path"] == (
-        "/api/v1/shared-directories/ignores/defaults/noise.desktop-ini"
-    )
-    assert module.normalize_contract_path_for_openapi(
-        routes_by_operation["updateSharedFileIgnoreRule"]["path"]
-    ) == "/shared-directories/ignores/defaults/{ruleKey}"
-    report = module.assert_contract_routes_match_openapi()
-    assert report["ok"] is True, json.dumps(report, sort_keys=True)
-    assert module.get_contract_route_body("addSharedDirectoryRoot") == {
-        "path": str(shared_root.resolve())
-    }
-    assert shared_root.is_dir()
-    assert module.get_contract_route_body("addSharedFileIgnorePattern") == {
-        "pattern": "rest-contract-ignored-*.bin"
-    }
-    assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {
-        "enabled": True
-    }
+    routes = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+    assert routes["createLibraryRoot"]["path"] == "/api/v1/library/roots"
+    for operation in ("getLibraryRoot", "updateLibraryRoot", "deleteLibraryRoot"):
+        assert routes[operation]["path"] == "/api/v1/library/roots/9223372036854775807"
+        assert module.normalize_contract_path_for_openapi(routes[operation]["path"]) == "/library/roots/{id}"
+    assert module.get_contract_route_body("createLibraryRoot") == {}
+    assert module.get_contract_route_body("updateLibraryRoot") == {"watchEnabled": False}
+    assert routes["removeSharedFileIgnorePattern"]["path"] == (
+        "/api/v1/library/ignores?" + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"}))
+    assert routes["updateSharedFileIgnoreRule"]["path"] == "/api/v1/library/ignores/defaults/noise.desktop-ini"
+    assert module.assert_contract_routes_match_openapi()["ok"] is True
+    assert module.get_contract_route_body("addSharedFileIgnorePattern") == {"pattern": "rest-contract-ignored-*.bin"}
+    assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {"enabled": True}
 
 
 def test_rust_category_contract_uses_name_paths_and_nullable_download_body() -> None:
@@ -289,7 +264,7 @@ def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
         "captureDiagnosticBundle",
         "refreshNat",
         "probeVpnGuard",
-        "reloadSharedDirectories",
+        "scanLibrary",
         "connectServerAny",
         "disconnectServers",
         "connectServer",
@@ -300,7 +275,6 @@ def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
         "deleteSearches",
         "reloadIpFilter",
         "clearLogs",
-        "replaceSharedDirectories",
     }:
         assert routes_by_operation[operation_id]["safe"] is False
         assert routes_by_operation[operation_id]["safety"] == "unsafe"
@@ -326,23 +300,12 @@ def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
 
-    for component in ("Ed2kSettings", "Ed2kSettingsUpdate"):
-        properties = schemas[component]["properties"]
-        assert properties["nickname"] == {"type": "string", "maxLength": 50}
-        assert properties["useServerPriorities"] == {
-            "type": "boolean",
-            "description": (
-                "Apply stable high, normal, then low server-priority ordering; "
-                "stock default true."
-            ),
-        }
-        assert properties["autoConnectStaticOnly"] == {
-            "type": "boolean",
-            "description": (
-                "Restrict application startup auto-connect to static servers; "
-                "explicit targeted connects are unaffected."
-            ),
-        }
+    network = schemas["SettingsPartial"]["properties"]["network"]["properties"]
+    assert network["nickname"]["type"] == "string"
+    assert network["nickname"]["x-maxUtf8Bytes"] == 128
+    servers = network["servers"]["properties"]
+    assert servers["usePriorities"]["type"] == "boolean"
+    assert servers["staticOnly"]["type"] == "boolean"
 
     server = schemas["Server"]
     assert "auxiliaryPorts" in server["required"]
@@ -352,47 +315,45 @@ def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -
     }
 
 
-def test_rust_openapi_smoke_uses_ed2k_owned_server_controls() -> None:
+def test_rust_openapi_smoke_uses_canonical_server_controls() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
-
-    removed_core_fields = {"reconnect", "safeServerConnect", "addServersFromServer"}
-    for component in ("CoreSettings", "CoreSettingsUpdate"):
-        assert removed_core_fields.isdisjoint(schemas[component]["properties"])
-    for component in ("Ed2kSettings", "Ed2kSettingsUpdate"):
-        properties = schemas[component]["properties"]
-        assert properties["reconnectEnabled"]["type"] == "boolean"
-        assert properties["safeServerConnect"]["type"] == "boolean"
-        assert properties["addServersFromServer"]["type"] == "boolean"
-        assert properties["serverKeepaliveMinutes"]["type"] == "integer"
-        assert properties["serverKeepaliveMinutes"]["minimum"] == 0
-        assert properties["serverKeepaliveMinutes"]["maximum"] == 1_440
-        assert "keepaliveSecs" not in properties
-
-    assert removed_core_fields.isdisjoint(module.REST_CORE_SETTING_KEYS)
-    assert module.REST_RUST_ED2K_SERVER_SETTING_KEYS == {
-        "reconnectEnabled",
-        "safeServerConnect",
-        "addServersFromServer",
-        "serverKeepaliveMinutes",
-    }
+    servers = schemas["SettingsPartial"]["properties"]["network"]["properties"]["servers"]["properties"]
+    for key in ("autoReconnect", "safeConnect", "acceptServerListUpdates"):
+        assert servers[key]["type"] == "boolean"
+    assert servers["keepaliveMinutes"] == {"type": "integer", "minimum": 0, "maximum": 1440, "multipleOf": 1}
     assert module.get_contract_route_body("patchSettings") == {
-        "ed2k": {"safeServerConnect": True}
-    }
-    assert module.get_contract_route_body("app_preferences_patch") == {
-        "safeServerConnect": True
+        "expectedRevision": "1", "set": {"network": {"servers": {"safeConnect": True}}},
     }
 
 
-def test_rust_openapi_documents_all_supported_nat_backends() -> None:
+def test_live_settings_fixture_uses_selected_contract_and_exact_observed_revision(monkeypatch):
+    module = rust_rest_conformance.load_rest_smoke_module()
+    module.REST_CONTRACT_ROUTES = [route for route in module.REST_CONTRACT_ROUTES
+                                   if route["operationId"] == "patchSettings"]
+    requests = []
+    def request(base, path, *, method="GET", json_body=None, **kwargs):
+        requests.append((method, path, json_body))
+        document = {"data": {"ok": True},
+                    "meta": {"apiVersion": "v1", "settingsRevision": "9007199254740993"}}
+        return {"status": 200, "content_type": "application/json", "json": document["data"],
+                "raw_json": document, "body_text": json.dumps(document)}
+    monkeypatch.setattr(module, "http_request", request)
+    monkeypatch.setattr(module, "validate_openapi_operation_response_payload", lambda *args: None)
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:4711", "key", "contract")
+    assert summary["routes"][0]["ok"], summary["routes"][0]
+    assert requests == [("GET", "/api/v1/settings", None), ("PATCH", "/api/v1/settings", {
+        "expectedRevision": "9007199254740993", "set": {"network": {"servers": {"safeConnect": True}}}})]
+    assert module.OPENAPI_CONTRACT_PATH == resolve_selected_workspace_repo(
+        Path(__file__).resolve().parents[2], "emulebb-tooling") / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+
+
+def test_rust_openapi_documents_nat_backend_choices() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
-
-    for component in ("NatSettings", "NatSettingsUpdate"):
-        assert schemas[component]["properties"]["backendOrder"]["items"]["enum"] == [
-            "pcp_natpmp",
-            "upnp_miniupnpc",
-        ]
+    order = schemas["SettingsPartial"]["properties"]["network"]["properties"]["nat"]["properties"]["backendOrder"]
+    assert order["items"]["enum"] == ["pcp-natpmp", "upnp"]
+    assert order["minItems"] == 1 and order["maxItems"] == 2 and order["uniqueItems"] is True
 
 
 def test_rust_openapi_diagnostics_documents_download_event_runtime_metrics() -> None:
