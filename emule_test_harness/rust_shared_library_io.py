@@ -673,6 +673,8 @@ class ProcessSampler:
     def __init__(self, process: subprocess.Popen[str], interval_seconds: float) -> None:
         psutil = _load_psutil()
         self.process = psutil.Process(process.pid)
+        self.controller = psutil.Process(os.getpid())
+        self.metric_errors: dict[str, str] = {}
         self.interval_seconds = interval_seconds
         self.next_sample = 0.0
         self.samples: list[dict[str, object]] = []
@@ -681,54 +683,71 @@ class ProcessSampler:
         now = time.monotonic()
         if not force and now < self.next_sample:
             return
+        self.next_sample = now + self.interval_seconds
         try:
             memory = self.process.memory_info()
             cpu = self.process.cpu_times()
-            io = self.process.io_counters()
-            self.samples.append(
-                {
-                    "cpuSeconds": round(float(cpu.user + cpu.system), 3),
-                    "workingSetBytes": int(memory.rss),
-                    "lifetimePeakWorkingSetBytes": int(memory.peak_wset)
-                    if hasattr(memory, "peak_wset") else None,
-                    "privateBytes": int(
-                        getattr(memory, "private", getattr(memory, "vms", 0))
-                    ),
-                    "handleCount": int(self.process.num_handles())
-                    if os.name == "nt"
-                    else None,
-                    "readCount": int(io.read_count),
-                    "writeCount": int(io.write_count),
-                    "readBytes": int(io.read_bytes),
-                    "writeBytes": int(io.write_bytes),
-                }
-            )
-        except Exception:  # process may be exiting between poll and sample
+        except Exception as error:  # A process may exit between poll and sample.
+            self.metric_errors["cpuMemory"] = type(error).__name__
             return
-        self.next_sample = now + self.interval_seconds
+        try:
+            io = self.process.io_counters()
+        except Exception as error:
+            # WHY: restricted /proc I/O access must not discard observable RSS/CPU.
+            self.metric_errors["io"] = type(error).__name__
+            io = None
+        try:
+            handles = self.process.num_handles() if os.name == "nt" else None
+        except Exception as error:
+            self.metric_errors["handles"] = type(error).__name__
+            handles = None
+        try:
+            controller_rss = int(self.controller.memory_info().rss)
+        except Exception as error:
+            self.metric_errors["controllerMemory"] = type(error).__name__
+            controller_rss = None
+        peak = getattr(memory, "peak_wset", None)
+        private = getattr(memory, "private", None)
+        self.samples.append({
+            "cpuSeconds": round(float(cpu.user + cpu.system), 3),
+            "workingSetBytes": int(memory.rss),
+            "lifetimePeakWorkingSetBytes": int(peak) if peak is not None else None,
+            # Virtual address space is not private resident or committed memory.
+            "privateBytes": int(private) if private is not None else None,
+            "controllerWorkingSetBytes": controller_rss,
+            "handleCount": int(handles) if handles is not None else None,
+            **{key: int(getattr(io, attribute)) if io is not None else None for key, attribute in (
+                ("readCount", "read_count"), ("writeCount", "write_count"),
+                ("readBytes", "read_bytes"), ("writeBytes", "write_bytes"),
+            )},
+        })
 
     def summary(self, start_index: int = 0) -> dict[str, object]:
         rows = self.samples[start_index:]
         if not rows:
-            return {"sampleCount": 0}
+            return {"sampleCount": 0, "metricErrors": dict(self.metric_errors)}
         first, last = rows[0], rows[-1]
+
+        def observed_max(key: str) -> int | None:
+            return max((int(row[key]) for row in rows if row.get(key) is not None), default=None)
+
+        def observed_delta(key: str) -> int | None:
+            return int(last[key]) - int(first[key]) if first[key] is not None and last[key] is not None else None
+
         return {
             "sampleCount": len(rows),
             "lifetimeCpuSeconds": float(last["cpuSeconds"]),
-            "cpuSecondsDelta": round(
-                float(last["cpuSeconds"]) - float(first["cpuSeconds"]), 3
-            ),
-            "peakWorkingSetBytes": max(int(row["workingSetBytes"]) for row in rows),
-            "lifetimePeakWorkingSetBytes": max(
-                (int(row["lifetimePeakWorkingSetBytes"]) for row in rows
-                 if row.get("lifetimePeakWorkingSetBytes") is not None), default=None,
-            ),
-            "peakPrivateBytes": max(int(row["privateBytes"]) for row in rows),
-            "peakHandleCount": max(int(row["handleCount"] or 0) for row in rows),
-            "readBytesDelta": int(last["readBytes"]) - int(first["readBytes"]),
-            "writeBytesDelta": int(last["writeBytes"]) - int(first["writeBytes"]),
-            "readCountDelta": int(last["readCount"]) - int(first["readCount"]),
-            "writeCountDelta": int(last["writeCount"]) - int(first["writeCount"]),
+            "cpuSecondsDelta": round(float(last["cpuSeconds"]) - float(first["cpuSeconds"]), 3),
+            "peakWorkingSetBytes": observed_max("workingSetBytes"),
+            "lifetimePeakWorkingSetBytes": observed_max("lifetimePeakWorkingSetBytes"),
+            "peakPrivateBytes": observed_max("privateBytes"),
+            "peakControllerWorkingSetBytes": observed_max("controllerWorkingSetBytes"),
+            "peakHandleCount": observed_max("handleCount"),
+            "readBytesDelta": observed_delta("readBytes"),
+            "writeBytesDelta": observed_delta("writeBytes"),
+            "readCountDelta": observed_delta("readCount"),
+            "writeCountDelta": observed_delta("writeCount"),
+            "metricErrors": dict(self.metric_errors),
         }
 
 
@@ -3886,7 +3905,10 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
         )
         # Docker's physical backing may be opaque. Retain the actual inventory;
         # this campaign qualifies resource limits and correctness, not SSD speed.
+        controller = _load_psutil().Process(os.getpid())
+        result["controllerMemory"] = {"beforePreparationWorkingSetBytes": int(controller.memory_info().rss)}
         result["preparation"] = prepare_fixture(paths, allow_non_ssd=True)
+        result["controllerMemory"]["afterPreparationWorkingSetBytes"] = int(controller.memory_info().rss)
         campaign_args = build_parser().parse_args(["run", "--allow-non-ssd"])
         report_path, report = run_campaign(paths, campaign_args)
         result.update(status=report["status"], campaignReport=str(report_path),

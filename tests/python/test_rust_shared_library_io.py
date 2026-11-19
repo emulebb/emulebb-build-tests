@@ -233,6 +233,7 @@ def test_retained_download_observation_requires_the_realistic_counts():
 
 def test_process_summary_distinguishes_sampled_memory_from_lifetime_peak():
     sampler = object.__new__(subject.ProcessSampler)
+    sampler.metric_errors = {}
     sampler.samples = [{"workingSetBytes": 100, "privateBytes": 90,
                         "lifetimePeakWorkingSetBytes": 500, "handleCount": 1,
                         "cpuSeconds": 1, "readBytes": 0, "writeBytes": 0,
@@ -1599,6 +1600,8 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
         assert options.command == "run" and options.allow_non_ssd and options.watcher_replay_from is None
         ok = fault != "campaign-failure"
         return paths.reports_root / "full.json", {"status": "passed" if ok else "failed", "acceptance": {"ok": ok}}
+    controller = SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=35_000_000))
+    monkeypatch.setattr(subject, "_load_psutil", lambda: SimpleNamespace(Process=lambda _pid: controller))
     monkeypatch.setattr(subject, "prepare_fixture", prepare)
     monkeypatch.setattr(subject, "run_campaign", campaign)
     if fault == "missing-budget":
@@ -1612,3 +1615,29 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
     retained = json.loads((args.report_root / "container-result.json").read_text())
     assert retained["status"] == ("passed" if fault == "none" else "failed")
     assert retained["acceptance"]["ok"] is (fault == "none")
+
+
+@pytest.mark.parametrize("io_available", [True, False])
+def test_process_sampler_preserves_rss_when_optional_metrics_are_unavailable(monkeypatch, io_available):
+    class Process:
+        def memory_info(self):
+            return SimpleNamespace(rss=256_000_000, vms=900_000_000, peak_wset=None, private=None)
+        def cpu_times(self): return SimpleNamespace(user=3.0, system=1.5)
+        def io_counters(self):
+            if not io_available: raise PermissionError("restricted process I/O")
+            return SimpleNamespace(read_count=1, write_count=2, read_bytes=3, write_bytes=4)
+        def num_handles(self): return 7
+    controller = SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=65_000_000))
+    monkeypatch.setattr(subject, "_load_psutil", lambda: SimpleNamespace(
+        Process=lambda pid: controller if pid == subject.os.getpid() else Process()))
+    sampler = subject.ProcessSampler(SimpleNamespace(pid=subject.os.getpid() + 1), 1)
+    sampler.maybe_sample(force=True)
+    result = sampler.summary()
+    assert result["sampleCount"] == 1
+    assert result["peakWorkingSetBytes"] == 256_000_000
+    assert result["peakControllerWorkingSetBytes"] == 65_000_000
+    assert result["lifetimeCpuSeconds"] == 4.5
+    assert result["lifetimePeakWorkingSetBytes"] is None
+    assert result["peakPrivateBytes"] is None  # vms must never be labelled private.
+    assert result["readBytesDelta"] == (0 if io_available else None)
+    assert result["metricErrors"] == ({} if io_available else {"io": "PermissionError"})
