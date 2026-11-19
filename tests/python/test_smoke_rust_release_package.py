@@ -422,10 +422,10 @@ def partial_details(*, size=12, verified=True, state="stopped", intent="stopped"
     first = size * 2 // 3
     return {"download": {"id": "7", "hash": "a" * 32, "sizeBytes": size,
                          "completedAt": None, "payloadVerified": False, "intent": intent, "state": state},
-            "parts": [{"index": 0, "start": 0, "end": first - 1, "size": first, "completedBytes": first if verified else 0,
-                       "gapBytes": 0 if verified else first, "complete": verified, "corrupted": False},
-                      {"index": 1, "start": first, "end": size - 1, "size": size - first,
-                       "completedBytes": 0, "gapBytes": size - first,
+            "parts": [{"index": 0, "start": 0, "end": first - 1, "sizeBytes": first, "presentBytes": first if verified else 0,
+                       "complete": verified, "corrupted": False},
+                      {"index": 1, "start": first, "end": size - 1, "sizeBytes": size - first,
+                       "presentBytes": 0,
                        "complete": False, "corrupted": False}]}
 
 
@@ -436,23 +436,27 @@ def test_partial_checkpoint_accepts_verified_part_zero_and_omits_paths():
                       "state": "stopped", "intent": "stopped"}
 
 
-def test_verified_partial_reads_the_details_resource(monkeypatch):
+def test_verified_partial_reads_separate_detail_and_parts_resources(monkeypatch):
     paths = []
     detail = partial_details()
     def api(base_url, method, path, key):
         paths.append(path)
-        return detail
+        return detail["download"]
+    def page(base_url, path):
+        paths.append(path)
+        return detail["parts"]
+    monkeypatch.setattr(smoke, "_download_page", page)
     monkeypatch.setattr(smoke, "request_json", api)
     monkeypatch.setattr(smoke, "wait_for", lambda probe, **kwargs: probe())
     result = smoke._wait_for_verified_partial("http://127.0.0.1:4711", "7", "a" * 32, 12)
     assert result["verifiedPartIndices"] == [0]
-    assert paths == ["/api/v1/downloads/7/details"]
+    assert paths == ["/api/v1/downloads/7", "/api/v1/downloads/7/parts?limit=200"]
 
 
 @pytest.mark.parametrize("completed,complete", [(8, False), (7, True), (True, True)])
 def test_received_bytes_without_verified_part_are_not_a_checkpoint(completed, complete):
     detail = partial_details()
-    detail["parts"][0].update(completedBytes=completed, complete=complete)
+    detail["parts"][0].update(presentBytes=completed, complete=complete)
     assert smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
                                    expected_size=12) is None
 
@@ -484,11 +488,11 @@ def test_partial_checkpoint_requires_complete_inclusive_part_geometry(fault):
     elif fault == "missing-first":
         detail["parts"].pop(0)
     elif fault == "gap":
-        detail["parts"][1].update(start=9, size=3, gapBytes=3)
+        detail["parts"][1].update(start=9, sizeBytes=3)
     elif fault == "overlap":
-        detail["parts"][1].update(start=7, size=5, gapBytes=5)
+        detail["parts"][1].update(start=7, sizeBytes=5)
     else:
-        detail["parts"][1]["size"] += 1
+        detail["parts"][1]["sizeBytes"] += 1
     with pytest.raises(RuntimeError, match="part geometry"):
         smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32, expected_size=12)
 
@@ -573,7 +577,7 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
             assert body == {"source": {"type": "ed2k-link", "link": body["source"]["link"]},
                             "intent": "started"}
             return {"id": "7", "hash": "a" * 32}
-        if path == "/api/v1/downloads/7/details":
+        if path in {"/api/v1/downloads/7", "/api/v1/downloads/7/parts?limit=200"}:
             details = partial_details(size=smoke.TRANSFER_SIZE_BYTES,
                                    verified=not (fault == "lost-parts" and state["leecherStarts"] == 2),
                                    state="stopped" if state["stopped"] else "downloading",
@@ -581,17 +585,18 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
             if fault == "changed-part-count" and state["leecherStarts"] == 2:
                 second = details["parts"][1]
                 original_end = second["end"]
-                second["size"] //= 2
-                second["end"] = second["start"] + second["size"] - 1
-                second["gapBytes"] = second["size"]
+                second["sizeBytes"] //= 2
+                second["end"] = second["start"] + second["sizeBytes"] - 1
                 details["parts"].append({**second, "index": 2, "start": second["end"] + 1,
-                                         "end": original_end, "size": original_end - second["end"],
-                                         "gapBytes": original_end - second["end"]})
-            return details
+                                         "end": original_end, "sizeBytes": original_end - second["end"]})
+            return details["download"] if path == "/api/v1/downloads/7" else details["parts"]
         if path == "/api/v1/snapshot":
             return {"downloads": {"unfinished": 0, "completed": 1}}
         return {"ok": True}
     def request(url, **kwargs):
+        if url.endswith("/api/v1/downloads/7/parts?limit=200"):
+            return json.dumps({"data": api(None, "GET", "/api/v1/downloads/7/parts?limit=200", None),
+                               "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
         if url.endswith("/api/v1/downloads/stop") or url.endswith("/api/v1/downloads/start"):
             operation = url.rsplit("/", 1)[-1]
             assert kwargs["expected_statuses"] == (207,)
@@ -637,7 +642,7 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
         assert closed == [2, 3, 1] and state["limit"] == 12207
     assert len(starts) == 3 and starts[1] == starts[2]
     assert len([item for item in operations if item[:2] == ("POST", "/api/v1/downloads")]) == 1
-    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/downloads/7/details")]) == 3
+    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/downloads/7")]) == 3
     assert [item[1] for item in operations if item[1] in ("/api/v1/downloads/stop", "/api/v1/downloads/start")] == (
         ["/api/v1/downloads/stop"] if fault else ["/api/v1/downloads/stop", "/api/v1/downloads/start"]
     )

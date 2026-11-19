@@ -266,18 +266,18 @@ def _partial_snapshot(details: dict, *, download_id: str, expected_hash: str, ex
     for part in parts:
         if (not isinstance(part, dict) or type(part.get("index")) is not int
                 or not 0 <= part["index"] < len(parts) or part["index"] in seen
-                or type(part.get("size")) is not int or part["size"] <= 0
+                or type(part.get("sizeBytes")) is not int or part["sizeBytes"] <= 0
                 or type(part.get("start")) is not int or type(part.get("end")) is not int
                 or part["start"] < 0 or part["end"] < part["start"]
-                or part["end"] - part["start"] + 1 != part["size"]):
+                or part["end"] - part["start"] + 1 != part["sizeBytes"]):
             raise RuntimeError("Packaged download has invalid part geometry")
         seen.add(part["index"])
         geometry.append((part["index"], part["start"], part["end"]))
         # Fully received bytes can precede hash verification. The native
         # DownloadPart contract defines complete as the verification verdict.
         if (part.get("complete") is True and part.get("corrupted") is False
-                and part.get("completedBytes") == part["size"] and part.get("gapBytes") == 0):
-            verified[part["index"]] = part["size"]
+                and type(part.get("presentBytes")) is int and part["presentBytes"] == part["sizeBytes"]):
+            verified[part["index"]] = part["sizeBytes"]
     ordered = sorted(geometry)
     if (seen != set(range(len(parts))) or ordered[0][1] != 0
             or ordered[-1][2] != expected_size - 1
@@ -291,12 +291,18 @@ def _partial_snapshot(details: dict, *, download_id: str, expected_hash: str, ex
             "state": download.get("state"), "intent": download.get("intent")}
 
 
+def _read_partial_snapshot(base_url: str, download_id: str, expected_hash: str, expected_size: int) -> dict | None:
+    """Read the fixed two-part smoke fixture through separate bounded resources."""
+    download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", API_KEY)
+    parts = _download_page(base_url, f"/api/v1/downloads/{download_id}/parts?limit=200")
+    return _partial_snapshot({"download": download, "parts": parts}, download_id=download_id,
+                             expected_hash=expected_hash, expected_size=expected_size)
+
+
 def _wait_for_verified_partial(base_url: str, download_id: str, expected_hash: str,
                                expected_size: int, *, stopped: bool = False) -> dict:
     def probe():
-        details = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}/details", API_KEY)
-        snapshot = _partial_snapshot(details, download_id=download_id, expected_hash=expected_hash,
-                                     expected_size=expected_size)
+        snapshot = _read_partial_snapshot(base_url, download_id, expected_hash, expected_size)
         return snapshot if snapshot and (not stopped or (snapshot["intent"] == "stopped"
                                               and snapshot["state"] == "stopped")) else None
     return wait_for(probe, timeout_seconds=90.0, interval_seconds=0.1,
@@ -679,9 +685,7 @@ def _smoke_binary(
             raise RuntimeError("Restarted packaged daemon has a different release identity")
         # Read durable progress before reconnecting or restarting the job; new
         # downloaded parts must not conceal a missing persisted checkpoint.
-        after = _partial_snapshot(request_json(leecher_base_url, "GET", f"/api/v1/downloads/{download_id}/details", API_KEY),
-                                  download_id=download_id, expected_hash=transfer_hash,
-                                  expected_size=int(payload["sizeBytes"]))
+        after = _read_partial_snapshot(leecher_base_url, download_id, transfer_hash, int(payload["sizeBytes"]))
         if (after is None or after["intent"] != "stopped" or after["state"] != "stopped"
                 or after["partsTotal"] != before["partsTotal"]
                 or not set(before["verifiedPartIndices"]).issubset(after["verifiedPartIndices"])
