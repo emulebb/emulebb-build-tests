@@ -1364,19 +1364,26 @@ def test_openapi_schema_component_drift_requires_non_empty_update_shapes(
         r"""
 components:
   schemas:
-    AppSettingsUpdate:
+    ExampleUpdate:
       type: object
       additionalProperties: false
       properties:
         core:
-          $ref: "#/components/schemas/CoreSettingsUpdate"
-    CoreSettingsUpdate:
+          $ref: "#/components/schemas/ChildUpdate"
+    ChildUpdate:
       type: object
       additionalProperties: false
       minProperties: 1
       properties:
-        maxUploadSlots:
+        amount:
           type: integer
+    RevisionPatch:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: string
     SharedFilePriority:
       type: string
       enum: [auto, not-published, verylow, low, normal, high, release]
@@ -1401,7 +1408,7 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
-            component="AppSettingsUpdate",
+            component="ExampleUpdate",
             issue="patch/update schema must reject empty objects with minProperties: 1 or required-field composition",
         ),
     )

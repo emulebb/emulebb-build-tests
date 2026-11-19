@@ -1297,6 +1297,9 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
 def schema_rejects_empty_object(schema: dict[str, object]) -> bool:
     """Returns whether a schema component rejects `{}` without relying on prose."""
 
+    required = schema.get("required")
+    if isinstance(required, list) and required:
+        return True
     min_properties = schema.get("minProperties")
     if isinstance(min_properties, int) and min_properties >= 1:
         return True
