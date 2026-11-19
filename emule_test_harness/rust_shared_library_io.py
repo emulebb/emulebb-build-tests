@@ -67,20 +67,22 @@ OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 OFFERFILES_SCALE_PACING_TOLERANCE_SECONDS = 2.0
 ACTIVE_LOCAL_SOURCES_SQL = """
-    SELECT DISTINCT local_file_instances.path_id,
+    SELECT local_file_instances.path_id,
            local_file_instances.known_file_id,
            local_file_instances.size_bytes,
            local_file_instances.verified_fingerprint
     FROM local_file_instances
-    JOIN shared_file_memberships
-      ON shared_file_memberships.path_id = local_file_instances.path_id
-    JOIN shared_directory_roots
-      ON shared_directory_roots.id = shared_file_memberships.root_id
-    WHERE shared_file_memberships.removed_at_ms IS NULL
+    WHERE EXISTS (
+      SELECT 1 FROM shared_file_memberships
+      JOIN shared_directory_roots
+        ON shared_directory_roots.id = shared_file_memberships.root_id
+      WHERE shared_file_memberships.path_id = local_file_instances.path_id
+      AND shared_file_memberships.removed_at_ms IS NULL
       AND shared_directory_roots.enabled = 1
       AND shared_directory_roots.deleted_at_ms IS NULL
       AND shared_directory_roots.accessible = 1
       AND shared_directory_roots.shareable = 1
+    )
 """
 DEFAULT_MEDIA_ROOTS_FILE = (
     Path(__file__).resolve().parent.parent
@@ -1097,9 +1099,9 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
             transfer_file_count += int(entry.is_file(follow_symlinks=False))
     counts: dict[str, int] = {}
     if database.is_file():
-        with sqlite3.connect(
+        with closing(sqlite3.connect(
             f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30
-        ) as connection:
+        )) as connection:
             active_sources = ACTIVE_LOCAL_SOURCES_SQL
             for key, query in {
                 "knownFiles": "SELECT COUNT(*) FROM known_files",
@@ -2502,9 +2504,9 @@ def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
     database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
     if not database.is_file():
         return {}
-    with sqlite3.connect(
+    with closing(sqlite3.connect(
         f"file:{database.as_posix()}?mode=ro", uri=True, timeout=5
-    ) as connection:
+    )) as connection:
         rows = connection.execute(
             f"""
             WITH active_sources AS ({ACTIVE_LOCAL_SOURCES_SQL})
@@ -3718,9 +3720,9 @@ def inspect_partial_media_run(
     if not database.is_file():
         raise RuntimeError("retained multi-HDD run has no metadata database")
     snapshot = profile_storage_snapshot(profile_dir)
-    with sqlite3.connect(
+    with closing(sqlite3.connect(
         f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30
-    ) as connection:
+    )) as connection:
         hash_rows, hash_bytes = connection.execute(
             """
             SELECT COUNT(*), coalesce(sum(size_bytes), 0)

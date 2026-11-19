@@ -1173,7 +1173,9 @@ def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -> None:
+def test_watcher_database_query_returns_only_active_probe_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     profile = tmp_path / "profile"
     database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
     rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
@@ -1194,6 +1196,27 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
             connection.execute("INSERT INTO verified_local_aich_hashes VALUES(?,0,?)", (known, bytes(20)))
             connection.execute("INSERT INTO local_file_instances(path_id,known_file_id,size_bytes,native_identity,verified_fingerprint,verified_at_ms) VALUES(?,?,16,?,?,0)", (path_id, known, b"identity" + bytes([known]), bytes(47)))
             connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_ms,last_seen_at_ms,removed_at_ms) VALUES(?,?,?,?,0,0,?)", (root, path_id, known, name, removed))
+        parent_path = subject.rust_metadata._upsert_local_path(connection, str(tmp_path.parent), 0)
+        parent_root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_ms) VALUES(?,0)", (parent_path,)).lastrowid
+        connection.execute("INSERT INTO shared_directory_root_origins VALUES(?,'explicit',0,1,1)", (parent_root,))
+        path_id, known = connection.execute(
+            "SELECT path_id,known_file_id FROM local_file_instances JOIN known_files ON known_files.id=known_file_id WHERE ed2k_hash=?",
+            (bytes.fromhex("11" * 16),),
+        ).fetchone()
+        connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_ms,last_seen_at_ms) VALUES(?,?,?,?,0,0)",
+                           (parent_root, path_id, known, f"{tmp_path.name}/watch-probe-0000.bin"))
+        plan = connection.execute("EXPLAIN QUERY PLAN " + subject.ACTIVE_LOCAL_SOURCES_SQL).fetchall()
+        assert not any("TEMP B-TREE" in str(row[3]) for row in plan)
+    connection.close()
+    connect = sqlite3.connect
+    readers = []
+
+    def track_reader(*args, **kwargs):
+        reader = connect(*args, **kwargs)
+        readers.append(reader)
+        return reader
+
+    monkeypatch.setattr(subject.sqlite3, "connect", track_reader)
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
     assert next(iter(rows.values()))["hash"] == "11" * 16
@@ -1203,6 +1226,14 @@ def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -
     assert snapshot["rowCounts"]["activeShareSources"] == 1
     assert snapshot["rowCounts"]["activeShareBytes"] == 16
     assert snapshot["rowCounts"]["invalidActiveShareIntegrity"] == 0
+    monkeypatch.setattr(subject, "ACTIVE_LOCAL_SOURCES_SQL", "SELECT * FROM missing_source")
+    for read in (subject._watcher_database_rows, subject.profile_storage_snapshot):
+        with pytest.raises(sqlite3.OperationalError):
+            read(profile)
+    assert len(readers) == 4
+    for reader in readers:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            reader.execute("SELECT 1")
 
 
 @pytest.mark.unit
