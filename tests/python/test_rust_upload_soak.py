@@ -288,3 +288,29 @@ def test_progress_separates_retired_piece_presence_from_payload_verification(mon
         "id": "7", "sizeBytes": 4096, "state": "completed", "payloadVerified": verified,
     })
     assert totals == {"partCount": 0, "presentBytes": 0, "verifiedBytes": expected}
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_upload_cap_uses_observed_revision_and_does_not_retry(monkeypatch, conflict):
+    calls = []
+    def request(base, path, **kwargs):
+        calls.append((base, path, kwargs))
+        if kwargs.get("method") == "PATCH":
+            assert kwargs["body"] == {
+                "expectedRevision": "9007199254740993",
+                "set": {"transfers": {"uploadLimitBytesPerSecond": 65536}},
+            }
+            if conflict:
+                raise RuntimeError("SETTINGS_CONFLICT")
+            return {"data": {"application": {"pendingRestart": []}}}
+        return {"data": {}, "meta": {"settingsRevision": "9007199254740993"}}
+    monkeypatch.setattr(rust_upload_soak, "http_json", request)
+    if conflict:
+        with pytest.raises(RuntimeError, match="SETTINGS_CONFLICT"):
+            rust_upload_soak.patch_upload_limit("http://127.0.0.1:4711", "synthetic-key", 64)
+    else:
+        assert rust_upload_soak.patch_upload_limit("http://127.0.0.1:4711", "synthetic-key", 64) == {
+            "application": {"pendingRestart": []}}
+    assert len(calls) == 2
+    assert all(path == "/api/v1/settings" and kwargs["api_key"] == "synthetic-key"
+               for _, path, kwargs in calls)

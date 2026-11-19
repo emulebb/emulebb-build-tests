@@ -18,6 +18,8 @@ from typing import Any
 
 from . import ed2k_server as ed2k_harness, kad_nodes, live_process_monitor, rust_client, rust_ed2k, rust_metadata
 from .local_kad_peer import LocalKadPeer
+from .rust_rest_contract import settings_patch
+from .vm_guest_profiles import http_json
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from .rust_local_ed2k import (
     RustRestFailure,
@@ -455,15 +457,13 @@ def start_rust(
 
 
 def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, object]:
-    """Applies the Rust core upload cap for a deterministic slow upload soak."""
+    """Set a live upload cap once against the observed native settings revision."""
+    snapshot = http_json(base_url, "/api/v1/settings", api_key=api_key, timeout_seconds=15.0)
+    body = settings_patch(snapshot, set_values={"transfers": {
+        "uploadLimitBytesPerSecond": upload_limit_kibps * 1024}})
+    return http_json(base_url, "/api/v1/settings", api_key=api_key, method="PATCH",
+                     body=body, timeout_seconds=15.0)["data"]
 
-    return request_json(
-        base_url,
-        "PATCH",
-        "/api/v1/app/settings",
-        api_key,
-        {"core": {"uploadLimitKiBps": upload_limit_kibps}},
-    )
 
 
 def safe_int(value: object) -> int:

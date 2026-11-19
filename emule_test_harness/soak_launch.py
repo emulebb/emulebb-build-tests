@@ -32,6 +32,7 @@ from .rust_client import (
     write_rust_profile,
 )
 from .ini import read_ini_text
+from .rust_upload_soak import patch_upload_limit as patch_rust_upload_limit
 from .vm_guest_profiles import api_data, retry_http_json, wait_until
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -681,8 +682,8 @@ def existing_shared_roots(roots: list[object]) -> tuple[list[object], int]:
     return existing, skipped
 
 
-def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, Any]:
-    """Applies the shared REST upload cap setting to one live client."""
+def patch_mfc_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, Any]:
+    """Applies the MFC REST upload cap setting to one live client."""
 
     return retry_http_json(
         "soak upload limit",
@@ -1194,7 +1195,7 @@ def bring_up_rust(
                 base_url,
                 diagnostic_writer_policy,
             )
-        patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
+        patch_rust_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
         if server_met_url:
             rust_mod.import_server_met(base_url, server_met_url)
         retry_http_json(
@@ -1414,7 +1415,7 @@ def bring_up_mfc(
         rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
         wait_for_mfc_core_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
         try:
-            patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
+            patch_mfc_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
         except RuntimeError as exc:
             log(f"MFC upload cap REST patch skipped after persisted profile cap: {type(exc).__name__}")
 
