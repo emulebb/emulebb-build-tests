@@ -1123,11 +1123,12 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         report["searchIdentityPhase"] = {"status": "passed", "stringIds": True,
                                          "beyondJavaScriptSafeInteger": True, "deletedIdNotReused": True,
                                          "networkResultsOnly": True, "indexLookupCreatesNoClaim": True, "stopPreservedSession": True, "linkedCriteria": True, "parentDeletionPreservedChild": True, "missingParentNotAllocated": True}
-        core = data(seeder, "GET", "/api/v1/app/settings")["core"]
-        if (core.get("baseUploadSlots"), core.get("uploadSlotElasticPercent"), core.get("uploadLimitKiBps")) != (1, 0, 8):
+        transfers = data(seeder, "GET", "/api/v1/settings")["effective"]["transfers"]
+        upload = transfers["upload"]
+        if (upload["baseSlots"], upload["elasticPercent"], transfers["uploadLimitBytesPerSecond"]) != (1, 0, 8192):
             raise RuntimeError("Local seeder did not admit the required single-slot upload policy")
-        report["seederPolicy"] = {key: core[key] for key in
-                                  ("baseUploadSlots", "uploadSlotElasticPercent", "uploadLimitKiBps")}
+        report["seederPolicy"] = {"baseSlots": upload["baseSlots"], "elasticPercent": upload["elasticPercent"],
+                                  "uploadLimitBytesPerSecond": transfers["uploadLimitBytesPerSecond"]}
         payload = package._write_transfer_payload(root / "shared" / "Synthetic.Friend.Control.bin")
         shared = rust_local_ed2k.publish_shared_tree(
             seeder["base"], package.API_KEY, root=Path(payload["path"]).parent,
