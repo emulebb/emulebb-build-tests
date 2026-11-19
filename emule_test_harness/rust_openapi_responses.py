@@ -156,3 +156,17 @@ def response_json_schema(response: dict[str, Any], label: str) -> dict[str, Any]
 def validate_openapi_schema(document: dict[str, Any], schema: dict[str, Any], payload: object) -> None:
     validator = jsonschema.Draft202012Validator(document).evolve(schema=schema)
     validator.validate(payload)
+    if schema.get("$ref") == "#/components/schemas/SettingsSurfaceEnvelope":
+        validate_settings_surface_schemas(document, payload)
+
+
+def validate_settings_surface_schemas(document: dict[str, Any], payload: object) -> None:
+    """Require live declaration-generated schemas to match the published components."""
+    generated = payload["data"]["schemas"]
+    documented = document["components"]["schemas"]
+    expected = set(documented["SettingsSurface"]["properties"]["schemas"]["required"])
+    if set(generated) != expected:
+        raise jsonschema.ValidationError("Settings surface schema component inventory differs from OpenAPI")
+    for name, schema in generated.items():
+        if documented.get(name) != schema:
+            raise jsonschema.ValidationError(f"Settings surface schema differs from OpenAPI: {name}")

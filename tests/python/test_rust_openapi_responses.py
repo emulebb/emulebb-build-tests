@@ -171,3 +171,29 @@ components:
     contract.write_text(contract.read_text(encoding="utf-8").replace("description: Deleted", "content: {application/json: {schema: {type: object}}}"), encoding="utf-8")
     with pytest.raises(RuntimeError, match="no body"):
         validate_openapi_operation_response_payload("DELETE", "/item", 204, None, contract)
+
+
+@pytest.mark.parametrize("drift", [None, "constraint", "missing", "extra"])
+def test_settings_surface_requires_exact_declaration_generated_components(drift) -> None:
+    from copy import deepcopy
+    from emule_test_harness.rust_openapi_responses import validate_openapi_schema
+
+    generated = {"SettingsValues": {"type": "integer", "minimum": 1}}
+    document = {"components": {"schemas": {
+        **deepcopy(generated),
+        "SettingsSurface": {"properties": {"schemas": {"required": list(generated)}}},
+        "SettingsSurfaceEnvelope": {"type": "object", "required": ["data"]},
+    }}}
+    payload = {"data": {"schemas": deepcopy(generated)}}
+    if drift == "constraint":
+        payload["data"]["schemas"]["SettingsValues"]["minimum"] = 2
+    elif drift == "missing":
+        payload["data"]["schemas"].clear()
+    elif drift == "extra":
+        payload["data"]["schemas"]["Other"] = {"type": "string"}
+    schema = {"$ref": "#/components/schemas/SettingsSurfaceEnvelope"}
+    if drift is None:
+        validate_openapi_schema(document, schema, payload)
+    else:
+        with pytest.raises(jsonschema.ValidationError, match="Settings surface schema"):
+            validate_openapi_schema(document, schema, payload)
