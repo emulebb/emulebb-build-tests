@@ -1641,3 +1641,71 @@ def test_process_sampler_preserves_rss_when_optional_metrics_are_unavailable(mon
     assert result["peakPrivateBytes"] is None  # vms must never be labelled private.
     assert result["readBytesDelta"] == (0 if io_available else None)
     assert result["metricErrors"] == ({} if io_available else {"io": "PermissionError"})
+
+
+@pytest.mark.parametrize("fault", ["missing", "unexpected", "misplaced", "wrong-size", "noncanonical-index", "duplicate-walk"])
+def test_fixture_validation_keeps_exact_path_and_size_verdicts(tmp_path, monkeypatch, fault):
+    fixture = subject.fixture
+    spec = tiny_spec()
+    root = tmp_path / "library"
+    for index in range(spec.file_count):
+        fixture.write_payload(root / fixture.relative_file_for_index(index, spec),
+                              b"x" * fixture.file_size_for_index(index, spec))
+    original = root / fixture.relative_file_for_index(0, spec)
+    if fault == "missing": original.unlink()
+    elif fault == "unexpected": fixture.write_payload(root / "unexpected.bin", b"x")
+    elif fault == "misplaced":
+        original.rename(original.with_name("file-000007.bin"))
+    elif fault == "wrong-size": fixture.write_payload(original, b"wrong-size")
+    elif fault == "noncanonical-index": original.rename(original.with_name("file-0.bin"))
+    else:
+        walk = storage.walk
+        def duplicated(path):
+            rows = iter(walk(path))
+            for row in rows:
+                yield row
+                if row[2]:
+                    yield row
+        monkeypatch.setattr(storage, "walk", duplicated)
+    result = fixture.validate_fixture(root, spec)
+    assert result["ok"] is False
+    expected_missing = 1 if fault in {"missing", "misplaced", "noncanonical-index"} else 0
+    expected_unexpected = 1 if fault in {"unexpected", "misplaced", "noncanonical-index"} else 0
+    assert result["missingCount"] == expected_missing
+    assert result["unexpectedPathCount"] == expected_unexpected
+    assert result["fileCount"] == spec.file_count - expected_missing + expected_unexpected
+    assert result["unexpectedSizeCount"] == (0 if fault in {"missing", "duplicate-walk"} else 1)
+
+
+def test_full_fixture_inventory_keeps_transient_allocations_below_sixteen_mebibytes(tmp_path, monkeypatch):
+    import itertools
+    import tracemalloc
+
+    fixture = subject.fixture
+    spec = fixture.PRODUCTION_SPEC
+    root = tmp_path / "library"
+    current_sizes = {}
+    def walk(_root):
+        entries = ((fixture.relative_file_for_index(index, spec), fixture.file_size_for_index(index, spec))
+                   for index in range(spec.file_count))
+        for parent, grouped in itertools.groupby(entries, key=lambda row: row[0].parent):
+            rows = list(grouped)
+            current_sizes.clear()
+            current_sizes.update((root / relative, size) for relative, size in rows)
+            yield root / parent, [], [relative.name for relative, _size in rows]
+    monkeypatch.setattr(storage, "walk", walk)
+    monkeypatch.setattr(storage, "stat", lambda path: SimpleNamespace(st_size=current_sizes[path]))
+    monkeypatch.setattr(storage, "detect_name_capabilities", lambda _root: {})
+    already_tracing = tracemalloc.is_tracing()
+    if not already_tracing: tracemalloc.start()
+    baseline = tracemalloc.get_traced_memory()[0]
+    tracemalloc.reset_peak()
+    try:
+        result = fixture.validate_fixture(root, spec)
+        transient_peak = tracemalloc.get_traced_memory()[1] - baseline
+    finally:
+        if not already_tracing: tracemalloc.stop()
+    assert result["ok"] and result["fileCount"] == 100_000
+    assert result["totalBytes"] == spec.total_bytes
+    assert result["longPathFileCount"] == 1000 and result["unicodePathFileCount"] == 16
+    assert transient_peak < 16 * 1024 * 1024, f"fixture inventory retained {transient_peak:,} traced bytes"

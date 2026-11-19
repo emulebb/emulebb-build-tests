@@ -262,24 +262,44 @@ def write_payload(path: Path, payload: bytes, *, atomic: bool = True) -> None:
     storage.replace(temporary, path)
 
 
+def _fixture_path_index(relative: Path, spec: FixtureSpec, unicode_indices: dict[Path, int]) -> int | None:
+    """Decode a generated file index, then verify its entire native relative path."""
+    if relative in unicode_indices:
+        return unicode_indices[relative]
+    name = relative.name
+    if not name.casefold().startswith("file-") or not name.casefold().endswith(".bin"):
+        return None
+    try:
+        index = int(name[5:-4])
+    except ValueError:
+        return None
+    if not 0 <= index < spec.file_count or relative != relative_file_for_index(index, spec):
+        return None
+    return index
+
+
 def validate_fixture(
     root: Path, spec: FixtureSpec = PRODUCTION_SPEC
 ) -> dict[str, object]:
-    """Fully inventory a fixture without reading payload bytes."""
+    """Fully inventory a fixture without reading payload bytes or retaining every path."""
 
-    expected_paths = {
-        relative_file_for_index(index, spec): file_size_for_index(index, spec)
-        for index in range(spec.file_count)
+    # WHY: the validator shares the daemon's measured memory group. Retaining
+    # two 100k Path collections can dominate that budget before launch.
+    seen = bytearray(spec.file_count)
+    valid_count = 0
+    unexpected_paths: set[Path] = set()
+    unicode_indices = {
+        relative_file_for_index(index, spec): index
+        for index in range(UNICODE_COHORT_START, UNICODE_COHORT_START + unicode_cohort_count(spec))
     }
-    expected_set = set(expected_paths)
-    seen: set[Path] = set()
     total_bytes = 0
     empty_directory_count = 0
     unexpected_size_count = 0
     long_path_count = 0
     unicode_path_count = 0
-    path_lengths: list[int] = []
-    component_lengths: list[int] = []
+    minimum_path_length: int | None = None
+    maximum_path_length = 0
+    maximum_component_length = 0
     for directory, subdirs, files in storage.walk(root):
         if not subdirs and not files:
             empty_directory_count += 1
@@ -288,22 +308,31 @@ def validate_fixture(
             relative = path.relative_to(root)
             size = storage.stat(path).st_size
             total_bytes += size
-            seen.add(relative)
-            if expected_paths.get(relative) != size:
+            index = _fixture_path_index(relative, spec, unicode_indices)
+            if index is None:
+                unexpected_paths.add(relative)
                 unexpected_size_count += 1
+            else:
+                if not seen[index]:
+                    seen[index] = 1
+                    valid_count += 1
+                if file_size_for_index(index, spec) != size:
+                    unexpected_size_count += 1
             length = storage.absolute_path_length(path)
-            path_lengths.append(length)
-            component_lengths.append(storage.maximum_native_component_length(path))
+            minimum_path_length = length if minimum_path_length is None else min(minimum_path_length, length)
+            maximum_path_length = max(maximum_path_length, length)
+            maximum_component_length = max(maximum_component_length, storage.maximum_native_component_length(path))
             if len(str(relative)) >= LONG_PATH_MIN_RELATIVE_CHARS:
                 long_path_count += 1
             if relative.parts[:2] == ("group-098", "unicode-cohort"):
                 unicode_path_count += 1
-    missing_count = len(expected_set - seen)
-    unexpected_path_count = len(seen - expected_set)
+    missing_count = spec.file_count - valid_count
+    unexpected_path_count = len(unexpected_paths)
+    file_count = valid_count + unexpected_path_count
     expected_long = baseline_long_path_count(spec)
     return {
         "ok": (
-            len(seen) == spec.file_count
+            file_count == spec.file_count
             and total_bytes == spec.total_bytes
             and empty_directory_count == 0
             and unexpected_size_count == 0
@@ -312,13 +341,13 @@ def validate_fixture(
             and long_path_count == expected_long
             and unicode_path_count == unicode_cohort_count(spec)
         ),
-        "fileCount": len(seen),
+        "fileCount": file_count,
         "totalBytes": total_bytes,
         "longPathFileCount": long_path_count,
-        "minimumAbsolutePathLength": min(path_lengths, default=0),
-        "maximumAbsolutePathLength": max(path_lengths, default=0),
+        "minimumAbsolutePathLength": minimum_path_length if minimum_path_length is not None else 0,
+        "maximumAbsolutePathLength": maximum_path_length,
         "pathLengthUnit": storage.native_length_unit(),
-        "maximumComponentLength": max(component_lengths, default=0),
+        "maximumComponentLength": maximum_component_length,
         "unicodePathFileCount": unicode_path_count,
         "nameCapabilities": storage.detect_name_capabilities(root),
         "emptyDirectoryCount": empty_directory_count,
