@@ -80,6 +80,15 @@ def resolve_workspace_repo(workspace_root: Path, repo_key: str) -> Path:
     return (resolved_workspace_root / repo_path).resolve()
 
 
+def resolve_rust_openapi_contract() -> Path:
+    """Select the explicit standalone contract or the verified workspace source."""
+    explicit = os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH")
+    if explicit:
+        return Path(explicit).resolve()
+    tooling = resolve_selected_workspace_repo(Path(__file__).resolve().parents[1], "emulebb-tooling")
+    return tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+
+
 def resolve_selected_workspace_repo(test_repo_root: Path, repository: str) -> Path:
     """Resolve a companion through Builder topology and verified registration.
 

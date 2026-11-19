@@ -2,22 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 import yaml
 
-from emule_test_harness.paths import get_emule_workspace_root
+from emule_test_harness.workspace_layout import resolve_rust_openapi_contract
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OPENAPI_CONTRACT_PATH = Path(
-    os.environ.get(
-        "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
-        str(get_emule_workspace_root(REPO_ROOT) / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
-    )
-)
+OPENAPI_CONTRACT_PATH = resolve_rust_openapi_contract()
 JSON_MEDIA_TYPE = "application/json"
 
 

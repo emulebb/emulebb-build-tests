@@ -15,6 +15,38 @@ from emule_test_harness.workspace_layout import (
 )
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_contract_selection_resolves_workspace_only_without_explicit_input(tmp_path, monkeypatch, explicit):
+    calls = []
+    def selected(_caller, repository):
+        calls.append(repository)
+        return tmp_path / "tooling"
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", selected)
+    if explicit:
+        expected = tmp_path / "selected.yaml"
+        monkeypatch.setenv("EMULEBB_REST_OPENAPI_CONTRACT_PATH", str(expected))
+    else:
+        monkeypatch.delenv("EMULEBB_REST_OPENAPI_CONTRACT_PATH", raising=False)
+        expected = tmp_path / "tooling/docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    assert workspace_layout.resolve_rust_openapi_contract() == expected
+    assert calls == ([] if explicit else ["emulebb-tooling"])
+
+
+@pytest.mark.parametrize("module", ["rust_openapi_responses", "rust_rest_conformance"])
+def test_contract_consumers_import_without_materialized_workspace(tmp_path, monkeypatch, module):
+    import runpy
+
+    selected = tmp_path / "selected.yaml"
+    monkeypatch.setenv("EMULEBB_REST_OPENAPI_CONTRACT_PATH", str(selected))
+    def unexpected_resolution(*_args):
+        raise AssertionError("Explicit contract must not inspect workspace topology")
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", unexpected_resolution)
+    source = Path(workspace_layout.__file__).with_name(f"{module}.py")
+    loaded = runpy.run_path(str(source))
+    key = "RUST_OPENAPI_CONTRACT_PATH" if module == "rust_rest_conformance" else "OPENAPI_CONTRACT_PATH"
+    assert loaded[key] == selected
+
+
 @pytest.mark.parametrize("managed", [False, True])
 def test_selected_companion_uses_builder_registration(tmp_path, monkeypatch, managed):
     builder = tmp_path / "repos/emulebb-build"

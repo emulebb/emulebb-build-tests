@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import urllib.parse
@@ -172,7 +173,7 @@ def test_load_rest_smoke_module_pins_rust_openapi_path(
     )
     assert (
         rust_rest_conformance.OPENAPI_CONTRACT_ENV
-        not in rust_rest_conformance.os.environ
+        not in os.environ
     )
 
 
@@ -196,7 +197,7 @@ def test_load_rest_smoke_module_restores_existing_openapi_path(
         rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH
     )
     assert (
-        rust_rest_conformance.os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV]
+        os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV]
         == "operator-contract.yaml"
     )
 

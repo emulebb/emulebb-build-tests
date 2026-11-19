@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import time
 import urllib.error
@@ -17,7 +16,7 @@ import jsonschema
 
 from emule_test_harness import rust_openapi_responses
 from emule_test_harness.rust_rest_contract import iter_downloads, settings_patch
-from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+from emule_test_harness.workspace_layout import resolve_rust_openapi_contract
 from emule_test_harness.script_modules import load_script_module
 from emule_test_harness.rust_rest_contract import REST_CONTRACT_VERSION, REST_CONTRACT_VERSION_HEADER
 
@@ -27,18 +26,7 @@ EVENT_STREAM_LAST_EVENT_ID = "00000000-0000-4000-8000-000000000001:1"
 EVENT_STREAM_READ_LINES = 16
 DOWNLOAD_EVENT_SCHEMA_COMPONENT = "DownloadEvent"
 OPENAPI_CONTRACT_ENV = "EMULEBB_REST_OPENAPI_CONTRACT_PATH"
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RUST_OPENAPI_CONTRACT_PATH = (
-    resolve_selected_workspace_repo(REPO_ROOT, "emulebb-tooling")
-    / "docs"
-    / "products"
-    / "emulebb-rust"
-    / "api"
-    / "REST-API-OPENAPI.yaml"
-)
-RUST_OPENAPI_CONTRACT_PATH = Path(
-    os.environ.get(OPENAPI_CONTRACT_ENV, str(DEFAULT_RUST_OPENAPI_CONTRACT_PATH))
-)
+RUST_OPENAPI_CONTRACT_PATH = resolve_rust_openapi_contract()
 EVENT_STREAM_EXPECTED_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     REST_CONTRACT_VERSION_HEADER: REST_CONTRACT_VERSION,

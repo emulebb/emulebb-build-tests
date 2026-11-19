@@ -138,7 +138,7 @@ def write_rust_profile(
     select product defaults. All supplied settings use current dotted product keys.
     """
     from .rust_openapi_responses import validate_openapi_schema_component_payload
-    from .workspace_layout import resolve_selected_workspace_repo
+    from .workspace_layout import resolve_rust_openapi_contract
     import jsonschema
 
     if set(settings or {}).intersection(reset):
@@ -171,14 +171,7 @@ def write_rust_profile(
         for group in groups:
             branch = branch.setdefault(group, {})
         branch[leaf] = value
-    # WHY: standalone package containers receive the selected contract explicitly;
-    # they must not need a second materialized Builder workspace to validate it.
-    explicit_contract = os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH")
-    if explicit_contract:
-        contract = Path(explicit_contract)
-    else:
-        tooling = resolve_selected_workspace_repo(Path(__file__).resolve().parents[1], "emulebb-tooling")
-        contract = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    contract = resolve_rust_openapi_contract()
     try:
         validate_openapi_schema_component_payload("SettingsPartial", partial, contract)
     except jsonschema.ValidationError as error:
