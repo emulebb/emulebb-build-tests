@@ -141,6 +141,30 @@ def test_request_ctrl_c_sends_sigint_on_posix(monkeypatch: pytest.MonkeyPatch) -
     assert signals == [rust_client.signal.SIGINT]
 
 
+@pytest.mark.parametrize("present", [True, False])
+def test_profile_contract_can_be_selected_without_container_workspace(tmp_path, monkeypatch, present):
+    from emule_test_harness import workspace_layout
+
+    contract = resolve_selected_workspace_repo(Path(__file__).resolve().parents[2], "emulebb-tooling") / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    selected = tmp_path / "contract.yaml"
+    if present:
+        selected.write_bytes(contract.read_bytes())
+    monkeypatch.setenv("EMULEBB_REST_OPENAPI_CONTRACT_PATH", str(selected))
+    def unexpected_resolution(*_args):
+        raise AssertionError("Explicit contract must not resolve workspace topology")
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", unexpected_resolution)
+    profile = tmp_path / "profile"
+    arguments = dict(rust_repo=rust_repo(), rest_addr="127.0.0.1", rest_port=4711, api_key="key")
+    if not present:
+        with pytest.raises(FileNotFoundError):
+            rust_client.write_rust_profile(profile, **arguments)
+        assert not profile.exists()
+        return
+    rust_client.write_rust_profile(profile, **arguments)
+    assert setting_value(profile, "network.autoConnect") is False
+    assert metadata_path(profile).is_file()
+
+
 def test_write_rust_profile_supports_rest_only_profile(tmp_path: Path) -> None:
     profile_dir = tmp_path / "profile"
 
