@@ -239,17 +239,21 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
     "history", "duplicate-accepted", "active-row", "preflight-enqueue", "incomplete-inventory",
     "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion", "unowned",
-    "creation-200", "creation-id", "creation-hash"])
+    "creation-200", "creation-id", "creation-hash", "settings-disconnect", "settings-conflict", "settings-intervening-save"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
     from copy import deepcopy
     monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
     content = subject.deterministic_payload(0, 256 * 1024, generation="android-apk-" + "a" * 32)
     guest_files = {}
-    original = {"daemon": {"incomingDir": "/original/Incoming"},
-                "core": {"autoConnect": True, "networkKademlia": True, "networkEd2k": True},
-                "ed2k": {"enableUdpReask": True, "addServersFromServer": True}, "nat": {"enabled": True}}
-    state = {"settings": deepcopy(original), "incoming": original["daemon"]["incomingDir"],
+    original = {"storage": {"incomingDirectory": {"mode": "custom", "value": "/original/Incoming"}},
+                "network": {"autoConnect": {"mode": "default", "value": True},
+                            "kadEnabled": {"mode": "default", "value": True},
+                            "ed2kEnabled": {"mode": "default", "value": True},
+                            "servers": {"acceptServerListUpdates": {"mode": "custom", "value": True}},
+                            "nat": {"enabled": {"mode": "default", "value": True}},
+                            "nickname": {"mode": "custom", "value": "Operator"}}}
+    state = {"settings": deepcopy(original), "incoming": original["storage"]["incomingDirectory"]["value"],
              "created": False, "restarts": 0, "deleted": False}
     servers = {}
     disabled_servers = []
@@ -277,12 +281,6 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     def request(base, method, route, key, body=None, *, expected_status=None):
         if route == "/api/v1/network":
             return {"binding": {"activeConfiguredAddress": "192.0.2.20"}}
-        if route == "/api/v1/app/settings":
-            if method == "PATCH":
-                state["settings"] = deepcopy(body)
-                if failure == "restore" and body == original:
-                    state["settings"]["core"]["autoConnect"] = False
-            return deepcopy(state["settings"])
         if route == "/api/v1/library/roots?limit=100":
             return {"data": [{"id": "1", "path": "/operator/Shared", "managed": False}],
                     "meta": {"hasMore": False, "nextCursor": None}}
@@ -333,7 +331,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             assert expected_status == 201
             if failure == "creation-200":
                 raise RuntimeError("Rust REST POST /api/v1/downloads returned HTTP 200; expected 201")
-            assert state["incoming"] == state["settings"]["daemon"]["incomingDir"]
+            assert state["incoming"] == state["settings"]["storage"]["incomingDirectory"]["value"]
             assert state["restarts"] == 1, "the immutable live incoming destination requires a real restart"
             guest_files[state["incoming"] + "/Android Sample_01.bin"] = b"corrupt" if failure == "payload" else content
             if failure == "occupant":
@@ -407,9 +405,46 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             assert not any(path.startswith(operation[2] + "/") for path in guest_files)
         return ""
 
+    revision = [7]
+    settings_writes = []
+    def settings_request(base, route, *, api_key, method="GET", body=None, **kwargs):
+        assert route == "/api/v1/settings"
+        if method == "GET" and failure == "settings-intervening-save" and state["restarts"] >= 2 and revision[0] == 8:
+            revision[0] += 1
+        if method == "PATCH":
+            settings_writes.append(body)
+            assert body["expectedRevision"] == str(revision[0])
+            if failure == "settings-conflict":
+                raise RuntimeError("SETTINGS_CONFLICT")
+            def apply(branch, partial):
+                for key, value in partial.items():
+                    if isinstance(value, dict):
+                        apply(branch[key], value)
+                    else:
+                        branch[key] = {"mode": "custom", "value": value}
+            if "set" in body:
+                apply(state["settings"], body["set"])
+            for key in body.get("reset", []):
+                branch, prior = state["settings"], original
+                *groups, leaf = key.split(".")
+                for group in groups:
+                    branch, prior = branch[group], prior[group]
+                branch[leaf] = deepcopy(prior[leaf])
+            if failure == "restore" and "reset" in body:
+                state["settings"]["network"]["autoConnect"] = {"mode": "custom", "value": False}
+            revision[0] += 1
+            if failure == "settings-disconnect":
+                raise OSError("Synthetic lost write response")
+        return {"data": {"saved": deepcopy(state["settings"]),
+                         "effective": {"storage": {"incomingDirectory": state["incoming"]}},
+                         "application": {"pendingRestart": ["storage.incomingDirectory"]
+                             if state["incoming"] != state["settings"]["storage"]["incomingDirectory"]["value"] else [], "failed": []}},
+                "meta": {"settingsRevision": str(revision[0])}}
+    monkeypatch.setattr(subject, "http_json", settings_request)
+
     def restart():
         state["restarts"] += 1
-        state["incoming"] = state["settings"]["daemon"]["incomingDir"]
+        state["incoming"] = state["settings"]["storage"]["incomingDirectory"]["value"]
 
     monkeypatch.setattr(subject, "request_json", request)
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
@@ -420,6 +455,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
                           "known-hash": "peer-shared-file-hash", "server-owner": "app-listener-owned-server-disable-precondition",
                           "restore": "cleanup-restore-original-settings", "history": "verify-completed-download-evidence",
+                          "settings-disconnect": "persist-fixture-settings", "settings-conflict": "persist-fixture-settings",
+                          "settings-intervening-save": "cleanup-restore-original-settings",
                           "duplicate-accepted": "verify-completed-download-evidence", "active-row": "verify-completed-delivery-metadata",
                           "preflight-enqueue": "verify-completed-download-evidence", "incomplete-inventory": "admit-prior-downloads-and-roots",
                           **{name: "enqueue-owned-transfer" for name in ("creation-200", "creation-id", "creation-hash")},
@@ -459,7 +496,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         assert result["collisionPreserved"] is True
         assert result["completedDeliverySurvivesRestart"] is True
         assert result["sha256"] == hashlib.sha256(content).hexdigest()
-        assert state["settings"] == original and state["incoming"] == original["daemon"]["incomingDir"]
+        assert state["settings"] == original and state["incoming"] == original["storage"]["incomingDirectory"]["value"]
         assert detail_reads, "successful transfer waits must inspect the retained job"
         if failure == "transient-completion":
             assert clock[0] == 1 and shared_reads[:2] == [0, 1]
@@ -473,7 +510,13 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             "duplicateRejected": True, "unfinishedDownloadAbsent": True}
         assert json.loads((tmp_path / "transfer-campaign.json").read_text())["fixtureCleanup"] == {
             "filesRemoved": 2, "directoriesRemoved": 1}
-    if failure not in {"unfinished", "restore"}:
+    if failure in {"settings-disconnect", "settings-conflict", "settings-intervening-save"}:
+        assert len(settings_writes) == 1, "unconfirmed or intervening writes cannot authorize compensation"
+        assert json.loads((tmp_path / "transfer-cleanup.json").read_text())["status"] == "failed"
+        assert any(path.startswith("/storage/") for path in guest_files)
+        if failure == "settings-conflict":
+            assert state["settings"] == original
+    if failure not in {"unfinished", "restore", "settings-disconnect", "settings-conflict", "settings-intervening-save"}:
         assert state["settings"] == original
     if failure == "restore":
         assert json.loads((tmp_path / "transfer-cleanup.json").read_text())["status"] == "failed"
@@ -485,7 +528,8 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
     from copy import deepcopy
     calls, restarts = [], []
     peer_base, app_base = "http://127.0.0.1:22222", "http://127.0.0.1:12345"
-    original = {"daemon": {"incomingDir": "/operator/Incoming"}, "nat": {"enabled": True}}
+    original = {"effective": {"storage": {"incomingDirectory": "/operator/Incoming"},
+                              "network": {"nat": {"enabled": True}}}}
     servers = {peer_base: [{"address": "127.0.0.1", "port": 20031, "name": "Fresh peer seed",
                            "priority": "normal", "static": False, "enabled": True}],
                app_base: [{"address": "192.0.2.100", "port": 4661, "name": "Operator"}]}
@@ -502,7 +546,7 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         calls.append((base, method, route))
         assert not route.startswith("/api/v1/downloads") or method == "GET"
         assert method != "PATCH"
-        if route == "/api/v1/app/settings":
+        if route == "/api/v1/settings":
             return deepcopy(original)
         if route == "/api/v1/library/roots?limit=100":
             return {"data": [{"id": "1", "path": "/operator/Shared", "managed": False}],
@@ -529,6 +573,8 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         return {}
 
     monkeypatch.setattr(subject, "production_peer", peer)
+    monkeypatch.setattr(subject, "http_json", lambda base, route, *, api_key:
+        {"data": request(base, "GET", route, api_key), "meta": {"settingsRevision": "7"}})
     monkeypatch.setattr(subject, "request_json", request)
     args = dict(apk_port=12345, api_key="operator-secret", adb="adb", child={}, report_dir=tmp_path,
                 rust_source=tmp_path, restart_service=lambda: restarts.append(True))

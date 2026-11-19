@@ -33,6 +33,28 @@ def settings_patch(snapshot: dict[str, Any], *, set_values: dict[str, Any] | Non
     return body
 
 
+def restore_settings_patch(snapshot: dict[str, Any], saved_leaves: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Restore captured current leaves, preserving default/custom modes.
+
+    Only the caller-owned dotted keys participate; unrelated saved settings stay
+    untouched. Default leaves reset against the installed product defaults.
+    """
+    values: dict[str, Any] = {}
+    reset = []
+    for key, leaf in saved_leaves.items():
+        if leaf["mode"] == "default":
+            reset.append(key)
+        elif leaf["mode"] == "custom":
+            branch = values
+            *groups, name = key.split(".")
+            for group in groups:
+                branch = branch.setdefault(group, {})
+            branch[name] = leaf["value"]
+        else:
+            raise RuntimeError("Saved settings snapshot has an invalid mode")
+    return settings_patch(snapshot, set_values=values, reset=tuple(reset))
+
+
 def iter_library_roots(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
     """Stream ID-ordered root pages using an existing authenticated request owner."""
     cursor: str | None = None

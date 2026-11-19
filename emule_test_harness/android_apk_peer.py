@@ -19,7 +19,8 @@ from .rust_local_ed2k import RustRestFailure, ed2k_link_with_source, publish_sha
 from .rust_shared_library_fixture import deterministic_payload
 from .android_adb_failure import AdbOperationFailure
 from .android_apk_cleanup import COLLISION_OCCUPANT, OwnedFixtureFailure, remove_owned_fixture
-from .rust_rest_contract import iter_library_roots
+from .rust_rest_contract import iter_library_roots, settings_patch, restore_settings_patch
+from .vm_guest_profiles import http_json
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
@@ -510,7 +511,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
     request = lambda method, route: request_json(base, method, route, api_key)
     app_attempted = False
     try:
-        original = request("GET", "/api/v1/app/settings")
+        original = http_json(base, "/api/v1/settings", api_key=api_key)
         roots = {row["path"] for row in iter_library_roots(lambda path: request("GET", "/api/v1" + path))}
         campaign.mark("admit-prior-downloads")
         if _complete_items(request("GET", "/api/v1/downloads?view=unfinished&limit=200"), kind="downloads"):
@@ -538,7 +539,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
                 campaign.mark("cleanup-restore-app-listener-state")
                 try:
                     restart_service()
-                    if (request("GET", "/api/v1/app/settings") != original
+                    if (http_json(base, "/api/v1/settings", api_key=api_key) != original
                             or {row["path"] for row in iter_library_roots(lambda path: request("GET", "/api/v1" + path))} != roots):
                         raise RuntimeError("Listener probe changed prior configuration")
                     campaign.cleaned("restore-app-listener-state")
@@ -573,14 +574,18 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
             raise RuntimeError("APK transfer returned invalid sharing roots")
         return {row["path"] for row in roots}
 
-    selection = {"daemon": ("incomingDir",), "core": ("autoConnect", "networkKademlia", "networkEd2k"),
-                 "ed2k": ("enableUdpReask", "addServersFromServer"), "nat": ("enabled",)}
-    settings = request("GET", "/api/v1/app/settings")
-    if any(not isinstance(settings.get(group), dict) or any(name not in settings[group] for name in names)
-           for group, names in selection.items()):
-        raise RuntimeError("APK transfer cannot preserve its prior settings")
-    original = {group: {name: settings[group][name] for name in names} for group, names in selection.items()}
-    if not isinstance(original["daemon"]["incomingDir"], str) or not original["daemon"]["incomingDir"].startswith("/"):
+    selection = ("storage.incomingDirectory", "network.autoConnect", "network.kadEnabled",
+                 "network.ed2kEnabled", "network.servers.acceptServerListUpdates", "network.nat.enabled")
+    settings = http_json(base, "/api/v1/settings", api_key=api_key)
+    if settings["data"]["application"]["pendingRestart"] or settings["data"]["application"]["failed"]:
+        raise RuntimeError("APK transfer requires its prepared settings to be effective")
+    def selected(saved, key):
+        for name in key.split("."):
+            saved = saved[name]
+        return saved
+    original = {key: dict(selected(settings["data"]["saved"], key)) for key in selection}
+    original_incoming = settings["data"]["effective"]["storage"]["incomingDirectory"]
+    if not isinstance(original_incoming, str) or not original_incoming.startswith("/"):
         raise RuntimeError("APK transfer requires its explicit prepared incoming configuration")
     campaign.mark("admit-prior-downloads-and-roots")
     original_roots = shared_roots()
@@ -621,20 +626,29 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
     file_hash = path = download_id = None
     enqueue_attempted = False
     changed = False
+    fixture_revision = None
     cleanup_errors = []
     try:
         campaign.mark("fixture-occupant-push")
         command(*prefix, "push", str(foreign), incoming + "/" + name)
         changed = True
         campaign.mark("persist-fixture-settings")
-        request("PATCH", "/api/v1/app/settings",
-                {"daemon": {"incomingDir": incoming},
-                 "core": {"autoConnect": False, "networkKademlia": False, "networkEd2k": True},
-                 "ed2k": {"enableUdpReask": False, "addServersFromServer": False}, "nat": {"enabled": False}})
+        snapshot = http_json(base, "/api/v1/settings", api_key=api_key)
+        update_document = http_json(base, "/api/v1/settings", api_key=api_key, method="PATCH",
+                            body=settings_patch(snapshot, set_values={
+                                "storage": {"incomingDirectory": incoming},
+                                "network": {"autoConnect": False, "kadEnabled": False, "ed2kEnabled": True,
+                                            "servers": {"acceptServerListUpdates": False}, "nat": {"enabled": False}}}))
+        fixture_revision = update_document["meta"]["settingsRevision"]
+        updated = update_document["data"]
+        if updated["application"]["failed"]:
+            raise RuntimeError("APK fixture settings could not be applied")
         campaign.mark("restart-fixture-destination")
         restart_service()
         campaign.mark("verify-fixture-destination")
-        if request("GET", "/api/v1/app/settings").get("daemon", {}).get("incomingDir") != incoming:
+        effective = http_json(base, "/api/v1/settings", api_key=api_key)["data"]
+        if (effective["effective"]["storage"]["incomingDirectory"] != incoming
+                or effective["application"]["pendingRestart"] or effective["application"]["failed"]):
             raise RuntimeError("APK qualification destination did not survive service restart")
         interface = network.get("binding", {}).get("activeInterfaceId") or None
         with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
@@ -805,18 +819,30 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                     raise RuntimeError("APK download removal did not accept the captured job")
         def restore_settings():
             if changed:
-                request("PATCH", "/api/v1/app/settings", original)
+                # WHY: an unconfirmed fixture write or intervening operator save
+                # must not trigger compensating writes against unknown state.
+                if fixture_revision is None:
+                    raise RuntimeError("APK fixture settings outcome is unconfirmed; owned evidence retained")
+                snapshot = http_json(base, "/api/v1/settings", api_key=api_key)
+                if snapshot["meta"]["settingsRevision"] != fixture_revision:
+                    raise RuntimeError("APK fixture settings changed; owned evidence retained")
+                http_json(base, "/api/v1/settings", api_key=api_key, method="PATCH",
+                          body=restore_settings_patch(snapshot, original))
                 restart_service()
-                restored = request("GET", "/api/v1/app/settings")
-                if any(restored.get(group, {}).get(name) != value for group, names in original.items() for name, value in names.items()):
-                    raise RuntimeError("APK transfer did not restore prior settings")
+                restored = http_json(base, "/api/v1/settings", api_key=api_key)["data"]
+                for key, prior in original.items():
+                    leaf = selected(restored["saved"], key)
+                    if leaf["mode"] != prior["mode"] or (prior["mode"] == "custom" and leaf["value"] != prior["value"]):
+                        raise RuntimeError("APK transfer did not restore prior settings")
+                if restored["application"]["pendingRestart"] or restored["application"]["failed"]:
+                    raise RuntimeError("APK transfer settings restoration requires attention")
                 if shared_roots() != original_roots:
                     raise RuntimeError("APK transfer changed prior sharing roots")
         def remove_fixture():
             if cleanup_errors:
                 return
             removed = remove_owned_fixture(command, prefix=prefix, nonce=nonce,
-                protected_roots=original_roots | {original["daemon"]["incomingDir"]}, payload_sha256=expected_sha)
+                protected_roots=original_roots | {original_incoming}, payload_sha256=expected_sha)
             campaign.record(fixtureCleanup=removed)
         for action_name, action in (("remove-owned-transfer", remove_transfer), ("restore-original-settings", restore_settings),
                                     ("remove-owned-fixture", remove_fixture)):
