@@ -119,8 +119,8 @@ def ownership_contenders(monkeypatch):
 
     def rest(_base, _method, path, _key):
         changed = state["calls"] > 0
-        if path == "/api/v1/app/settings":
-            return {"core": {"uploadLimitKiBps": 2 if changed and state["mutation"] == "settings" else 1}}
+        if path == "/api/v1/settings":
+            return {"effective": {"transfers": {"uploadLimitBytesPerSecond": 2048 if changed and state["mutation"] == "settings" else 1024}}}
         assert path == "/api/v1/library/roots?limit=100"
         return {"data": [{"id": "1", "path": "/synthetic/changed", "managed": False}] if changed and state["mutation"] == "roots" else [],
                 "meta": {"hasMore": False, "nextCursor": None}}
@@ -137,8 +137,8 @@ def test_busy_profile_contenders_require_specific_failure_and_preserve_fixture(o
     profile, bootstrap, state, tmp_path = ownership_contenders
     before = bootstrap.read_bytes()
     result = smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
-    assert len(result) == 3 and all(item["profileBusy"] for item in result)
-    assert state["calls"] == 3 and bootstrap.read_bytes() == before
+    assert len(result) == 4 and all(item["profileBusy"] for item in result)
+    assert state["calls"] == 4 and bootstrap.read_bytes() == before
     # The portable input is real and closed, so a busy verdict is not masking an
     # empty or malformed import archive prepared by this fixture.
     from emule_test_harness.profile_exchange import read_exchange_header

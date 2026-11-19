@@ -486,8 +486,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
 
     fixture = temp_root / "ownership-import"
     create_import_fixture(fixture)
-    # Export only hashes from the stock fixture. Its share paths are a separate
-    # native directory-list input and need no stock Windows path mapping.
+    # Export only hashes so this ownership probe needs no source-path mapping.
     hashes = fixture / "hashes"
     hashes.mkdir()
     for name in ("known.met", "known2_64.met"):
@@ -496,21 +495,21 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
     archive = fixture / "hashes.sqlite"
     write_exchange(ExportJob(fixture / "windows.toml", hashes, "stock", target_platform, archive, ()),
                    hashes_only=True)
-    directory_list = fixture / "shared.txt"
-    directory_list.write_text(f"{fixture / 'shared'}\n", encoding="utf-8")
 
     bootstrap = profile / "emulebb-rust-settings.toml"
     before_bootstrap = file_sha256(bootstrap)
-    before_settings = request_json(base_url, "GET", "/api/v1/app/settings", API_KEY)
+    before_settings = request_json(base_url, "GET", "/api/v1/settings", API_KEY)
     before_roots = list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, API_KEY)))
     contenders = []
-    for command, arguments in (
-        ("import-emule-profile", ["--hashes-only", str(archive)]),
-        ("import-shared-directories", [str(directory_list)]),
-        ("reconcile-shared-files", []),
+    for arguments in (
+        ["import", "profile", "--hashes-only", str(archive)],
+        ["settings", "get", "network.nickname"],
+        ["settings", "set", "network.nickname", "Sample"],
+        ["settings", "reset", "network.nickname"],
     ):
+        command = " ".join(arguments[:2])
         result = subprocess.run(
-            [str(binary), "--profile", str(profile), command, *arguments],
+            [str(binary), "--profile", str(profile), *arguments],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=False,
         )
         if (result.returncode == 0 or result.stdout.strip()
@@ -520,7 +519,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
                                f"(exit {result.returncode}): {result.stderr[-2000:]}")
         contenders.append({"command": command, "exitCode": result.returncode, "profileBusy": True})
     if (file_sha256(bootstrap) != before_bootstrap
-            or request_json(base_url, "GET", "/api/v1/app/settings", API_KEY) != before_settings
+            or request_json(base_url, "GET", "/api/v1/settings", API_KEY) != before_settings
             or list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, API_KEY))) != before_roots):
         raise RuntimeError("denied offline commands changed the owned profile's bootstrap, settings or roots")
     return contenders
@@ -722,13 +721,16 @@ def _smoke_binary(
         _graceful_shutdown(seeder_base_url, seeder_process)
         ownership = {}
         if contenders is not None:
-            from emule_test_harness.profile_import_audit import run_json
-
-            run_json([str(binary), "--profile", str(leecher_profile), "reconcile-shared-files"], 20)
+            offline = subprocess.run(
+                [str(binary), "--profile", str(leecher_profile), "settings", "get", "network.nickname"],
+                capture_output=True, text=True, encoding="utf-8", timeout=20, check=False,
+            )
+            if offline.returncode != 0 or not offline.stdout.strip():
+                raise RuntimeError("Offline settings did not acquire the stopped profile")
             ownership["profileOwnership"] = {
                 "contenders": contenders,
                 "bootstrapSettingsAndRootsUnchanged": True,
-                "reconcileAfterShutdown": True,
+                "offlineSettingsAfterShutdown": True,
             }
         return {
             "status": "passed",

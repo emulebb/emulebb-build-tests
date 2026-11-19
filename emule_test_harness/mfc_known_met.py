@@ -290,7 +290,7 @@ def import_mfc_known_met_cache(
         archive=output/"reports"/"profile-import"/(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+uuid.uuid4().hex[:8])/"hashes.sqlite"
         job=ExportJob(archive,known_met.parent,"auto","windows",archive,())
         write_exchange(job,hashes_only=True)
-        summary["liveImport"]=run_json([str(output/"tools/emulebb-rust/bin/emulebb-rust.exe"),"--profile",str(metadata_db.parent),"import-emule-profile","--hashes-only",str(archive)],7200)
+        summary["liveImport"]=run_json([str(output/"tools/emulebb-rust/bin/emulebb-rust.exe"),"--profile",str(metadata_db.parent),"import","profile","--hashes-only",str(archive)],7200)
         summary["archive"]=str(archive)
     return {**summary,"dryRun":dry_run,"metadataDb":str(metadata_db)}
 

@@ -15,36 +15,14 @@ import pytest
 
 from emule_test_harness import profile_import_audit, rust_upload_soak
 from emule_test_harness.emule_profile_export import PathMapping
-from emule_test_harness.profile_import_audit import mount_argument, validate_imported_hashes, validate_reconciliation
+from emule_test_harness.profile_import_audit import mount_argument, validate_imported_hashes
 from emule_test_harness.rust_native_fingerprint import NativeFingerprint, NativeTimestamp, encode_fingerprint
-
-
-@pytest.mark.parametrize("field", ["hashedCount", "completedReadBytes", "activeHashCount", "running"])
-def test_audit_rejects_payload_work(field: str) -> None:
-    report = {"hashedCount": 0, "completedReadBytes": 0, "activeHashCount": 0, "running": False}
-    report[field] = 1
-    with pytest.raises(RuntimeError, match="unexpected payload work"):
-        validate_reconciliation(report)
-
-
-def test_pending_hash_work_is_reported_without_being_executed() -> None:
-    validate_reconciliation({
-        "hashedCount": 0, "completedReadBytes": 0, "activeHashCount": 0,
-        "running": False, "plannedHashCount": 12,
-    })
 
 
 def test_container_mount_requires_absolute_explicit_paths() -> None:
     assert mount_argument("/mnt/sample=/data/sample") == ("/mnt/sample", "/data/sample")
     with pytest.raises(argparse.ArgumentTypeError):
         mount_argument("relative=/data/sample")
-
-
-def test_complete_reuse_rejects_pending_hashing_without_executing_it():
-    report={"hashedCount":0,"completedReadBytes":0,"activeHashCount":0,"running":False,"plannedHashCount":1}
-    validate_reconciliation(report)
-    with pytest.raises(RuntimeError,match="queued for hashing"):
-        validate_reconciliation(report,require_complete_reuse=True)
 
 
 def test_hash_validation_detects_corruption_even_when_row_counts_match(tmp_path: Path) -> None:
