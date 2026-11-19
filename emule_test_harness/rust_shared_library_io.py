@@ -24,6 +24,7 @@ from . import (
     ed2k_server as ed2k_harness,
     kad_nodes,
     rust_client,
+    rust_cgroup_budget,
     rust_local_ed2k,
     rust_metadata,
     rust_rest_conformance,
@@ -2877,6 +2878,7 @@ def run_campaign(
 ) -> tuple[Path, dict[str, object]]:
     """Run initial scan, watcher lifecycle, reload, and persistence phases."""
 
+    resource_budget_before = rust_cgroup_budget.sample_budget()
     manifest = load_prepared_manifest(paths)
     # A terminated prior run may have left only harness-owned probe files behind.
     storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
@@ -3429,6 +3431,7 @@ def run_campaign(
         report["rest"] = rest_summary(clients)
         report["watcherLogs"] = watcher_log_summary(log_paths)
         report["processes"] = [sampler.summary() for sampler in samplers]
+        rust_cgroup_budget.finish_report(report, resource_budget_before)
         report["finishedAtUtc"] = utc_now()
         report["elapsedSeconds"] = round(time.monotonic() - overall_started, 3)
         write_json(report_path, report)

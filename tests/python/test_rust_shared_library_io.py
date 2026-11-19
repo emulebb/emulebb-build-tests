@@ -8,8 +8,111 @@ from types import SimpleNamespace
 import pytest
 
 from emule_test_harness import rust_shared_library_io as subject
+from emule_test_harness import rust_cgroup_budget as cgroup_budget
 from emule_test_harness import rust_shared_library_storage as storage
 from emule_test_harness import workspace_layout
+
+
+def cgroup_files(tmp_path):
+    import os
+
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    files = {"cgroup.procs": str(os.getpid()), "cpu.max": "100000 100000",
+             "memory.max": str(cgroup_budget.MEMORY_BYTES), "memory.swap.max": "0",
+             "memory.peak": "450000000", "memory.events": "oom 0\noom_kill 0\noom_group_kill 0\n"}
+    for name, value in files.items():
+        (root / name).write_text(value, encoding="ascii")
+    membership = tmp_path / "membership"
+    membership.write_text("0::/\n", encoding="ascii")
+    return root, membership
+
+
+def test_cgroup_budget_requires_kernel_membership_and_reads_the_actual_limits(tmp_path):
+    root, membership = cgroup_files(tmp_path)
+    value = cgroup_budget.sample_budget(root=root, membership=membership)
+    assert cgroup_budget.matches_target(value)
+    assert value["scope"] == "campaign-process-tree"
+    assert value["memoryPeakBytes"] == 450000000
+    (root / "cgroup.procs").write_text("", encoding="ascii")
+    with pytest.raises(RuntimeError, match="does not cover"):
+        cgroup_budget.sample_budget(root=root, membership=membership)
+
+
+def test_cgroup_budget_does_not_claim_an_unobserved_namespace(tmp_path):
+    root, membership = cgroup_files(tmp_path)
+    membership.write_text("0::/other\n", encoding="ascii")
+    assert cgroup_budget.sample_budget(root=root, membership=membership) is None
+    assert cgroup_budget.sample_budget(root=root, membership=tmp_path / "absent") is None
+
+
+@pytest.mark.parametrize("name,value", [("memory.max", "max"), ("memory.max", "1073741824"),
+                                        ("memory.swap.max", "max"), ("memory.swap.max", "1"),
+                                        ("cpu.max", "max 100000"), ("cpu.max", "200000 100000")])
+def test_cgroup_budget_does_not_qualify_a_different_budget(tmp_path, name, value):
+    root, membership = cgroup_files(tmp_path)
+    (root / name).write_text(value, encoding="ascii")
+    assert not cgroup_budget.matches_target(cgroup_budget.sample_budget(root=root, membership=membership))
+
+
+@pytest.mark.parametrize("name,value", [("memory.max", "-1"), ("cpu.max", "100000 0"),
+                                        ("memory.events", "oom -1\noom_kill 0\noom_group_kill 0")])
+def test_cgroup_budget_rejects_invalid_kernel_numbers(tmp_path, name, value):
+    root, membership = cgroup_files(tmp_path)
+    (root / name).write_text(value, encoding="ascii")
+    with pytest.raises(ValueError):
+        cgroup_budget.sample_budget(root=root, membership=membership)
+
+
+@pytest.mark.parametrize("changed", [None, "scopeIdentity", "memoryMaxBytes", "oom", "oomKill", "oomGroupKill", "missing"])
+def test_cgroup_budget_checks_gate_success_and_keep_failed_campaigns_failed(tmp_path, monkeypatch, changed):
+    root, membership = cgroup_files(tmp_path)
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    after = dict(before)
+    if changed == "scopeIdentity":
+        after[changed] = [0, 0]
+    elif changed == "missing":
+        after = None
+    elif changed:
+        after[changed] += 1
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: after)
+    report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
+              "acceptance": {"ok": True}}
+    cgroup_budget.finish_report(report, before)
+    assert report["kernelResourceBudget"]["ok"] is (changed is None)
+    assert report["acceptance"]["ok"] is (changed is None)
+    assert report["status"] == ("passed" if changed is None else "failed")
+    report["status"] = "failed"
+    report["acceptance"]["ok"] = False
+    cgroup_budget.finish_report(report, before)
+    assert report["status"] == "failed" and report["acceptance"]["ok"] is False
+
+
+def test_cgroup_budget_measurement_failure_retains_a_failed_report(tmp_path, monkeypatch):
+    root, membership = cgroup_files(tmp_path)
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    def fail():
+        raise OSError("kernel read failed")
+    monkeypatch.setattr(cgroup_budget, "sample_budget", fail)
+    report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
+              "acceptance": {"ok": True}}
+    cgroup_budget.finish_report(report, before)
+    assert report["status"] == "failed"
+    assert report["kernelResourceBudget"]["error"] == "OSError"
+    assert report["qualificationScope"]["containerLimitsEnforced"] is False
+
+
+def test_functional_success_does_not_qualify_an_unbounded_cgroup(tmp_path, monkeypatch):
+    root, membership = cgroup_files(tmp_path)
+    (root / "memory.max").write_text("max", encoding="ascii")
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: dict(before))
+    report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
+              "acceptance": {"ok": True}}
+    cgroup_budget.finish_report(report, before)
+    assert report["status"] == "passed"
+    assert report["kernelResourceBudget"]["ok"] is True
+    assert report["qualificationScope"]["containerLimitsEnforced"] is False
 
 
 def tiny_spec() -> subject.FixtureSpec:
