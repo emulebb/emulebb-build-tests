@@ -499,6 +499,8 @@ def _verify_settings_form(page, *, base_url: str, api_key: str,
     leaf = _saved_setting(restored, key)
     if leaf["mode"] != original["mode"] or (leaf["mode"] == "custom" and leaf["value"] != value):
         raise RuntimeError("Settings form did not restore the original saved mode/value")
+    if restored["data"]["effective"]["transfers"]["uploadLimitBytesPerSecond"] != leaf["value"]:
+        raise RuntimeError("Settings form did not restore the effective live upload limit")
     return {**result, "writes": 2, "restored": True, "key": key}
 
 

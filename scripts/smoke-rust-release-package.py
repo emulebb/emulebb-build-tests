@@ -762,6 +762,7 @@ def _smoke_binary(
             "sharedRoots": 1,
             "profile": "fresh-local-only",
             "renderedWebui": bool(rendered_webui),
+            **({"webuiSettings": rendered_webui["checks"]["settingsForm"]} if rendered_webui else {}),
             **({"publicWebuiCapture": rendered_webui["checks"]["publicCapture"]}
                if public_capture_path is not None else {}),
             "localDownload": {
