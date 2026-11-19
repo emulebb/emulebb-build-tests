@@ -1700,7 +1700,7 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
     assert script_text.count("p2p_bind_addr=p2p_address") == 1
-    assert "p2p_bind_ip=p2p_address" in script_text
+    assert "'network.p2p.bindIp': p2p_address" in script_text
     assert "rust_client.start_rust_client_executable(" in script_text
     assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text
     assert "converged_live_wire.resolve_rust_regular_exe(" not in script_text
@@ -1883,7 +1883,11 @@ def test_server_tcp_metadata_is_bilateral_and_snapshotted_before_transfer() -> N
         script_text.count(
             "add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA)"
         )
-        == 2
+        == 1
+    )
+    assert (
+        "'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA"
+        in script_text
     )
     assert script_text.count("rust_local_ed2k.wait_for_server_list_metadata(") == 4
     assert (
