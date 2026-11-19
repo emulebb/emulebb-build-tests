@@ -47,9 +47,9 @@ from emule_test_harness.rust_client import (
     stop_process_tree,
     write_rust_profile,
 )
-from emule_test_harness.vm_guest_profiles import api_data, api_rows, retry_http_json, wait_until
+from emule_test_harness.vm_guest_profiles import api_data, api_rows, http_json, retry_http_json, wait_until
 
-API_KEY = "rust-linux-direct-smoke"
+API_KEY = "rust-linux-direct-smoke-api-key-0001"
 ROUTE_PROBE_IP = "192.0.2.1"
 REST_ADDR = "127.0.0.1"
 REST_PORT = 4731
@@ -772,15 +772,9 @@ def main(argv: list[str] | None = None) -> int:
             add_nat_matrix_trigger_server(base_url)
 
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, Any]:
-                return retry_http_json(
-                    "NAT matrix settings",
-                    2,
-                    base_url,
-                    "/api/v1/app/settings",
-                    api_key=API_KEY,
-                    method="PATCH",
-                    body=payload,
-                )
+                return http_json(base_url, "/api/v1/settings", api_key=API_KEY,
+                                 method="PATCH", body=payload)
+
 
             def restart_for_nat() -> None:
                 nonlocal process
@@ -805,9 +799,10 @@ def main(argv: list[str] | None = None) -> int:
                 request_nat_matrix_trigger_connect(base_url)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
+                read_settings=lambda: http_json(base_url, "/api/v1/settings", api_key=API_KEY),
                 apply_settings=apply_nat_settings,
                 restart_daemon=restart_for_nat,
-                read_nat_status=lambda: nat_status(base_url),
+                read_nat_status=lambda: http_json(base_url, "/api/v1/nat", api_key=API_KEY),
                 daemon_alive=lambda: process.poll() is None,
             )
             if not report["natMatrix"]["passed"]:

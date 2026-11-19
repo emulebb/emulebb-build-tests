@@ -28,6 +28,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness.rust_rest_contract import settings_patch
 from emule_test_harness import (
     nat_live_matrix,
     server_failure_accounting,
@@ -621,31 +622,22 @@ def main() -> int:
         ).stdout
         api_key = tomllib.loads(settings)["rest"]["api_key"]
         api = "http://127.0.0.1:14712/api/v1"
-        settings_patch: dict[str, object] = {}
+        settings_values: dict[str, object] = {}
         if args.disable_protocol_obfuscation or args.nat_matrix:
-            settings_patch["ed2k"] = {"obfuscationEnabled": False}
+            settings_values["security"] = {"obfuscationEnabled": False}
         if args.binding_mode == "interface-ip":
-            settings_patch["daemon"] = {
-                "p2pBindInterface": "tun0",
-                "p2pBindIp": tun_ip,
-            }
-        if settings_patch:
-            updated = response_data(
-                request_json(
-                    api + "/app/settings",
-                    api_key,
-                    method="PATCH",
-                    payload=settings_patch,
-                    timeout=90,
-                )
-            )
+            settings_values["network"] = {"p2p": {"bindInterface": "tun0", "bindIp": tun_ip}}
+        if settings_values:
+            snapshot = request_json(api + "/settings", api_key, timeout=90)
+            updated = response_data(request_json(
+                api + "/settings", api_key, method="PATCH",
+                payload=settings_patch(snapshot, set_values=settings_values), timeout=90))
+            saved = updated["saved"]
             if args.disable_protocol_obfuscation or args.nat_matrix:
-                updated_ed2k = updated.get("ed2k", {})
-                if not isinstance(updated_ed2k, dict) or updated_ed2k.get("obfuscationEnabled") is not False:
+                if saved["security"]["obfuscationEnabled"]["value"] is not False:
                     raise RuntimeError("REST settings PATCH did not disable protocol obfuscation")
             if args.binding_mode == "interface-ip":
-                updated_daemon = updated.get("daemon", {})
-                if not isinstance(updated_daemon, dict) or updated_daemon.get("p2pBindIp") != tun_ip:
+                if saved["network"]["p2p"]["bindIp"]["value"] != tun_ip:
                     raise RuntimeError("REST settings PATCH did not set the tun0 P2P bind IP")
             command(*compose, "restart", "emulebb-rust", env=env, timeout=90)
             deadline = time.monotonic() + 120
@@ -666,16 +658,15 @@ def main() -> int:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Rust WebUI did not restart after settings update")
                 time.sleep(2)
-            persisted = response_data(
-                request_json(api + "/app/settings", api_key, timeout=90)
-            )
+            persisted = response_data(request_json(api + "/settings", api_key, timeout=90))
+            if persisted["application"]["pendingRestart"] or persisted["application"]["failed"]:
+                raise RuntimeError("Saved VPN settings were not applied after restart")
+            effective = persisted["effective"]
             if args.disable_protocol_obfuscation or args.nat_matrix:
-                persisted_ed2k = persisted.get("ed2k", {})
-                if not isinstance(persisted_ed2k, dict) or persisted_ed2k.get("obfuscationEnabled") is not False:
+                if effective["security"]["obfuscationEnabled"] is not False:
                     raise RuntimeError("protocol-obfuscation setting did not persist across restart")
             if args.binding_mode == "interface-ip":
-                persisted_daemon = persisted.get("daemon", {})
-                if not isinstance(persisted_daemon, dict) or persisted_daemon.get("p2pBindIp") != tun_ip:
+                if effective["network"]["p2p"]["bindIp"] != tun_ip:
                     raise RuntimeError("P2P bind IP did not persist across restart")
                 report["p2pBindIpMatchesTun0"] = True
         report["protocolObfuscationEnabled"] = not (
@@ -685,7 +676,7 @@ def main() -> int:
         if args.nat_matrix:
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
                 return request_json(
-                    api + "/app/settings",
+                    api + "/settings",
                     api_key,
                     method="PATCH",
                     payload=payload,
@@ -714,6 +705,7 @@ def main() -> int:
                     time.sleep(2)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
+                read_settings=lambda: request_json(api + "/settings", api_key, timeout=90),
                 apply_settings=apply_nat_settings,
                 restart_daemon=restart_for_nat,
                 read_nat_status=lambda: request_json(

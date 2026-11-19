@@ -323,7 +323,7 @@ def main() -> int:
         if args.nat_matrix:
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
                 return request_json(
-                    api + "/app/settings",
+                    api + "/settings",
                     api_key,
                     method="PATCH",
                     payload=payload,
@@ -352,6 +352,7 @@ def main() -> int:
                     time.sleep(2)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
+                read_settings=lambda: request_json(api + "/settings", api_key, timeout=90),
                 apply_settings=apply_nat_settings,
                 restart_daemon=restart_for_nat,
                 read_nat_status=lambda: request_json(
