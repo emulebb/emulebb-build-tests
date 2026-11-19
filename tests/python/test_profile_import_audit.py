@@ -203,7 +203,7 @@ def binding_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     with sqlite3.connect(database) as db:
         db.executescript("""
             CREATE TABLE local_paths(id,platform,native_path);
-            CREATE TABLE local_file_instances(path_id,known_file_id,file_size,verified_fingerprint);
+            CREATE TABLE local_file_instances(path_id,known_file_id,size_bytes,verified_fingerprint);
             CREATE TABLE known_files(id,ed2k_hash,size_bytes,aich_root);
             CREATE TABLE verified_local_content(known_file_id,aich_root);
             CREATE TABLE verified_local_md4_hashes(known_file_id,part_index,md4_hash);

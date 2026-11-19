@@ -47,7 +47,8 @@ def profile_counts(profile: Path) -> dict[str, int]:
             for table in (
                 "known_files", "verified_local_content",
                 "verified_local_md4_hashes", "verified_local_aich_hashes", "local_file_instances",
-                "transfers", "shared_directory_roots", "aich_recovery_sets", "aich_recovery_parts",
+                "download_jobs", "download_history", "shared_directory_roots",
+                "aich_recovery_sets", "aich_recovery_parts",
             )
         }
 
@@ -91,7 +92,7 @@ def capture_import_baseline(profile: Path, exchange: Path, destination: Path) ->
             for content_id, file_hash in target.execute("SELECT known_file_id,ed2k_hash FROM verified_local_content JOIN known_files ON known_files.id=known_file_id"):
                 baseline.execute("INSERT INTO content VALUES (?,?)", (file_hash, _content_digest(target, content_id)))
                 result["contentRecords"] += 1
-            for row in target.execute("SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,f.ed2k_hash FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id JOIN known_files f ON f.id=i.known_file_id"):
+            for row in target.execute("SELECT p.platform,p.native_path,i.size_bytes,i.verified_fingerprint,f.ed2k_hash FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id JOIN known_files f ON f.id=i.known_file_id"):
                 baseline.execute("INSERT INTO bindings VALUES (?,?,?)", (row[0], row[1], _rows_digest([row])))
                 result["pathBindings"] += 1
             for root, size in target.execute("SELECT r.root,r.size_bytes FROM aich_recovery_sets r JOIN exchange.recovery_sets e ON e.root=r.root AND e.size_bytes=r.size_bytes"):
@@ -276,7 +277,7 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob,
     with ExitStack() as resources, closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
         previous = resources.enter_context(closing(sqlite3.connect(baseline.as_uri()+"?mode=ro&immutable=1",uri=True))) if baseline else None
         rows = target.execute(
-            "SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,"
+            "SELECT p.platform,p.native_path,i.size_bytes,i.verified_fingerprint,"
             "k.id,k.ed2k_hash,k.size_bytes,k.aich_root,c.aich_root "
             "FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id "
             "JOIN known_files k ON k.id=i.known_file_id "
