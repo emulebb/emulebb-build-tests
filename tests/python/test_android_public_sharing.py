@@ -223,7 +223,8 @@ class FakePhone:
         if args[:2] == ("readlink", "-f"): return args[-1]
         if args[0] == "cat": return "1" * 32
         return ""
-    def request(self, *args): return {"total": 0, "items": []}
+    def request(self, *args, **kwargs):
+        return {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
 
 
 def installation_evidence(phone):
@@ -236,8 +237,8 @@ def installation_evidence(phone):
 def mock_observer(monkeypatch, *, fail=False):
     monkeypatch.setattr(subject, "guest_scope", lambda *a, **kw: None)
     monkeypatch.setattr(subject, "wifi_default", lambda *a: None)
-    monkeypatch.setattr(subject, "_settings", lambda *a, **kw: None)
-    monkeypatch.setattr(subject, "configure_public_discovery", lambda *a: {"connectionAndPublication": "require-live-observation"})
+    monkeypatch.setattr(subject, "_settings", lambda *a, **kw: {"application": {"pendingRestart": []}})
+    monkeypatch.setattr(subject, "configure_public_discovery", lambda *a, **kw: {"connectionAndPublication": "require-live-observation"})
     monkeypatch.setattr(subject, "publish_staged_tree", lambda *a: None)
     monkeypatch.setattr(subject, "battery_condition", lambda *a, **kw: {"continuousOperationGuarantee": "not-claimed"})
     monkeypatch.setattr(subject, "_guest_free", lambda *a: 1024**4)
@@ -328,12 +329,13 @@ def test_actual_sampler_queue_guard_retains_its_phase_and_exact_safe_reason(tmp_
     calls = []
     def request(method, path):
         calls.append((method, path))
-        return {"total": 1, "items": [{"path": "private-foreign-download"}]}
+        return {"data": [{"name": "private-foreign-download"}],
+                "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
     phone.request = request
     result = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
-    assert result["failurePhase"] == "sample-transfer-queue"
+    assert result["failurePhase"] == "sample-download-queue"
     assert result["failureReason"] == "download-queue-not-empty" and result["service"] == "stopped-after-failure"
-    assert calls == [("GET", "/transfers?limit=1")]
+    assert calls == [("GET", "/downloads?view=unfinished&limit=1")]
     assert "private-foreign" not in (tmp_path / "session.json").read_text()
 
 
@@ -359,7 +361,8 @@ def test_explicit_stop_request_stops_normal_ui_service(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "stop-request.json").read_text())["nonce"] == value["nonce"]
 
 
-def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("restart_pending", [False, True])
+def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_path, monkeypatch, restart_pending):
     source = tmp_path / "source"
     source.mkdir()
     (source / "Sample.bin").write_bytes(b"data")
@@ -367,12 +370,18 @@ def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_pa
     phone = FakePhone()
     mock_observer(monkeypatch)
     monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
-    def settings(*args, **kwargs): phone.calls.append("cap-configured")
+    def settings(*args, **kwargs):
+        phone.calls.append("cap-configured")
+        return {"application": {"pendingRestart": ["network.kadEnabled"] if restart_pending else []}}
     monkeypatch.setattr(subject, "_settings", settings)
+    discovery = []
+    monkeypatch.setattr(subject, "configure_public_discovery", lambda phone, *, start_networks:
+                        discovery.append(start_networks) or {"connectionAndPublication": "require-live-observation"})
     digest = subject.prepare(phone, campaign=campaign, output_root=tmp_path, source=source, expected_file_count=1,
                              expected_total_bytes=4, installation=installation_evidence(phone), admission={}, limits=subject.Limits(), route="direct-wifi")
     push = next(call for call in phone.calls if isinstance(call, tuple) and call[0] == "push")
     assert phone.calls.index("cap-configured") < phone.calls.index("stop") < phone.calls.index(push)
+    assert discovery == [not restart_pending] and phone.calls.count("start_service") == 1
     value = subject.admit_campaign(campaign, digest, phone.device.serial)
     assert value["sourceUnchanged"] and value["guestSha256Verified"] and (source / "Sample.bin").read_bytes() == b"data"
 
@@ -532,8 +541,8 @@ def test_safe_failure_reason_matches_exact_runtime_literals_only():
     ("POST", "/servers/operations/import-met-url", 60.0),
     ("POST", "/kad/operations/import-nodes-url", 60.0),
     ("POST", "/servers/operations/connect", 60.0),
-    ("PATCH", "/app/settings", 60.0),
-    ("GET", "/app/settings", 10.0), ("GET", "/stats", 10.0), ("GET", "/nat", 10.0),
+    ("PATCH", "/settings", 60.0),
+    ("GET", "/settings", 10.0), ("GET", "/stats", 10.0), ("GET", "/nat", 10.0),
     ("GET", "/shared-files?limit=200&cursor=opaque", 10.0),
 ])
 def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline(monkeypatch, method, path, timeout):
@@ -550,12 +559,92 @@ def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline
     assert phone.failed_rest_operation is None
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_phone_settings_request_keeps_revision_and_bounded_failure_owner(monkeypatch, fail):
+    phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
+    phone.port, phone.key = 12345, "fixture-key"
+    calls = []
+    document = {"data": {}, "meta": {"settingsRevision": "9007199254740993"}}
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        if fail:
+            raise TimeoutError("private-response")
+        return document
+    monkeypatch.setattr(subject, "http_json", request)
+    if fail:
+        with pytest.raises(TimeoutError):
+            phone.request("GET", "/settings", include_meta=True)
+        assert phone.failed_rest_operation == "settings-read"
+    else:
+        assert phone.request("GET", "/settings", include_meta=True) == document
+    assert calls == [(("http://127.0.0.1:12345", "/api/v1/settings"), {
+        "api_key": "fixture-key", "method": "GET", "body": None, "timeout_seconds": 10.0})]
+
+
+@pytest.mark.parametrize("configure,fault", [
+    (False, None), (True, None), (True, "conflict"), (True, "saved-rate"), (True, "apply-failed"),
+    (False, "pending"), (False, "effective-rate"), (False, "binding"), (False, "root"),
+])
+def test_campaign_settings_require_saved_preparation_and_effective_observation(configure, fault):
+    from copy import deepcopy
+    limits = subject.Limits()
+    effective = {"storage": {"incomingDirectory": subject.INCOMING},
+                 "security": {"vpnGuard": {"mode": "off"}},
+                 "network": {"p2p": {"bindInterface": "tun0" if fault == "binding" else None, "bindIp": None},
+                             "autoConnect": not configure, "ed2kEnabled": not configure,
+                             "kadEnabled": not configure, "nat": {"enabled": not configure}},
+                 "transfers": {"uploadLimitBytesPerSecond": limits.upload_limit_kibps * 1024
+                               * (2 if configure or fault == "effective-rate" else 1)}}
+    def saved(values):
+        return {key: saved(value) if isinstance(value, dict) else {"mode": "custom", "value": value}
+                for key, value in values.items()}
+    snapshot = {"data": {"effective": effective, "saved": saved(effective), "application": {
+        "pendingRestart": ["network.nat.enabled"] if fault == "pending" else [], "failed": []}},
+        "meta": {"apiVersion": "v1", "settingsRevision": "9007199254740993"}}
+    calls = []
+    def request(method, path, body=None, *, include_meta=False):
+        calls.append((method, path, body))
+        if path.startswith("/library/roots"):
+            roots = [{"id": "1", "path": subject.SHARED, "managed": False},
+                     {"id": "2", "path": subject.INCOMING, "managed": True}]
+            if fault == "root":
+                roots.append({"id": "3", "path": "/other", "managed": False})
+            return {"data": roots, "meta": {"hasMore": False, "nextCursor": None}}
+        assert path == "/settings" and include_meta is True
+        if method == "PATCH":
+            assert body == {"expectedRevision": "9007199254740993", "set": {
+                "transfers": {"uploadLimitBytesPerSecond": limits.upload_limit_kibps * 1024},
+                "network": {"autoConnect": True, "ed2kEnabled": True, "kadEnabled": True, "nat": {"enabled": True}}}}
+            if fault == "conflict":
+                raise RuntimeError("SETTINGS_CONFLICT")
+            result = deepcopy(snapshot)
+            selected = body["set"]
+            if fault == "saved-rate":
+                selected = deepcopy(selected)
+                selected["transfers"]["uploadLimitBytesPerSecond"] = 1
+            result["data"]["saved"]["network"].update(saved(selected["network"]))
+            result["data"]["saved"]["transfers"] = saved(selected["transfers"])
+            result["data"]["application"] = {"pendingRestart": ["network.kadEnabled"],
+                "failed": [{"key": "network.kadEnabled"}] if fault == "apply-failed" else []}
+            result["meta"]["settingsRevision"] = "9007199254740994"
+            return result
+        return deepcopy(snapshot)
+    phone = SimpleNamespace(request=request)
+    if fault:
+        with pytest.raises(RuntimeError, match="Campaign|SETTINGS_CONFLICT"):
+            subject._settings(phone, limits, configure=configure)
+    else:
+        result = subject._settings(phone, limits, configure=configure)
+        assert bool(result["application"]["pendingRestart"]) is configure
+    assert len([call for call in calls if call[0] == "PATCH"]) == int(configure)
+
+
 def test_phone_request_records_only_closed_failed_operation(monkeypatch):
     phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
     phone.port, phone.key = 12345, "fixture-key"
     def fail(*args, **kwargs): raise TimeoutError("private-response-and-path")
     monkeypatch.setattr(subject, "request_json", fail)
-    with pytest.raises(TimeoutError): phone.request("PATCH", "/app/settings", {"private": "payload"})
+    with pytest.raises(TimeoutError): phone.request("PATCH", "/settings", {"private": "payload"})
     assert phone.failed_rest_operation == "settings-update"
     with pytest.raises(TimeoutError): phone.request("POST", "/private-unknown-route", {})
     assert phone.failed_rest_operation == "unclassified-rest-operation"
@@ -921,7 +1010,7 @@ def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_c
     calls = []
     def request(method, path):
         calls.append((method, path))
-        return {"total": 0, "items": []} if path.startswith("/transfers") else {
+        return {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}} if path.startswith("/downloads") else {
             "items": []} if path == "/uploads" else {"enabled": True, "gatewayDiscovered": True, "mappings": []}
     phone = SimpleNamespace(identity=lambda: None, shell=lambda *args: "", request=request,
                             base="http://127.0.0.1:12345", key="private-key")
@@ -946,10 +1035,11 @@ def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_c
     assert result["claims"]["perFileServedBytes"] == "evidence-incomplete"
     assert "private-key" not in json.dumps(result)
     assert phases == ["sample-app-identity", "sample-direct-route", "sample-guest-scope", "sample-settings",
-        "sample-transfer-queue", "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads"]
+        "sample-download-queue", "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads"]
 
 
-def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch):
+@pytest.mark.parametrize("start_networks", [True, False])
+def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch, start_networks):
     calls = []
     server_pages = iter([[], [{"enabled": True}]])
     def request(method, path, body=None):
@@ -959,11 +1049,12 @@ def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch):
         if path == "/kad": return {"connected": False}
         if path == "/kad/operations/import-nodes-url": return {"imported": True}
         return {}
-    value = subject.configure_public_discovery(SimpleNamespace(request=request))
+    value = subject.configure_public_discovery(SimpleNamespace(request=request), start_networks=start_networks)
     assert ("POST", "/servers/operations/import-met-url", {"url": subject.DEFAULT_SERVER_MET_URL}) in calls
     assert ("POST", "/kad/operations/import-nodes-url", {"url": subject.DEFAULT_NODES_DAT_URL}) in calls
-    assert ("POST", "/servers/operations/connect", {}) in calls
-    assert ("POST", "/kad/operations/start", {}) in calls
+    assert (("POST", "/servers/operations/connect", {}) in calls) is start_networks
+    assert (("POST", "/kad/operations/start", {}) in calls) is start_networks
+    assert value["networkStartDeferred"] is not start_networks
     assert value["connectionAndPublication"] == "require-live-observation"
     assert not any("transfers" in path or "searches" in path for _, path, _ in calls)
 
