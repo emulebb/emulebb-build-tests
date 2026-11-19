@@ -10,6 +10,7 @@ import shlex
 
 from .android_apk_profile import read_hashed_receipt
 from .rust_local_ed2k import request_json
+from .vm_guest_profiles import http_json
 from .rust_shared_library_fixture import deterministic_payload
 from .rust_rest_contract import iter_library_roots
 
@@ -129,13 +130,14 @@ def cleanup_report_fixture(command, *, prefix, retained_report: Path, report_sha
                 or hashlib.sha256(fixture.read_bytes()).hexdigest() != fixture_sha256):
             raise RuntimeError("Retained synthetic payload differs from caller authority")
         stage("admit-current-storage")
-        settings = request_json(base_url, "GET", "/api/v1/app/settings", api_key)
-        incoming = settings.get("daemon", {}).get("incomingDir")
+        settings = http_json(base_url, "/api/v1/settings", api_key=api_key)
+        incoming = settings["data"]["effective"]["storage"]["incomingDirectory"]
+        saved_incoming = settings["data"]["saved"]["storage"]["incomingDirectory"]["value"]
         roots = list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)))
         protected = {root["path"] for root in roots}
-        if not isinstance(incoming, str) or not incoming.startswith("/"):
+        if any(not isinstance(path, str) or not path.startswith("/") for path in (incoming, saved_incoming)):
             raise RuntimeError("Current incoming destination is not explicit")
-        protected.add(incoming)
+        protected.update((incoming, saved_incoming))
         stage("match-owned-nonce")
         listing = _nul_paths(command(*prefix, "shell", "sh", "-c", shlex.quote(
             "find /sdcard/Download -mindepth 1 -maxdepth 1 -name 'emulebb-apk-proof-*' -print0 | head -c 8192"), binary=True), maximum=16)
@@ -153,7 +155,7 @@ def cleanup_report_fixture(command, *, prefix, retained_report: Path, report_sha
                                        payload_sha256=fixture_sha256)
         receipt.update(removed)
         stage("verify-settings-preserved")
-        if (request_json(base_url, "GET", "/api/v1/app/settings", api_key) != settings
+        if (http_json(base_url, "/api/v1/settings", api_key=api_key) != settings
                 or {root["path"] for root in list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)))}
                    != {root["path"] for root in roots}):
             raise RuntimeError("Configuration changed during owned fixture cleanup")

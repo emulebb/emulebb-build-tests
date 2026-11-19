@@ -85,7 +85,9 @@ def _verify_reset_candidate(payload: dict) -> None:
 def _verify_fresh_storage(settings: dict, roots: list[dict]) -> None:
     from .android_apk_profile import INCOMING, SHARED
     entries = roots
-    if (settings.get("daemon", {}).get("incomingDir") != INCOMING or not isinstance(entries, list)
+    if (settings.get("effective", {}).get("storage", {}).get("incomingDirectory") != INCOMING
+            or settings.get("saved", {}).get("storage", {}).get("incomingDirectory", {}).get("value") != INCOMING
+            or settings.get("application", {}).get("pendingRestart") or settings.get("application", {}).get("failed") or not isinstance(entries, list)
             or any(not isinstance(root, dict) or not isinstance(root.get("path"), str) for root in entries)
             or {root["path"] for root in entries} != {SHARED, INCOMING}
             or {root["path"] for root in entries if root.get("managed") is False} != {SHARED}
@@ -1178,7 +1180,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             from .rust_local_ed2k import request_json
             value["phase"] = "verify-fresh-storage-defaults"
             base = f"http://127.0.0.1:{port}"
-            _verify_fresh_storage(request_json(base, "GET", "/api/v1/app/settings", key),
+            _verify_fresh_storage(request_json(base, "GET", "/api/v1/settings", key),
                                   list(iter_library_roots(lambda path: request_json(base, "GET", "/api/v1" + path, key))))
             value["freshDefaults"] = {"incoming": "canonical", "sharedRoots": "canonical"}
             passed("fresh-storage-defaults-after-start")
@@ -1186,9 +1188,11 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             from .rust_local_ed2k import request_json
             value["phase"] = "verify-prepared-storage-after-start"
             try:
-                settings = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/app/settings", key)
+                settings = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/settings", key)
                 roots = list(iter_library_roots(lambda path: request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1" + path, key)))
-                if (settings.get("daemon", {}).get("incomingDir") != configured_storage["incomingDir"]
+                if (settings["effective"]["storage"]["incomingDirectory"] != configured_storage["incomingDir"]
+                        or settings["saved"]["storage"]["incomingDirectory"]["value"] != configured_storage["incomingDir"]
+                        or settings["application"]["pendingRestart"] or settings["application"]["failed"]
                         or configured_storage["sharedRoot"] not in {root.get("path") for root in roots}):
                     raise RuntimeError("Prepared phone storage settings differ")
             except Exception:

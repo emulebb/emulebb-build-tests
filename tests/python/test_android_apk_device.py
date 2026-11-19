@@ -14,6 +14,12 @@ SERIAL = "synthetic-phone._adb-tls-connect._tcp"
 KEY = "synthetic-private-key-not-for-receipts"
 
 
+def storage_settings(incoming):
+    return {"saved": {"storage": {"incomingDirectory": {"mode": "custom", "value": incoming}}},
+            "effective": {"storage": {"incomingDirectory": incoming}},
+            "application": {"pendingRestart": [], "failed": []}}
+
+
 def selected_adb(monkeypatch):
     device = subject.AdbDevice.__new__(subject.AdbDevice)
     device.adb, device.serial, device.server_port, device.version = Path("synthetic-adb"), SERIAL, 5037, 41
@@ -103,11 +109,11 @@ def test_fresh_defaults_require_actual_incoming_and_only_canonical_shared_root()
     from emule_test_harness.android_apk_profile import INCOMING, SHARED
     roots = [{"path": SHARED, "managed": False, "watchEnabled": False},
              {"path": INCOMING, "managed": True, "watchEnabled": False}]
-    subject._verify_fresh_storage({'daemon': {'incomingDir': INCOMING}}, roots)
-    for settings, invalid in [({'daemon': {'incomingDir': '/other'}}, roots),
-                              ({'daemon': {'incomingDir': INCOMING}}, []),
-                              ({'daemon': {'incomingDir': INCOMING}}, roots + [{"path": "/other", "managed": False}]),
-                              ({'daemon': {'incomingDir': INCOMING}}, [dict(root, watchEnabled=True) for root in roots])]:
+    subject._verify_fresh_storage(storage_settings(INCOMING), roots)
+    for settings, invalid in [(storage_settings('/other'), roots),
+                              (storage_settings(INCOMING), []),
+                              (storage_settings(INCOMING), roots + [{"path": "/other", "managed": False}]),
+                              (storage_settings(INCOMING), [dict(root, watchEnabled=True) for root in roots])]:
         with pytest.raises(RuntimeError):
             subject._verify_fresh_storage(settings, invalid)
 
@@ -877,7 +883,7 @@ def test_reset_journals_one_uninstall_and_bound_new_install(tmp_path, monkeypatc
     if fault == 'wrong-old-hash':
         phone.checksum = '0' * 64
     monkeypatch.setattr(rust_local_ed2k, 'request_json', lambda base, method, route, key:
-        {'daemon': {'incomingDir': INCOMING}} if route == '/api/v1/app/settings' else {'data': [{'id': '1', 'path': SHARED, 'managed': False, 'watchEnabled': False},
+        storage_settings(INCOMING) if route == '/api/v1/settings' else {'data': [{'id': '1', 'path': SHARED, 'managed': False, 'watchEnabled': False},
                       {'id': '2', 'path': INCOMING, 'managed': True, 'watchEnabled': False}],
              'meta': {'hasMore': False, 'nextCursor': None}})
     if fault == 'theme-fails':
@@ -1338,8 +1344,8 @@ def test_owned_compatible_update_requires_bound_receipts_and_preserves_phone_sta
     phone.calls.clear()
     if fault == "execute":
         from emule_test_harness import rust_local_ed2k
-        monkeypatch.setattr(rust_local_ed2k, "request_json", lambda base, method, route, key: {
-            "daemon": {"incomingDir": android_apk_profile.INCOMING}} if route == "/api/v1/app/settings" else {
+        monkeypatch.setattr(rust_local_ed2k, "request_json", lambda base, method, route, key:
+            storage_settings(android_apk_profile.INCOMING) if route == "/api/v1/settings" else {
             "data": [{"id": "1", "path": android_apk_profile.SHARED, "managed": False}],
             "meta": {"hasMore": False, "nextCursor": None}})
     kwargs = dict(serial=SERIAL, output_root=tmp_path, report_dir=tmp_path / "updated", expected_cert_sha256="b" * 64,

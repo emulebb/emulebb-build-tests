@@ -46,14 +46,15 @@ def test_compatible_update_requires_exact_owned_origin_configuration_and_schema(
         assert approval.installed == old and approval.target_sha256 == "e" * 64
 
 
-@pytest.mark.parametrize("fault", [None, "lost-roots", "lost-files", "redirected", "no-restart"])
+@pytest.mark.parametrize("fault", [None, "lost-roots", "lost-files", "redirected", "no-restart", "conflict", "apply-failed"])
 def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tmp_path, monkeypatch, fault):
     from emule_test_harness import rust_local_ed2k
     old, _, _, payload = evidence()
     payload["buildIdentity"]["sourceRevision"] = old["sourceRevision"]
     roots = {"/storage/emulated/0/Download/Existing Shared"}
     entries = {"Existing User File.bin"}
-    settings = {"daemon": {"incomingDir": None}}
+    settings = {"storage": {"incomingDirectory": {"mode": "custom", "value": "/storage/emulated/0/Download/eMuleBB"}}}
+    revision = [7]
     calls = []
     changed = [False]
     live_incoming = ["/storage/emulated/0/Download/eMuleBB"]
@@ -64,9 +65,6 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
         if route == "/api/v1/library/roots?limit=100":
             return {"data": [{"id": str(i), "path": root, "managed": False} for i, root in enumerate(sorted(roots), 1)],
                     "meta": {"hasMore": False, "nextCursor": None}}
-        if route == "/api/v1/app/settings":
-            if method == "PATCH": settings.update(body)
-            return settings
         if route == "/api/v1/library/roots":
             assert method == "POST" and body == {"path": subject.SHARED}
             # The sharing root must be disjoint from the running Incoming root.
@@ -74,6 +72,21 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
                 roots.add(subject.SHARED)
             if fault == "lost-roots": roots.remove("/storage/emulated/0/Download/Existing Shared")
         return {}
+
+    def settings_request(base, route, *, api_key, method="GET", body=None, **kwargs):
+        assert route == "/api/v1/settings"
+        calls.append((method, route, body))
+        if method == "PATCH":
+            assert body == {"expectedRevision": "7", "set": {"storage": {"incomingDirectory": subject.INCOMING}}}
+            if fault == "conflict":
+                raise RuntimeError("SETTINGS_CONFLICT")
+            settings["storage"]["incomingDirectory"] = {"mode": "custom", "value": subject.INCOMING}
+            revision[0] += 1
+        return {"data": {"saved": settings, "effective": {"storage": {"incomingDirectory": live_incoming[0]}},
+                         "application": {"pendingRestart": ["storage.incomingDirectory"]
+                                         if settings["storage"]["incomingDirectory"]["value"] != live_incoming[0] else [],
+                                         "failed": [{"key": "storage.incomingDirectory"}] if fault == "apply-failed" else []}},
+                "meta": {"settingsRevision": str(revision[0])}}
 
     def command(*args):
         assert args[:3] == ("-s", "synthetic-device", "shell")
@@ -90,10 +103,11 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
         return ""
 
     monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(subject, "http_json", settings_request)
     report = tmp_path / "config.json"
     kwargs = dict(prefix=("-s", "synthetic-device"), base_url="http://127.0.0.1:1234", api_key="synthetic-private-key",
                   payload=payload, device_hash="d" * 64, report_path=report,
-                  restart_service=lambda: live_incoming.__setitem__(0, settings["daemon"]["incomingDir"])
+                  restart_service=lambda: live_incoming.__setitem__(0, settings["storage"]["incomingDirectory"]["value"])
                   if fault != "no-restart" else None)
     if fault:
         with pytest.raises(RuntimeError, match="storage configuration failed"):
