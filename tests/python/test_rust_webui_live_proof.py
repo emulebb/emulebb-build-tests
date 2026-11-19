@@ -702,6 +702,97 @@ def test_native_settings_save_requires_one_confirmed_owned_write(fault):
     assert page.listener is None
 
 
+@pytest.fixture
+def browser_network_settings(monkeypatch):
+    snapshot = {"meta": {"settingsRevision": "17"}, "data": {
+        "saved": {"network": {"autoConnect": {"mode": "default", "value": True}, "nat": {
+            "enabled": {"mode": "default", "value": True},
+            "requireInitialMapping": {"mode": "default", "value": False}}}},
+        "effective": {"network": {"autoConnect": True, "nat": {"enabled": True, "requireInitialMapping": False}}},
+        "application": {"pendingRestart": [], "failed": []}}}
+    monkeypatch.setattr(rust_webui_live_proof, "_read_settings_form", lambda *args, **kwargs: ({}, snapshot, {}))
+    monkeypatch.setattr(rust_webui_live_proof, "_wait_for_settings_form", lambda *args: {"ok": True})
+    return snapshot
+
+
+@pytest.mark.parametrize("fault", [None, "custom", "pending", "failure", "effective"])
+def test_zero_configuration_checks_saved_defaults_and_running_state(browser_network_settings, fault):
+    snapshot = browser_network_settings
+    if fault == "custom":
+        snapshot["data"]["saved"]["network"]["autoConnect"]["mode"] = "custom"
+    elif fault == "pending":
+        snapshot["data"]["application"]["pendingRestart"] = ["network.autoConnect"]
+    elif fault == "failure":
+        snapshot["data"]["application"]["failed"] = [{"key": "network.autoConnect"}]
+    elif fault == "effective":
+        snapshot["data"]["effective"]["network"]["autoConnect"] = False
+    if fault:
+        with pytest.raises(RuntimeError):
+            rust_webui_live_proof._assert_zero_configuration_defaults(None, base_url="local", api_key="key", timeout_seconds=1)
+    else:
+        assert rust_webui_live_proof._assert_zero_configuration_defaults(
+            None, base_url="local", api_key="key", timeout_seconds=1) == {
+                "autoConnect": True, "upnpEnabled": True, "requireInitialMapping": False,
+                "verifiedThroughRenderedWebui": True}
+
+
+@pytest.mark.parametrize("changed", [(), ("enabled",), ("enabled", "requireInitialMapping")])
+@pytest.mark.parametrize("outcome", ["applied", "restart", "failure", "uncertain"])
+def test_nat_form_saves_only_changed_values_once_and_reports_application(
+        monkeypatch, browser_network_settings, changed, outcome):
+    snapshot = browser_network_settings
+    for name in changed:
+        leaf = snapshot["data"]["saved"]["network"]["nat"][name]
+        leaf.update(mode="custom", value=not leaf["value"])
+    if outcome == "restart":
+        snapshot["data"]["application"]["pendingRestart"] = ["network.nat.enabled"]
+    elif outcome == "failure":
+        snapshot["data"]["application"]["failed"] = [{"key": "network.nat.enabled"}]
+    controls, writes = [], []
+
+    class Editor:
+        def __init__(self, key):
+            self.key = key
+
+        def locator(self, selector):
+            return self
+
+        @property
+        def last(self):
+            return self
+
+        def uncheck(self):
+            controls.append((self.key, "custom"))
+
+        def set_checked(self, value):
+            controls.append((self.key, value))
+
+    def save(_page, body, timeout):
+        writes.append(body)
+        if outcome == "uncertain":
+            raise RuntimeError("unconfirmed response")
+        for name, value in body["set"]["network"]["nat"].items():
+            snapshot["data"]["saved"]["network"]["nat"][name] = {"mode": "default", "value": value}
+        return snapshot
+
+    monkeypatch.setattr(rust_webui_live_proof, "_settings_editor", lambda page, key: Editor(key))
+    monkeypatch.setattr(rust_webui_live_proof, "_save_settings_form", save)
+    if outcome == "failure" or (outcome == "uncertain" and changed):
+        with pytest.raises(RuntimeError):
+            rust_webui_live_proof._configure_best_effort_upnp(None, base_url="local", api_key="key", timeout_seconds=1)
+    else:
+        assert rust_webui_live_proof._configure_best_effort_upnp(
+            None, base_url="local", api_key="key", timeout_seconds=1) == {
+                "enabled": True, "requireInitialMapping": False,
+                "restartRequired": outcome == "restart", "writes": int(bool(changed)),
+                "configuredThroughRenderedWebui": True}
+    assert len(writes) == int(bool(changed))
+    assert len(controls) == 2 * len(changed)
+    if changed:
+        assert writes == [{"expectedRevision": "17", "set": {"network": {"nat": {
+            name: name == "enabled" for name in changed}}}}]
+
+
 def test_sanitize_report_text_applies_runtime_redactions() -> None:
     text = rust_webui_live_proof.sanitize_report_text(
         "linux private.iso ABCDEF0123456789ABCDEF0123456789 C:\\profile\\file",

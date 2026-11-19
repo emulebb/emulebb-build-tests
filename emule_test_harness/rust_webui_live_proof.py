@@ -450,10 +450,12 @@ def _save_settings_form(page, expected: dict, timeout_seconds: float) -> dict:
         page.remove_listener("request", observe)
 
 
-def _verify_settings_form(page, *, base_url: str, api_key: str,
-                          timeout_seconds: float, verify_edits: bool) -> dict:
-    """Read all native fields; optional writes belong only to disposable package profiles."""
+def _read_settings_form(page, *, base_url: str, api_key: str, timeout_seconds: float) -> tuple[dict, dict, dict]:
+    """Capture a navigation-owned snapshot and prove its complete rendered form."""
     surface = api_data(base_url, "settings/surface", api_key)
+    # WHY: Settings can already be selected by another proof step. Navigate from
+    # Logs so the captured GET belongs to this load, without an implicit retry.
+    _click_primary_nav(page, "Logs", timeout_ms=int(timeout_seconds * 1000))
     with page.expect_response(lambda response: response.request.method == "GET"
                               and urlparse(response.url).path == "/api/v1/settings",
                               timeout=int(timeout_seconds * 1000)) as observed:
@@ -463,6 +465,14 @@ def _verify_settings_form(page, *, base_url: str, api_key: str,
         raise RuntimeError("Settings navigation did not load the native snapshot")
     snapshot = response.json()
     result = _wait_for_settings_form(page, surface, snapshot, timeout_seconds)
+    return surface, snapshot, result
+
+
+def _verify_settings_form(page, *, base_url: str, api_key: str,
+                          timeout_seconds: float, verify_edits: bool) -> dict:
+    """Read all native fields; optional writes belong only to disposable package profiles."""
+    surface, snapshot, result = _read_settings_form(
+        page, base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
     result["writes"] = 0
     if not verify_edits:
         return result
@@ -739,6 +749,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
     zero_configuration_defaults = _assert_zero_configuration_defaults(
         page,
+        base_url=base_url,
+        api_key=api_key,
         timeout_seconds=options.network_timeout_seconds,
     )
     _click_primary_nav(page, "Servers")
@@ -1335,33 +1347,26 @@ def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
     }
 
 
-def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict[str, Any]:
+def _assert_zero_configuration_defaults(page, *, base_url: str, api_key: str,
+                                         timeout_seconds: float) -> dict[str, Any]:
     """Prove fresh-profile auto-connect and best-effort UPnP in the rendered form."""
 
-    _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
-    panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Settings", exact=True)
-    )
-    advanced = panel.get_by_label(re.compile("Advanced"))
-    if not advanced.is_checked():
-        advanced.check()
-    auto_connect = panel.get_by_role(
-        "checkbox",
-        name=re.compile(r"^Auto connect(?:\s|$)"),
-    )
-    nat_section = panel.locator('[data-settings-section="nat"]')
-    nat_enabled = nat_section.get_by_role("checkbox", name=re.compile(r"^NAT(?:\s|$)"))
-    require_initial = nat_section.get_by_role(
-        "checkbox",
-        name=re.compile(r"^Require initial NAT mapping(?:\s|$)"),
-    )
-    auto_connect.wait_for(timeout=int(timeout_seconds * 1000))
-    nat_enabled.wait_for(timeout=int(timeout_seconds * 1000))
-    require_initial.wait_for(timeout=int(timeout_seconds * 1000))
+    _, snapshot, _ = _read_settings_form(
+        page, base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
+    expected = {"network.autoConnect": True, "network.nat.enabled": True,
+                "network.nat.requireInitialMapping": False}
+    for key, value in expected.items():
+        leaf = _saved_setting(snapshot, key)
+        if leaf != {"mode": "default", "value": value}:
+            raise RuntimeError(f"Fresh-profile setting is not the expected default: {key}")
+    application = snapshot["data"]["application"]
+    if application["pendingRestart"] or application["failed"]:
+        raise RuntimeError("Fresh-profile settings have unapplied changes")
+    network = snapshot["data"]["effective"]["network"]
     observed = {
-        "autoConnect": auto_connect.is_checked(),
-        "upnpEnabled": nat_enabled.is_checked(),
-        "requireInitialMapping": require_initial.is_checked(),
+        "autoConnect": network["autoConnect"],
+        "upnpEnabled": network["nat"]["enabled"],
+        "requireInitialMapping": network["nat"]["requireInitialMapping"],
         "verifiedThroughRenderedWebui": True,
     }
     if (
@@ -1376,35 +1381,36 @@ def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict
     return observed
 
 
-def _configure_best_effort_upnp(page, *, timeout_seconds: float) -> dict[str, Any]:
+def _configure_best_effort_upnp(page, *, base_url: str, api_key: str,
+                                timeout_seconds: float) -> dict[str, Any]:
     """Enable best-effort NAT mapping through the rendered Settings form."""
 
-    _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
-    panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Settings", exact=True)
-    )
-    advanced = panel.get_by_label(re.compile("Advanced"))
-    if not advanced.is_checked():
-        advanced.check()
-    nat_section = panel.locator('[data-settings-section="nat"]')
-    nat_enabled = nat_section.get_by_role("checkbox", name=re.compile(r"^NAT(?:\s|$)"))
-    if not nat_enabled.is_checked():
-        nat_enabled.check()
-    require_initial = nat_section.get_by_role(
-        "checkbox",
-        name=re.compile(r"^Require initial NAT mapping(?:\s|$)"),
-    )
-    if require_initial.is_checked():
-        require_initial.uncheck()
-    panel.get_by_role("button", name="Save", exact=True).click()
-    page.get_by_text(
-        "Settings saved; restart daemon for bind, port, NAT, VPN, and filter changes",
-        exact=True,
-    ).wait_for(timeout=int(timeout_seconds * 1000))
+    surface, snapshot, _ = _read_settings_form(
+        page, base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
+    changes = {}
+    for name, value in {"enabled": True, "requireInitialMapping": False}.items():
+        key = "network.nat." + name
+        if _saved_setting(snapshot, key)["value"] is value:
+            continue
+        editor = _settings_editor(page, key)
+        editor.locator('input[aria-label^="Use default for "]').uncheck()
+        editor.locator('input[type="checkbox"]').last.set_checked(value)
+        changes[name] = value
+    if changes:
+        snapshot = _save_settings_form(page, settings_patch(
+            snapshot, set_values={"network": {"nat": changes}}), timeout_seconds)
+        _wait_for_settings_form(page, surface, snapshot, timeout_seconds)
+    for name, value in {"enabled": True, "requireInitialMapping": False}.items():
+        if _saved_setting(snapshot, "network.nat." + name)["value"] is not value:
+            raise RuntimeError("Best-effort NAT settings were not saved")
+    application = snapshot["data"]["application"]
+    if application["failed"]:
+        raise RuntimeError("Best-effort NAT settings application failed")
     return {
         "enabled": True,
         "requireInitialMapping": False,
-        "restartRequired": True,
+        "restartRequired": bool(application["pendingRestart"]),
+        "writes": int(bool(changes)),
         "configuredThroughRenderedWebui": True,
     }
 
@@ -1811,8 +1817,12 @@ def run_webui_live_proof(
                 if configure_best_effort_upnp:
                     report["checks"]["upnpConfiguration"] = _configure_best_effort_upnp(
                         page,
+                        base_url=base_url,
+                        api_key=api_key,
                         timeout_seconds=timeout_seconds,
                     )
+                    if consumer_workflow is not None and report["checks"]["upnpConfiguration"]["restartRequired"]:
+                        raise RuntimeError("Saved NAT configuration requires a daemon restart before consumer-network proof")
 
                 if consumer_workflow is not None:
                     workflow_result = _consumer_network_actions(
