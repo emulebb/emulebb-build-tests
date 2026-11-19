@@ -2691,6 +2691,7 @@ class WatcherConvergenceError(TimeoutError):
 def run_watcher_phase(
     *,
     label: str,
+    watch_root_id: str,
     action: Callable[[], dict[str, int]],
     expected_paths: dict[str, dict[str, object]],
     expected_catalog_total: int,
@@ -2706,13 +2707,26 @@ def run_watcher_phase(
     require_same_hashes: bool = False,
     spec: FixtureSpec = PRODUCTION_SPEC,
 ) -> tuple[dict[str, object], dict[str, str]]:
-    """Apply one live mutation and wait for REST plus SQLite convergence."""
+    """Prove exact live convergence, allowing one explicit loss-recovery scan.
+
+    Saturated native notifications may set scanRequired. Record that public
+    signal and exercise the operator's scan action once; never retry a failed
+    scan or accept a root that still requires scanning.
+    """
 
     started = time.monotonic()
     deadline = started + timeout_seconds
     process_start = len(sampler.samples)
     disk_before = disk_io_snapshot(disk_counter_key)
+    root_path = f"/library/roots/{watch_root_id}"
+    before_root = client.request("GET", root_path)
+    if before_root["scanRequired"] is not False or before_root["watchEnabled"] is not True:
+        raise RuntimeError("Watcher phase requires an enabled root with an acknowledged baseline")
     operation = action()
+    scan_required_observed = False
+    scan_requested = False
+    recovery_scan: dict[str, object] | None = None
+    root_scan_required = True
     final_rows: dict[str, dict[str, object]] = {}
     final_evidence, _ = _watcher_row_evidence(
         {},
@@ -2747,6 +2761,23 @@ def run_watcher_phase(
             )
             final_rows = rows
             final_evidence = evidence
+            root = client.request("GET", root_path)
+            if root["watchEnabled"] is not True:
+                raise RuntimeError("Watcher root was disabled during the mutation phase")
+            root_scan_required = root["scanRequired"]
+            if root_scan_required is True:
+                scan_required_observed = True
+                if not scan_requested:
+                    scan_requested = True
+                    recovery_scan = run_dynamic_reload_phase(
+                        label=f"{label}ExplicitRecovery",
+                        action=lambda: client.request("POST", "/library/scan", {}),
+                        client=client, process=process, sampler=sampler,
+                        counter_keys=[] if disk_counter_key is None else [disk_counter_key],
+                        timeout_seconds=max(0.0, deadline - time.monotonic()),
+                        poll_seconds=poll_seconds,
+                    )
+                    continue
             for path_class in class_convergence:
                 if class_convergence[path_class] is not None:
                     continue
@@ -2781,7 +2812,7 @@ def run_watcher_phase(
                     class_ok = not rows
                 if class_ok:
                     class_convergence[path_class] = round(time.monotonic() - started, 3)
-            if shared_total == expected_catalog_total and rows_ok:
+            if shared_total == expected_catalog_total and rows_ok and root_scan_required is False:
                 converged = True
                 break
         except sqlite3.OperationalError:
@@ -2809,6 +2840,7 @@ def run_watcher_phase(
         "metadataIntegrity": final_evidence["invalidIntegrityCount"] == 0,
         "hashTransition": final_evidence["hashTransitionOk"] is True,
         "restIdentitySample": rest_sample["failureCount"] == 0,
+        "rootScanAcknowledged": root_scan_required is False,
     } | storage_acceptance(
         storage_snapshot,
         expected_active=expected_catalog_total,
@@ -2824,6 +2856,12 @@ def run_watcher_phase(
         "sharedFilesTotal": shared_total,
         "database": final_evidence,
         "restIdentitySample": rest_sample,
+        "watchRecovery": {
+            "scanRequiredObserved": scan_required_observed,
+            "explicitScanCount": int(scan_requested),
+            "scanRequiredAfter": root_scan_required,
+            "scan": recovery_scan,
+        },
         "throughput": {
             "filesPerSecond": round(operation["fileCount"] / elapsed, 3),
             "mibPerSecond": round(operation["totalBytes"] / MIB / elapsed, 3),
@@ -3137,7 +3175,7 @@ def run_campaign(
         created_paths = _expected_watcher_paths(watch_root, renamed=False)
         renamed_paths = _expected_watcher_paths(watch_root, renamed=True)
         created, created_hashes = run_watcher_phase(
-            spec=spec, label="watcherCreate",
+            spec=spec, label="watcherCreate", watch_root_id=watched["id"],
             action=lambda: fixture.install_watcher_cohort(
                 staging_root, watch_root
             ),
@@ -3160,7 +3198,7 @@ def run_campaign(
             report["qualificationScope"]["fullCampaign"] = False
             return report_path, report
         modified, modified_hashes = run_watcher_phase(
-            spec=spec, label="watcherModify",
+            spec=spec, label="watcherModify", watch_root_id=watched["id"],
             action=lambda: fixture.modify_watcher_cohort(watch_root),
             expected_paths=created_paths,
             expected_catalog_total=spec.file_count
@@ -3177,7 +3215,7 @@ def run_campaign(
         )
         report["watcherLifecycle"].append(modified)
         renamed, renamed_hashes = run_watcher_phase(
-            spec=spec, label="watcherRename",
+            spec=spec, label="watcherRename", watch_root_id=watched["id"],
             action=lambda: fixture.rename_watcher_cohort(watch_root),
             expected_paths=renamed_paths,
             expected_catalog_total=spec.file_count
@@ -3194,7 +3232,7 @@ def run_campaign(
         )
         report["watcherLifecycle"].append(renamed)
         deleted, _ = run_watcher_phase(
-            spec=spec, label="watcherDelete",
+            spec=spec, label="watcherDelete", watch_root_id=watched["id"],
             action=lambda: fixture.delete_watcher_cohort(watch_root),
             expected_paths={},
             expected_catalog_total=spec.file_count,

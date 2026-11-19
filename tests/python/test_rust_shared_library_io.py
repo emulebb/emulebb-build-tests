@@ -1119,6 +1119,68 @@ def test_linux_lsblk_parser_maps_children_to_one_physical_disk() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("mode", ["direct", "loss", "persistent-loss", "scan-failure"])
+def test_watcher_phase_uses_one_explicit_scan_and_requires_loss_acknowledgment(monkeypatch, tmp_path, mode):
+    import itertools
+
+    clock = itertools.count(step=0.01)
+    monkeypatch.setattr(subject.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(subject.time, "sleep", lambda _: None)
+    monkeypatch.setattr(subject, "disk_io_snapshot", lambda _: {})
+    monkeypatch.setattr(subject, "profile_storage_snapshot", lambda _: {})
+    monkeypatch.setattr(subject, "storage_acceptance", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(subject, "_watcher_database_rows", lambda _: {})
+    state = {"mutated": False, "scans": 0}
+
+    def request(method, path, payload=None, **_kwargs):
+        if method == "POST":
+            assert path == "/library/scan" and payload == {}
+            state["scans"] += 1
+            if mode == "scan-failure":
+                raise RuntimeError("synthetic scan failure")
+            return {}
+        if path == "/library/roots/1":
+            lost = state["mutated"] and mode != "direct"
+            if state["scans"] and mode != "persistent-loss":
+                lost = False
+            return {"watchEnabled": True, "scanRequired": lost}
+        assert path == subject.SHARED_FILES_PROBE_PATH
+        return {"total": 0}
+
+    def recover(**kwargs):
+        kwargs["action"]()
+        return {"progress": {"running": False, "pending": False}}
+
+    monkeypatch.setattr(subject, "run_dynamic_reload_phase", recover)
+    def mutate():
+        state["mutated"] = True
+        return {"fileCount": 0, "totalBytes": 0}
+
+    def run():
+        return subject.run_watcher_phase(
+            label="watcherProbe", watch_root_id="1", action=mutate,
+            expected_paths={}, expected_catalog_total=0,
+            client=SimpleNamespace(request=request), process=SimpleNamespace(poll=lambda: None),
+            sampler=SimpleNamespace(samples=[], maybe_sample=lambda **_kwargs: None, summary=lambda _: {}),
+            profile_dir=tmp_path, disk_counter_key=None, timeout_seconds=0.3, poll_seconds=0,
+        )
+
+    if mode == "scan-failure":
+        with pytest.raises(RuntimeError, match="synthetic scan failure"):
+            run()
+    elif mode == "persistent-loss":
+        with pytest.raises(subject.WatcherConvergenceError) as failure:
+            run()
+        assert failure.value.phase_report["acceptance"]["checks"]["rootScanAcknowledged"] is False
+    else:
+        report, hashes = run()
+        assert report["acceptance"]["ok"] is True and hashes == {}
+        assert report["watchRecovery"]["scanRequiredObserved"] is (mode == "loss")
+        assert report["watchRecovery"]["scanRequiredAfter"] is False
+    assert state["scans"] == int(mode != "direct")
+
+
+@pytest.mark.unit
 def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) -> None:
     normal = subject._normalized_path_key(tmp_path / "watch-probe-0000.bin")
     long = subject._normalized_path_key(tmp_path / "watch-probe-0500.bin")
