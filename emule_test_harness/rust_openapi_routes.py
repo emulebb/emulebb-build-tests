@@ -829,6 +829,16 @@ def settings_section_resource_response_drift(
 
         data_ref = envelope_data_ref(envelope)
         if data_ref is None:
+            data = envelope.get("properties", {}).get("data", {})
+            # Bounded collection resources retain the same named, closed item
+            # requirement as singleton resources; unbounded arrays still fail.
+            maximum = data.get("maxItems") if isinstance(data, dict) else None
+            if (isinstance(data, dict) and data.get("type") == "array"
+                    and type(maximum) is int and maximum > 0):
+                reference = data.get("items", {}).get("$ref")
+                if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+                    data_ref = reference
+        if data_ref is None:
             drift.append(
                 SettingsSectionResourceResponseDrift(
                     name=name,
@@ -3004,7 +3014,6 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     overrides: dict[Route, str | tuple[str, ...]] = {}
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
-        (r'\("PATCH",\s*\["library", "roots", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/library/roots/{id}"),
         (r'\("GET",\s*\["library", "files", _, "tags"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/tags"),
         (r'\("GET",\s*\["searches", _, "results"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results"),
         (r'\("GET",\s*\["searches", _, "results", _, "observations"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results/{resultId}/observations"),
@@ -3136,10 +3145,11 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
     returns: dict[Route, str] = {}
     route_body_fields = route_body_metadata_rs_text.split("fn route_body_fields", 1)[-1]
     for pattern, method, path in (
+        (r'\("PATCH",\s*\["library", "roots", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/library/roots/{id}"),
         (r'\("PATCH",\s*\["downloads", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/downloads/{id}"),
         (r'\("PATCH",\s*\["shared-files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/shared-files/{hash}"),
         (
-            r'\("PATCH",\s*\["library", "ignores", "defaults", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',
+            r'\("PATCH",\s*\["library", "ignores", "defaults", _\]\)\s*=>\s*(?:\{\s*)?Some\((\w+)\)',
             "PATCH",
             "/library/ignores/defaults/{ruleKey}",
         ),

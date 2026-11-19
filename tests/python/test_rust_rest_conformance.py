@@ -213,7 +213,8 @@ def test_rust_openapi_shared_root_routes_use_controlled_external_path(
     assert module.normalize_contract_path_for_openapi(
         routes_by_operation["updateSharedFileIgnoreRule"]["path"]
     ) == "/shared-directories/ignores/defaults/{ruleKey}"
-    assert module.assert_contract_routes_match_openapi()["ok"] is True
+    report = module.assert_contract_routes_match_openapi()
+    assert report["ok"] is True, json.dumps(report, sort_keys=True)
     assert module.get_contract_route_body("addSharedDirectoryRoot") == {
         "path": str(shared_root.resolve())
     }
@@ -236,7 +237,8 @@ def test_rust_category_contract_uses_name_paths_and_nullable_download_body() -> 
         assert route["path"] == "/api/v1/categories/MissingCategory"
         assert route["openapiPath"] == "/categories/{categoryName}"
         assert module.normalize_contract_path_for_openapi(route["path"]) == route["openapiPath"]
-    assert module.assert_contract_routes_match_openapi()["ok"] is True
+    report = module.assert_contract_routes_match_openapi()
+    assert report["ok"] is True, json.dumps(report, sort_keys=True)
     assert module.get_contract_route_body("patchCategory") == {"comment": "REST contract"}
     assert module.get_contract_route_body("downloadSearchResult") == {
         "intent": "stopped", "category": None,

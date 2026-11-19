@@ -71,17 +71,24 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
 
     def rust_concrete_path(path: str, operation_id: str) -> str:
         concrete = concrete_path(path, operation_id).replace("{resultId}", RUST_MISSING_DOWNLOAD_ID).replace("{categoryName}", RUST_MISSING_CATEGORY_NAME).replace("{tagName}", RUST_MISSING_TAG_NAME)
-        return concrete.replace("{id}", RUST_MISSING_DOWNLOAD_ID) if path.startswith("/downloads/") else concrete
+        return concrete.replace("{id}", RUST_MISSING_DOWNLOAD_ID) if path.startswith(("/downloads/", "/library/roots/")) else concrete
 
     def rust_normalize_path(path: str) -> str:
         path = path.replace(f"/results/{RUST_MISSING_DOWNLOAD_ID}", "/results/{resultId}")
+        path = path.replace(f"/library/roots/{RUST_MISSING_DOWNLOAD_ID}", "/library/roots/{id}")
         path = path.replace(f"/library/tags/{RUST_MISSING_TAG_NAME}", "/library/tags/{tagName}")
+        path = path.replace(f"/library/ignores/defaults/{smoke.REST_CONTRACT_IGNORE_RULE_KEY}",
+                            "/library/ignores/defaults/{ruleKey}")
         return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
                                            "/categories/{categoryName}")
                               .replace(f"/downloads/{RUST_MISSING_DOWNLOAD_ID}",
                                        "/downloads/{id}"))
 
     def rust_contract_body(operation_id: str) -> dict[str, object] | None:
+        if operation_id == "createLibraryRoot":
+            return {}
+        if operation_id == "updateLibraryRoot":
+            return {"watchEnabled": False}
         if operation_id == "setLibrarySharing":
             return {"enabled": False, "hashes": ["ff" * 16]}
         if operation_id == "createLibraryTag":
@@ -108,6 +115,10 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
     smoke.REST_CONTRACT_EXPECTED_ERROR_STATUSES.update({
         "createDownload": (400,),
         "createLibraryTag": (400,),
+        "createLibraryRoot": (400,),
+        "getLibraryRoot": (404,),
+        "updateLibraryRoot": (404,),
+        "deleteLibraryRoot": (404,),
         "getLibraryTag": (404,),
         "listLibraryFileTags": (404,),
         "listSearchResultObservations": (404,),

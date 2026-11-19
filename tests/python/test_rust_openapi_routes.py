@@ -2981,6 +2981,7 @@ components:
           default: false
     LibraryRootPatch:
       type: object
+      minProperties: 1
       additionalProperties: false
       required: [watchEnabled]
       properties:
@@ -4269,3 +4270,25 @@ def test_selected_library_sharing_outcomes_preserve_error_status_and_commit_mean
                     {"hash": "01" * 16, "status": "failed", "httpStatus": 404}):
         with pytest.raises(jsonschema.ValidationError):
             validate_openapi_schema(document, schema, invalid)
+
+
+@pytest.mark.parametrize("bounded", [True, False])
+def test_section_collection_requires_bounded_array_and_closed_named_items(tmp_path, bounded):
+    import yaml
+    surface = write(tmp_path / "surface.rs", 'SettingsSectionResourceSpec { name: "roots", route: "/api/v1/library/roots", ui_section: "Sharing", description: "Roots." }')
+    data = {"type": "array", "items": {"$ref": "#/components/schemas/Root"}}
+    if bounded:
+        data["maxItems"] = 100
+    document = {
+        "paths": {"/library/roots": {"get": {"responses": {"200": {"$ref": "#/components/responses/Roots"}}}}},
+        "components": {
+            "responses": {"Roots": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Envelope"}}}}},
+            "schemas": {"Envelope": {"type": "object", "additionalProperties": False, "properties": {"data": data}},
+                        "Root": {"type": "object", "additionalProperties": False, "properties": {"id": {"type": "string"}}}}}}
+    spec = write(tmp_path / "spec.yaml", yaml.safe_dump(document))
+    drift = settings_section_resource_response_drift(surface, spec)
+    assert bool(drift) is not bounded
+    if bounded:
+        document["components"]["schemas"]["Root"]["additionalProperties"] = True
+        spec = write(spec, yaml.safe_dump(document))
+        assert settings_section_resource_response_drift(surface, spec)[0].issue == "data schema Root must be a closed object"

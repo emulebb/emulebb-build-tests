@@ -450,6 +450,10 @@ def test_same_session_republish_reoffers_without_duplicate_source(monkeypatch, t
         or {"ok": True},
     )
     monkeypatch.setattr(
+        module.rust_local_ed2k, "clear_explicit_library_roots",
+        lambda *_args: calls.append(("request", "DELETE", "/api/v1/library/roots/1", None)) or {"removed": ["1"]},
+    )
+    monkeypatch.setattr(
         module,
         "wait_for_rust_shared_file_absent",
         lambda *_args, **_kwargs: {"absent": True},
@@ -598,7 +602,8 @@ def test_cross_client_shared_root_uses_current_object_contract(monkeypatch, tmp_
         "http://192.0.2.10:4711", "key", root=tmp_path, file_name="fixture.bin", timeout_seconds=1.0,
     )
 
-    assert calls[0][0][4]["roots"] == [{"path": str(tmp_path)}]
+    assert calls[0][0][1:3] == ("POST", "/api/v1/library/roots")
+    assert calls[0][0][4] == {"path": str(tmp_path), "watchEnabled": False}
 
 
 def test_cross_client_diagnostics_require_both_unified_peer_streams(tmp_path: Path) -> None:

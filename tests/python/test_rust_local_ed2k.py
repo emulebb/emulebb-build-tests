@@ -593,3 +593,17 @@ def test_download_detail_refuses_a_same_hash_replacement(monkeypatch):
     monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: {"id": "8", "hash": "a" * 32})
     with pytest.raises(RuntimeError, match="substituted another job"):
         rust_local_ed2k.download_detail("http://127.0.0.1", "key", "7", expected_hash="a" * 32)
+
+
+def test_clear_explicit_library_roots_preserves_managed_resources(monkeypatch):
+    calls = []
+    def request(_base, method, path, _key, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "GET":
+            return {"data": [{"id": "2", "managed": True}, {"id": "9", "managed": False}],
+                    "meta": {"hasMore": False, "nextCursor": None}}
+        assert (method, path, kwargs) == ("DELETE", "/api/v1/library/roots/9", {"expected_status": 204})
+        return {}
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    assert rust_local_ed2k.clear_explicit_library_roots("http://127.0.0.1:4711", "synthetic") == {"removed": ["9"]}
+    assert len(calls) == 2
