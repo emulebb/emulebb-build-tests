@@ -448,7 +448,7 @@ def request_document(base_url: str, method: str, path: str, api_key: str, body: 
     """Use this smoke's HTTP transport and require the current REST envelope."""
     document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body,
                                    expected_statuses=expected_statuses))
-    if (not isinstance(document, dict) or not isinstance(document.get("data"), dict)
+    if (not isinstance(document, dict) or not isinstance(document.get("data"), (dict, list))
             or not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"):
         raise RuntimeError("Packaged REST must return the current v1 data/meta envelope")
     return document
@@ -457,8 +457,11 @@ def request_document(base_url: str, method: str, path: str, api_key: str, body: 
 def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
                  *, expected_statuses: tuple[int, ...] | None = None) -> dict:
     """Read this smoke's object data while retaining envelope checks."""
-    return request_document(base_url, method, path, api_key, body,
+    data = request_document(base_url, method, path, api_key, body,
                             expected_statuses=expected_statuses)["data"]
+    if not isinstance(data, dict):
+        raise RuntimeError("Packaged REST object requires the current v1 data/meta envelope")
+    return data
 
 
 def _download_page(base_url: str, path: str) -> list[dict]:
@@ -506,7 +509,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
     bootstrap = profile / "emulebb-rust-settings.toml"
     before_bootstrap = file_sha256(bootstrap)
     before_settings = request_json(base_url, "GET", "/api/v1/settings", API_KEY)
-    before_roots = list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, API_KEY)))
+    before_roots = list(iter_library_roots(lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY)))
     contenders = []
     for arguments in (
         ["import", "profile", "--hashes-only", str(archive)],
@@ -527,7 +530,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
         contenders.append({"command": command, "exitCode": result.returncode, "profileBusy": True})
     if (file_sha256(bootstrap) != before_bootstrap
             or request_json(base_url, "GET", "/api/v1/settings", API_KEY) != before_settings
-            or list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, API_KEY))) != before_roots):
+            or list(iter_library_roots(lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY))) != before_roots):
         raise RuntimeError("denied offline commands changed the owned profile's bootstrap, settings or roots")
     return contenders
 

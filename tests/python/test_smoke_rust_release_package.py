@@ -117,16 +117,18 @@ def ownership_contenders(monkeypatch):
             stderr="profile is already in use: fixture; stop its daemon or offline command before retrying",
         )
 
-    def rest(_base, _method, path, _key):
+    def rest(url, **kwargs):
+        path = url.removeprefix("http://127.0.0.1:4711")
         changed = state["calls"] > 0
         if path == "/api/v1/settings":
-            return {"effective": {"transfers": {"uploadLimitBytesPerSecond": 2048 if changed and state["mutation"] == "settings" else 1024}}}
+            data = {"effective": {"transfers": {"uploadLimitBytesPerSecond": 2048 if changed and state["mutation"] == "settings" else 1024}}}
+            return json.dumps({"data": data, "meta": {"apiVersion": "v1"}}).encode()
         assert path == "/api/v1/library/roots?limit=100"
-        return {"data": [{"id": "1", "path": "/synthetic/changed", "managed": False}] if changed and state["mutation"] == "roots" else [],
-                "meta": {"hasMore": False, "nextCursor": None}}
+        return json.dumps({"data": [{"id": "1", "path": "/synthetic/changed", "managed": False}] if changed and state["mutation"] == "roots" else [],
+                           "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
 
     monkeypatch.setattr(smoke.subprocess, "run", offline)
-    monkeypatch.setattr(smoke, "request_json", rest)
+    monkeypatch.setattr(smoke, "_request", rest)
     try:
         yield profile, bootstrap, state, tmp_path
     finally:
