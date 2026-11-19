@@ -8,7 +8,7 @@ import urllib.parse
 import pytest
 
 from emule_test_harness import rust_rest_conformance
-from emule_test_harness.rust_rest_contract import iter_library_roots
+from emule_test_harness.rust_rest_contract import iter_downloads, iter_library_roots
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 
@@ -35,6 +35,34 @@ def test_library_roots_follow_short_pages_without_skipping_id_gaps():
 def test_library_roots_require_bounded_advancing_pages(document):
     with pytest.raises(RuntimeError):
         list(iter_library_roots(lambda path: document))
+
+
+def test_download_pages_keep_full_width_ids_and_follow_short_pages():
+    calls = []
+    def fetch(path):
+        calls.append(path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        assert query["view"] == ["all"] and query["limit"] == ["200"]
+        if len(calls) == 1:
+            return {"data": [{"id": "9007199254740993"}, {"id": "7"}],
+                    "meta": {"hasMore": True, "nextCursor": "opaque-next"}}
+        assert query["cursor"] == ["opaque-next"]
+        return {"data": [{"id": "1"}], "meta": {"hasMore": False, "nextCursor": None}}
+    assert [row["id"] for row in iter_downloads(fetch)] == ["9007199254740993", "7", "1"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("document", [
+    {"data": [], "meta": {"hasMore": False}},
+    {"data": [], "meta": {"hasMore": True, "nextCursor": "next"}},
+    {"data": [{"id": "01"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "1"}, {"id": "2"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "9223372036854775808"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "7"}] * 201, "meta": {"hasMore": False, "nextCursor": None}},
+])
+def test_download_pages_require_bounded_advancing_current_identities(document):
+    with pytest.raises(RuntimeError):
+        list(iter_downloads(lambda path: document))
 
 
 def test_explicit_contract_load_does_not_override_operator_environment(tmp_path, monkeypatch):

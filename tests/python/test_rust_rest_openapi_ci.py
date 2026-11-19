@@ -99,10 +99,10 @@ def test_retained_scale_proof_accepts_short_pages_and_reopens_the_profile(tmp_pa
 
 @pytest.mark.parametrize("rows,meta,error", [
     ([], {"hasMore": False, "nextCursor": None}, "invalid page length"),
-    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
+    ([{"id": "3"}, {"id": "3"}], {"hasMore": False, "nextCursor": None}, "immutable identities"),
     ([{"id": "3"}], {"hasMore": False, "nextCursor": None}, "omitted jobs"),
-    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}, "Final retained-scale page"),
-    ([{"id": 3}], {"hasMore": False, "nextCursor": None}, "lost exact IDs"),
+    ([{"id": "3"}, {"id": "2"}, {"id": "1"}], {"hasMore": False, "nextCursor": "extra"}, "continuation did not advance"),
+    ([{"id": 3}], {"hasMore": False, "nextCursor": None}, "identity is invalid"),
 ])
 def test_retained_scale_proof_rejects_incomplete_or_invalid_pages(tmp_path, monkeypatch, rows, meta, error):
     module, root, shutdowns = retained_scale_subject(tmp_path, monkeypatch)

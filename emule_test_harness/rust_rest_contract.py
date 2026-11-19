@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 REST_CONTRACT_VERSION = "2.0.0"
@@ -55,33 +55,48 @@ def restore_settings_patch(snapshot: dict[str, Any], saved_leaves: dict[str, dic
     return settings_patch(snapshot, set_values=values, reset=tuple(reset))
 
 
-def iter_library_roots(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Stream ID-ordered root pages using an existing authenticated request owner."""
+def _iter_id_resources(fetch_page: Callable[[str], dict[str, Any]], path: str,
+                       query: dict[str, Any], *, descending: bool) -> Iterator[dict[str, Any]]:
+    """Traverse bounded current resource pages with strict immutable-ID order."""
     cursor: str | None = None
-    previous_id = 0
+    previous_id = 9223372036854775808 if descending else 0
     while True:
-        query: dict[str, str | int] = {"limit": 100}
+        parameters = dict(query)
         if cursor is not None:
-            query["cursor"] = cursor
-        document = fetch_page("/library/roots?" + urlencode(query))
+            parameters["cursor"] = cursor
+        document = fetch_page(path + "?" + urlencode(parameters))
         rows, meta = document.get("data"), document.get("meta")
-        if not isinstance(rows, list) or len(rows) > 100 or not isinstance(meta, dict):
-            raise RuntimeError("library root collection requires a bounded data page and metadata")
+        if (not isinstance(rows, list) or len(rows) > query["limit"] or not isinstance(meta, dict)
+                or not {"hasMore", "nextCursor"}.issubset(meta)):
+            raise RuntimeError(f"{path} collection requires a bounded data page and metadata")
         for row in rows:
             value = row.get("id") if isinstance(row, dict) else None
             if not isinstance(value, str) or not 1 <= len(value) <= 19 or not value.isascii() or not value.isdecimal():
-                raise RuntimeError("library root identity is invalid")
+                raise RuntimeError(f"{path} identity is invalid")
             number = int(value)
-            if value != str(number) or not previous_id < number <= 9223372036854775807:
-                raise RuntimeError("library root page did not advance its immutable identities")
+            advances = 0 < number < previous_id if descending else previous_id < number <= 9223372036854775807
+            if value != str(number) or not advances:
+                raise RuntimeError(f"{path} page did not advance its immutable identities")
             previous_id = number
             yield row
         more, next_cursor = meta.get("hasMore"), meta.get("nextCursor")
         if more is False and next_cursor is None:
             return
         if more is not True or not rows or not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
-            raise RuntimeError("library root continuation did not advance")
+            raise RuntimeError(f"{path} continuation did not advance")
         cursor = next_cursor
+
+
+def iter_library_roots(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Stream ID-ordered root pages using an existing authenticated request owner."""
+    return _iter_id_resources(fetch_page, "/library/roots", {"limit": 100}, descending=False)
+
+
+def iter_downloads(fetch_page: Callable[[str], dict[str, Any]], *,
+                   view: Literal["all", "completed", "unfinished"] = "all") -> Iterator[dict[str, Any]]:
+    """Stream all retained jobs in native descending-ID order without a total cap."""
+    return _iter_id_resources(fetch_page, "/downloads", {"view": view, "limit": 200}, descending=True)
+
 
 # Compile-time packet-diagnostics controls are private harness surfaces. They
 # are intentionally implemented by diagnostics builds and intentionally absent

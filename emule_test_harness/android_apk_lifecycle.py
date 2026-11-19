@@ -741,6 +741,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
     def file_link_intents():
         from .rust_local_ed2k import request_json
         from .rust_webui_live_proof import run_file_link_browser_proof
+        from .rust_rest_contract import iter_downloads
 
         proof = {"schema": "emulebb.android.apk-file-links/1", "status": "failed", "cases": []}
         result["fileLinks"] = proof
@@ -761,14 +762,20 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             if link not in find("pending_link").get("text", ""):
                 raise RuntimeError("APK did not preserve the requested pending file link")
 
-        def transfer_rows():
-            value = request_json(base, "GET", "/api/v1/transfers?limit=100", key)
-            items = value.get("items")
-            if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
-                raise RuntimeError("APK file-link proof received an invalid transfer collection")
-            return sorted((item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
+        def download_signature():
+            # WHY: retained history is unbounded, while progress metadata can
+            # change normally. Stream immutable identities instead of truncating
+            # the collection or holding every job in memory.
+            digest, count = hashlib.sha256(), 0
+            for item in iter_downloads(lambda path: request_json(base, "GET", "/api/v1" + path, key)):
+                file_hash = item.get("hash")
+                if not isinstance(file_hash, str) or re.fullmatch(r"[0-9a-f]{32}", file_hash) is None:
+                    raise RuntimeError("APK file-link proof received an invalid download identity")
+                digest.update(json.dumps([item["id"], file_hash], separators=(",", ":")).encode() + b"\n")
+                count += 1
+            return count, digest.hexdigest()
 
-        baseline = transfer_rows()
+        baseline = download_signature()
         click("stop_service")
         wait_state("Stopped")
         assert_listener_stopped()
@@ -806,11 +813,11 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         pending()
         dispatch(link)
         pending()
-        if transfer_rows() != baseline:
-            raise RuntimeError("APK intent reception silently changed the transfer queue")
+        if download_signature() != baseline:
+            raise RuntimeError("APK intent reception silently changed the download jobs")
         case("start-and-repeated-intents-without-enqueue")
         browser = shell("cmd", "package", "resolve-activity", "--brief", "-a", "android.intent.action.VIEW",
-                        "-c", "android.intent.category.BROWSABLE", "-d", base + "/transfers")
+                        "-c", "android.intent.category.BROWSABLE", "-d", base + "/")
         component = browser.splitlines()[-1] if browser.splitlines() else ""
         package = component.partition("/")[0]
         # WHY: resolve-activity can return the platform resolver when no default
@@ -827,13 +834,13 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 raise RuntimeError("APK did not dispatch the WebUI to the actual guest browser")
             time.sleep(1)
         reopen()
-        if inspect().get("pending_link", {}).get("text") or transfer_rows() != baseline:
+        if inspect().get("pending_link", {}).get("text") or download_signature() != baseline:
             raise RuntimeError("APK browser dispatch retained its pending link or enqueued it")
         case("native-browser-dispatch-without-enqueue")
         proof["browser"] = run_file_link_browser_proof(base_url=base, api_key=key, link=link,
             file_hash=file_hash, size_bytes=1, report_path=report_dir / "apk-file-link-browser.json",
             identity=payload["buildIdentity"])
-        if proof["browser"].get("status") != "passed" or transfer_rows() != baseline:
+        if proof["browser"].get("status") != "passed" or download_signature() != baseline:
             raise RuntimeError("APK bundled WebUI file-link confirmation did not finish cleanly")
         authenticated()
         case("bundled-webui-confirmation")
