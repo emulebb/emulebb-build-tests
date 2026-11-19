@@ -79,16 +79,24 @@ class FixtureSpec:
 
 
 PRODUCTION_SPEC = FixtureSpec()
+LOW_MEMORY_SPEC = FixtureSpec(
+    top_directories=50, small_count=40_000, medium_count=7_500, large_count=2_500,
+)
+QUALIFICATION_SPECS = (LOW_MEMORY_SPEC, PRODUCTION_SPEC)
+
+
+def _unicode_cohort_start(spec: FixtureSpec) -> int:
+    return spec.file_count - 1_100
 
 
 def baseline_long_path_count(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
-    """Reserve one 1,000-file top-level group in the production fixture."""
+    """Reserve one 1,000-file group in either capacity-tier fixture."""
 
-    return 1_000 if spec == PRODUCTION_SPEC else 0
+    return 1_000 if spec in QUALIFICATION_SPECS else 0
 
 
 def unicode_cohort_count(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
-    return len(UNICODE_FILE_NAMES) if spec == PRODUCTION_SPEC else 0
+    return len(UNICODE_FILE_NAMES) if spec in QUALIFICATION_SPECS else 0
 
 
 def unicode_cohort_summary(spec: FixtureSpec = PRODUCTION_SPEC) -> dict[str, object]:
@@ -101,7 +109,7 @@ def unicode_cohort_summary(spec: FixtureSpec = PRODUCTION_SPEC) -> dict[str, obj
         "cjk": True,
         "emoji": True,
         "bracketed": True,
-        "longUnicodePathCount": 4 if spec == PRODUCTION_SPEC else 0,
+        "longUnicodePathCount": 4 if spec in QUALIFICATION_SPECS else 0,
     }
 
 
@@ -136,10 +144,10 @@ def relative_file_for_index(index: int, spec: FixtureSpec = PRODUCTION_SPEC) -> 
     top = index // files_per_top
     leaf = (index % files_per_top) // spec.files_per_leaf
     relative = Path(f"group-{top:03d}") / f"leaf-{leaf:03d}"
-    unicode_offset = index - UNICODE_COHORT_START
-    if spec == PRODUCTION_SPEC and 0 <= unicode_offset < len(UNICODE_FILE_NAMES):
+    unicode_offset = index - _unicode_cohort_start(spec)
+    if spec in QUALIFICATION_SPECS and 0 <= unicode_offset < len(UNICODE_FILE_NAMES):
         relative = (
-            Path("group-098")
+            Path(f"group-{spec.top_directories - 2:03d}")
             / "unicode-cohort"
             / f"case-{unicode_offset:02d}"
         )
@@ -166,11 +174,12 @@ def superseded_unicode_baseline_paths(
 ) -> tuple[Path, ...]:
     """Return the v2 baseline paths replaced by the deterministic Unicode cohort."""
 
-    if spec != PRODUCTION_SPEC:
+    if spec not in QUALIFICATION_SPECS:
         return ()
     paths = []
     files_per_top = spec.leaf_directories_per_top * spec.files_per_leaf
-    for index in range(UNICODE_COHORT_START, UNICODE_COHORT_START + len(UNICODE_FILE_NAMES)):
+    start = _unicode_cohort_start(spec)
+    for index in range(start, start + len(UNICODE_FILE_NAMES)):
         top = index // files_per_top
         leaf = (index % files_per_top) // spec.files_per_leaf
         paths.append(
@@ -215,8 +224,8 @@ def mutation_indices(spec: FixtureSpec = PRODUCTION_SPEC) -> tuple[int, ...]:
     """Select a deterministic, evenly spread 1% sample across all size tiers."""
 
     requested = (
-        MUTATION_COUNTS
-        if spec == PRODUCTION_SPEC
+        tuple(bucket // 100 for bucket in (spec.small_count, spec.medium_count, spec.large_count))
+        if spec in QUALIFICATION_SPECS
         else tuple(
             min(count, bucket)
             for count, bucket in zip(
@@ -290,7 +299,7 @@ def validate_fixture(
     unexpected_paths: set[Path] = set()
     unicode_indices = {
         relative_file_for_index(index, spec): index
-        for index in range(UNICODE_COHORT_START, UNICODE_COHORT_START + unicode_cohort_count(spec))
+        for index in range(_unicode_cohort_start(spec), _unicode_cohort_start(spec) + unicode_cohort_count(spec))
     }
     total_bytes = 0
     empty_directory_count = 0
@@ -324,7 +333,7 @@ def validate_fixture(
             maximum_component_length = max(maximum_component_length, storage.maximum_native_component_length(path))
             if len(str(relative)) >= LONG_PATH_MIN_RELATIVE_CHARS:
                 long_path_count += 1
-            if relative.parts[:2] == ("group-098", "unicode-cohort"):
+            if relative in unicode_indices:
                 unicode_path_count += 1
     missing_count = spec.file_count - valid_count
     unexpected_path_count = len(unexpected_paths)

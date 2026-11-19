@@ -1734,12 +1734,12 @@ def test_fixture_validation_keeps_exact_path_and_size_verdicts(tmp_path, monkeyp
     assert result["unexpectedSizeCount"] == (0 if fault in {"missing", "duplicate-walk"} else 1)
 
 
-def test_full_fixture_inventory_keeps_transient_allocations_below_sixteen_mebibytes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("spec", [subject.fixture.LOW_MEMORY_SPEC, subject.fixture.PRODUCTION_SPEC])
+def test_full_fixture_inventory_keeps_transient_allocations_below_sixteen_mebibytes(tmp_path, monkeypatch, spec):
     import itertools
     import tracemalloc
 
     fixture = subject.fixture
-    spec = fixture.PRODUCTION_SPEC
     root = tmp_path / "library"
     current_sizes = {}
     def walk(_root):
@@ -1762,7 +1762,24 @@ def test_full_fixture_inventory_keeps_transient_allocations_below_sixteen_mebiby
         transient_peak = tracemalloc.get_traced_memory()[1] - baseline
     finally:
         if not already_tracing: tracemalloc.stop()
-    assert result["ok"] and result["fileCount"] == 100_000
+    assert result["ok"] and result["fileCount"] == spec.file_count
     assert result["totalBytes"] == spec.total_bytes
     assert result["longPathFileCount"] == 1000 and result["unicodePathFileCount"] == 16
     assert transient_peak < 16 * 1024 * 1024, f"fixture inventory retained {transient_peak:,} traced bytes"
+
+
+def test_low_memory_fixture_preserves_size_mix_and_path_coverage():
+    fixture = subject.fixture
+    spec = fixture.LOW_MEMORY_SPEC
+    spec.validate()
+    assert spec.file_count == 50_000
+    assert spec.total_bytes == fixture.PRODUCTION_SPEC.total_bytes // 2
+    assert len(fixture.mutation_indices(spec)) == 500
+    assert fixture.expected_mutation_bytes(spec) == fixture.expected_mutation_bytes() // 2
+    paths = [fixture.relative_file_for_index(index, spec) for index in range(spec.file_count)]
+    assert len(set(paths)) == spec.file_count
+    assert sum(len(str(path)) >= fixture.LONG_PATH_MIN_RELATIVE_CHARS for path in paths) == 1000
+    unicode_paths = [path for path in paths if "unicode-cohort" in path.parts]
+    assert len(unicode_paths) == 16
+    assert {path.name for path in unicode_paths} == set(fixture.UNICODE_FILE_NAMES)
+    assert sum(len(path.parts) == 6 for path in unicode_paths) == 4
