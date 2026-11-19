@@ -4275,7 +4275,7 @@ def test_selected_library_sharing_outcomes_preserve_error_status_and_commit_mean
 @pytest.mark.parametrize("bounded", [True, False])
 def test_section_collection_requires_bounded_array_and_closed_named_items(tmp_path, bounded):
     import yaml
-    surface = write(tmp_path / "surface.rs", 'SettingsSectionResourceSpec { name: "roots", route: "/api/v1/library/roots", ui_section: "Sharing", description: "Roots." }')
+    surface = write(tmp_path / "surface.rs", 'const SETTINGS_SECTION_RESOURCES: &[SettingsSectionResourceSpec] = &[SettingsSectionResourceSpec { name: "roots", route: "/api/v1/library/roots", ui_section: "Sharing", description: "Roots." }];')
     data = {"type": "array", "items": {"$ref": "#/components/schemas/Root"}}
     if bounded:
         data["maxItems"] = 100
