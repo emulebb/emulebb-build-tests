@@ -123,6 +123,33 @@ def test_selected_committed_error_requires_true_commit_flag(selected_rust_openap
         validate_openapi_schema(document, schema, payload)
 
 
+@pytest.mark.parametrize("code,details", [
+    ("SETTINGS_CONFLICT", {"actualRevision": "2"}),
+    ("SETTINGS_REVISION_EXHAUSTED", {}),
+    ("PAYLOAD_TOO_LARGE", {}),
+    ("INVALID_ARGUMENT", {"issues": [{"key": "network.nickname", "code": "invalid-value", "message": "Text is invalid."}]}),
+])
+def test_selected_settings_errors_have_documented_codes_and_typed_details(selected_rust_openapi, code, details):
+    _, document = selected_rust_openapi
+    validate_openapi_schema(document, openapi_schema_component(document, "ErrorEnvelope"),
+                            {"error": {"code": code, "message": "Settings outcome", "details": details}})
+
+
+@pytest.mark.parametrize("code,details", [
+    ("SETTINGS_CONFLICT", {}),
+    ("SETTINGS_CONFLICT", {"actualRevision": 2}),
+    ("SETTINGS_CONFLICT", {"actualRevision": "0"}),
+    ("INVALID_ARGUMENT", {"issues": []}),
+    ("INVALID_ARGUMENT", {"issues": [{"key": "network.extension", "code": "invalid-value", "message": "Invalid."}]}),
+    ("INVALID_ARGUMENT", {"issues": [{"key": "network.nickname", "code": "unrecognized-code", "message": "Invalid."}]}),
+])
+def test_selected_settings_errors_reject_invalid_revision_and_issue_shapes(selected_rust_openapi, code, details):
+    _, document = selected_rust_openapi
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, openapi_schema_component(document, "ErrorEnvelope"),
+                                {"error": {"code": code, "message": "Settings outcome", "details": details}})
+
+
 def test_selected_friend_frontdoors_document_current_persistence_errors(selected_rust_openapi):
     _, document = selected_rust_openapi
     schema = openapi_schema_component(document, "ErrorEnvelope")
