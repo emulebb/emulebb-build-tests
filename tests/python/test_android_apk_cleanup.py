@@ -45,13 +45,13 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
     elif fault == "bound":
         candidates *= 17
     settings = {"daemon": {"incomingDir": candidate if fault == "current-incoming" else "/operator/Incoming"}}
-    roots = [{"path": canonical if fault == "shared-root" else "/operator/Shared"}]
+    roots = [{"id": "1", "path": canonical if fault == "shared-root" else "/operator/Shared", "managed": False}]
     operations, requests, removed = [], [], []
 
     def request(base, method, route, key):
         requests.append((method, route))
         assert method == "GET", "cleanup must not mutate operator configuration"
-        return deepcopy(settings if route.endswith("settings") else {"roots": roots})
+        return deepcopy(settings if route.endswith("settings") else {"data": roots, "meta": {"hasMore": False, "nextCursor": None}})
 
     def command(*args, **kwargs):
         operation = args[2:]

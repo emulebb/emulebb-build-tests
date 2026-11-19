@@ -121,7 +121,9 @@ def ownership_contenders(monkeypatch):
         changed = state["calls"] > 0
         if path == "/api/v1/app/settings":
             return {"core": {"uploadLimitKiBps": 2 if changed and state["mutation"] == "settings" else 1}}
-        return {"roots": ["changed"] if changed and state["mutation"] == "roots" else []}
+        assert path == "/api/v1/library/roots?limit=100"
+        return {"data": [{"id": "1", "path": "/synthetic/changed", "managed": False}] if changed and state["mutation"] == "roots" else [],
+                "meta": {"hasMore": False, "nextCursor": None}}
 
     monkeypatch.setattr(smoke.subprocess, "run", offline)
     monkeypatch.setattr(smoke, "request_json", rest)

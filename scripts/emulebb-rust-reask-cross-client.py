@@ -1169,7 +1169,7 @@ def withdraw_rust_shared_root(
         shared_files_path=RUST_SHARED_FILES_PATH,
         timeout=timeout,
     )
-    shared_directories = cc.rust_local_ed2k.clear_explicit_library_roots(base_url, api_key)
+    library_roots = cc.rust_local_ed2k.clear_explicit_library_roots(base_url, api_key)
     reload_response = reload_shared_catalog(
         base_url,
         api_key,
@@ -1187,7 +1187,7 @@ def withdraw_rust_shared_root(
         "fileHash": _canonical_hash(file_hash, field="file_hash"),
         "method": "shared-roots-cleared",
         "fixturePath": str(fixture_path.resolve()),
-        "sharedDirectories": shared_directories,
+        "libraryRoots": library_roots,
         "presentBefore": True,
         "reloadResponse": reload_response,
         "absentAfter": True,

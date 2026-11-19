@@ -101,12 +101,15 @@ def test_reset_candidate_must_still_match_admitted_hash(tmp_path):
 
 def test_fresh_defaults_require_actual_incoming_and_only_canonical_shared_root():
     from emule_test_harness.android_apk_profile import INCOMING, SHARED
-    subject._verify_fresh_storage({'daemon': {'incomingDir': INCOMING}}, {'roots': [{'path': SHARED}]})
-    for settings, roots in [({'daemon': {'incomingDir': '/other'}}, {'roots': [{'path': SHARED}]}),
-                            ({'daemon': {'incomingDir': INCOMING}}, {'roots': []}),
-                            ({'daemon': {'incomingDir': INCOMING}}, {'roots': [{'path': SHARED}, {'path': '/other'}]})]:
+    roots = [{"path": SHARED, "managed": False, "watchEnabled": False},
+             {"path": INCOMING, "managed": True, "watchEnabled": False}]
+    subject._verify_fresh_storage({'daemon': {'incomingDir': INCOMING}}, roots)
+    for settings, invalid in [({'daemon': {'incomingDir': '/other'}}, roots),
+                              ({'daemon': {'incomingDir': INCOMING}}, []),
+                              ({'daemon': {'incomingDir': INCOMING}}, roots + [{"path": "/other", "managed": False}]),
+                              ({'daemon': {'incomingDir': INCOMING}}, [dict(root, watchEnabled=True) for root in roots])]:
         with pytest.raises(RuntimeError):
-            subject._verify_fresh_storage(settings, roots)
+            subject._verify_fresh_storage(settings, invalid)
 
 
 @pytest.mark.parametrize('baseline,fail', [('unknown', False), ('auto', True), ('no', False)])
@@ -874,7 +877,9 @@ def test_reset_journals_one_uninstall_and_bound_new_install(tmp_path, monkeypatc
     if fault == 'wrong-old-hash':
         phone.checksum = '0' * 64
     monkeypatch.setattr(rust_local_ed2k, 'request_json', lambda base, method, route, key:
-        {'daemon': {'incomingDir': INCOMING}} if route == '/api/v1/app/settings' else {'roots': [{'path': SHARED}]})
+        {'daemon': {'incomingDir': INCOMING}} if route == '/api/v1/app/settings' else {'data': [{'id': '1', 'path': SHARED, 'managed': False, 'watchEnabled': False},
+                      {'id': '2', 'path': INCOMING, 'managed': True, 'watchEnabled': False}],
+             'meta': {'hasMore': False, 'nextCursor': None}})
     if fault == 'theme-fails':
         def theme_failure(*args):
             raise RuntimeError('synthetic theme failure')
@@ -1335,7 +1340,8 @@ def test_owned_compatible_update_requires_bound_receipts_and_preserves_phone_sta
         from emule_test_harness import rust_local_ed2k
         monkeypatch.setattr(rust_local_ed2k, "request_json", lambda base, method, route, key: {
             "daemon": {"incomingDir": android_apk_profile.INCOMING}} if route == "/api/v1/app/settings" else {
-            "roots": [{"path": android_apk_profile.SHARED}]})
+            "data": [{"id": "1", "path": android_apk_profile.SHARED, "managed": False}],
+            "meta": {"hasMore": False, "nextCursor": None}})
     kwargs = dict(serial=SERIAL, output_root=tmp_path, report_dir=tmp_path / "updated", expected_cert_sha256="b" * 64,
         execute=fault == "execute", dwell_seconds=15,
         installation_receipt=installation, installation_receipt_sha256=hashlib.sha256(installation.read_bytes()).hexdigest(),

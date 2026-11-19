@@ -937,12 +937,9 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
         ),
     )
     monkeypatch.setattr(
-        module,
-        "clear_shared_roots",
-        lambda *_args, **_kwargs: {
-            "request": {"roots": [], "confirmReplaceRoots": True},
-            "response": {"status": 200, "json": {"roots": []}},
-        },
+        module.cc.rust_local_ed2k,
+        "clear_explicit_library_roots",
+        lambda *_args, **_kwargs: {"removed": ["1"]},
     )
     monkeypatch.setattr(
         module,
@@ -960,10 +957,7 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
         "fileHash": FILE_HASH,
         "method": "shared-roots-cleared",
         "fixturePath": str(fixture.resolve()),
-        "sharedDirectories": {
-            "request": {"roots": [], "confirmReplaceRoots": True},
-            "response": {"status": 200, "json": {"roots": []}},
-        },
+        "libraryRoots": {"removed": ["1"]},
         "presentBefore": True,
         "reloadResponse": {"status": 200, "json": {"ok": True}},
         "absentAfter": True,
@@ -972,32 +966,6 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
     assert observed_states == [
         (True, module.RUST_SHARED_FILES_PATH),
         (False, module.RUST_SHARED_FILES_PATH),
-    ]
-
-
-def test_clear_shared_roots_uses_exact_production_patch(monkeypatch) -> None:
-    module = _load_module()
-    calls: list[tuple[str, str, object]] = []
-
-    def retry_rest_request(_base_url, path, *, method, json_body, **_kwargs):
-        calls.append((method, path, json_body))
-        return {
-            "status": 200,
-            "raw_json": {"data": {"roots": []}},
-        }
-
-    monkeypatch.setattr(module.dtt, "retry_rest_request", retry_rest_request)
-
-    assert module.clear_shared_roots("http://responder.test", "secret") == {
-        "request": {"roots": [], "confirmReplaceRoots": True},
-        "response": {"status": 200, "json": {"roots": []}},
-    }
-    assert calls == [
-        (
-            "PATCH",
-            module.SHARED_DIRECTORIES_PATH,
-            {"roots": [], "confirmReplaceRoots": True},
-        )
     ]
 
 

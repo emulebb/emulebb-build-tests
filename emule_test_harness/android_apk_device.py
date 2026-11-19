@@ -82,12 +82,14 @@ def _verify_reset_candidate(payload: dict) -> None:
             raise RuntimeError("Owned reset candidate APK bytes changed")
 
 
-def _verify_fresh_storage(settings: dict, roots: dict) -> None:
+def _verify_fresh_storage(settings: dict, roots: list[dict]) -> None:
     from .android_apk_profile import INCOMING, SHARED
-    entries = roots.get("roots")
+    entries = roots
     if (settings.get("daemon", {}).get("incomingDir") != INCOMING or not isinstance(entries, list)
             or any(not isinstance(root, dict) or not isinstance(root.get("path"), str) for root in entries)
-            or {root["path"] for root in entries} != {SHARED}):
+            or {root["path"] for root in entries} != {SHARED, INCOMING}
+            or {root["path"] for root in entries if root.get("managed") is False} != {SHARED}
+            or any(root.get("watchEnabled") is not False for root in entries)):
         raise RuntimeError("Fresh profile REST storage defaults differ")
 
 
