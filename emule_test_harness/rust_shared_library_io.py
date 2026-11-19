@@ -2840,24 +2840,41 @@ def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
         "failed to create shared-directory watcher",
         "failed to watch shared directory",
     )
+    finalization_markers = {
+        "rootCommitStarted": "shared-directory reload committing root memberships",
+        "rootCommitFinished": "shared-directory reload committed root memberships",
+        "catalogRebuildStarted": "shared-directory reload rebuilding complete catalog",
+        "reloadFinished": "shared-directory reload completed",
+    }
+    finalization_counts = dict.fromkeys(finalization_markers, 0)
+    last_finalization_event = None
     for path in log_paths:
         if not path.is_file():
             continue
         byte_count = path.stat().st_size
         marker_counts["logByteCount"] += byte_count
         marker_counts["nonEmptyLogCount"] += int(byte_count > 0)
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            marker_counts["watcherRegistrations"] += int(
-                "watching shared directory for auto-pickup" in line
-            )
-            marker_counts["autoShared"] += int("auto-shared monitored file" in line)
-            marker_counts["autoRemoved"] += int(
-                "auto-removed monitored file from shared catalog" in line
-            )
-            marker_counts["watcherErrors"] += int(
-                any(marker in line for marker in error_markers)
-            )
-    return marker_counts
+        # Keep failure reporting bounded when a long campaign has large logs.
+        # Only fixed event names and counters enter the report, never log text.
+        with path.open(encoding="utf-8", errors="replace") as lines:
+            for line in lines:
+                marker_counts["watcherRegistrations"] += int(
+                    "watching shared directory for auto-pickup" in line
+                )
+                marker_counts["autoShared"] += int("auto-shared monitored file" in line)
+                marker_counts["autoRemoved"] += int(
+                    "auto-removed monitored file from shared catalog" in line
+                )
+                marker_counts["watcherErrors"] += int(
+                    any(marker in line for marker in error_markers)
+                )
+                for event, marker in finalization_markers.items():
+                    if marker in line:
+                        finalization_counts[event] += 1
+                        last_finalization_event = event
+    return {**marker_counts, "reloadFinalization": {
+        **finalization_counts, "lastEvent": last_finalization_event,
+    }}
 
 
 def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path) -> dict[str, object]:

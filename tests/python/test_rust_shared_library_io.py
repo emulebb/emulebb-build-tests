@@ -1240,6 +1240,32 @@ def test_watcher_log_summary_reports_empty_logs_without_faking_registration(
     assert summary["logByteCount"] == 0
     assert summary["nonEmptyLogCount"] == 0
     assert summary["watcherRegistrations"] == 0
+    assert summary["reloadFinalization"]["lastEvent"] is None
+
+
+@pytest.mark.unit
+def test_log_summary_keeps_finalization_stage_without_exposing_log_text(tmp_path: Path) -> None:
+    log = tmp_path / "initial.log"
+    log.write_text("\n".join((
+        "INFO watching shared directory for auto-pickup path=private-path",
+        "INFO shared-directory reload committing root memberships",
+        "INFO shared-directory reload committed root memberships",
+        "INFO shared-directory reload rebuilding complete catalog",
+        "unrelated private-path event",
+    )), encoding="utf-8")
+    summary = subject.watcher_log_summary([tmp_path / "absent.log", log])
+    assert summary["watcherRegistrations"] == 1
+    assert summary["reloadFinalization"] == {
+        "rootCommitStarted": 1, "rootCommitFinished": 1,
+        "catalogRebuildStarted": 1, "reloadFinished": 0,
+        "lastEvent": "catalogRebuildStarted",
+    }
+    assert "private-path" not in json.dumps(summary)
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("\nINFO shared-directory reload completed\n")
+    completed = subject.watcher_log_summary([log])["reloadFinalization"]
+    assert completed["reloadFinished"] == 1
+    assert completed["lastEvent"] == "reloadFinished"
 
 
 @pytest.mark.unit
