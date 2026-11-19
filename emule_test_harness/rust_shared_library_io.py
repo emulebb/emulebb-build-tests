@@ -17,6 +17,7 @@ import urllib.request
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import cache
 from pathlib import Path
 from typing import Callable
 
@@ -87,14 +88,17 @@ DEFAULT_MEDIA_ROOTS_FILE = (
 )
 
 
-dtt = load_script_module(
-    "deterministic_two_client_transfer_shared_library_io",
-    "deterministic-two-client-transfer.py",
-)
-local_kad = load_script_module(
-    "local_kad_swarm_shared_library_io",
-    "local-kad-swarm.py",
-)
+@cache
+def _lan_transfer_harness():
+    """Load Windows cross-client controls only for the LAN-specific commands."""
+    return load_script_module("deterministic_two_client_transfer_shared_library_io",
+                              "deterministic-two-client-transfer.py")
+
+
+@cache
+def _lan_kad_harness():
+    """Keep LAN swarm dependencies out of the portable library/history campaign."""
+    return load_script_module("local_kad_swarm_shared_library_io", "local-kad-swarm.py")
 
 
 @dataclass(frozen=True)
@@ -1679,8 +1683,8 @@ def _lan_startup_observation(
         "ed2kConnected": stats.get("ed2kConnected"),
         "ed2kPublish": diagnostics.get("ed2kPublish"),
         "kadPublish": diagnostics.get("kadPublish"),
-        "targetKad": local_kad.compact_local_kad_status(target_kad),
-        "seedKad": local_kad.compact_local_kad_status(seed_kad),
+        "targetKad": _lan_kad_harness().compact_local_kad_status(target_kad),
+        "seedKad": _lan_kad_harness().compact_local_kad_status(seed_kad),
         "serverFileCount": int(server_stats_data.get("file_count") or 0),
         "serverTargetPublicationCount": int(target_client.get("shared_files") or 0),
         "serverTargetPublishedHashes": [],
@@ -1704,9 +1708,9 @@ def run_lan_startup_campaign(
     target_disk_row = target_disk(paths, inventory)
     assert_ssd_target(target_disk_row, allow_non_ssd=args.allow_non_ssd)
 
-    lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
-    ports = dtt.choose_distinct_ports(lan_bind_addr)
-    seed_spec = local_kad.KadClientSpec(
+    lan_bind_addr = _lan_transfer_harness().rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    ports = _lan_transfer_harness().choose_distinct_ports(lan_bind_addr)
+    seed_spec = _lan_kad_harness().KadClientSpec(
         index=1,
         profile_id="rust-lan-seed",
         nick="rust-lan-seed",
@@ -1714,7 +1718,7 @@ def run_lan_startup_campaign(
         udp_port=ports["client1_udp"],
         rest_port=ports["client1_rest"],
     )
-    target_spec = local_kad.KadClientSpec(
+    target_spec = _lan_kad_harness().KadClientSpec(
         index=2,
         profile_id="rust-library-target",
         nick="rust-library-target",
@@ -2092,8 +2096,8 @@ def run_offerfiles_scale_campaign(
     target_disk_row = target_disk(paths, inventory)
     assert_ssd_target(target_disk_row, allow_non_ssd=args.allow_non_ssd)
 
-    lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
-    ports = dtt.choose_distinct_ports(lan_bind_addr)
+    lan_bind_addr = _lan_transfer_harness().rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    ports = _lan_transfer_harness().choose_distinct_ports(lan_bind_addr)
     client_nick = "rust-offerfiles-scale"
     if args.resume_run_id:
         run_id = args.resume_run_id
