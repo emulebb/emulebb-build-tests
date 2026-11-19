@@ -1122,18 +1122,13 @@ def publish_rust_shared_tree(
 
     directories = request_json(
         base_url,
-        "PATCH",
-        "/api/v1/shared-directories",
-        api_key,
-        {
-            "roots": [{"path": str(root)}],
-            "confirmReplaceRoots": True,
-        },
+        "POST", "/api/v1/library/roots", api_key,
+        {"path": str(root), "watchEnabled": False},
     )
     reload_result = request_json(
         base_url,
         "POST",
-        "/api/v1/shared-directories/operations/reload",
+        "/api/v1/library/scan",
         api_key,
     )
     shared_files = wait_for_rust_shared_file(
@@ -1324,17 +1319,11 @@ def verify_rust_same_session_republish(
         port=endpoint_port,
     )
 
-    clear_roots = request_json(
-        base_url,
-        "PATCH",
-        "/api/v1/shared-directories",
-        api_key,
-        {"roots": [], "confirmReplaceRoots": True},
-    )
+    clear_roots = rust_local_ed2k.clear_explicit_library_roots(base_url, api_key)
     clear_reload = request_json(
         base_url,
         "POST",
-        "/api/v1/shared-directories/operations/reload",
+        "/api/v1/library/scan",
         api_key,
     )
     local_absence = wait_for_rust_shared_file_absent(
@@ -1357,15 +1346,13 @@ def verify_rust_same_session_republish(
 
     restore_roots = request_json(
         base_url,
-        "PATCH",
-        "/api/v1/shared-directories",
-        api_key,
-        {"roots": [{"path": str(shared_root)}], "confirmReplaceRoots": True},
+        "POST", "/api/v1/library/roots", api_key,
+        {"path": str(shared_root), "watchEnabled": False},
     )
     restore_reload = request_json(
         base_url,
         "POST",
-        "/api/v1/shared-directories/operations/reload",
+        "/api/v1/library/scan",
         api_key,
     )
     local_republish = wait_for_rust_shared_file(

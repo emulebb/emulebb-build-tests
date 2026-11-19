@@ -36,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness.rust_rest_contract import iter_library_roots
 from emule_test_harness.build_provenance import require_clean_git_source  # noqa: E402
 from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
@@ -54,7 +55,7 @@ PANEL_ROUTES = {
     "overview": "/api/v1/status",
     "downloads": "/api/v1/downloads",
     "search": "/api/v1/searches",
-    "sharing": "/api/v1/shared-directories",
+    "sharing": "/api/v1/library/scan",
     "shared-files": "/api/v1/shared-files",
     "uploads": "/api/v1/uploads",
     "network": "/api/v1/network",
@@ -497,7 +498,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
     bootstrap = profile / "emulebb-rust-settings.toml"
     before_bootstrap = file_sha256(bootstrap)
     before_settings = request_json(base_url, "GET", "/api/v1/app/settings", API_KEY)
-    before_roots = request_json(base_url, "GET", "/api/v1/shared-directories", API_KEY)["roots"]
+    before_roots = list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, API_KEY)))
     contenders = []
     for command, arguments in (
         ("import-emule-profile", ["--hashes-only", str(archive)]),
@@ -516,7 +517,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
         contenders.append({"command": command, "exitCode": result.returncode, "profileBusy": True})
     if (file_sha256(bootstrap) != before_bootstrap
             or request_json(base_url, "GET", "/api/v1/app/settings", API_KEY) != before_settings
-            or request_json(base_url, "GET", "/api/v1/shared-directories", API_KEY)["roots"] != before_roots):
+            or list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, API_KEY))) != before_roots):
         raise RuntimeError("denied offline commands changed the owned profile's bootstrap, settings or roots")
     return contenders
 

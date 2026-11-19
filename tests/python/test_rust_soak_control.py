@@ -201,11 +201,12 @@ def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -
 
     def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
         calls.append(path)
-        if path == "/shared-directories":
+        if path == "/library/roots?limit=100":
+            return {"data": [{"id": "1", "path": r"C:\Share", "accessible": True, "shareable": True}],
+                    "meta": {"hasMore": False, "nextCursor": None}}
+        if path == "/library/scan":
             return {
                 "hashingCount": 4,
-                "roots": [{"path": r"C:\Share", "accessible": True, "shareable": True}],
-                "items": [{"path": r"C:\Share", "accessible": True, "shareable": True}],
                 "reloadProgress": {
                     "phase": "hashing",
                     "running": True,
@@ -223,7 +224,7 @@ def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -
 
     assert summary["hashingCount"] == 4
     assert summary["sharedFilesTotal"] == 42
-    assert calls == ["/shared-directories", "/shared-files?limit=1"]
+    assert calls == ["/library/roots?limit=100", "/library/scan", "/shared-files?limit=1"]
     assert summary["reload"] == {
         "phase": "hashing",
         "running": True,
@@ -456,13 +457,13 @@ def test_shared_reload_settled_proof_fails_while_hashing(monkeypatch) -> None:
     assert "192.0.2.10" not in repr(result)
 
 
-def test_reload_shared_directories_requires_accepted_queue(monkeypatch) -> None:
+def test_reload_shared_directories_accepts_scan_status(monkeypatch) -> None:
     control = _load_rust_soak_control()
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_request_json(_base_url: str, path: str, **kwargs) -> dict[str, object]:
         calls.append((path, kwargs["method"], kwargs["body"]))
-        return {"ok": True, "started": True, "queued": 42}
+        return {"hashingCount": 0, "reloadProgress": {"phase": "idle"}}
 
     monkeypatch.setattr(control, "request_json", fake_request_json)
     result = control.reload_shared_directories(
@@ -473,11 +474,10 @@ def test_reload_shared_directories_requires_accepted_queue(monkeypatch) -> None:
         )
     )
 
-    assert calls == [("/shared-directories/operations/reload", "POST", {})]
+    assert calls == [("/library/scan", "POST", {})]
     assert result == {
-        "schema": "emulebb.rust-shared-directory-reload.v1",
+        "schema": "emulebb.rust-library-scan.v1",
         "accepted": True,
-        "queued": 42,
         "baseUrlFingerprint": control.text_fingerprint("http://192.0.2.10:4731/api/v1"),
     }
     assert "192.0.2.10" not in repr(result)
@@ -488,10 +488,10 @@ def test_reload_shared_directories_rejects_invalid_response(monkeypatch) -> None
     monkeypatch.setattr(
         control,
         "request_json",
-        lambda *args, **kwargs: {"ok": True, "started": True, "queued": -1},
+        lambda *args, **kwargs: {"hashingCount": 0, "reloadProgress": None},
     )
 
-    with pytest.raises(RuntimeError, match="valid queued count"):
+    with pytest.raises(RuntimeError, match="invalid cached status"):
         control.reload_shared_directories(
             SimpleNamespace(
                 base_url="http://127.0.0.1:4731/api/v1",

@@ -283,8 +283,9 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                 if failure == "restore" and body == original:
                     state["settings"]["core"]["autoConnect"] = False
             return deepcopy(state["settings"])
-        if route == "/api/v1/shared-directories":
-            return {"roots": [{"path": "/operator/Shared"}]}
+        if route == "/api/v1/library/roots?limit=100":
+            return {"data": [{"id": "1", "path": "/operator/Shared", "managed": False}],
+                    "meta": {"hasMore": False, "nextCursor": None}}
         if route == "/api/v1/servers":
             rows = servers.setdefault(base, [deepcopy(public_server)])
             if method == "POST":
@@ -503,8 +504,9 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
         assert method != "PATCH"
         if route == "/api/v1/app/settings":
             return deepcopy(original)
-        if route == "/api/v1/shared-directories":
-            return {"roots": [{"path": "/operator/Shared"}]}
+        if route == "/api/v1/library/roots?limit=100":
+            return {"data": [{"id": "1", "path": "/operator/Shared", "managed": False}],
+                    "meta": {"hasMore": False, "nextCursor": None}}
         if route == "/api/v1/downloads?view=unfinished&limit=200":
             return {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
         if route == "/api/v1/network":

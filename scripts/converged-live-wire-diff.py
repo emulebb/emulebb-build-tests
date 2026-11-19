@@ -7,8 +7,8 @@ file, run a few widely-spaced keyword searches), captures each side's segmented
 ``diag_event_v2`` run, extracts complete eD2K TCP packet events, then diffs the
 two packet views and writes a combined report.
 
-Both clients expose the same ``/api/v1`` REST surface (``/searches``,
-``/shared-directories``, ``/servers/operations/connect``, ``/kad/operations/start``)
+Both clients expose ``/api/v1`` REST controls for searches, server and Kad
+connections, with client-specific library-root resources
 and both emit unified eD2K TCP packet events, so a rust-vs-MFC exchange of the
 same wire traffic can be checked for wire-faithfulness with
 ``emule_test_harness.packet_trace_diff`` after normalization by
@@ -316,14 +316,14 @@ def run_rust_side(
 
         # Share step: with --full-shares, share the live-wire library roots (same
         # set as MFC); otherwise share the single gentle seed file. Both go over
-        # PATCH /api/v1/shared-directories (same shape both clients accept).
+        # The native Rust root resource; MFC has its separate current contract.
         if shared_roots:
             evidence["share"] = rust_mod.share_directories(base_url, shared_roots)
         else:
             evidence["share"] = retry_http_json(
-                "rust share", 2, base_url, "/api/v1/shared-directories",
-                api_key=RUST_API_KEY, method="PATCH",
-                body=clw.build_shared_directory_patch_payload(seed_dir),
+                "rust share", 2, base_url, "/api/v1/library/roots",
+                api_key=RUST_API_KEY, method="POST",
+                body={"path": str(seed_dir), "watchEnabled": False},
             )
 
         # HighID scenarios wait for ed2kHighId; the LowID scenario only waits for
@@ -516,7 +516,7 @@ def run_mfc_side(
         evidence["ed2kConnected"] = bool(server_status.get("connected"))
         evidence["ed2kHighId"] = bool(server_status.get("connected")) and not bool(server_status.get("lowId"))
 
-        # Share the SAME set as rust via the SAME shared-directories endpoint:
+        # Share the same file set through the MFC root configuration endpoint:
         # the live-wire library roots with --full-shares, else the single seed.
         if shared_roots:
             roots_payload = {

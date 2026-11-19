@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from .android_apk_lifecycle import APPLICATION_ID, APK_NAVIGATION_CONTROLS, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
 from .android_apk_profile import OwnedUpdateApproval, admit_owned_update, admit_storage_configuration, read_hashed_receipt
 from .android_adb_failure import AdbOperationFailure, StartupSummaryCapture
+from .rust_rest_contract import iter_library_roots
 
 
 @dataclass(frozen=True)
@@ -1176,7 +1177,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             value["phase"] = "verify-fresh-storage-defaults"
             base = f"http://127.0.0.1:{port}"
             _verify_fresh_storage(request_json(base, "GET", "/api/v1/app/settings", key),
-                                  request_json(base, "GET", "/api/v1/shared-directories", key))
+                                  list(iter_library_roots(lambda path: request_json(base, "GET", "/api/v1" + path, key))))
             value["freshDefaults"] = {"incoming": "canonical", "sharedRoots": "canonical"}
             passed("fresh-storage-defaults-after-start")
         if configured_storage is not None:
@@ -1184,7 +1185,7 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             value["phase"] = "verify-prepared-storage-after-start"
             try:
                 settings = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/app/settings", key)
-                roots = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/shared-directories", key).get("roots", [])
+                roots = list(iter_library_roots(lambda path: request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1" + path, key)))
                 if (settings.get("daemon", {}).get("incomingDir") != configured_storage["incomingDir"]
                         or configured_storage["sharedRoot"] not in {root.get("path") for root in roots}):
                     raise RuntimeError("Prepared phone storage settings differ")

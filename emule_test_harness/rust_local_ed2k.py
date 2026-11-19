@@ -91,6 +91,18 @@ def request_json(
     raise RuntimeError(f"Rust REST returned a non-object payload for {method} {path}: {data!r}")
 
 
+def clear_explicit_library_roots(base_url: str, api_key: str) -> dict[str, object]:
+    """Remove each explicit resource by ID; required destinations remain owned."""
+    from .rust_rest_contract import iter_library_roots
+    roots = list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)))
+    removed = []
+    for root in roots:
+        if not root["managed"]:
+            request_json(base_url, "DELETE", f"/api/v1/library/roots/{root['id']}", api_key, expected_status=204)
+            removed.append(root["id"])
+    return {"removed": removed}
+
+
 def canonical_download_id(job_id: object) -> str:
     """Validate the public positive decimal i64 job identity."""
     if (not isinstance(job_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", job_id)
@@ -635,18 +647,15 @@ def publish_shared_tree(
 
     directories = request_json(
         base_url,
-        "PATCH",
-        "/api/v1/shared-directories",
+        "POST",
+        "/api/v1/library/roots",
         api_key,
-        {
-            "roots": [{"path": str(root)}],
-            "confirmReplaceRoots": True,
-        },
+        {"path": str(root), "watchEnabled": False},
     )
     reload_result = request_json(
         base_url,
         "POST",
-        "/api/v1/shared-directories/operations/reload",
+        "/api/v1/library/scan",
         api_key,
     )
     observations: list[dict[str, object]] = []

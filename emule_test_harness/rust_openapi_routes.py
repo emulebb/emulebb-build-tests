@@ -116,7 +116,7 @@ CATEGORY_RESPONSE_COMPONENT = "Category"
 CATEGORY_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}(?![\s\S])"
 CATEGORY_CREATE_REQUEST_COMPONENT = "CategoryCreateRequest"
 CATEGORY_PATCH_COMPONENT = "CategoryPatch"
-SHARED_DIRECTORY_ROOT_INPUT_COMPONENT = "SharedDirectoryRootInput"
+LIBRARY_ROOT_CREATE_COMPONENT = "LibraryRootCreateRequest"
 GENERIC_SECTION_RESOURCE_RESPONSE_COMPONENTS = {
     "BulkOperationResponse",
     "OkResponse",
@@ -1279,8 +1279,8 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         )
     if CATEGORY_PATCH_COMPONENT in schemas:
         append_category_mutation_schema_drift(drift, schemas, CATEGORY_PATCH_COMPONENT)
-    if SHARED_DIRECTORY_ROOT_INPUT_COMPONENT in schemas:
-        append_shared_directory_root_schema_drift(drift, schemas)
+    if LIBRARY_ROOT_CREATE_COMPONENT in schemas:
+        append_library_root_schema_drift(drift, schemas)
     return tuple(sorted(drift))
 
 
@@ -2513,79 +2513,28 @@ def assert_trim_non_empty_text_schema(
         )
 
 
-def append_shared_directory_root_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
-) -> None:
-    schema = schemas.get(SHARED_DIRECTORY_ROOT_INPUT_COMPONENT)
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=SHARED_DIRECTORY_ROOT_INPUT_COMPONENT,
-                issue="missing shared-directory root input schema component",
-            )
-        )
-        return
-    one_of = schema.get("oneOf")
-    if not isinstance(one_of, list) or len(one_of) != 2:
-        drift.append(
-            SchemaComponentDrift(
-                component=SHARED_DIRECTORY_ROOT_INPUT_COMPONENT,
-                issue="shared-directory root input must have string and object oneOf branches",
-            )
-        )
-        return
-    assert_trim_non_empty_text_schema(
-        drift,
-        "SharedDirectoryRootInput.oneOf[0]",
-        one_of[0],
-        nullable=False,
-    )
-    object_branch = one_of[1]
-    if not isinstance(object_branch, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component="SharedDirectoryRootInput.oneOf[1]",
-                issue="shared-directory root object branch must be an object schema",
-            )
-        )
-        return
-    if object_branch.get("type") != "object":
-        drift.append(
-            SchemaComponentDrift(
-                component="SharedDirectoryRootInput.oneOf[1]",
-                issue="shared-directory root object branch type must be object",
-            )
-        )
-    if object_branch.get("additionalProperties") is not False:
-        drift.append(
-            SchemaComponentDrift(
-                component="SharedDirectoryRootInput.oneOf[1]",
-                issue="shared-directory root object branch must reject unknown fields",
-            )
-        )
-    if object_branch.get("required") != ["path"]:
-        drift.append(
-            SchemaComponentDrift(
-                component="SharedDirectoryRootInput.oneOf[1]",
-                issue="shared-directory root object branch must require path",
-            )
-        )
-    properties = object_branch.get("properties")
-    if not isinstance(properties, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component="SharedDirectoryRootInput.oneOf[1]",
-                issue="shared-directory root object branch must declare properties",
-            )
-        )
-        return
-    assert_trim_non_empty_text_schema(
-        drift,
-        "SharedDirectoryRootInput.oneOf[1].properties.path",
-        properties.get("path"),
-        nullable=False,
-    )
+def append_library_root_schema_drift(drift: list[SchemaComponentDrift], schemas: dict[str, object]) -> None:
+    """Require the current single-root create and atomic watch-edit shapes."""
+    for name, required, fields in [(LIBRARY_ROOT_CREATE_COMPONENT, ["path"], {"path", "watchEnabled"}),
+                                   ("LibraryRootPatch", ["watchEnabled"], {"watchEnabled"})]:
+        schema = schemas.get(name)
+        if not isinstance(schema, dict):
+            drift.append(SchemaComponentDrift(component=name, issue="missing library root request schema"))
+            continue
+        if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+            drift.append(SchemaComponentDrift(component=name, issue="library root request must be a closed object"))
+        if schema.get("required") != required:
+            drift.append(SchemaComponentDrift(component=name, issue="library root request required fields differ"))
+        properties = schema.get("properties")
+        if not isinstance(properties, dict) or set(properties) != fields:
+            drift.append(SchemaComponentDrift(component=name, issue="library root request fields differ"))
+            continue
+        if properties.get("watchEnabled", {}).get("type") != "boolean":
+            drift.append(SchemaComponentDrift(component=name, issue="watchEnabled must be boolean"))
+        if name == LIBRARY_ROOT_CREATE_COMPONENT:
+            if properties["watchEnabled"].get("default") is not False:
+                drift.append(SchemaComponentDrift(component=name, issue="watchEnabled must default off"))
+            assert_trim_non_empty_text_schema(drift, name+".properties.path", properties.get("path"), nullable=False)
 
 
 def append_friend_create_schema_drift(
@@ -3055,6 +3004,7 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     overrides: dict[Route, str | tuple[str, ...]] = {}
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
+        (r'\("PATCH",\s*\["library", "roots", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/library/roots/{id}"),
         (r'\("GET",\s*\["library", "files", _, "tags"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/tags"),
         (r'\("GET",\s*\["searches", _, "results"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results"),
         (r'\("GET",\s*\["searches", _, "results", _, "observations"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results/{resultId}/observations"),
@@ -3189,9 +3139,9 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
         (r'\("PATCH",\s*\["downloads", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/downloads/{id}"),
         (r'\("PATCH",\s*\["shared-files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/shared-files/{hash}"),
         (
-            r'\("PATCH",\s*\["shared-directories", "ignores", "defaults", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',
+            r'\("PATCH",\s*\["library", "ignores", "defaults", _\]\)\s*=>\s*\{\s*Some\((\w+)\)',
             "PATCH",
-            "/shared-directories/ignores/defaults/{ruleKey}",
+            "/library/ignores/defaults/{ruleKey}",
         ),
         (r'\("PATCH",\s*\["servers", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/servers/{serverId}"),
         (r'\("PATCH",\s*\["categories", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/categories/{categoryName}"),

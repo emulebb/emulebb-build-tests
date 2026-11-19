@@ -690,27 +690,17 @@ def _normalize_shared_root_entry(root: object) -> str:
 
 
 def share_directories(base_url: str, roots: list[object]) -> dict[str, Any]:
-    """Shares `roots` via the current Rust PATCH /api/v1/shared-directories shape.
-
-    Operator inputs may still describe their original recursive intent, but the
-    Rust product schema is current-only; the soak harness expands or normalizes
-    outside the daemon and does not send retired REST fields.
-    """
-
+    """Create each selected recursive root through the current resource API."""
     if not roots:
         return {"shared": False, "reason": "no shared_directories.roots in inputs"}
-    normalized = [{"path": _normalize_shared_root_entry(root)} for root in roots]
-    body = {"confirmReplaceRoots": True, "roots": normalized}
-    # The shared-directories PATCH triggers the large-library reload, which
-    # transiently starves REST at startup (63k-file profile); REST recovers once the
-    # reload settles. Retry patiently so a fresh launch rides out that window instead
-    # of failing after 2 quick attempts.
-    result = retry_http_json(
-        "share dirs", 10, base_url, "/api/v1/shared-directories",
-        api_key=API_KEY, method="PATCH", body=body,
-    )
-    log(f"shared {len(normalized)} directory root(s) from live-wire inputs")
-    return {"shared": True, "roots": normalized, "result": api_data(result)}
+    created = []
+    for entry in roots:
+        root = _normalize_shared_root_entry(entry)
+        result = retry_http_json("create library root", 1, base_url, "/api/v1/library/roots",
+                                api_key=API_KEY, method="POST", body={"path": root, "watchEnabled": False})
+        created.append(api_data(result))
+    log(f"created {len(created)} library root(s) from live-wire inputs")
+    return {"shared": True, "roots": created}
 
 
 def run_pass(

@@ -11,6 +11,7 @@ import shlex
 from .android_apk_profile import read_hashed_receipt
 from .rust_local_ed2k import request_json
 from .rust_shared_library_fixture import deterministic_payload
+from .rust_rest_contract import iter_library_roots
 
 FIXTURE_NAME = "Android Sample.bin"
 COLLISION_OCCUPANT = b"synthetic foreign occupant"
@@ -130,7 +131,7 @@ def cleanup_report_fixture(command, *, prefix, retained_report: Path, report_sha
         stage("admit-current-storage")
         settings = request_json(base_url, "GET", "/api/v1/app/settings", api_key)
         incoming = settings.get("daemon", {}).get("incomingDir")
-        roots = request_json(base_url, "GET", "/api/v1/shared-directories", api_key)["roots"]
+        roots = list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)))
         protected = {root["path"] for root in roots}
         if not isinstance(incoming, str) or not incoming.startswith("/"):
             raise RuntimeError("Current incoming destination is not explicit")
@@ -153,7 +154,7 @@ def cleanup_report_fixture(command, *, prefix, retained_report: Path, report_sha
         receipt.update(removed)
         stage("verify-settings-preserved")
         if (request_json(base_url, "GET", "/api/v1/app/settings", api_key) != settings
-                or {root["path"] for root in request_json(base_url, "GET", "/api/v1/shared-directories", api_key)["roots"]}
+                or {root["path"] for root in list(iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)))}
                    != {root["path"] for root in roots}):
             raise RuntimeError("Configuration changed during owned fixture cleanup")
         receipt.update(status="passed", phase="complete")

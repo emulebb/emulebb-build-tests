@@ -286,7 +286,7 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
     ]
     def request(method, path, **kwargs):
         assert method == "GET"
-        if path == "/shared-directories":
+        if path == "/library/scan":
             return responses.pop(0)
         assert path == subject.SHARED_FILES_PROBE_PATH
         assert not responses, "catalog checked before the queued worker settled"
@@ -1555,7 +1555,7 @@ def test_dynamic_reload_checkpoints_running_progress(
             ]
 
         def request(self, _method: str, route: str, **_kwargs: object):
-            if route == "/shared-directories":
+            if route == "/library/scan":
                 return self.directories.pop(0)
             return {"total": 8}
 

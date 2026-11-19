@@ -2964,65 +2964,40 @@ components:
         validate_openapi_schema(document, create, {"name": "Alpha\n"})
 
 
-def test_openapi_schema_component_drift_requires_shared_directory_root_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
+ROOT_REQUEST_SCHEMAS = r"""
 components:
   schemas:
-    SharedDirectoryRootInput:
-      oneOf:
-        - type: string
-          minLength: 1
-        - type: object
-          additionalProperties: false
-          required: [path]
-          properties:
-            path:
-              type: string
-              minLength: 1
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="SharedDirectoryRootInput.oneOf[0]",
-            issue="trim-non-empty text pattern must require at least one non-whitespace character",
-        ),
-        SchemaComponentDrift(
-            component="SharedDirectoryRootInput.oneOf[1].properties.path",
-            issue="trim-non-empty text pattern must require at least one non-whitespace character",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_shared_directory_root_constraints(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    SharedDirectoryRootInput:
-      oneOf:
-        - type: string
+    LibraryRootCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [path]
+      properties:
+        path:
+          type: string
           minLength: 1
           pattern: '\S'
-        - type: object
-          additionalProperties: false
-          required: [path]
-          properties:
-            path:
-              type: string
-              minLength: 1
-              pattern: '\S'
-""",
-    )
+        watchEnabled:
+          type: boolean
+          default: false
+    LibraryRootPatch:
+      type: object
+      additionalProperties: false
+      required: [watchEnabled]
+      properties:
+        watchEnabled:
+          type: boolean
+"""
 
-    assert openapi_schema_component_drift(openapi_yaml) == ()
+
+def test_openapi_schema_component_drift_requires_root_default_off(tmp_path: Path) -> None:
+    path = write(tmp_path / "REST-API-OPENAPI.yaml", ROOT_REQUEST_SCHEMAS.replace("default: false", "default: true"))
+    assert openapi_schema_component_drift(path) == (SchemaComponentDrift(
+        component="LibraryRootCreateRequest", issue="watchEnabled must default off"),)
+
+
+def test_openapi_schema_component_drift_accepts_atomic_root_requests(tmp_path: Path) -> None:
+    path = write(tmp_path / "REST-API-OPENAPI.yaml", ROOT_REQUEST_SCHEMAS)
+    assert openapi_schema_component_drift(path) == ()
 
 
 def test_openapi_schema_component_drift_requires_friend_user_hash_constraints(
@@ -4056,7 +4031,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
             .route("/api/v1/downloads", post(create_download))
             .route("/api/v1/downloads/{id}", patch(update_download))
             .route("/api/v1/downloads/start", post(start_downloads))
-            .route("/api/v1/shared-directories/ignores/defaults/{ruleKey}", patch(update_ignore))
+            .route("/api/v1/library/ignores/defaults/{ruleKey}", patch(update_ignore))
             .route("/api/v1/servers/operations/import-met-url", post(import_servers))
             .route("/api/v1/searches/{searchId}/results/{resultId}/download", post(download));
         ''',
@@ -4083,7 +4058,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
             let segments = api_segments(path)?;
             match (method, segments.as_slice()) {
                 ("PATCH", ["downloads", _]) => Some(DOWNLOAD_PATCH),
-                ("PATCH", ["shared-directories", "ignores", "defaults", _]) => {
+                ("PATCH", ["library", "ignores", "defaults", _]) => {
                     Some(SHARED_FILE_IGNORE_RULE)
                 }
                 ("POST", ["searches", _, "results", _, "download"]) => {
@@ -4112,7 +4087,7 @@ def test_rust_body_field_inventory_reads_exact_and_parameterized_allowlists(tmp_
 
     assert rust_body_field_inventory(route_body_metadata_rs, routes_rs) == {
         Route("GET", "/app"): (),
-        Route("PATCH", "/shared-directories/ignores/defaults/{ruleKey}"): ("enabled",),
+        Route("PATCH", "/library/ignores/defaults/{ruleKey}"): ("enabled",),
         Route("POST", "/downloads"): ("category", "intent", "redownload", "source"),
         Route("PATCH", "/downloads/{id}"): ("category", "name", "sizeBytes"),
         Route("POST", "/downloads/start"): ("ids",),

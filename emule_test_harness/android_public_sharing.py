@@ -39,6 +39,7 @@ from .rust_local_ed2k import RustRestFailure, request_json
 from .rust_shared_library_io import compact_progress, path_fingerprint, utc_now, write_json
 from .soak_launch import DEFAULT_SERVER_MET_URL
 from .upload_parity_monitor import rust_summary
+from .rust_rest_contract import iter_library_roots
 
 SCHEMA = "emulebb.android.public-sharing/1"
 MAX_RECEIPT_BYTES = 4 * 1024**2
@@ -91,7 +92,8 @@ REST_OPERATIONS = {
     ("GET", "/nat"): ("nat-status-read", 10.0),
     ("GET", "/servers"): ("server-list-read", 10.0),
     ("GET", "/kad"): ("kad-status-read", 10.0),
-    ("GET", "/shared-directories"): ("sharing-settings-read", 10.0),
+    ("GET", "/library/roots"): ("sharing-settings-read", 10.0),
+    ("GET", "/library/scan"): ("sharing-status-read", 10.0),
     ("GET", "/shared-files"): ("shared-catalog-read", 10.0),
     ("GET", "/transfers"): ("transfer-queue-read", 10.0),
     ("GET", "/uploads"): ("uploads-read", 10.0),
@@ -908,8 +910,9 @@ def _settings(phone: Phone, limits: Limits, *, configure=False):
             or daemon.get("p2pBindIp") not in {None, "", "0.0.0.0", "::"}
             or settings.get("vpnGuard", {}).get("mode") != "off"):
         raise RuntimeError("Campaign requires canonical storage and explicit direct route settings")
-    roots = phone.request("GET", "/shared-directories").get("roots")
-    if not isinstance(roots, list) or {root.get("path") for root in roots} != {SHARED}:
+    roots = list(iter_library_roots(lambda path: phone.request("GET", path)))
+    if ({root["path"] for root in roots if not root["managed"]} != {SHARED}
+            or any(root["path"] not in {SHARED, INCOMING} for root in roots)):
         raise RuntimeError("Campaign requires only the canonical approved Shared root")
     if configure:
         phone.request("PATCH", "/app/settings", {"core": {"uploadLimitKiBps": limits.upload_limit_kibps,
@@ -998,7 +1001,7 @@ def sample(phone: Phone, receipt: dict, previous_uploads=None, *, phase=None):
     phase("sample-nat")
     nat = phone.request("GET", "/nat")
     phase("sample-hashing")
-    directories = phone.request("GET", "/shared-directories")
+    directories = phone.request("GET", "/library/scan")
     hashing = compact_progress(directories)
     phase("sample-uploads")
     upload_evidence, current_uploads = public_upload_evidence(

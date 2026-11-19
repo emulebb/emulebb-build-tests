@@ -372,7 +372,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise
 
     def reload_settled() -> object | None:
-        directories = request("GET", "/api/v1/shared-directories")
+        directories = request("GET", "/api/v1/library/scan")
         progress = directories.get("reloadProgress")
         if (isinstance(progress, dict) and progress.get("running") is False
                 and progress.get("pending") is False and directories.get("hashingCount") == 0):
@@ -687,7 +687,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         category_only.write_bytes(category_only_bytes)
         category_copy.write_bytes(duplicate_bytes)
         independent_copy.write_bytes(duplicate_bytes)
-        request("POST", "/api/v1/shared-directories/operations/reload")
+        request("POST", "/api/v1/library/scan")
         wait_until("category root reload", remaining(), reload_settled)
 
         def category_shares_ready() -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -720,10 +720,9 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError(f"Ordered per-hash tag outcomes differ: {outcomes}")
         require_file_tags(only_hash, ["Rotate"])
         require_file_tags(duplicate_hash, ["Rotate"])
-        request("PATCH", "/api/v1/shared-directories", body={
-            "roots": [{"path": str(independent_root)}], "confirmReplaceRoots": True,
-        })
-        request("POST", "/api/v1/shared-directories/operations/reload")
+        library_request("POST", "/api/v1/library/roots", "/library/roots", 201,
+                        {"path": str(independent_root), "watchEnabled": False})
+        request("POST", "/api/v1/library/scan")
         wait_until("independent root reload", remaining(), reload_settled)
         if independent_copy.read_bytes() != duplicate_bytes:
             raise RuntimeError("Independent complete copy changed before category deletion")
@@ -804,7 +803,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         if upload_counts(duplicate_hash) != (counts_before[0] + 5, counts_before[1] + 1):
             raise RuntimeError("Clean shutdown did not persist refused-only demand")
         request("POST", "/api/v1/servers/operations/connect")
-        request("POST", "/api/v1/shared-directories/operations/reload")
+        request("POST", "/api/v1/library/scan")
         wait_until("restarted category root reload", remaining(), reload_settled)
         surviving = categories()
         if len(surviving) != 1:

@@ -8,7 +8,33 @@ import urllib.parse
 import pytest
 
 from emule_test_harness import rust_rest_conformance
+from emule_test_harness.rust_rest_contract import iter_library_roots
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
+
+def test_library_roots_follow_short_pages_without_skipping_id_gaps():
+    calls = []
+    def fetch(path):
+        calls.append(path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        assert query["limit"] == ["100"]
+        if len(calls) == 1:
+            return {"data": [{"id": "1"}], "meta": {"hasMore": True, "nextCursor": "opaque-next"}}
+        assert query["cursor"] == ["opaque-next"]
+        return {"data": [{"id": "7"}], "meta": {"hasMore": False, "nextCursor": None}}
+    assert [row["id"] for row in iter_library_roots(fetch)] == ["1", "7"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("document", [
+    {"data": [], "meta": {"hasMore": True, "nextCursor": "next"}},
+    {"data": [{"id": "01"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "2"}, {"id": "1"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "1"}] * 101, "meta": {"hasMore": False, "nextCursor": None}},
+])
+def test_library_roots_require_bounded_advancing_pages(document):
+    with pytest.raises(RuntimeError):
+        list(iter_library_roots(lambda path: document))
 
 
 def test_explicit_contract_load_does_not_override_operator_environment(tmp_path, monkeypatch):

@@ -29,6 +29,7 @@ from . import (
     rust_local_ed2k,
     rust_metadata,
     rust_rest_conformance,
+    rust_rest_contract,
     rust_shared_library_fixture as fixture,
     rust_shared_library_storage as storage,
 )
@@ -634,7 +635,7 @@ def wait_for_rest(
             )
         try:
             client.request(
-                "GET", "/shared-directories", timeout_seconds=2.0, record=False
+                "GET", "/library/scan", timeout_seconds=2.0, record=False
             )
             return
         except Exception as exc:  # noqa: BLE001 - preserve only the final error type below
@@ -912,7 +913,7 @@ def wait_for_reload(
             )
         sampler.maybe_sample()
         data = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
@@ -995,7 +996,7 @@ def run_dynamic_reload_phase(
     """Run a reload whose real-media file count is intentionally unknown."""
 
     before_dirs = client.request(
-        "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
     )
     before_progress = compact_progress(before_dirs)
     before_started = before_progress.get("startedAtMs")
@@ -1016,7 +1017,7 @@ def run_dynamic_reload_phase(
             )
         sampler.maybe_sample()
         data = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
         scanned = int(progress.get("scannedCount") or 0)
@@ -1671,7 +1672,7 @@ def _lan_startup_observation(
     target_nick: str,
 ) -> dict[str, object]:
     directories = target_client.request(
-        "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
     )
     shared = target_client.request(
         "GET",
@@ -2218,12 +2219,8 @@ def run_offerfiles_scale_campaign(
                 paths, profile_dir, run_root / "offline-scan.log", choose_loopback_port()
             )
             client.request(
-                "PATCH",
-                "/shared-directories",
-                {
-                    "confirmReplaceRoots": True,
-                    "roots": [{"path": str(paths.fixture_root) + os.sep}],
-                },
+                "POST", "/library/roots",
+                {"path": str(paths.fixture_root) + os.sep, "watchEnabled": False},
             )
             offline_scan = wait_for_reload(
                 label="offerfilesOfflineScan",
@@ -2496,7 +2493,7 @@ def rest_summary(clients: list[RestClient]) -> dict[str, object]:
     status_latencies = [
         float(sample["latencySeconds"])
         for sample in samples
-        if sample.get("method") == "GET" and sample.get("path") == "/shared-directories"
+        if sample.get("method") == "GET" and sample.get("path") == "/library/scan"
     ]
     return {
         "requestCount": len(samples),
@@ -2945,8 +2942,10 @@ def run_campaign(
     manifest = load_prepared_manifest(paths)
     if manifest.get("fileCount") != spec.file_count or manifest.get("totalBytes") != spec.total_bytes:
         raise RuntimeError("Prepared fixture differs from the selected capacity tier")
-    # A terminated prior run may have left only harness-owned probe files behind.
-    storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
+    watch_root = paths.scenario_root / "watcher-library"
+    # Probe data is isolated from the large, unwatched baseline root.
+    storage.remove_tree(watch_root / "_watcher-probe-v2")
+    storage.make_directories(watch_root)
     storage.remove_tree(paths.scenario_root / "watcher-staging")
     restored = {"fileCount": 0, "totalBytes": 0}
     if manifest.get("contentGeneration") == "mutation-v2":
@@ -3061,15 +3060,12 @@ def run_campaign(
         samplers.append(sampler)
         report["downloadSnapshots"].append(retained_download_observation(client))
         if replay:
-            client.request("POST", "/shared-directories/operations/reload", {})
+            client.request("POST", "/library/scan", {})
         else:
+            client.request("POST", "/library/roots", {"path": str(watch_root), "watchEnabled": True})
             client.request(
-                "PATCH",
-                "/shared-directories",
-                {
-                    "confirmReplaceRoots": True,
-                    "roots": [{"path": str(paths.fixture_root) + os.sep}],
-                },
+                "POST", "/library/roots",
+                {"path": str(paths.fixture_root) + os.sep, "watchEnabled": False},
             )
         initial = wait_for_reload(
             label="watcherReplayBaseline" if replay else "bestEffortInitial",
@@ -3121,27 +3117,27 @@ def run_campaign(
         }
 
         root_update_started = time.monotonic()
-        updated = client.request("PATCH", "/shared-directories", {
-            "confirmReplaceRoots": True,
-            "roots": [{"path": str(paths.fixture_root) + os.sep}],
-        })
-        roots = updated.get("roots", [])
+        roots = list(rust_rest_contract.iter_library_roots(lambda path: client.request("GET", path)))
+        baseline = next(row for row in roots if _normalized_path_key(row["path"]) == _normalized_path_key(paths.fixture_root))
+        watched = next(row for row in roots if _normalized_path_key(row["path"]) == _normalized_path_key(watch_root))
+        report["rootWatchPolicy"] = {"largeRootEnabled": baseline["watchEnabled"], "watcherRootEnabled": watched["watchEnabled"]}
+        updated = client.request("PATCH", f"/library/roots/{baseline['id']}", {"watchEnabled": False})
         report["populatedRootUpdate"] = {
             "elapsedSeconds": round(time.monotonic() - root_update_started, 3),
-            "rootCount": len(roots),
-            "ok": len(roots) == 1 and _normalized_path_key(roots[0]["path"])
-                == _normalized_path_key(paths.fixture_root),
+            "resourceId": updated["id"],
+            "ok": updated["id"] == baseline["id"] and updated["watchEnabled"] is False
+                and _normalized_path_key(updated["path"]) == _normalized_path_key(paths.fixture_root),
         }
         if not report["populatedRootUpdate"]["ok"]:
-            raise RuntimeError("populated root replacement returned different roots")
+            raise RuntimeError("populated root policy update changed resource identity")
 
         report["watcherStaging"] = fixture.stage_watcher_cohort(staging_root)
-        created_paths = _expected_watcher_paths(paths.fixture_root, renamed=False)
-        renamed_paths = _expected_watcher_paths(paths.fixture_root, renamed=True)
+        created_paths = _expected_watcher_paths(watch_root, renamed=False)
+        renamed_paths = _expected_watcher_paths(watch_root, renamed=True)
         created, created_hashes = run_watcher_phase(
             spec=spec, label="watcherCreate",
             action=lambda: fixture.install_watcher_cohort(
-                staging_root, paths.fixture_root
+                staging_root, watch_root
             ),
             expected_paths=created_paths,
             expected_catalog_total=spec.file_count
@@ -3163,7 +3159,7 @@ def run_campaign(
             return report_path, report
         modified, modified_hashes = run_watcher_phase(
             spec=spec, label="watcherModify",
-            action=lambda: fixture.modify_watcher_cohort(paths.fixture_root),
+            action=lambda: fixture.modify_watcher_cohort(watch_root),
             expected_paths=created_paths,
             expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
@@ -3180,7 +3176,7 @@ def run_campaign(
         report["watcherLifecycle"].append(modified)
         renamed, renamed_hashes = run_watcher_phase(
             spec=spec, label="watcherRename",
-            action=lambda: fixture.rename_watcher_cohort(paths.fixture_root),
+            action=lambda: fixture.rename_watcher_cohort(watch_root),
             expected_paths=renamed_paths,
             expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
@@ -3197,7 +3193,7 @@ def run_campaign(
         report["watcherLifecycle"].append(renamed)
         deleted, _ = run_watcher_phase(
             spec=spec, label="watcherDelete",
-            action=lambda: fixture.delete_watcher_cohort(paths.fixture_root),
+            action=lambda: fixture.delete_watcher_cohort(watch_root),
             expected_paths={},
             expected_catalog_total=spec.file_count,
             client=client,
@@ -3222,6 +3218,7 @@ def run_campaign(
             checks = {
                 "baseline": initial["acceptance"]["ok"],
                 "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
+            "optionalRootWatching": report["rootWatchPolicy"] == {"largeRootEnabled": False, "watcherRootEnabled": True},
                 "watcherLifecycle": len(report["watcherLifecycle"]) == 4
                     and all(phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]),
                 "downloadRowsPreserved": all(rows.get(key) == value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()),
@@ -3248,7 +3245,7 @@ def run_campaign(
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["warmRestart"] = {
             "sharedFilesTotal": warm_shared.get("total"),
@@ -3265,7 +3262,7 @@ def run_campaign(
         )
 
         no_change_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
-        client.request("POST", "/shared-directories/operations/reload", {})
+        client.request("POST", "/library/scan", {})
         no_change = wait_for_reload(
             label="noChangeReload",
             client=client,
@@ -3318,7 +3315,7 @@ def run_campaign(
         clients.append(client)
         samplers.append(sampler)
         report["downloadSnapshots"].append(retained_download_observation(client))
-        client.request("POST", "/shared-directories/operations/reload", {})
+        client.request("POST", "/library/scan", {})
         changed = wait_for_reload(
             label="onePercentMutation",
             client=client,
@@ -3374,7 +3371,7 @@ def run_campaign(
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         final_dirs = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["finalRestart"] = {
             "sharedFilesTotal": final_shared.get("total"),
@@ -3421,6 +3418,7 @@ def run_campaign(
         storage_snapshots = [phase["storage"] for phase in report["phases"]] + [warm["storage"], final["storage"]]
         global_checks = {
             "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
+            "optionalRootWatching": report["rootWatchPolicy"] == {"largeRootEnabled": False, "watcherRootEnabled": True},
             "resourceSamplesPresent": len(samplers) == 4
                 and all(sampler.summary().get("sampleCount", 0) > 0 for sampler in samplers),
             "gracefulShutdowns": graceful_shutdowns(report, (
@@ -3501,7 +3499,7 @@ def run_campaign(
         if process is not None:
             report["emergencyShutdown"] = stop_daemon(process, client)
         storage.remove_tree(staging_root)
-        storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
+        storage.remove_tree(watch_root / "_watcher-probe-v2")
         report["rest"] = rest_summary(clients)
         report["watcherLogs"] = watcher_log_summary(log_paths)
         report["processes"] = [sampler.summary() for sampler in samplers]
@@ -3598,16 +3596,13 @@ def run_media_campaign(
             paths, profile_dir, run_root / "initial.log", choose_loopback_port()
         )
         clients.append(client)
+        def create_roots() -> None:
+            for root in roots:
+                client.request("POST", "/library/roots", {"path": str(root), "watchEnabled": False})
+
         initial = run_dynamic_reload_phase(
             label="multiHddInitial",
-            action=lambda: client.request(
-                "PATCH",
-                "/shared-directories",
-                {
-                    "confirmReplaceRoots": True,
-                    "roots": [{"path": str(root) + os.sep} for root in roots],
-                },
-            ),
+            action=create_roots,
             client=client,
             process=process,
             sampler=sampler,
@@ -3636,7 +3631,7 @@ def run_media_campaign(
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["warmRestart"] = {
             "sharedFilesTotal": warm_shared.get("total"),
@@ -3646,7 +3641,7 @@ def run_media_campaign(
         no_change = run_dynamic_reload_phase(
             label="multiHddNoChangeReload",
             action=lambda: client.request(
-                "POST", "/shared-directories/operations/reload", {}
+                "POST", "/library/scan", {}
             ),
             client=client,
             process=process,

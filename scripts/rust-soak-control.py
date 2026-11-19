@@ -43,6 +43,7 @@ from emule_test_harness.diag_event_runs import select_latest_diag_run
 from emule_test_harness import hideme_split_tunnel
 from emule_test_harness import mfc_known_met, rust_native_fingerprint
 from emule_test_harness import soak_launch
+from emule_test_harness.rust_rest_contract import iter_library_roots
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
@@ -2935,22 +2936,28 @@ def summarize_shared_directories(
 ) -> dict[str, object]:
     """Returns sanitized shared-directory and shared-file totals for one client."""
 
-    directories = request_json(base_url, "/shared-directories", api_key=api_key, timeout_seconds=timeout_seconds)
+    if shared_files_pagination == "cursor":
+        root_rows = list(iter_library_roots(lambda path: request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds)))
+        item_rows = []
+        directories = request_json(base_url, "/library/scan", api_key=api_key, timeout_seconds=timeout_seconds)
+    else:
+        directories = request_json(base_url, "/shared-directories", api_key=api_key, timeout_seconds=timeout_seconds)
+        root_rows, item_rows = directories.get("roots"), directories.get("items")
     files = request_json(
         base_url,
         shared_file_page_path(page_size=1, pagination=shared_files_pagination),
         api_key=api_key,
         timeout_seconds=timeout_seconds,
     )
-    root_fingerprints = shared_directory_fingerprints(directories.get("roots"))
-    item_fingerprints = shared_directory_fingerprints(directories.get("items"))
+    root_fingerprints = shared_directory_fingerprints(root_rows)
+    item_fingerprints = shared_directory_fingerprints(item_rows)
     roots = summarize_shared_directory_rows(
-        directories.get("roots"),
+        root_rows,
         include_fingerprints=include_fingerprints,
         sample_limit=sample_limit,
     )
     items = summarize_shared_directory_rows(
-        directories.get("items"),
+        item_rows,
         include_fingerprints=include_fingerprints,
         sample_limit=sample_limit,
     )
@@ -3202,23 +3209,16 @@ def reload_shared_directories(args: argparse.Namespace) -> dict[str, object]:
 
     response = request_json(
         args.base_url,
-        "/shared-directories/operations/reload",
+        "/library/scan",
         api_key=args.api_key,
         method="POST",
         body={},
         timeout_seconds=args.request_timeout_seconds,
     )
-    if response.get("ok") is not True or response.get("started") is not True:
-        raise RuntimeError("shared-directory reload was not accepted")
-    queued = safe_int(response.get("queued"))
-    if queued is None or queued < 0:
-        raise RuntimeError("shared-directory reload response did not contain a valid queued count")
-    return {
-        "schema": "emulebb.rust-shared-directory-reload.v1",
-        "accepted": True,
-        "queued": queued,
-        "baseUrlFingerprint": text_fingerprint(args.base_url),
-    }
+    if not isinstance(response.get("reloadProgress"), dict) or safe_int(response.get("hashingCount")) is None:
+        raise RuntimeError("library scan returned invalid cached status")
+    return {"schema": "emulebb.rust-library-scan.v1", "accepted": True,
+            "baseUrlFingerprint": text_fingerprint(args.base_url)}
 
 
 def compact_shared_endpoint_summary(summary: dict[str, object], sample_limit: int) -> dict[str, object]:
@@ -3434,14 +3434,8 @@ def fetch_shared_file_catalog(
     }
 
 
-def shared_root_paths(directories: dict[str, object]) -> list[str]:
-    """Returns normalized share roots used for path grouping."""
-
-    rows = directories.get("items")
-    if not isinstance(rows, list):
-        rows = directories.get("roots")
-    if not isinstance(rows, list):
-        return []
+def shared_root_paths(rows: list[dict[str, object]]) -> list[str]:
+    """Return normalized current root rows for catalog grouping."""
     roots = []
     for row in rows:
         if not isinstance(row, dict):
@@ -3523,8 +3517,12 @@ def fetch_shared_file_catalog_by_root(
 ) -> dict[str, object]:
     """Fetches shared-file catalog counts grouped by sanitized shared root."""
 
-    directories = request_json(base_url, "/shared-directories", api_key=api_key)
-    roots = shared_root_paths(directories)
+    if pagination == "cursor":
+        rows = list(iter_library_roots(lambda path: request_json(base_url, path, api_key=api_key)))
+    else:
+        model = request_json(base_url, "/shared-directories", api_key=api_key)
+        rows = model.get("items") if isinstance(model.get("items"), list) else model.get("roots", [])
+    roots = shared_root_paths(rows)
     groups: dict[str, dict[str, object]] = {}
     unmatched_prefix_groups: dict[int, dict[str, dict[str, object]]] = {}
     row_count = 0
@@ -3871,6 +3869,26 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+def apply_rust_root_entries(args: argparse.Namespace, entries: list[object]) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Reconcile explicit resources by ID, preserving required roots and unchanged IDs."""
+    if any(not shared_root_is_recursive(entry) for entry in entries):
+        raise RuntimeError("Rust library roots are recursive; flat MFC roots require an explicit sharing decision")
+    desired = {normalize_private_path(shared_root_path(normalize_shared_root_entry(entry))): shared_root_path(normalize_shared_root_entry(entry)) for entry in entries}
+    current = list(iter_library_roots(lambda path: request_json(args.base_url, path, api_key=args.api_key, timeout_seconds=args.timeout_seconds)))
+    present = {normalize_private_path(row["path"]) for row in current}
+    # Add before retiring unrelated explicit roots. A creation conflict remains
+    # visible and never causes an automatic withdrawal of existing roots.
+    for key, path in desired.items():
+        if key not in present:
+            request_json(args.base_url, "/library/roots", api_key=args.api_key, method="POST",
+                         body={"path": path, "watchEnabled": False}, timeout_seconds=args.timeout_seconds)
+    for row in current:
+        if not row["managed"] and normalize_private_path(row["path"]) not in desired:
+            request_json(args.base_url, f"/library/roots/{row['id']}", api_key=args.api_key, method="DELETE", timeout_seconds=args.timeout_seconds)
+    rows = list(iter_library_roots(lambda path: request_json(args.base_url, path, api_key=args.api_key, timeout_seconds=args.timeout_seconds)))
+    return rows, request_json(args.base_url, "/library/scan", api_key=args.api_key, timeout_seconds=args.timeout_seconds)
+
+
 def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     """Applies MFC persisted shared-root intent to the Rust REST profile."""
 
@@ -3885,20 +3903,8 @@ def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
         extra_roots=[args.extra_root] if args.extra_root is not None else None,
     )
     existing_entries, skipped_inaccessible = existing_shared_roots(root_entries)
-    payload_roots = [
-        {"path": shared_root_path(normalize_shared_root_entry(root))}
-        for root in existing_entries
-    ]
-    response = request_json(
-        args.base_url,
-        "/shared-directories",
-        api_key=args.api_key,
-        method="PATCH",
-        body={"confirmReplaceRoots": True, "roots": payload_roots},
-        timeout_seconds=args.timeout_seconds,
-    )
-    roots = response.get("roots")
-    items = response.get("items")
+    roots, response = apply_rust_root_entries(args, existing_entries)
+    items = []
     recursive_count = sum(1 for root in existing_entries if shared_root_is_recursive(root))
     return {
         "applied": True,
@@ -3915,51 +3921,20 @@ def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
             "roots": summarize_shared_directory_rows(roots),
             "items": summarize_shared_directory_rows(items),
             "hashingCount": response.get("hashingCount"),
-            "reload": response.get("reload"),
+            "reload": response.get("reloadProgress"),
         },
     }
 
 
 def mutate_rust_shared_root(args: argparse.Namespace) -> dict[str, object]:
-    """Adds or removes one recursive Rust shared root through the live REST API."""
-
-    path = str(args.path)
+    """Create a recursive root or remove an explicit resource by immutable ID."""
     if args.operation == "add":
-        response = request_json(
-            args.base_url,
-            "/shared-directories/roots",
-            api_key=args.api_key,
-            method="POST",
-            body={"path": path},
-            timeout_seconds=args.timeout_seconds,
-        )
-    elif args.operation == "remove":
-        response = request_json(
-            args.base_url,
-            f"/shared-directories/roots?path={quote(path, safe='')}",
-            api_key=args.api_key,
-            method="DELETE",
-            timeout_seconds=args.timeout_seconds,
-        )
-    else:
-        raise RuntimeError(f"unsupported shared-root operation: {args.operation}")
-
-    roots = response.get("roots")
-    items = response.get("items")
-    root_fingerprint = private_path_fingerprint(path)
-    root_fingerprints = set(shared_directory_fingerprints(roots))
-    return {
-        "operation": args.operation,
-        "applied": True,
-        "requestedRootFingerprint": root_fingerprint,
-        "requestedRootPresent": root_fingerprint in root_fingerprints,
-        "rust": {
-            "roots": summarize_shared_directory_rows(roots),
-            "items": summarize_shared_directory_rows(items),
-            "hashingCount": response.get("hashingCount"),
-            "reload": response.get("reload"),
-        },
-    }
+        root = request_json(args.base_url, "/library/roots", api_key=args.api_key, method="POST",
+                            body={"path": str(args.path), "watchEnabled": False}, timeout_seconds=args.timeout_seconds)
+        return {"operation": "add", "applied": True, "resourceId": root["id"],
+                "requestedRootFingerprint": private_path_fingerprint(root["path"])}
+    request_json(args.base_url, f"/library/roots/{args.id}", api_key=args.api_key, method="DELETE", timeout_seconds=args.timeout_seconds)
+    return {"operation": "remove", "applied": True, "resourceId": args.id}
 
 
 def mfc_rest_shared_root_entries(
@@ -4185,20 +4160,8 @@ def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     )
     if not root_entries:
         raise RuntimeError("MFC REST returned no shared-directory entries")
-    payload_roots = [
-        {"path": shared_root_path(normalize_shared_root_entry(root))}
-        for root in root_entries
-    ]
-    response = request_json(
-        args.base_url,
-        "/shared-directories",
-        api_key=args.api_key,
-        method="PATCH",
-        body={"confirmReplaceRoots": True, "roots": payload_roots},
-        timeout_seconds=args.timeout_seconds,
-    )
-    roots = response.get("roots")
-    items = response.get("items")
+    roots, response = apply_rust_root_entries(args, root_entries)
+    items = []
     recursive_count = sum(1 for root in root_entries if shared_root_is_recursive(root))
     return {
         "applied": True,
@@ -4212,7 +4175,7 @@ def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
             "roots": summarize_shared_directory_rows(roots),
             "items": summarize_shared_directory_rows(items),
             "hashingCount": response.get("hashingCount"),
-            "reload": response.get("reload"),
+            "reload": response.get("reloadProgress"),
         },
     }
 
@@ -6951,7 +6914,7 @@ def build_parser() -> argparse.ArgumentParser:
         "remove-shared-root",
         help="Remove one shared root from the live Rust profile.",
     )
-    remove_root_parser.add_argument("--path", type=Path, required=True)
+    remove_root_parser.add_argument("--id", required=True)
     remove_root_parser.add_argument("--timeout-seconds", type=float, default=120.0)
     remove_root_parser.set_defaults(func=mutate_rust_shared_root, operation="remove")
 

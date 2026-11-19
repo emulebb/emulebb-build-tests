@@ -1193,9 +1193,9 @@ def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monke
 
     def fake_request_json(_base_url, method, path, _api_key, body=None):
         calls.append((method, path, body))
-        if path == "/api/v1/shared-directories":
-                return {"roots": body["roots"], "items": []}
-        if path == "/api/v1/shared-directories/operations/reload":
+        if path == "/api/v1/library/roots":
+                return {"id": "1", **body}
+        if path == "/api/v1/library/scan":
             return {"ok": True}
         if path == "/api/v1/shared-files":
             return {
@@ -1221,11 +1221,11 @@ def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monke
     )
 
     assert calls[0] == (
-        "PATCH",
-        "/api/v1/shared-directories",
-        {"roots": [{"path": str(tmp_path / "shared-tree")}], "confirmReplaceRoots": True},
+        "POST",
+        "/api/v1/library/roots",
+        {"path": str(tmp_path / "shared-tree"), "watchEnabled": False},
     )
-    assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
+    assert calls[1] == ("POST", "/api/v1/library/scan", None)
     assert calls[2] == ("GET", "/api/v1/shared-files", None)
     assert calls[3] == ("GET", "/api/v1/status", None)
     assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"

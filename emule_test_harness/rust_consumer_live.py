@@ -27,6 +27,7 @@ from .rust_webui_live_proof import (
     ConsumerSharedFixture,
     _matched_shared_catalog,
     api_data,
+    api_document,
     profile_settings_api_key,
     run_webui_live_proof,
     sanitize_report_text,
@@ -516,10 +517,11 @@ def _shared_persistence_snapshot(
 ) -> dict[str, Any]:
     """Verify that the synthetic root and exact shared catalog survive restart."""
 
-    directories = api_data(base_url, "shared-directories", api_key)
-    roots = directories.get("roots", []) if isinstance(directories, dict) else []
+    from .rust_rest_contract import iter_library_roots
     files = api_data(base_url, "shared-files?limit=100", api_key)
     matched = _matched_shared_catalog(files, fixtures)
+    roots = [row for row in iter_library_roots(lambda path: api_document(base_url, path, api_key))
+             if matched and any(Path(file["path"]).is_relative_to(Path(row["path"])) for file in files["items"])]
     if not isinstance(roots, list) or len(roots) != 1 or matched is None:
         raise RuntimeError("synthetic shared root or catalog did not persist across restart")
     return {

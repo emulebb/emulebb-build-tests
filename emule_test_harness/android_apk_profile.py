@@ -9,6 +9,7 @@ import re
 import shlex
 
 from .android_apk_lifecycle import admit_production_certificate
+from .rust_rest_contract import iter_library_roots
 
 INCOMING = "/storage/emulated/0/Download/eMuleBB/Incoming"
 SHARED = "/storage/emulated/0/Download/eMuleBB/Shared"
@@ -43,8 +44,7 @@ def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, pa
         return command(*prefix, "shell", *args)
 
     def roots():
-        document = request_json(base_url, "GET", "/api/v1/shared-directories", api_key)
-        value = document.get("roots")
+        value = [root for root in iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)) if not root["managed"]]
         if not isinstance(value, list) or any(not isinstance(root, dict) or not isinstance(root.get("path"), str) for root in value):
             raise RuntimeError("Invalid shared-root configuration")
         return {root["path"] for root in value}
@@ -72,7 +72,7 @@ def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, pa
         if any(restarted.get(name) != value for name, value in payload["buildIdentity"].items()):
             raise RuntimeError("Restarted configuration source identity differs")
         if SHARED not in before_roots:
-            request_json(base_url, "POST", "/api/v1/shared-directories/roots", api_key, {"path": SHARED})
+            request_json(base_url, "POST", "/api/v1/library/roots", api_key, {"path": SHARED})
         settings = request_json(base_url, "GET", "/api/v1/app/settings", api_key)
         after_roots = roots()
         after_entries = set(shell("ls", "-A", "/sdcard/Download/eMuleBB").splitlines())

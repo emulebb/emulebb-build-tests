@@ -61,14 +61,15 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
     def request(base, method, route, key, body=None):
         calls.append((method, route, body))
         if route == "/api/v1/app": return payload["buildIdentity"]
-        if route == "/api/v1/shared-directories": return {"roots": [{"path": root} for root in roots]}
+        if route == "/api/v1/library/roots?limit=100":
+            return {"data": [{"id": str(i), "path": root, "managed": False} for i, root in enumerate(sorted(roots), 1)],
+                    "meta": {"hasMore": False, "nextCursor": None}}
         if route == "/api/v1/app/settings":
             if method == "PATCH": settings.update(body)
             return settings
-        if route == "/api/v1/shared-directories/roots":
+        if route == "/api/v1/library/roots":
             assert method == "POST" and body == {"path": subject.SHARED}
-            # Canonical Rust behavior: children covered by the live Incoming
-            # folder are ignored, even after a persisted-only incoming PATCH.
+            # The sharing root must be disjoint from the running Incoming root.
             if not subject.SHARED.startswith(live_incoming[0] + "/"):
                 roots.add(subject.SHARED)
             if fault == "lost-roots": roots.remove("/storage/emulated/0/Download/Existing Shared")
@@ -102,7 +103,7 @@ def test_normal_configuration_uses_additive_roots_and_preserves_phone_entries(tm
         result = subject.configure_storage(command, **kwargs)
         assert result["status"] == "passed" and result["application"] == "service-restarted-before-sharing"
         assert result["priorRootsPreserved"] and result["rootEntriesPreserved"] and result["filesMovedOrDeleted"] == 0
-    assert not any(method == "DELETE" or route == "/api/v1/shared-directories" and method == "PATCH" for method, route, body in calls)
+    assert not any(method in {"DELETE", "PATCH"} and route.startswith("/api/v1/library/roots") for method, route, body in calls)
     assert "Existing User File.bin" not in report.read_text() and "synthetic-private-key" not in report.read_text()
 
 

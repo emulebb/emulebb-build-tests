@@ -69,11 +69,10 @@ SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
 QUEUE_PRESSURE_PATH = "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
-SHARED_DIRECTORIES_PATH = "/api/v1/shared-directories"
 MFC_SHARED_FILES_PATH = "/api/v1/shared-files?offset=0&limit=100"
 MFC_SHARED_RELOAD_PATH = "/api/v1/shared-files/operations/reload"
 RUST_SHARED_FILES_PATH = "/api/v1/shared-files"
-RUST_SHARED_RELOAD_PATH = "/api/v1/shared-directories/operations/reload"
+RUST_SHARED_RELOAD_PATH = "/api/v1/library/scan"
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
@@ -944,18 +943,13 @@ def start_rust(
         if shared_dir is not None:
             cc.request_json(
                 base_url,
-                "PATCH",
-                "/api/v1/shared-directories",
-                api_key,
-                {
-                    "roots": [{"path": str(Path(shared_dir).resolve())}],
-                    "confirmReplaceRoots": True,
-                },
+                "POST", "/api/v1/library/roots", api_key,
+                {"path": str(Path(shared_dir).resolve()), "watchEnabled": False},
             )
             cc.request_json(
                 base_url,
                 "POST",
-                "/api/v1/shared-directories/operations/reload",
+                "/api/v1/library/scan",
                 api_key,
             )
         cc.request_json(base_url, "POST", "/api/v1/servers/operations/connect", api_key)
@@ -1081,37 +1075,6 @@ def reload_shared_catalog(
     return receipt
 
 
-def clear_shared_roots(
-    base_url: str,
-    api_key: str,
-) -> dict[str, object]:
-    """Replace an ephemeral responder profile's shared roots with none."""
-
-    request = {"roots": [], "confirmReplaceRoots": True}
-    response = dtt.retry_rest_request(
-        base_url,
-        SHARED_DIRECTORIES_PATH,
-        method="PATCH",
-        api_key=api_key,
-        json_body=request,
-        timeout_seconds=30.0,
-    )
-    status = int(response.get("status") or 0)
-    payload = _api_data(response.get("raw_json"))
-    receipt = {
-        "request": request,
-        "response": {
-            "status": status,
-            "json": payload if isinstance(payload, dict) else None,
-        },
-    }
-    if status != 200:
-        raise RuntimeError(
-            "shared-root replacement failed: "
-            f"{dtt.rest_smoke.compact_http_result(response)!r}"
-        )
-    return receipt
-
 
 def restore_shared_fixture(shared_path: Path, withdrawn_path: Path) -> None:
     """Restore one harness-owned fixture without overwriting another file."""
@@ -1206,7 +1169,7 @@ def withdraw_rust_shared_root(
         shared_files_path=RUST_SHARED_FILES_PATH,
         timeout=timeout,
     )
-    shared_directories = clear_shared_roots(base_url, api_key)
+    shared_directories = cc.rust_local_ed2k.clear_explicit_library_roots(base_url, api_key)
     reload_response = reload_shared_catalog(
         base_url,
         api_key,

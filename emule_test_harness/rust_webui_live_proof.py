@@ -454,7 +454,7 @@ def _sharing_publish_actions(
     sharing_panel.get_by_placeholder("Server folder path").fill(options.shared_root_path)
     with page.expect_response(
         lambda response: response.request.method == "POST"
-        and urlparse(response.url).path == "/api/v1/shared-directories/roots",
+        and urlparse(response.url).path == "/api/v1/library/roots",
         timeout=int(options.network_timeout_seconds * 1000),
     ) as add_root_response:
         sharing_panel.get_by_role("button", name="Add root", exact=True).click()
@@ -466,14 +466,15 @@ def _sharing_publish_actions(
     page.get_by_text("Folder added", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
     )
+    root_id = str(add_root_response.value.json()["data"]["id"])
 
     def indexed_fixture(min_updated_at_ms: int = 0) -> dict[str, Any] | None:
-        directories = api_data(base_url, "shared-directories", api_key)
-        roots = directories.get("roots", []) if isinstance(directories, dict) else []
+        directories = api_data(base_url, "library/scan", api_key)
+        root = api_data(base_url, f"library/roots/{root_id}", api_key)
         reload_progress = (
             directories.get("reloadProgress", {}) if isinstance(directories, dict) else {}
         )
-        if not isinstance(roots, list) or len(roots) != 1 or not isinstance(reload_progress, dict):
+        if not isinstance(root, dict) or root.get("id") != root_id or not isinstance(reload_progress, dict):
             return None
         if reload_progress.get("running") or reload_progress.get("pending"):
             return None
@@ -501,7 +502,7 @@ def _sharing_publish_actions(
     )
     with page.expect_response(
         lambda response: response.request.method == "POST"
-        and urlparse(response.url).path == "/api/v1/shared-directories/operations/reload",
+        and urlparse(response.url).path == "/api/v1/library/scan",
         timeout=int(options.network_timeout_seconds * 1000),
     ) as reload_response:
         sharing_panel.get_by_role("button", name="Reload", exact=True).click()

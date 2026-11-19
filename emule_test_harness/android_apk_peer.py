@@ -19,6 +19,7 @@ from .rust_local_ed2k import RustRestFailure, ed2k_link_with_source, publish_sha
 from .rust_shared_library_fixture import deterministic_payload
 from .android_adb_failure import AdbOperationFailure
 from .android_apk_cleanup import COLLISION_OCCUPANT, OwnedFixtureFailure, remove_owned_fixture
+from .rust_rest_contract import iter_library_roots
 
 PREFIX = ("-s", "emulator-5554")
 PEER_KEY = "synthetic-apk-peer-only-0000000000000000"
@@ -494,7 +495,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
     app_attempted = False
     try:
         original = request("GET", "/api/v1/app/settings")
-        roots = {row["path"] for row in request("GET", "/api/v1/shared-directories")["roots"]}
+        roots = {row["path"] for row in iter_library_roots(lambda path: request("GET", "/api/v1" + path))}
         campaign.mark("admit-prior-downloads")
         if _complete_items(request("GET", "/api/v1/downloads?view=unfinished&limit=200"), kind="downloads"):
             raise RuntimeError("Listener probe refuses to interrupt unfinished downloads")
@@ -522,7 +523,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
                 try:
                     restart_service()
                     if (request("GET", "/api/v1/app/settings") != original
-                            or {row["path"] for row in request("GET", "/api/v1/shared-directories")["roots"]} != roots):
+                            or {row["path"] for row in iter_library_roots(lambda path: request("GET", "/api/v1" + path))} != roots):
                         raise RuntimeError("Listener probe changed prior configuration")
                     campaign.cleaned("restore-app-listener-state")
                 except Exception as error:
@@ -551,7 +552,7 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         return command(*prefix, "shell", *args)
 
     def shared_roots():
-        roots = request("GET", "/api/v1/shared-directories").get("roots")
+        roots = list(iter_library_roots(lambda path: request("GET", "/api/v1" + path)))
         if not isinstance(roots, list) or any(not isinstance(row, dict) or not isinstance(row.get("path"), str) for row in roots):
             raise RuntimeError("APK transfer returned invalid sharing roots")
         return {row["path"] for row in roots}
