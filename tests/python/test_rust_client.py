@@ -8,6 +8,7 @@ import stat
 import subprocess
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -376,12 +377,15 @@ def test_write_rust_profile_supports_incoming_dir(tmp_path: Path) -> None:
 def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rust_live_wire_module()
     hashes = ["a" * 32, "b" * 32]
-    candidates = [{"hash": hashes[0], "_searchId": "1", "sizeBytes": 1000},
-                  {"hash": hashes[1], "_searchId": "1", "sizeBytes": 20000000}]
+    search_id = "00000000-0000-0000-0000-000000000001"
+    candidates = [{"id": "101", "hash": hashes[0], "_searchId": search_id, "sizeBytes": 1000},
+                  {"id": "102", "hash": hashes[1], "_searchId": search_id, "sizeBytes": 20000000}]
+    admissions = {f"/api/v1/searches/{search_id}/results/101/download": ("7", hashes[0]),
+                  f"/api/v1/searches/{search_id}/results/102/download": ("8", hashes[1])}
     def create(_label, _attempts, _base, path, **kwargs):
-        file_hash = path.split("/")[-3]
+        job_id, file_hash = admissions[path]
         assert kwargs["body"] == {"intent": "started", "category": None}
-        return {"data": {"id": "7" if file_hash == hashes[0] else "8", "hash": file_hash}}
+        return {"data": {"id": job_id, "hash": file_hash}}
     def detail(_base, _key, job_id, *, expected_hash):
         done = job_id == "7"
         return {"id": job_id, "hash": expected_hash, "sizeBytes": 1000 if done else 20000000,
@@ -392,6 +396,8 @@ def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pyt
     monkeypatch.setattr(module, "download_part_totals", lambda *_args: {"verifiedBytes": 9728000})
     monkeypatch.setattr(module, "_source_count_lower_bound", lambda *_args: 1)
     monkeypatch.setattr(module, "log", lambda message: None)
+    ticks = iter((0.0, 0.1, 1.1))
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _: None))
     result = module.run_downloads("http://192.0.2.10:4711", candidates, 1, max_concurrent=2)
     assert result["completedFiles"] == [{"candidateIndex": 1, "sizeBytes": 1000}]
     assert result["completedFilesTotalBytes"] == 1000
