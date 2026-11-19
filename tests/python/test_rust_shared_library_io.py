@@ -1119,8 +1119,8 @@ def test_linux_lsblk_parser_maps_children_to_one_physical_disk() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("mode", ["direct", "loss", "persistent-loss", "scan-failure"])
-def test_watcher_phase_uses_one_explicit_scan_and_requires_loss_acknowledgment(monkeypatch, tmp_path, mode):
+@pytest.mark.parametrize("mode", ["direct", "loss", "new-loss", "persistent-loss", "continuous-loss", "scan-failure"])
+def test_watcher_recovery_requires_new_loss_before_another_acknowledgment(monkeypatch, tmp_path, mode):
     import itertools
 
     clock = itertools.count(step=0.01)
@@ -1131,6 +1131,8 @@ def test_watcher_phase_uses_one_explicit_scan_and_requires_loss_acknowledgment(m
     monkeypatch.setattr(subject, "storage_acceptance", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(subject, "_watcher_database_rows", lambda _: {})
     state = {"mutated": False, "scans": 0}
+    monkeypatch.setattr(subject, "_watcher_loss_revision", lambda *_args:
+                        100 + (state["scans"] if mode in ("new-loss", "continuous-loss") else 0))
 
     def request(method, path, payload=None, **_kwargs):
         if method == "POST":
@@ -1141,8 +1143,8 @@ def test_watcher_phase_uses_one_explicit_scan_and_requires_loss_acknowledgment(m
             return {}
         if path == "/library/roots/1":
             lost = state["mutated"] and mode != "direct"
-            if state["scans"] and mode != "persistent-loss":
-                lost = False
+            if state["scans"] and mode not in ("persistent-loss", "continuous-loss"):
+                lost = mode == "new-loss" and state["scans"] == 1
             return {"watchEnabled": True, "scanRequired": lost}
         assert path == subject.SHARED_FILES_PROBE_PATH
         return {"total": 0}
@@ -1168,16 +1170,23 @@ def test_watcher_phase_uses_one_explicit_scan_and_requires_loss_acknowledgment(m
     if mode == "scan-failure":
         with pytest.raises(RuntimeError, match="synthetic scan failure"):
             run()
-    elif mode == "persistent-loss":
+    elif mode in ("persistent-loss", "continuous-loss"):
         with pytest.raises(subject.WatcherConvergenceError) as failure:
             run()
         assert failure.value.phase_report["acceptance"]["checks"]["rootScanAcknowledged"] is False
+        assert failure.value.phase_report["watchRecovery"]["failure"] == (
+            "scanDidNotAcknowledgeObservedLoss" if mode == "persistent-loss"
+            else "newLossAfterAcknowledgmentBudget"
+        )
     else:
         report, hashes = run()
         assert report["acceptance"]["ok"] is True and hashes == {}
-        assert report["watchRecovery"]["scanRequiredObserved"] is (mode == "loss")
+        assert report["watchRecovery"]["scanRequiredObserved"] is (mode != "direct")
         assert report["watchRecovery"]["scanRequiredAfter"] is False
-    assert state["scans"] == int(mode != "direct")
+        assert [row["observedLossRevision"] for row in report["watchRecovery"]["scans"]] == (
+            [] if mode == "direct" else [100, 101] if mode == "new-loss" else [100]
+        )
+    assert state["scans"] == (2 if mode in ("new-loss", "continuous-loss") else int(mode != "direct"))
 
 
 @pytest.mark.unit
@@ -1270,6 +1279,7 @@ def test_watcher_database_query_returns_only_active_probe_rows(
                            (parent_root, path_id, known, f"{tmp_path.name}/watch-probe-0000.bin"))
         plan = connection.execute("EXPLAIN QUERY PLAN " + subject.ACTIVE_LOCAL_SOURCES_SQL).fetchall()
         assert not any("TEMP B-TREE" in str(row[3]) for row in plan)
+        connection.execute("UPDATE shared_directory_roots SET watch_loss_revision=9 WHERE id=?", (root,))
     connection.close()
     connect = sqlite3.connect
     readers = []
@@ -1280,6 +1290,9 @@ def test_watcher_database_query_returns_only_active_probe_rows(
         return reader
 
     monkeypatch.setattr(subject.sqlite3, "connect", track_reader)
+    assert subject._watcher_loss_revision(profile, str(root)) == 9
+    with pytest.raises(RuntimeError, match="no longer exists"):
+        subject._watcher_loss_revision(profile, str(parent_root + 1))
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
     assert next(iter(rows.values()))["hash"] == "11" * 16
@@ -1293,7 +1306,7 @@ def test_watcher_database_query_returns_only_active_probe_rows(
     for read in (subject._watcher_database_rows, subject.profile_storage_snapshot):
         with pytest.raises(sqlite3.OperationalError):
             read(profile)
-    assert len(readers) == 4
+    assert len(readers) == 6
     for reader in readers:
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             reader.execute("SELECT 1")

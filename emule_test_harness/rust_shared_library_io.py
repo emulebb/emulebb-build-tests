@@ -2513,6 +2513,21 @@ def _normalized_path_key(path: str | Path) -> str:
     return os.path.normcase(normalized)
 
 
+def _watcher_loss_revision(profile_dir: Path, root_id: str) -> int:
+    """Read one subscribed root's durable loss watermark for explicit recovery."""
+    database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    with closing(sqlite3.connect(
+        f"file:{database.as_posix()}?mode=ro", uri=True, timeout=5
+    )) as connection:
+        row = connection.execute(
+            "SELECT watch_loss_revision FROM shared_directory_roots "
+            "WHERE id = ? AND enabled = 1 AND deleted_at_ms IS NULL", (root_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("Watcher recovery root no longer exists")
+    return int(row[0])
+
+
 def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
     """Read active watcher-probe identities without returning paths to reports."""
 
@@ -2681,7 +2696,7 @@ class WatcherConvergenceError(TimeoutError):
     def __init__(self, phase_report: dict[str, object]) -> None:
         self.phase_report = phase_report
         reason = (
-            "did not converge within its phase timeout"
+            "did not converge"
             if not phase_report["acceptance"]["checks"]["converged"]
             else "failed strict post-convergence acceptance"
         )
@@ -2707,11 +2722,12 @@ def run_watcher_phase(
     require_same_hashes: bool = False,
     spec: FixtureSpec = PRODUCTION_SPEC,
 ) -> tuple[dict[str, object], dict[str, str]]:
-    """Prove exact live convergence, allowing one explicit loss-recovery scan.
+    """Prove exact live convergence with bounded, revision-proven recovery.
 
     Saturated native notifications may set scanRequired. Record that public
-    signal and exercise the operator's scan action once; never retry a failed
-    scan or accept a root that still requires scanning.
+    signal and exercise the operator's scan action. Permit a second explicit
+    acknowledgement only for a newer durable loss revision; never retry a
+    failed scan or accept a root that still requires scanning.
     """
 
     started = time.monotonic()
@@ -2723,9 +2739,12 @@ def run_watcher_phase(
     if before_root["scanRequired"] is not False or before_root["watchEnabled"] is not True:
         raise RuntimeError("Watcher phase requires an enabled root with an acknowledged baseline")
     operation = action()
+    print(f"{label}: mutation complete; checking exact content and root acknowledgement",
+          file=sys.stderr, flush=True)
     scan_required_observed = False
-    scan_requested = False
-    recovery_scan: dict[str, object] | None = None
+    recovery_scans: list[dict[str, object]] = []
+    observed_loss_revision: int | None = None
+    recovery_failure: str | None = None
     root_scan_required = True
     final_rows: dict[str, dict[str, object]] = {}
     final_evidence, _ = _watcher_row_evidence(
@@ -2767,17 +2786,27 @@ def run_watcher_phase(
             root_scan_required = root["scanRequired"]
             if root_scan_required is True:
                 scan_required_observed = True
-                if not scan_requested:
-                    scan_requested = True
-                    recovery_scan = run_dynamic_reload_phase(
-                        label=f"{label}ExplicitRecovery",
+                revision = _watcher_loss_revision(profile_dir, watch_root_id)
+                observed_loss_revision = revision
+                if recovery_scans and revision <= recovery_scans[-1]["observedLossRevision"]:
+                    recovery_failure = "scanDidNotAcknowledgeObservedLoss"
+                    break
+                if len(recovery_scans) >= 2:
+                    recovery_failure = "newLossAfterAcknowledgmentBudget"
+                    break
+                recovery = {"observedLossRevision": revision}
+                recovery_scans.append(recovery)
+                print(f"{label}: explicit acknowledgement {len(recovery_scans)} for loss revision {revision}",
+                      file=sys.stderr, flush=True)
+                recovery["scan"] = run_dynamic_reload_phase(
+                        label=f"{label}ExplicitRecovery{len(recovery_scans)}",
                         action=lambda: client.request("POST", "/library/scan", {}),
                         client=client, process=process, sampler=sampler,
                         counter_keys=[] if disk_counter_key is None else [disk_counter_key],
                         timeout_seconds=max(0.0, deadline - time.monotonic()),
                         poll_seconds=poll_seconds,
-                    )
-                    continue
+                )
+                continue
             for path_class in class_convergence:
                 if class_convergence[path_class] is not None:
                     continue
@@ -2858,9 +2887,11 @@ def run_watcher_phase(
         "restIdentitySample": rest_sample,
         "watchRecovery": {
             "scanRequiredObserved": scan_required_observed,
-            "explicitScanCount": int(scan_requested),
+            "explicitScanCount": len(recovery_scans),
             "scanRequiredAfter": root_scan_required,
-            "scan": recovery_scan,
+            "observedLossRevision": observed_loss_revision,
+            "failure": recovery_failure,
+            "scans": recovery_scans,
         },
         "throughput": {
             "filesPerSecond": round(operation["fileCount"] / elapsed, 3),
@@ -2877,6 +2908,8 @@ def run_watcher_phase(
     }
     if not report["acceptance"]["ok"]:
         raise WatcherConvergenceError(report)
+    print(f"{label}: exact content and root acknowledgement passed",
+          file=sys.stderr, flush=True)
     return report, {key: str(row["hash"]) for key, row in final_rows.items()}
 
 
