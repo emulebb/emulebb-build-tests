@@ -203,11 +203,7 @@ def test_metadata_writes_close_sqlite_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata_db = tmp_path / rust_metadata.RUST_PROFILE_METADATA_FILE
-    with sqlite3.connect(metadata_db) as connection:
-        connection.execute(
-            "CREATE TABLE settings(section TEXT, key TEXT, value_json TEXT, updated_at_ms INTEGER, "
-            "PRIMARY KEY(section, key))"
-        )
+    rust_metadata.create_metadata_db(rust_repo(), metadata_db)
 
     original_connect = sqlite3.connect
     tracked: list[_TrackedConnection] = []
@@ -219,7 +215,7 @@ def test_metadata_writes_close_sqlite_connection(
 
     monkeypatch.setattr(rust_metadata.sqlite3, "connect", connect)
 
-    rust_metadata.put_setting_json(metadata_db, "network", "enabled", True)
+    rust_metadata.edit_app_settings(rust_repo(), metadata_db, {"network.ed2kEnabled": False})
 
     assert len(tracked) == 1
     assert tracked[0].closed is True
@@ -544,3 +540,51 @@ def test_search_observation_fixture_preserves_session_and_global_count_boundarie
         ).fetchall()
         assert counts == [(3,1,10,20),(1,1,30,30)]
         assert connection.execute("SELECT result_count FROM search_sessions WHERE id=?",(int(fixture["sessionId"]),)).fetchone() == (1,)
+
+
+def test_canonical_settings_fixture_seeds_every_leaf_and_preserves_modes_and_revisions(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    defaults = rust_metadata.saved_settings_defaults(rust_repo())
+    assert rust_metadata.read_app_settings(database) == (1, defaults)
+    assert rust_metadata.edit_app_settings(rust_repo(), database, {
+        "network.nickname": "Sample Client", "transfers.maxConcurrentDownloads": 8,
+        "network.nat.backendOrder": ["upnp"],
+    }) == 2
+    _, saved = rust_metadata.read_app_settings(database)
+    assert saved["network"]["nickname"] == {"mode": "custom", "value": "Sample Client"}
+    assert saved["transfers"]["maxConcurrentDownloads"] == {"mode": "custom", "value": 8}
+    assert saved["network"]["nat"]["backendOrder"] == {"mode": "custom", "value": ["upnp"]}
+    assert saved["network"]["p2p"] == defaults["network"]["p2p"]
+    assert rust_metadata.edit_app_settings(rust_repo(), database, {"transfers.maxConcurrentDownloads": None},
+                                         reset=("network.nickname", "network.nat.backendOrder")) == 3
+    assert rust_metadata.read_app_settings(database) == (3, defaults)
+    assert rust_metadata.edit_app_settings(rust_repo(), database, {"network.nickname": "eMule"}) == 4
+    assert rust_metadata.read_app_settings(database) == (4, defaults)
+
+
+@pytest.mark.parametrize("values,reset", [
+    ({"network.extension": True}, ()),
+    ({"network.nickname": "Sample"}, ("network.nickname",)),
+    ({}, ("network.nickname", "network.nickname")),
+    ({}, ()),
+    ({"storage.tempDirectory": "x" * 140000}, ()),
+])
+def test_canonical_settings_fixture_rejects_invalid_edits_without_partial_writes(tmp_path, values, reset):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    before = rust_metadata.read_app_settings(database)
+    with pytest.raises(ValueError):
+        rust_metadata.edit_app_settings(rust_repo(), database, values, reset=reset)
+    assert rust_metadata.read_app_settings(database) == before
+
+
+def test_canonical_settings_fixture_write_failure_rolls_back_document_and_revision(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    before = rust_metadata.read_app_settings(database)
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TRIGGER fail_settings BEFORE UPDATE ON app_settings BEGIN SELECT RAISE(ABORT,'fixture fault'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="fixture fault"):
+        rust_metadata.edit_app_settings(rust_repo(), database, {"network.nickname": "Sample"})
+    assert rust_metadata.read_app_settings(database) == before

@@ -68,6 +68,7 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
     daemon startup.
     """
 
+    defaults = saved_settings_defaults(rust_repo)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     schema_id, schema_version = _schema_marker(rust_repo)
     now = _now_ms()
@@ -84,7 +85,80 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
             """,
             (str(uuid.uuid4()), now, now),
         )
+        conn.execute("INSERT INTO app_settings(id,revision,document_json) VALUES(1,1,?)",
+                     (_settings_json(defaults),))
         conn.commit()
+
+
+def saved_settings_defaults(rust_repo: Path) -> dict[str, Any]:
+    """Load the Rust-generated test snapshot, checked against compiled defaults."""
+    fixture = rust_repo / "crates/emulebb-settings/tests/fixtures/default-settings.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))
+
+
+def _settings_json(document: dict[str, Any]) -> str:
+    encoded = json.dumps(document, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 131072:
+        raise ValueError("Saved settings fixture exceeds the 128 KiB document budget")
+    return encoded
+
+
+def _setting_leaf(document: dict[str, Any], key: str) -> dict[str, Any]:
+    branch = document
+    for segment in key.split("."):
+        if not isinstance(branch, dict) or segment not in branch:
+            raise ValueError(f"Unknown canonical setting key: {key}")
+        branch = branch[segment]
+    if not isinstance(branch, dict) or set(branch) != {"mode", "value"}:
+        raise ValueError(f"Expected a canonical setting leaf: {key}")
+    return branch
+
+
+def edit_app_settings(rust_repo: Path, db_path: Path, values: dict[str, Any], *,
+                      reset: tuple[str, ...] = ()) -> int:
+    """Prepare one current-schema settings edit in a stopped test profile.
+
+    Keys are current dotted product keys. Native startup owns value validation;
+    this fixture writer enforces structure, modes, revision and serialized size.
+    """
+    if not values and not reset:
+        raise ValueError("Settings edit must contain a set or reset")
+    if len(set(reset)) != len(reset) or set(values).intersection(reset):
+        raise ValueError("Settings edit contains duplicate or overlapping resets")
+    defaults = saved_settings_defaults(rust_repo)
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as conn:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT revision,document_json FROM app_settings WHERE id=1").fetchone()
+            if row is None:
+                raise RuntimeError("Canonical settings singleton is missing")
+            revision, encoded = row
+            if not 1 <= revision < 9223372036854775807:
+                raise ValueError("Settings revision cannot advance")
+            document = json.loads(encoded)
+            for key in reset:
+                leaf, default = _setting_leaf(document, key), _setting_leaf(defaults, key)
+                leaf.update(mode="default", value=default["value"])
+            for key, value in values.items():
+                leaf, default = _setting_leaf(document, key), _setting_leaf(defaults, key)
+                # JSON booleans and integers are distinct product types.
+                same = type(value) is type(default["value"]) and value == default["value"]
+                leaf.update(mode="default" if same else "custom", value=value)
+            encoded = _settings_json(document)
+            changed = conn.execute("UPDATE app_settings SET revision=?,document_json=? WHERE id=1 AND revision=?",
+                                   (revision + 1, encoded, revision)).rowcount
+            if changed != 1:
+                raise RuntimeError("Settings fixture revision changed during write")
+            return revision + 1
+
+
+def read_app_settings(db_path: Path) -> tuple[int, dict[str, Any]]:
+    """Read the complete fixture document without creating or repairing a database."""
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        row = conn.execute("SELECT revision,document_json FROM app_settings WHERE id=1").fetchone()
+        if row is None:
+            raise RuntimeError("Canonical settings singleton is missing")
+        return row[0], json.loads(row[1])
 
 
 def initialize_local_discovery(rust_repo: Path, db_path: Path) -> None:
