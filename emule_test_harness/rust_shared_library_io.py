@@ -3831,6 +3831,73 @@ def cleanup(paths: HarnessPaths, *, confirmed: bool) -> dict[str, object]:
     }
 
 
+def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
+    """Admit a verified archive and reuse the full campaign inside a capped container."""
+    from .build_provenance import require_clean_git_source
+
+    if sys.platform != "linux":
+        raise RuntimeError("Container campaign requires native Linux execution")
+    output = get_workspace_output_root().resolve()
+    native, reports = args.native_root.resolve(), args.report_root.resolve()
+    archive, rust_repo = args.archive.resolve(), args.rust_repo.resolve()
+    if (not native.is_relative_to(output) or native == output
+            or not reports.is_relative_to(output) or reports.is_relative_to(native)
+            or not archive.is_relative_to(output) or not archive.is_file()):
+        raise RuntimeError("Container campaign paths must stay in their owned output boundaries")
+    if not native.is_dir() or any(item.name != "tmp" for item in native.iterdir()):
+        raise RuntimeError("Container campaign requires a fresh native volume")
+    if require_clean_git_source(rust_repo, label="container Rust").revision != args.source_sha:
+        raise RuntimeError("Container Rust source differs from the admitted archive")
+    reports.mkdir(parents=True, exist_ok=True)
+    result = {"schema": "emulebb.rust-container-campaign.v1", "status": "running",
+              "qualificationScope": {"containerLimitsEnforced": False}, "acceptance": {"ok": False}}
+    before = rust_cgroup_budget.sample_budget()
+    try:
+        if before is None or not rust_cgroup_budget.matches_target(before):
+            raise RuntimeError("Container campaign kernel limits do not match the required budget")
+        package = load_script_module("shared_library_portable_package", "smoke-rust-release-package.py")
+        manifest = package._verify_package_manifest(archive, args.source_sha, args.version,
+                                                    "x86_64-unknown-linux-gnu")
+        unpacked = native / "runtime"
+        unpacked.mkdir()
+        with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(archive)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            try:
+                package._extract_portable_stream(process.stdout, unpacked)
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+            _, errors = process.communicate()
+            if process.returncode:
+                raise RuntimeError(f"Campaign archive decompression failed: {errors.decode(errors='replace')[-2000:]}")
+        scenario = native / "scenario"
+        paths = HarnessPaths(
+            workspace_root=get_required_emule_workspace_root(), output_root=output, rust_repo=rust_repo,
+            scenario_root=scenario, fixture_root=scenario / "fixture/library",
+            manifest_path=scenario / "fixture-manifest.json",
+            owner_path=scenario / ".emulebb-rust-shared-library-io-owner.json",
+            runs_root=scenario / "runs", reports_root=reports / "campaign",
+            staged_executable=unpacked / "emulebb-rust/emulebb-rust",
+        )
+        # Docker's physical backing may be opaque. Retain the actual inventory;
+        # this campaign qualifies resource limits and correctness, not SSD speed.
+        result["preparation"] = prepare_fixture(paths, allow_non_ssd=True)
+        campaign_args = build_parser().parse_args(["run", "--allow-non-ssd"])
+        report_path, report = run_campaign(paths, campaign_args)
+        result.update(status=report["status"], campaignReport=str(report_path),
+                      sourceSha=args.source_sha, archiveSha256=manifest["sha256"],
+                      acceptance={"ok": report.get("acceptance", {}).get("ok") is True})
+    except BaseException as error:
+        result.update(status="failed", error=type(error).__name__)
+        raise
+    finally:
+        # Cover extraction and fixture preparation as well as all daemon phases.
+        rust_cgroup_budget.finish_report(result, before)
+        write_json(reports / "container-result.json", result)
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-repo", type=Path)
@@ -3861,6 +3928,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--allow-non-ssd", action="store_true")
     run.add_argument("--watcher-replay-from", help="copy an owned verified baseline for focused watcher/restart proof; excludes initial hashing qualification")
+    container = subparsers.add_parser("container-run", help="run the full campaign from a verified native archive")
+    container.add_argument("--archive", type=Path, required=True)
+    container.add_argument("--source-sha", required=True)
+    container.add_argument("--version", required=True)
+    container.add_argument("--native-root", type=Path, required=True)
+    container.add_argument("--report-root", type=Path, required=True)
     lan_startup = subparsers.add_parser(
         "lan-startup",
         help=(
@@ -3934,6 +4007,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "container-run":
+            result = run_container_campaign(args)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["status"] == "passed" else 1
         paths = resolve_paths(rust_repo=args.rust_repo, registered_stage=args.registered_stage,
                               require_runtime=args.command not in {"describe", "prepare"})
         if args.command == "describe":

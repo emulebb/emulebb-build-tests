@@ -1546,3 +1546,69 @@ def test_dynamic_reload_checkpoints_running_progress(
     assert checkpoints[0]["status"] == "running"
     assert checkpoints[0]["progress"]["scannedCount"] == 4
     assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {"read_count": 1}
+
+
+@pytest.mark.parametrize("fault", ["none", "missing-budget", "preparation-oom", "campaign-failure"])
+def test_container_campaign_measures_preparation_and_requires_campaign_acceptance(tmp_path, monkeypatch, fault):
+    from emule_test_harness import build_provenance
+
+    output = tmp_path / "output"
+    native = output / "native"
+    (native / "tmp").mkdir(parents=True)
+    archive = output / "candidate.tar.zst"
+    archive.write_bytes(b"synthetic archive")
+    source = tmp_path / "source"
+    source.mkdir()
+    args = SimpleNamespace(native_root=native, report_root=output / "reports", archive=archive,
+                           rust_repo=source, source_sha="a" * 40, version="0.1.0-beta.2")
+    monkeypatch.setattr(subject.sys, "platform", "linux")
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: tmp_path / "workspace")
+    monkeypatch.setattr(build_provenance, "require_clean_git_source", lambda *a, **k: SimpleNamespace(revision="a" * 40))
+    root, membership = cgroup_files(tmp_path)
+    sample = cgroup_budget.sample_budget
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: None if fault == "missing-budget" else sample(root=root, membership=membership))
+    stages = []
+    def verify(*arguments):
+        stages.append("verify")
+        assert arguments[1:] == ("a" * 40, "0.1.0-beta.2", "x86_64-unknown-linux-gnu")
+        return {"sha256": "b" * 64}
+    def extract(_stream, destination):
+        stages.append("extract")
+        executable = destination / "emulebb-rust/emulebb-rust"
+        executable.parent.mkdir()
+        executable.write_bytes(b"ELF fixture")
+    package = SimpleNamespace(_verify_package_manifest=verify, _extract_portable_stream=extract)
+    monkeypatch.setattr(subject, "load_script_module", lambda *a: package)
+    class Process:
+        stdout = None
+        returncode = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def communicate(self): return b"", b""
+    monkeypatch.setattr(subject.subprocess, "Popen", lambda *a, **k: Process())
+    def prepare(paths, *, allow_non_ssd):
+        stages.append("prepare")
+        assert allow_non_ssd and paths.staged_executable.is_file()
+        assert paths.scenario_root.is_relative_to(native)
+        if fault == "preparation-oom":
+            (root / "memory.events").write_text("oom 1\noom_kill 1\noom_group_kill 0\n")
+        return {"status": "prepared"}
+    def campaign(paths, options):
+        stages.append("campaign")
+        assert options.command == "run" and options.allow_non_ssd and options.watcher_replay_from is None
+        ok = fault != "campaign-failure"
+        return paths.reports_root / "full.json", {"status": "passed" if ok else "failed", "acceptance": {"ok": ok}}
+    monkeypatch.setattr(subject, "prepare_fixture", prepare)
+    monkeypatch.setattr(subject, "run_campaign", campaign)
+    if fault == "missing-budget":
+        with pytest.raises(RuntimeError, match="kernel limits"):
+            subject.run_container_campaign(args)
+        assert stages == []
+    else:
+        result = subject.run_container_campaign(args)
+        assert result["status"] == ("passed" if fault == "none" else "failed")
+        assert stages == ["verify", "extract", "prepare", "campaign"]
+    retained = json.loads((args.report_root / "container-result.json").read_text())
+    assert retained["status"] == ("passed" if fault == "none" else "failed")
+    assert retained["acceptance"]["ok"] is (fault == "none")
