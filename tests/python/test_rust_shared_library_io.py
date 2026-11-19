@@ -19,7 +19,7 @@ def cgroup_files(tmp_path):
     root = tmp_path / "cgroup"
     root.mkdir()
     files = {"cgroup.procs": str(os.getpid()), "cpu.max": "100000 100000",
-             "memory.max": str(cgroup_budget.MEMORY_BYTES), "memory.swap.max": "0",
+             "memory.max": str(512 * 1024 * 1024), "memory.swap.max": "0",
              "memory.peak": "450000000", "memory.events": "oom 0\noom_kill 0\noom_group_kill 0\n"}
     for name, value in files.items():
         (root / name).write_text(value, encoding="ascii")
@@ -31,7 +31,7 @@ def cgroup_files(tmp_path):
 def test_cgroup_budget_requires_kernel_membership_and_reads_the_actual_limits(tmp_path):
     root, membership = cgroup_files(tmp_path)
     value = cgroup_budget.sample_budget(root=root, membership=membership)
-    assert cgroup_budget.matches_target(value)
+    assert cgroup_budget.matches_target(value, 512 * 1024 * 1024)
     assert value["scope"] == "campaign-process-tree"
     assert value["memoryPeakBytes"] == 450000000
     (root / "cgroup.procs").write_text("", encoding="ascii")
@@ -52,7 +52,7 @@ def test_cgroup_budget_does_not_claim_an_unobserved_namespace(tmp_path):
 def test_cgroup_budget_does_not_qualify_a_different_budget(tmp_path, name, value):
     root, membership = cgroup_files(tmp_path)
     (root / name).write_text(value, encoding="ascii")
-    assert not cgroup_budget.matches_target(cgroup_budget.sample_budget(root=root, membership=membership))
+    assert not cgroup_budget.matches_target(cgroup_budget.sample_budget(root=root, membership=membership), 512 * 1024 * 1024)
 
 
 @pytest.mark.parametrize("name,value", [("memory.max", "-1"), ("cpu.max", "100000 0"),
@@ -78,13 +78,13 @@ def test_cgroup_budget_checks_gate_success_and_keep_failed_campaigns_failed(tmp_
     monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: after)
     report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
               "acceptance": {"ok": True}}
-    cgroup_budget.finish_report(report, before)
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
     assert report["kernelResourceBudget"]["ok"] is (changed is None)
     assert report["acceptance"]["ok"] is (changed is None)
     assert report["status"] == ("passed" if changed is None else "failed")
     report["status"] = "failed"
     report["acceptance"]["ok"] = False
-    cgroup_budget.finish_report(report, before)
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
     assert report["status"] == "failed" and report["acceptance"]["ok"] is False
 
 
@@ -96,7 +96,7 @@ def test_cgroup_budget_measurement_failure_retains_a_failed_report(tmp_path, mon
     monkeypatch.setattr(cgroup_budget, "sample_budget", fail)
     report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
               "acceptance": {"ok": True}}
-    cgroup_budget.finish_report(report, before)
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
     assert report["status"] == "failed"
     assert report["kernelResourceBudget"]["error"] == "OSError"
     assert report["qualificationScope"]["containerLimitsEnforced"] is False
@@ -109,7 +109,7 @@ def test_functional_success_does_not_qualify_an_unbounded_cgroup(tmp_path, monke
     monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: dict(before))
     report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
               "acceptance": {"ok": True}}
-    cgroup_budget.finish_report(report, before)
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
     assert report["status"] == "passed"
     assert report["kernelResourceBudget"]["ok"] is True
     assert report["qualificationScope"]["containerLimitsEnforced"] is False
@@ -1606,8 +1606,9 @@ def test_dynamic_reload_checkpoints_running_progress(
     assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {"read_count": 1}
 
 
-@pytest.mark.parametrize("fault", ["none", "missing-budget", "preparation-oom", "campaign-failure"])
-def test_container_campaign_measures_preparation_and_requires_campaign_acceptance(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("library_files", [50_000, 100_000])
+@pytest.mark.parametrize("fault", ["none", "missing-budget", "wrong-budget", "preparation-oom", "campaign-failure"])
+def test_container_campaign_measures_preparation_and_requires_campaign_acceptance(tmp_path, monkeypatch, fault, library_files):
     from emule_test_harness import build_provenance
 
     output = tmp_path / "output"
@@ -1618,12 +1619,14 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
     source = tmp_path / "source"
     source.mkdir()
     args = SimpleNamespace(native_root=native, report_root=output / "reports", archive=archive,
-                           rust_repo=source, source_sha="a" * 40, version="0.1.0-beta.2")
+                           rust_repo=source, source_sha="a" * 40, version="0.1.0-beta.2", library_files=library_files)
     monkeypatch.setattr(subject.sys, "platform", "linux")
     monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
     monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: tmp_path / "workspace")
     monkeypatch.setattr(build_provenance, "require_clean_git_source", lambda *a, **k: SimpleNamespace(revision="a" * 40))
     root, membership = cgroup_files(tmp_path)
+    expected_spec, expected_memory = subject.fixture.capacity_tier(library_files)
+    (root / "memory.max").write_text(str(expected_memory * (2 if fault == "wrong-budget" else 1)), encoding="ascii")
     sample = cgroup_budget.sample_budget
     monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: None if fault == "missing-budget" else sample(root=root, membership=membership))
     stages = []
@@ -1645,14 +1648,16 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
         def __exit__(self, *args): pass
         def communicate(self): return b"", b""
     monkeypatch.setattr(subject.subprocess, "Popen", lambda *a, **k: Process())
-    def prepare(paths, *, allow_non_ssd):
+    def prepare(paths, *, allow_non_ssd, spec):
+        assert spec == expected_spec
         stages.append("prepare")
         assert allow_non_ssd and paths.staged_executable.is_file()
         assert paths.scenario_root.is_relative_to(native)
         if fault == "preparation-oom":
             (root / "memory.events").write_text("oom 1\noom_kill 1\noom_group_kill 0\n")
         return {"status": "prepared"}
-    def campaign(paths, options):
+    def campaign(paths, options, *, spec, memory_bytes):
+        assert spec == expected_spec and memory_bytes == expected_memory
         stages.append("campaign")
         assert options.command == "run" and options.allow_non_ssd and options.watcher_replay_from is None
         ok = fault != "campaign-failure"
@@ -1661,7 +1666,7 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
     monkeypatch.setattr(subject, "_load_psutil", lambda: SimpleNamespace(Process=lambda _pid: controller))
     monkeypatch.setattr(subject, "prepare_fixture", prepare)
     monkeypatch.setattr(subject, "run_campaign", campaign)
-    if fault == "missing-budget":
+    if fault in {"missing-budget", "wrong-budget"}:
         with pytest.raises(RuntimeError, match="kernel limits"):
             subject.run_container_campaign(args)
         assert stages == []
@@ -1672,6 +1677,7 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
     retained = json.loads((args.report_root / "container-result.json").read_text())
     assert retained["status"] == ("passed" if fault == "none" else "failed")
     assert retained["acceptance"]["ok"] is (fault == "none")
+    assert retained["capacityTarget"] == {"libraryFiles": library_files, "memoryBytes": expected_memory, "retainedJobs": 100_000}
 
 
 @pytest.mark.parametrize("io_available", [True, False])
@@ -1783,3 +1789,27 @@ def test_low_memory_fixture_preserves_size_mix_and_path_coverage():
     assert len(unicode_paths) == 16
     assert {path.name for path in unicode_paths} == set(fixture.UNICODE_FILE_NAMES)
     assert sum(len(path.parts) == 6 for path in unicode_paths) == 4
+
+
+def test_capacity_tier_preflight_rejects_mismatched_inputs_before_fixture_mutation(monkeypatch):
+    with pytest.raises(RuntimeError, match="not an approved capacity tier"):
+        subject.run_campaign(None, None, spec=subject.fixture.LOW_MEMORY_SPEC, memory_bytes=1024 * 1024 * 1024)
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: None)
+    monkeypatch.setattr(subject, "load_prepared_manifest", lambda _paths:
+                        {"fileCount": 100_000, "totalBytes": subject.PRODUCTION_SPEC.total_bytes})
+    with pytest.raises(RuntimeError, match="Prepared fixture differs"):
+        subject.run_campaign(None, None, spec=subject.fixture.LOW_MEMORY_SPEC)
+
+
+@pytest.mark.parametrize("memory_bytes", [512 * 1024 * 1024, 1024 * 1024 * 1024])
+def test_cgroup_diagnostics_need_an_explicit_target_to_claim_enforced_limits(tmp_path, monkeypatch, memory_bytes):
+    root, membership = cgroup_files(tmp_path)
+    (root / "memory.max").write_text(str(memory_bytes), encoding="ascii")
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: dict(before))
+    report = {"status": "diagnosticComplete", "qualificationScope": {"containerLimitsEnforced": False}}
+    cgroup_budget.finish_report(report, before)
+    assert report["kernelResourceBudget"]["ok"] is True
+    assert report["qualificationScope"]["containerLimitsEnforced"] is False
+    cgroup_budget.finish_report(report, before, memory_bytes=memory_bytes)
+    assert report["qualificationScope"]["containerLimitsEnforced"] is True

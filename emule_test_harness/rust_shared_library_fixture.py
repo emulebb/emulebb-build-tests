@@ -85,6 +85,15 @@ LOW_MEMORY_SPEC = FixtureSpec(
 QUALIFICATION_SPECS = (LOW_MEMORY_SPEC, PRODUCTION_SPEC)
 
 
+def capacity_tier(file_count: int) -> tuple[FixtureSpec, int]:
+    """Return the operator-approved fixture and total process-tree memory cap."""
+    if file_count == 50_000:
+        return LOW_MEMORY_SPEC, 512 * MIB
+    if file_count == 100_000:
+        return PRODUCTION_SPEC, 1024 * MIB
+    raise ValueError("library capacity must be 50000 or 100000 files")
+
+
 def _unicode_cohort_start(spec: FixtureSpec) -> int:
     return spec.file_count - 1_100
 

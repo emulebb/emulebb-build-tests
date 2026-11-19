@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-MEMORY_BYTES = 512 * 1024 * 1024
-
 
 def _number(value: str) -> int:
     number = int(value)
@@ -54,13 +52,13 @@ def sample_budget(*, root: Path = Path("/sys/fs/cgroup"),
     }
 
 
-def matches_target(value: dict) -> bool:
+def matches_target(value: dict, memory_bytes: int) -> bool:
     """Require the exact resident limit, disabled swap and one CPU of quota."""
-    return (value["memoryMaxBytes"] == MEMORY_BYTES and value["swapMaxBytes"] == 0
+    return (value["memoryMaxBytes"] == memory_bytes and value["swapMaxBytes"] == 0
             and value["cpuQuotaMicros"] == value["cpuPeriodMicros"])
 
 
-def finish_report(report: dict, before: dict | None) -> None:
+def finish_report(report: dict, before: dict | None, *, memory_bytes: int | None = None) -> None:
     """Retain budget evidence and fail an observed budget whose proof changed."""
     if before is None:
         return
@@ -79,7 +77,8 @@ def finish_report(report: dict, before: dict | None) -> None:
         evidence["checks"] = checks
         evidence["ok"] = all(checks.values())
         report["qualificationScope"]["containerLimitsEnforced"] = (
-            matches_target(before) and checks["sameScope"] and checks["limitsUnchanged"])
+            memory_bytes is not None and matches_target(before, memory_bytes)
+            and checks["sameScope"] and checks["limitsUnchanged"])
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         evidence["error"] = type(error).__name__
         evidence["ok"] = False

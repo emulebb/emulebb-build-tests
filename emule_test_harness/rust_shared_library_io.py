@@ -2705,6 +2705,7 @@ def run_watcher_phase(
     previous_hashes: dict[str, str] | None = None,
     require_changed_hashes: bool = False,
     require_same_hashes: bool = False,
+    spec: FixtureSpec = PRODUCTION_SPEC,
 ) -> tuple[dict[str, object], dict[str, str]]:
     """Apply one live mutation and wait for REST plus SQLite convergence."""
 
@@ -2812,9 +2813,9 @@ def run_watcher_phase(
     } | storage_acceptance(
         storage_snapshot,
         expected_active=expected_catalog_total,
-        expected_bytes=PRODUCTION_SPEC.total_bytes
+        expected_bytes=spec.total_bytes
         + sum(int(value["sizeBytes"]) for value in expected_paths.values()),
-        expected_minimum_long=fixture.baseline_long_path_count()
+        expected_minimum_long=fixture.baseline_long_path_count(spec)
         + sum(1 for value in expected_paths.values() if value["pathClass"] == "long"),
     )
     report = {
@@ -2934,11 +2935,16 @@ def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path, *,
 def run_campaign(
     paths: HarnessPaths, args: argparse.Namespace, *, replay_report: Path | None = None,
     heap_profile_dir: Path | None = None, stop_after_watcher_create: bool = False,
+    spec: FixtureSpec = PRODUCTION_SPEC, memory_bytes: int | None = None,
 ) -> tuple[Path, dict[str, object]]:
     """Run initial scan, watcher lifecycle, reload, and persistence phases."""
 
+    if memory_bytes is not None and fixture.capacity_tier(spec.file_count) != (spec, memory_bytes):
+        raise RuntimeError("Library fixture and memory limit are not an approved capacity tier")
     resource_budget_before = rust_cgroup_budget.sample_budget()
     manifest = load_prepared_manifest(paths)
+    if manifest.get("fileCount") != spec.file_count or manifest.get("totalBytes") != spec.total_bytes:
+        raise RuntimeError("Prepared fixture differs from the selected capacity tier")
     # A terminated prior run may have left only harness-owned probe files behind.
     storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
     storage.remove_tree(paths.scenario_root / "watcher-staging")
@@ -2947,13 +2953,13 @@ def run_campaign(
         # A replay reuses the current physical generation and its matching
         # snapshot. Restoring bytes would invalidate that snapshot's proofs.
         if args.watcher_replay_from is None:
-            restored = restore_fixture_baseline(paths.fixture_root)
+            restored = restore_fixture_baseline(paths.fixture_root, spec)
             update_fixture_generation(paths, "base-v2")
     elif manifest.get("contentGeneration") != "base-v2":
         raise RuntimeError(
             "fixture content generation is unknown; rerun prepare after cleanup"
         )
-    validation = validate_fixture(paths.fixture_root)
+    validation = validate_fixture(paths.fixture_root, spec)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
     if paths.staged_executable is None or not paths.staged_executable.is_file():
@@ -2983,8 +2989,8 @@ def run_campaign(
             bus_type=str(target.get("busType") or ""),
             friendly_name=str(target.get("friendlyName") or ""),
             mount_path=Path(mount_path),
-            expected_file_count=PRODUCTION_SPEC.file_count,
-            expected_bytes=PRODUCTION_SPEC.total_bytes,
+            expected_file_count=spec.file_count,
+            expected_bytes=spec.total_bytes,
         )
     ]
     report: dict[str, object] = {
@@ -3004,6 +3010,8 @@ def run_campaign(
         },
         "fixture": validation,
         "retainedDownloadFixture": dict(RETAINED_DOWNLOAD_EXPECTED),
+        "capacityTarget": {"libraryFiles": spec.file_count, "retainedJobs": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+                           "memoryBytes": memory_bytes},
         "qualificationScope": {
             "physicalLibrary": True, "downloadHistory": "metadata-only",
             "containerLimitsEnforced": False,
@@ -3069,7 +3077,7 @@ def run_campaign(
             process=process,
             sampler=sampler,
             disk_counter_key=target.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
+            expected_scanned=spec.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
             completion_logs=initial_completion_logs,
@@ -3078,23 +3086,23 @@ def run_campaign(
         initial["acceptance"] = phase_acceptance(
             initial,
             {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
-                "plannedHashCount": 0 if replay else PRODUCTION_SPEC.file_count,
-                "hashedCount": 0 if replay else PRODUCTION_SPEC.file_count,
-                "reusedCount": PRODUCTION_SPEC.file_count if replay else 0,
-                "plannedReadBytes": 0 if replay else PRODUCTION_SPEC.total_bytes,
+                "sharedFilesTotal": spec.file_count,
+                "scannedCount": spec.file_count,
+                "plannedHashCount": 0 if replay else spec.file_count,
+                "hashedCount": 0 if replay else spec.file_count,
+                "reusedCount": spec.file_count if replay else 0,
+                "plannedReadBytes": 0 if replay else spec.total_bytes,
                 "diskCount": 0 if replay else 1,
-                "newCount": 0 if replay else PRODUCTION_SPEC.file_count,
+                "newCount": 0 if replay else spec.file_count,
             },
         )
         initial["acceptance"]["checks"].update(
             storage_acceptance(
                 initial["storage"],
-                expected_active=PRODUCTION_SPEC.file_count,
-                expected_bytes=PRODUCTION_SPEC.total_bytes,
-                expected_minimum_long=fixture.baseline_long_path_count(),
-                expected_known=None if replay else PRODUCTION_SPEC.file_count + RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+                expected_active=spec.file_count,
+                expected_bytes=spec.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(spec),
+                expected_known=None if replay else spec.file_count + RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
             )
         )
         initial["acceptance"]["ok"] = all(initial["acceptance"]["checks"].values())
@@ -3131,12 +3139,12 @@ def run_campaign(
         created_paths = _expected_watcher_paths(paths.fixture_root, renamed=False)
         renamed_paths = _expected_watcher_paths(paths.fixture_root, renamed=True)
         created, created_hashes = run_watcher_phase(
-            label="watcherCreate",
+            spec=spec, label="watcherCreate",
             action=lambda: fixture.install_watcher_cohort(
                 staging_root, paths.fixture_root
             ),
             expected_paths=created_paths,
-            expected_catalog_total=PRODUCTION_SPEC.file_count
+            expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
             client=client,
             process=process,
@@ -3154,10 +3162,10 @@ def run_campaign(
             report["qualificationScope"]["fullCampaign"] = False
             return report_path, report
         modified, modified_hashes = run_watcher_phase(
-            label="watcherModify",
+            spec=spec, label="watcherModify",
             action=lambda: fixture.modify_watcher_cohort(paths.fixture_root),
             expected_paths=created_paths,
-            expected_catalog_total=PRODUCTION_SPEC.file_count
+            expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
             client=client,
             process=process,
@@ -3171,10 +3179,10 @@ def run_campaign(
         )
         report["watcherLifecycle"].append(modified)
         renamed, renamed_hashes = run_watcher_phase(
-            label="watcherRename",
+            spec=spec, label="watcherRename",
             action=lambda: fixture.rename_watcher_cohort(paths.fixture_root),
             expected_paths=renamed_paths,
-            expected_catalog_total=PRODUCTION_SPEC.file_count
+            expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
             client=client,
             process=process,
@@ -3188,10 +3196,10 @@ def run_campaign(
         )
         report["watcherLifecycle"].append(renamed)
         deleted, _ = run_watcher_phase(
-            label="watcherDelete",
+            spec=spec, label="watcherDelete",
             action=lambda: fixture.delete_watcher_cohort(paths.fixture_root),
             expected_paths={},
-            expected_catalog_total=PRODUCTION_SPEC.file_count,
+            expected_catalog_total=spec.file_count,
             client=client,
             process=process,
             sampler=sampler,
@@ -3251,7 +3259,7 @@ def run_campaign(
         report["warmRestart"]["hydration"] = wait_for_shared_catalog_hydration(
             client=client,
             process=process,
-            expected=PRODUCTION_SPEC.file_count,
+            expected=spec.file_count,
             timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
             poll_seconds=args.poll_seconds,
         )
@@ -3264,7 +3272,7 @@ def run_campaign(
             process=process,
             sampler=sampler,
             disk_counter_key=target.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
+            expected_scanned=spec.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
             completion_logs=no_change_completion_logs,
@@ -3273,11 +3281,11 @@ def run_campaign(
         no_change["acceptance"] = phase_acceptance(
             no_change,
             {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
+                "sharedFilesTotal": spec.file_count,
+                "scannedCount": spec.file_count,
                 "plannedHashCount": 0,
                 "hashedCount": 0,
-                "reusedCount": PRODUCTION_SPEC.file_count,
+                "reusedCount": spec.file_count,
                 "plannedReadBytes": 0,
                 "diskCount": 0,
                 "newCount": 0,
@@ -3286,9 +3294,9 @@ def run_campaign(
         no_change["acceptance"]["checks"].update(
             storage_acceptance(
                 no_change["storage"],
-                expected_active=PRODUCTION_SPEC.file_count,
-                expected_bytes=PRODUCTION_SPEC.total_bytes,
-                expected_minimum_long=fixture.baseline_long_path_count(),
+                expected_active=spec.file_count,
+                expected_bytes=spec.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(spec),
             )
         )
         no_change["acceptance"]["ok"] = all(no_change["acceptance"]["checks"].values())
@@ -3298,7 +3306,7 @@ def run_campaign(
         process = None
         client = None
 
-        mutation = mutate_fixture(paths.fixture_root)
+        mutation = mutate_fixture(paths.fixture_root, spec)
         update_fixture_generation(paths, "mutation-v2")
         report["mutation"] = mutation
         mutation_log = run_root / "mutation.log"
@@ -3317,7 +3325,7 @@ def run_campaign(
             process=process,
             sampler=sampler,
             disk_counter_key=target.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
+            expected_scanned=spec.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
             completion_logs=mutation_completion_logs,
@@ -3326,23 +3334,23 @@ def run_campaign(
         changed["acceptance"] = phase_acceptance(
             changed,
             {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
-                "plannedHashCount": len(mutation_indices()),
-                "hashedCount": len(mutation_indices()),
-                "reusedCount": PRODUCTION_SPEC.file_count - len(mutation_indices()),
-                "plannedReadBytes": expected_mutation_bytes(),
+                "sharedFilesTotal": spec.file_count,
+                "scannedCount": spec.file_count,
+                "plannedHashCount": len(mutation_indices(spec)),
+                "hashedCount": len(mutation_indices(spec)),
+                "reusedCount": spec.file_count - len(mutation_indices(spec)),
+                "plannedReadBytes": expected_mutation_bytes(spec),
                 "diskCount": 1,
-                "changedCount": len(mutation_indices()),
+                "changedCount": len(mutation_indices(spec)),
                 "newCount": 0,
             },
         )
         changed["acceptance"]["checks"].update(
             storage_acceptance(
                 changed["storage"],
-                expected_active=PRODUCTION_SPEC.file_count,
-                expected_bytes=PRODUCTION_SPEC.total_bytes,
-                expected_minimum_long=fixture.baseline_long_path_count(),
+                expected_active=spec.file_count,
+                expected_bytes=spec.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(spec),
             )
         )
         changed["acceptance"]["ok"] = all(changed["acceptance"]["checks"].values())
@@ -3377,7 +3385,7 @@ def run_campaign(
         report["finalRestart"]["hydration"] = wait_for_shared_catalog_hydration(
             client=client,
             process=process,
-            expected=PRODUCTION_SPEC.file_count,
+            expected=spec.file_count,
             timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
             poll_seconds=args.poll_seconds,
         )
@@ -3426,41 +3434,41 @@ def run_campaign(
                 and all(value["ok"] is True for value in report["downloadSnapshots"]),
             "fixtureExact": validation["ok"] is True,
             "longPathBaselineExact": validation["longPathFileCount"]
-            == fixture.baseline_long_path_count(),
+            == fixture.baseline_long_path_count(spec),
             "warmRestartCatalogCohort": startup_catalog_cohort_accepted(
-                warm["sharedFilesTotal"], PRODUCTION_SPEC.file_count
+                warm["sharedFilesTotal"], spec.file_count
             ),
             "warmRestartCatalogHydrated": warm["hydration"]["sharedFilesTotal"]
-            == PRODUCTION_SPEC.file_count,
+            == spec.file_count,
             "warmRestartIdle": int(warm["hashingCount"] or 0) == 0,
             "warmRestartNoWatcherRows": int(warm["watcherActiveCount"]) == 0,
             "warmRestartStorage": all(
                 storage_acceptance(
                     warm["storage"],
-                    expected_active=PRODUCTION_SPEC.file_count,
-                    expected_bytes=PRODUCTION_SPEC.total_bytes,
-                    expected_minimum_long=fixture.baseline_long_path_count(),
+                    expected_active=spec.file_count,
+                    expected_bytes=spec.total_bytes,
+                    expected_minimum_long=fixture.baseline_long_path_count(spec),
                 ).values()
             ),
             "finalRestartCatalogCohort": startup_catalog_cohort_accepted(
-                final["sharedFilesTotal"], PRODUCTION_SPEC.file_count
+                final["sharedFilesTotal"], spec.file_count
             ),
             "finalRestartCatalogHydrated": final["hydration"]["sharedFilesTotal"]
-            == PRODUCTION_SPEC.file_count,
+            == spec.file_count,
             "finalRestartIdle": int(final["hashingCount"] or 0) == 0,
             "finalRestartNoWatcherRows": int(final["watcherActiveCount"]) == 0,
             "finalRestartStorage": all(
                 storage_acceptance(
                     final["storage"],
-                    expected_active=PRODUCTION_SPEC.file_count,
-                    expected_bytes=PRODUCTION_SPEC.total_bytes,
-                    expected_minimum_long=fixture.baseline_long_path_count(),
+                    expected_active=spec.file_count,
+                    expected_bytes=spec.total_bytes,
+                    expected_minimum_long=fixture.baseline_long_path_count(spec),
                 ).values()
             ),
             "mutationExact": mutation
             == {
-                "fileCount": len(mutation_indices()),
-                "totalBytes": expected_mutation_bytes(),
+                "fileCount": len(mutation_indices(spec)),
+                "totalBytes": expected_mutation_bytes(spec),
             },
             "watcherRegistered": int(logs["watcherRegistrations"]) > 0
             or functional_watcher_registration,
@@ -3497,7 +3505,7 @@ def run_campaign(
         report["rest"] = rest_summary(clients)
         report["watcherLogs"] = watcher_log_summary(log_paths)
         report["processes"] = [sampler.summary() for sampler in samplers]
-        rust_cgroup_budget.finish_report(report, resource_budget_before)
+        rust_cgroup_budget.finish_report(report, resource_budget_before, memory_bytes=memory_bytes)
         report["finishedAtUtc"] = utc_now()
         report["elapsedSeconds"] = round(time.monotonic() - overall_started, 3)
         write_json(report_path, report)
@@ -3919,6 +3927,7 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
     """Admit a verified archive and reuse the full campaign inside a capped container."""
     from .build_provenance import require_clean_git_source
 
+    spec, memory_bytes = fixture.capacity_tier(args.library_files)
     if sys.platform != "linux":
         raise RuntimeError("Container campaign requires native Linux execution")
     output = get_workspace_output_root().resolve()
@@ -3934,10 +3943,12 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("Container Rust source differs from the admitted archive")
     reports.mkdir(parents=True, exist_ok=True)
     result = {"schema": "emulebb.rust-container-campaign.v1", "status": "running",
+              "capacityTarget": {"libraryFiles": spec.file_count, "memoryBytes": memory_bytes,
+                                 "retainedJobs": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"]},
               "qualificationScope": {"containerLimitsEnforced": False}, "acceptance": {"ok": False}}
     before = rust_cgroup_budget.sample_budget()
     try:
-        if before is None or not rust_cgroup_budget.matches_target(before):
+        if before is None or not rust_cgroup_budget.matches_target(before, memory_bytes):
             raise RuntimeError("Container campaign kernel limits do not match the required budget")
         package = load_script_module("shared_library_portable_package", "smoke-rust-release-package.py")
         manifest = package._verify_package_manifest(archive, args.source_sha, args.version,
@@ -3957,10 +3968,10 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
         # this campaign qualifies resource limits and correctness, not SSD speed.
         controller = _load_psutil().Process(os.getpid())
         result["controllerMemory"] = {"beforePreparationWorkingSetBytes": int(controller.memory_info().rss)}
-        result["preparation"] = prepare_fixture(paths, allow_non_ssd=True)
+        result["preparation"] = prepare_fixture(paths, allow_non_ssd=True, spec=spec)
         result["controllerMemory"]["afterPreparationWorkingSetBytes"] = int(controller.memory_info().rss)
         campaign_args = build_parser().parse_args(["run", "--allow-non-ssd"])
-        report_path, report = run_campaign(paths, campaign_args)
+        report_path, report = run_campaign(paths, campaign_args, spec=spec, memory_bytes=memory_bytes)
         result.update(status=report["status"], campaignReport=str(report_path),
                       sourceSha=args.source_sha, archiveSha256=manifest["sha256"],
                       acceptance={"ok": report.get("acceptance", {}).get("ok") is True})
@@ -3969,7 +3980,7 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
         raise
     finally:
         # Cover extraction and fixture preparation as well as all daemon phases.
-        rust_cgroup_budget.finish_report(result, before)
+        rust_cgroup_budget.finish_report(result, before, memory_bytes=memory_bytes)
         write_json(reports / "container-result.json", result)
     return result
 
@@ -4010,6 +4021,7 @@ def build_parser() -> argparse.ArgumentParser:
     container.add_argument("--version", required=True)
     container.add_argument("--native-root", type=Path, required=True)
     container.add_argument("--report-root", type=Path, required=True)
+    container.add_argument("--library-files", type=int, choices=(50_000, 100_000), required=True)
     heap = subparsers.add_parser("container-heap-profile", help="diagnostic copied-profile watcher replay; never workload qualification")
     heap.add_argument("--archive", type=Path, required=True)
     heap.add_argument("--source-sha", required=True)
