@@ -715,6 +715,10 @@ def main(argv: list[str] | None = None) -> int:
         replace_servers=False,
         settings={
             'storage.incomingDirectory': str(incoming_dir),
+            'network.ed2kEnabled': True,
+            'network.kadEnabled': True,
+            'network.autoConnect': False,
+            'network.servers.autoReconnect': False,
             'network.p2p.bindIp': direct_bind_ip,
             'network.p2p.tcpPort': ED2K_PORT,
             'network.p2p.udpPort': KAD_PORT,
@@ -848,20 +852,6 @@ def main(argv: list[str] | None = None) -> int:
                 "protocol": nat.get("protocol"),
                 "lastError": nat.get("lastError"),
             }
-        retry_http_json(
-            "enable networks",
-            2,
-            base_url,
-            "/api/v1/app/settings",
-            api_key=API_KEY,
-            method="PATCH",
-            body=rust_client.rust_network_settings_patch(
-                auto_connect=False,
-                reconnect_enabled=False,
-                network_ed2k=True,
-                network_kademlia=True,
-            ),
-        )
         retry_http_json("kad start", 2, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
         enforce_connect_cooldown(output_root / "live-wire" / ".last-server-connect")
         request_server_connect(base_url)

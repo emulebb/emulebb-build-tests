@@ -43,7 +43,8 @@ from emule_test_harness.diag_event_runs import select_latest_diag_run
 from emule_test_harness import hideme_split_tunnel
 from emule_test_harness import mfc_known_met, rust_native_fingerprint
 from emule_test_harness import soak_launch
-from emule_test_harness.rust_rest_contract import iter_library_roots
+from emule_test_harness.rust_rest_contract import iter_library_roots, settings_patch
+from emule_test_harness.vm_guest_profiles import http_json
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
@@ -54,7 +55,6 @@ from emule_test_harness.rust_local_ed2k import (
 from emule_test_harness.rust_client import (
     RUST_PROFILE_METADATA_FILE,
     RUST_PROFILE_SETTINGS_FILE,
-    rust_network_settings_patch,
     spawn_rust_daemon,
 )
 from emule_test_harness.soak_launch import (
@@ -2171,21 +2171,19 @@ def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
 
     steps: list[dict[str, object]] = []
     if args.ensure_preferences:
-        steps.append(
-            request_json_attempt(
-                args.base_url,
-                "/app/settings",
-                api_key=args.api_key,
-                method="PATCH",
-                body=rust_network_settings_patch(
-                    auto_connect=True,
-                    reconnect_enabled=True,
-                    network_ed2k=True,
-                    network_kademlia=True,
-                ),
-                timeout_seconds=args.timeout_seconds,
-            )
-        )
+        snapshot = http_json(args.base_url, "/settings", api_key=args.api_key,
+                             timeout_seconds=args.timeout_seconds)
+        saved = http_json(args.base_url, "/settings", api_key=args.api_key, method="PATCH",
+                          body=settings_patch(snapshot, set_values={"network": {
+                              "autoConnect": True, "ed2kEnabled": True, "kadEnabled": True,
+                              "servers": {"autoReconnect": True}}}),
+                          timeout_seconds=args.timeout_seconds)
+        application = saved["data"]["application"]
+        if application["failed"]:
+            raise RuntimeError("Saved P2P settings could not be applied; inspect settings application failures")
+        if application["pendingRestart"]:
+            raise RuntimeError("Saved P2P settings require a daemon restart before connecting")
+        steps.append({"ok": True, "path": "/settings", "method": "PATCH", "data": saved["data"]})
 
     deadline = time.time() + args.timeout_seconds
     final_sample: dict[str, object] | None = None

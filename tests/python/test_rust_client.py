@@ -86,22 +86,6 @@ def setting_value(profile_dir: Path, key: str) -> object:
     return document["value"]
 
 
-def test_rust_network_settings_patch_keeps_server_reconnect_under_ed2k() -> None:
-    assert rust_client.rust_network_settings_patch(
-        auto_connect=False,
-        reconnect_enabled=True,
-        network_ed2k=True,
-        network_kademlia=False,
-    ) == {
-        "core": {
-            "autoConnect": False,
-            "networkEd2k": True,
-            "networkKademlia": False,
-        },
-        "ed2k": {"reconnectEnabled": True},
-    }
-
-
 def test_request_ctrl_c_sends_sigint_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     signals: list[int] = []
 

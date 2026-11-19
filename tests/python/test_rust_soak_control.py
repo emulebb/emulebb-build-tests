@@ -2236,46 +2236,43 @@ def test_vpn_allowlist_status_can_default_to_regular_rust_only(tmp_path: Path, m
     assert [row["name"] for row in result["executables"]] == ["emulebb-rust.exe"]
 
 
-def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> None:
+@pytest.mark.parametrize("outcome", ["ready", "restart", "failed", "conflict"])
+def test_rust_p2p_start_observes_revision_and_application_before_connecting(monkeypatch, outcome):
     control = _load_rust_soak_control()
-    calls: list[tuple[str, str, dict[str, object] | None]] = []
-
-    def fake_request_json(base_url, path, *, api_key, method="GET", body=None, timeout_seconds=8.0):
-        assert base_url == "http://192.0.2.10:4731/api/v1"
-        assert api_key == "key"
+    calls = []
+    def settings_request(base_url, path, *, api_key, method="GET", body=None, **kwargs):
+        assert base_url == "http://192.0.2.10:4731/api/v1" and api_key == "key"
+        calls.append((method, path, body))
+        if method == "GET":
+            return {"data": {}, "meta": {"settingsRevision": "7"}}
+        if outcome == "conflict":
+            raise RuntimeError("SETTINGS_CONFLICT")
+        return {"data": {"application": {
+            "pendingRestart": ["network.autoConnect"] if outcome == "restart" else [],
+            "failed": [{"key": "network.autoConnect"}] if outcome == "failed" else [],
+        }}}
+    def network_request(base_url, path, *, method="GET", body=None, **kwargs):
         calls.append((method, path, body))
         return {"ok": True}
-
-    monkeypatch.setattr(control, "request_json", fake_request_json)
-    monkeypatch.setattr(control, "sample", lambda _base_url, _api_key: {"ed2kConnected": True, "kadConnected": True})
-
-    result = control.rust_p2p_start(
-        SimpleNamespace(
-            base_url="http://192.0.2.10:4731/api/v1",
-            api_key="key",
-            timeout_seconds=1.0,
-            ensure_preferences=True,
-            start_kad=True,
-        )
-    )
-
-    assert result["sample"] == {"ed2kConnected": True, "kadConnected": True}
-    assert calls == [
-        (
-            "PATCH",
-            "/app/settings",
-            {
-                "core": {
-                    "autoConnect": True,
-                    "networkKademlia": True,
-                    "networkEd2k": True,
-                },
-                "ed2k": {"reconnectEnabled": True},
-            },
-        ),
-        ("POST", "/kad/operations/start", {}),
-        ("POST", "/servers/operations/connect", {}),
-    ]
+    monkeypatch.setattr(control, "http_json", settings_request)
+    monkeypatch.setattr(control, "request_json", network_request)
+    monkeypatch.setattr(control, "sample", lambda *args: {"ed2kConnected": True, "kadConnected": True})
+    args = SimpleNamespace(base_url="http://192.0.2.10:4731/api/v1", api_key="key",
+                           timeout_seconds=1.0, ensure_preferences=True, start_kad=True)
+    if outcome == "ready":
+        assert control.rust_p2p_start(args)["sample"] == {"ed2kConnected": True, "kadConnected": True}
+    else:
+        message = {"restart": "require a daemon restart", "failed": "could not be applied",
+                   "conflict": "SETTINGS_CONFLICT"}[outcome]
+        with pytest.raises(RuntimeError, match=message):
+            control.rust_p2p_start(args)
+    expected = [("GET", "/settings", None), ("PATCH", "/settings", {
+        "expectedRevision": "7", "set": {"network": {"autoConnect": True, "ed2kEnabled": True,
+            "kadEnabled": True, "servers": {"autoReconnect": True}}},
+    })]
+    if outcome == "ready":
+        expected += [("POST", "/kad/operations/start", {}), ("POST", "/servers/operations/connect", {})]
+    assert calls == expected
 
 
 def test_rust_early_connect_proof_requests_start_and_waits_for_highid(monkeypatch) -> None:
@@ -2298,7 +2295,7 @@ def test_rust_early_connect_proof_requests_start_and_waits_for_highid(monkeypatc
                 {
                     "ok": True,
                     "method": "PATCH",
-                    "path": "/app/settings",
+                    "path": "/settings",
                     "data": {"daemon": {"incomingDir": r"C:\Private\incoming"}},
                 },
                 {

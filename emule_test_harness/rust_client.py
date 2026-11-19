@@ -60,25 +60,6 @@ def verified_runtime_stage(rust_repo: Path, output_root: Path) -> dict:
     return data
 
 
-def rust_network_settings_patch(
-    *,
-    auto_connect: bool,
-    reconnect_enabled: bool,
-    network_ed2k: bool,
-    network_kademlia: bool,
-) -> dict[str, dict[str, bool]]:
-    """Build a current-schema Rust network settings PATCH body."""
-
-    return {
-        "core": {
-            "autoConnect": auto_connect,
-            "networkEd2k": network_ed2k,
-            "networkKademlia": network_kademlia,
-        },
-        "ed2k": {"reconnectEnabled": reconnect_enabled},
-    }
-
-
 def write_private_text(path: Path, contents: str) -> None:
     """Write credential-bearing text with owner-only POSIX permissions."""
 
