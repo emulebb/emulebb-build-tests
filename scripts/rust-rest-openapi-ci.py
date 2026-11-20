@@ -668,17 +668,18 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                                            "parts": "passed", "sources": "passed", "comments": "passed"}
         if download_action("start", job_ids[0]) != "accepted":
             raise RuntimeError("Stopped download was not started")
-        def allocated_storage() -> tuple[Any, ...] | None:
-            row = durable_jobs()[0]
-            return row if row[5] is not None and row[6] is not None and row[7] is not None else None
-
-        started_row = wait_until("download storage allocation", remaining(), allocated_storage)
+        # Explicit start reserves a stable pathname/UUID in SQLite. Only useful
+        # source selection may materialize it and acquire filesystem identity.
+        # The real-peer phase owns materialized UUID/category storage proof.
+        started_row = durable_jobs()[0]
         marker = started_row[6]
-        storage_path = Path(started_row[5])
-        if (str(uuid.UUID(marker)) != marker or started_row[4] != str(temp_override)
+        storage_path = Path(started_row[5]) if started_row[5] is not None else None
+        if (started_row[3] != "started" or marker is None or str(uuid.UUID(marker)) != marker
+                or started_row[4] != str(temp_override) or storage_path is None
                 or storage_path.parent.resolve() != temp_override.resolve()
-                or storage_path.name != f"{job_ids[0]}-{marker}" or not storage_path.is_dir()):
-            raise RuntimeError(f"Download did not persist its allocated UUID storage path: {started_row[:7]}")
+                or storage_path.name != f"{job_ids[0]}-{marker}"
+                or started_row[7] is not None or storage_path.exists()):
+            raise RuntimeError("Source-less start lost its reserved plan or materialized storage")
         if download_action("stop", job_ids[0]) != "accepted":
             raise RuntimeError("Started download was not stopped")
         request("PATCH", f"/api/v1/downloads/{job_ids[2]}", body={"category": "ALPHA"})
@@ -890,7 +891,10 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         report["categoryNames"] = {"deleted": "Alpha", "survivor": "Second-2", "recreated": "ALPHA"}
         report["assignmentsAfterReopen"] = [None, "Second-2", None]
         report["downloadIds"] = job_ids
+        if storage_path.exists():
+            raise RuntimeError("Source-less storage materialized during category/restart proof")
         report["storage"] = {"jobId": job_ids[0], "path": str(storage_path), "markerId": marker,
+                             "materialized": False, "sourceLessStartPreserved": True,
                              "persistedAcrossReopen": True}
         report["sharing"] = {"withdrawnHash": only_hash, "survivingHash": duplicate_hash,
                              "categoryOnlyWithdrawn": True, "independentCompleteCopyRetained": True,
@@ -995,6 +999,21 @@ def prove_friend_frontdoor(*, request, database: Path, prefix: str, route_templa
             raise RuntimeError("Successful friend retry disagreed with current cache/durable membership")
     result["retryAddAndRemove"] = "passed"
     return result
+
+
+def download_storage_snapshot(database: Path, job_id: str) -> tuple[Any, ...]:
+    """Read only durable storage identity, independently of resident execution."""
+    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+        row = connection.execute(
+            "SELECT temp.display_path,storage.display_path,j.storage_directory_marker_id,"
+            "j.storage_directory_identity FROM download_jobs j "
+            "LEFT JOIN local_paths temp ON temp.id=j.selected_temp_path_id "
+            "LEFT JOIN local_paths storage ON storage.id=j.storage_path_id WHERE j.id=?",
+            (int(job_id),),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("Storage proof lost the admitted download")
+    return row
 
 
 def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
@@ -1137,8 +1156,12 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
         file_hash = content["hash"]
         link = rust_local_ed2k.ed2k_link_with_source(content["ed2kLink"], REST_ADDR, seeder["tcp"])
         for peer in peers[1:]:
+            peer["tempOverride"] = peer["profile"] / "category-temp"
+            peer["tempOverride"].mkdir()
+            request(peer, "POST", "/api/v1/categories",
+                    body={"name": "Alpha", "tempDir": str(peer["tempOverride"])})
             admitted = request(peer, "POST", "/api/v1/downloads", expected=201, body={
-                "source": {"type": "ed2k-link", "link": link}, "intent": "started",
+                "source": {"type": "ed2k-link", "link": link}, "intent": "started", "category": "Alpha",
             })["json"]["data"]
             peer["downloadId"] = require_download_id(admitted, hash_value=file_hash)
 
@@ -1157,6 +1180,22 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
 
         active, queued = poll("one active and one waiting local upload", populated)
         report["readiness"] = {"active": active["id"], "queued": queued["id"], "fileHash": file_hash}
+        for peer in peers[1:]:
+            storage = download_storage_snapshot(peer["database"], peer["downloadId"])
+            temp, stored_path, marker, identity = storage
+            path = Path(stored_path) if stored_path is not None else None
+            if (marker is None or str(uuid.UUID(marker)) != marker or identity is None
+                    or temp != str(peer["tempOverride"]) or path is None or not path.is_dir()
+                    or path.parent.resolve() != peer["tempOverride"].resolve()
+                    or path.name != f"{peer['downloadId']}-{marker}"):
+                raise RuntimeError("Useful-source execution lost its allocated UUID storage identity")
+            request(peer, "DELETE", "/api/v1/categories/Alpha")
+            if (data(peer, "GET", f"/api/v1/downloads/{peer['downloadId']}")["category"] is not None
+                    or download_storage_snapshot(peer["database"], peer["downloadId"]) != storage):
+                raise RuntimeError("Category deletion changed allocated download storage")
+            peer["storageSnapshot"] = storage
+        report["sourcePreparationStorage"] = {"allocatedJobs": 2, "categoryTempOverride": True,
+                                               "uuidIdentity": True, "categoryDeletionPreservedStorage": True}
         for collection, row in (("uploads", active), ("upload-queue", queued)):
             prefix = f"/api/v1/{collection}/{row['id']}"
             def ready(prefix=prefix, row=row):
@@ -1218,6 +1257,10 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
                         ).fetchall()
                     if integrity != ("ok",) or triggers or (process is not None and process.poll() is None):
                         raise RuntimeError("Local friend fixture teardown or database integrity was incomplete")
+                    if "storageSnapshot" in peer:
+                        if download_storage_snapshot(peer["database"], peer["downloadId"]) != peer["storageSnapshot"]:
+                            raise RuntimeError("Allocated storage identity changed across shutdown/reopen")
+                        report["sourcePreparationStorage"]["persistedAcrossReopen"] = True
                     report.setdefault("finalDatabases", []).append({"profile": peer["profile"].name,
                         "friendRows": rows, "reopenedAfterShutdown": True, "integrity": "ok", "faultTriggersRemoved": True})
                 except Exception as error:
