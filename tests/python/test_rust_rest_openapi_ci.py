@@ -68,7 +68,7 @@ def retained_scale_subject(tmp_path, monkeypatch):
         from urllib.parse import urlsplit, parse_qs
         assert kwargs["api_key"] == package.API_KEY
         if path == "/api/v1/status":
-            return {"data": {"stats": {"activeDownloads": 1, "downloadCount": 1000}}}
+            return {"data": {"stats": {"downloadResources": {"active": 0, "preparing": 0, "waiting": 1}, "downloadCount": 1000}}}
         query = parse_qs(urlsplit(path).query)
         view = query["view"][0]
         identities = [value for value in range(1000, 0, -1)
@@ -88,7 +88,7 @@ def test_retained_scale_proof_accepts_short_pages_and_reopens_the_profile(tmp_pa
     report = module.run_retained_download_scale_phase(executable=tmp_path / "daemon", rust_repo=tmp_path,
                                                       root=root, openapi_contract=tmp_path / "openapi")
     assert report["status"] == "passed"
-    assert report["dashboardCounts"] == {"activeDownloads": 1, "downloadCount": 1000}
+    assert report["dashboardCounts"] == {"waiting": 1, "downloadCount": 1000}
     assert {view: (value["rows"], value["pages"]) for view, value in report["views"].items()} == {
         "all": (1000, 500), "completed": (990, 495), "unfinished": (10, 5),
     }

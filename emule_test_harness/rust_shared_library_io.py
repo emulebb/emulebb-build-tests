@@ -1179,9 +1179,11 @@ def retained_download_observation(client: RestClient) -> dict[str, object]:
     """Capture the combined workload's public counts without timing promises."""
     counts = client.request("GET", "/snapshot")["downloads"]
     stats = client.request("GET", "/stats")
+    resources = stats.get("downloadResources", {})
     observed = {
         "unfinished": counts.get("unfinished"), "completed": counts.get("completed"),
-        "total": stats.get("downloadCount"), "started": stats.get("activeDownloads"),
+        "total": stats.get("downloadCount"),
+        "started": sum(resources.get(key, 0) for key in ("active", "preparing", "waiting")),
     }
     observed["ok"] = observed == {
         "unfinished": RETAINED_DOWNLOAD_EXPECTED["unfinishedDownloads"],

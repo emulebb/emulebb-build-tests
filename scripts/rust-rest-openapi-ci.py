@@ -1391,11 +1391,10 @@ def run_retained_download_scale_phase(*, executable: Path, rust_repo: Path, root
 
         wait_until("retained-scale REST readiness", 120.0, ready)
         report["listener"] = verify_listener_receipt(profile, base_url)
-        expected_counts = {"activeDownloads": fixture["queued"],
-                           "downloadCount": fixture["jobs"]}
+        expected_counts = {"waiting": fixture["queued"], "downloadCount": fixture["jobs"]}
         stats = ready()["data"]["stats"]
-        report["dashboardCounts"] = {key: stats[key] for key in expected_counts}
-        if {key: stats[key] for key in expected_counts} != expected_counts:
+        report["dashboardCounts"] = {"waiting": stats["downloadResources"]["waiting"], "downloadCount": stats["downloadCount"]}
+        if report["dashboardCounts"] != expected_counts:
             raise RuntimeError("Retained-scale dashboard counts differ from the seeded jobs")
         report["views"] = rust_rest_conformance.prove_retained_download_pages(
             lambda path: http_json(base_url, "/api/v1" + path, api_key=api_key, timeout_seconds=30.0),
@@ -1409,7 +1408,7 @@ def run_retained_download_scale_phase(*, executable: Path, rust_repo: Path, root
         process, handle = package._start_daemon(executable, profile, root / "restart.log")
         wait_until("reopened retained-scale REST readiness", 120.0, ready)
         stats = ready()["data"]["stats"]
-        if {key: stats[key] for key in expected_counts} != expected_counts:
+        if {"waiting": stats["downloadResources"]["waiting"], "downloadCount": stats["downloadCount"]} != expected_counts:
             raise RuntimeError("Retained job counts changed across clean restart")
         report["restartCountsPreserved"] = True
         report["status"] = "passed"

@@ -80,7 +80,7 @@ def heartbeat(args: argparse.Namespace) -> bool:
     rb = rust.get("sessionUploadedBytes", 0) or 0
     mb = mfc.get("sessionUploadedBytes", 0) or 0
     print(f"RUST up={rust.get('uploadSpeedKiBps')}KiB/s upl={rust.get('activeUploads')} sUp={rb/1e9:.2f}GB "
-          f"high={rust.get('ed2kHighId')} kadfw={rust.get('kadFirewalled')} actDl={rust.get('activeDownloads')} reach={'y' if rust else 'n'}")
+          f"high={rust.get('ed2kHighId')} kadfw={rust.get('kadFirewalled')} actDl={rust.get('downloadResources', {}).get('active')} reach={'y' if rust else 'n'}")
     print(f"MFC  up={mfc.get('uploadSpeedKiBps')}KiB/s upl={mfc.get('activeUploads')} sUp={mb/1e9:.2f}GB reach={'y' if mfc else 'n'}")
     print(f"ratio={mb/rb:.2f}" if rb else "ratio=n/a")
     if args.monitor_heartbeat:

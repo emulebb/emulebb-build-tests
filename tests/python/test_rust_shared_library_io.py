@@ -219,7 +219,7 @@ def test_retained_download_observation_requires_the_realistic_counts():
             assert method == "GET"
             return {
                 "/snapshot": {"downloads": {"unfinished": 1000, "completed": 99000}},
-                "/stats": {"downloadCount": 100000, "activeDownloads": 100},
+                "/stats": {"downloadCount": 100000, "downloadResources": {"active": 0, "preparing": 0, "waiting": 100}},
             }[path]
     assert subject.retained_download_observation(Client())["ok"] is True
     class IncompleteClient(Client):

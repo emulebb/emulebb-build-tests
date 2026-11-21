@@ -20,6 +20,35 @@ def write(path: Path, text: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize("mode,limit,valid", [
+    ("automatic", None, True), ("fixed", 16, True),
+    ("automatic", 16, False), ("fixed", None, False), ("fixed", 0, False),
+])
+def test_download_resource_summary_enforces_concurrency_mode_and_limit(mode, limit, valid):
+    payload = {
+        "active": 17, "preparing": 2, "waiting": 981,
+        "concurrency": {"mode": mode, "configuredLimit": limit, "target": 16, "burstActive": 1},
+        "residentMemory": {"usedBytes": 33554432, "softTargetBytes": 67108864, "limitBytes": 134217728},
+    }
+    if valid:
+        validate_openapi_schema_component_payload("DownloadResources", payload)
+    else:
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema_component_payload("DownloadResources", payload)
+
+
+def test_download_resources_are_required_in_stats_and_counts_are_nonnegative():
+    schemas = load_openapi_document()["components"]["schemas"]
+    assert "downloadResources" in schemas["Stats"]["required"]
+    for component, fields in {
+        "DownloadResources": ("active", "preparing", "waiting"),
+        "DownloadConcurrency": ("target", "burstActive"),
+        "DownloadResidentMemory": ("usedBytes", "softTargetBytes", "limitBytes"),
+    }.items():
+        for field in fields:
+            assert schemas[component]["properties"][field]["minimum"] == 0
+
+
 def test_response_component_schema_resolves_validation_refs(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
