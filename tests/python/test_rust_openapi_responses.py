@@ -49,6 +49,36 @@ def test_download_resources_are_required_in_stats_and_counts_are_nonnegative():
             assert schemas[component]["properties"][field]["minimum"] == 0
 
 
+@pytest.mark.parametrize("component", ["DownloadSummary", "Download"])
+def test_download_waiting_reason_is_closed_and_matches_lifecycle(component):
+    from emule_test_harness.rust_openapi_responses import validate_openapi_schema
+    document = load_openapi_document()
+    schema = document["components"]["schemas"][component]
+    payload = {"id": "1", "hash": "11" * 16, "name": "Sample.bin", "category": None,
+               "sizeBytes": 16, "progress": 0, "intent": "started", "state": "queued",
+               "waitingReason": "sources", "createdAt": 1, "updatedAt": 1, "completedAt": None}
+    if component == "Download":
+        payload.update(payloadVerified=False, delivery=None, failure=None)
+    for reason in ("network", "sources", "resources"):
+        payload["waitingReason"] = reason
+        validate_openapi_schema(document, schema, payload)
+    for reason in (None, "unknown"):
+        payload["waitingReason"] = reason
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, payload)
+    for state in document["components"]["schemas"]["DownloadState"]["enum"]:
+        if state == "queued":
+            continue
+        payload.update(state=state, waitingReason=None)
+        validate_openapi_schema(document, schema, payload)
+        payload["waitingReason"] = "resources"
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, payload)
+    del payload["waitingReason"]
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_schema(document, schema, payload)
+
+
 def test_response_component_schema_resolves_validation_refs(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
