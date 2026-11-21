@@ -110,6 +110,7 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         "deleteLibraryRoot": (404,),
         "getLibraryTag": (404,),
         "listLibraryFileTags": (404,),
+        "listLibraryFileLocations": (404,),
         "listSearchResultObservations": (404,),
         "listSearchResults": (404,),
         "stopSearch": (404,),

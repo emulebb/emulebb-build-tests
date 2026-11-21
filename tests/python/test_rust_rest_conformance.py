@@ -283,6 +283,17 @@ def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
     }
 
 
+def test_library_locations_probe_requires_missing_hash_response() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    module = rust_rest_conformance.load_rest_smoke_module(
+        tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    route = next(row for row in module.REST_CONTRACT_ROUTES
+                 if row["operationId"] == "listLibraryFileLocations")
+    assert route["path"] == "/api/v1/library/files/0123456789abcdef0123456789abcdef/locations"
+    assert route["successResponseStatuses"] == ["200"]
+    assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES["listLibraryFileLocations"] == (404,)
+
+
 def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     routes_by_operation = {
