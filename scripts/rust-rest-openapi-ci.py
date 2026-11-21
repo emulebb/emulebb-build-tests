@@ -737,6 +737,12 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         wait_until("independent root reload", remaining(), reload_settled)
         if independent_copy.read_bytes() != duplicate_bytes:
             raise RuntimeError("Independent complete copy changed before category deletion")
+        locations = library_request("GET", f"/api/v1/library/files/{duplicate_hash}/locations",
+                                    "/library/files/{hash}/locations", 200)
+        if (len(locations) != 2 or not all(row["present"] is True for row in locations)
+                or {Path(row["path"]).resolve() for row in locations}
+                != {category_copy.resolve(), independent_copy.resolve()}):
+            raise RuntimeError("Library locations did not retain both current copies")
 
         # Both physical copies are eligible here. Keep one connection and its
         # cached complete reader across REST rotation; a fresh request must fail.

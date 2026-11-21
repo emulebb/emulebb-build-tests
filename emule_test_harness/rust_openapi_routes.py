@@ -3018,6 +3018,7 @@ def parameterized_query_overrides(route_metadata_rs_text: str) -> dict[Route, st
     parameterized = route_metadata_rs_text.split("fn route_query_fields_for_parameterized", 1)[-1]
     for pattern, method, path in (
         (r'\("GET",\s*\["library", "files", _, "tags"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/tags"),
+        (r'\("GET",\s*\["library", "files", _, "locations"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/library/files/{hash}/locations"),
         (r'\("GET",\s*\["searches", _, "results"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results"),
         (r'\("GET",\s*\["searches", _, "results", _, "observations"\]\)\s*=>\s*Some\((\w+)\)', "GET", "/searches/{searchId}/results/{resultId}/observations"),
     ):
