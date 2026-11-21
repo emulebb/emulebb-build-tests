@@ -50,7 +50,7 @@ PATH_TOKEN_PARAMETER_SCHEMAS = {
     "UploadId": ("id", r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\s\S])"),
 }
 QUERY_BOOLEAN_PARAMETER_SCHEMAS = {
-    "IncludeScoreBreakdown": "includeScoreBreakdown",
+    "CountTotal": "countTotal",
 }
 DOWNLOAD_EVENT_COMPONENT = "DownloadEvent"
 DOWNLOAD_EVENT_VARIANTS = {
@@ -1330,7 +1330,7 @@ def append_download_schema_drift(drift: list[SchemaComponentDrift], schemas: dic
     assert_decimal_id_schema(drift, "DownloadId", schemas.get("DownloadId"), "job ID")
 
     summary_fields = {"id", "hash", "name", "category", "sizeBytes", "progress", "intent",
-                      "state", "createdAt", "updatedAt", "completedAt"}
+                      "state", "waitingReason", "createdAt", "updatedAt", "completedAt"}
     for component, expected in (("DownloadSummary", summary_fields),
                                 ("Download", summary_fields | {"payloadVerified", "delivery", "failure"})):
         schema = schemas.get(component)

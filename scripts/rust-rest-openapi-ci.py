@@ -1167,7 +1167,7 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
 
         def populated():
             active = data(seeder, "GET", "/api/v1/uploads")["items"]
-            queued = data(seeder, "GET", "/api/v1/upload-queue")["items"]
+            queued = data(seeder, "GET", "/api/v1/upload-queue")
             def valid(row):
                 return row.get("id") and row.get("userHash") and row.get("requestedFileHash") == file_hash
             active = next((row for row in active if valid(row) and row.get("uploading")), None)

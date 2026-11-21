@@ -1078,8 +1078,8 @@ def test_openapi_parameter_metadata_drift_requires_boolean_query_types(tmp_path:
         """
 components:
   parameters:
-    IncludeScoreBreakdown:
-      name: includeScoreBreakdown
+    CountTotal:
+      name: countTotal
       in: query
       required: false
       schema:
@@ -1089,8 +1089,8 @@ components:
 
     assert openapi_parameter_metadata_drift(openapi_yaml) == (
         ParameterMetadataDrift(
-            source="components.parameters.IncludeScoreBreakdown.schema",
-            issue="includeScoreBreakdown query parameter type must be boolean",
+            source="components.parameters.CountTotal.schema",
+            issue="countTotal query parameter type must be boolean",
         ),
     )
 
@@ -1101,8 +1101,8 @@ def test_openapi_parameter_metadata_drift_accepts_boolean_query_types(tmp_path: 
         """
 components:
   parameters:
-    IncludeScoreBreakdown:
-      name: includeScoreBreakdown
+    CountTotal:
+      name: countTotal
       in: query
       required: false
       schema:
@@ -2865,6 +2865,7 @@ def test_selected_download_shapes_use_job_ids_nullable_metadata_and_per_id_resul
     validate_openapi_schema(document, summary, {
         "id": "1", "hash": "a" * 32, "name": "Unknown size", "category": None,
         "sizeBytes": None, "progress": None, "intent": "stopped", "state": "waiting-metadata",
+        "waitingReason": None,
         "createdAt": 1, "updatedAt": 1, "completedAt": None,
     })
     batch = openapi_schema_component(document, "DownloadBatchItem")
@@ -3295,7 +3296,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
             const SNAPSHOT: &[&str] = &["limit"];
             const DOWNLOADS: &[&str] = &["view", "category", "cursor", "limit"];
             const SEARCH_RESULTS: &[&str] = &["limit", "cursor", "sort", "order"];
-            const UPLOAD_QUEUE: &[&str] = &["offset", "limit", "includeScoreBreakdown"];
+            const UPLOAD_QUEUE: &[&str] = &["cursor", "limit", "countTotal"];
             match (method, path) {
                 ("GET", "/api/v1/app")
                 | ("GET", "/api/v1/upload-queue") => Some(match path {
@@ -3326,7 +3327,7 @@ def test_rust_query_parameter_inventory_reads_exact_and_parameterized_allowlists
     assert rust_query_parameter_inventory(route_metadata_rs, routes_rs) == {
         Route("GET", "/app"): (),
         Route("GET", "/snapshot"): ("limit",),
-        Route("GET", "/upload-queue"): ("includeScoreBreakdown", "limit", "offset"),
+        Route("GET", "/upload-queue"): ("countTotal", "cursor", "limit"),
         Route("GET", "/downloads"): ("category", "cursor", "limit", "view"),
         Route("GET", "/searches/{searchId}/results"): ("cursor", "limit", "order", "sort"),
     }
@@ -4217,6 +4218,7 @@ def test_selected_download_detail_and_nonempty_parts_match_checkpointed_projecti
     detail = {
         "id": "1", "hash": "a" * 32, "name": "Sample.bin", "category": None,
         "sizeBytes": 4096, "progress": 0, "intent": "started", "state": "failed",
+        "waitingReason": None,
         "createdAt": 1, "updatedAt": 2, "completedAt": None, "payloadVerified": False,
         "delivery": {"path": None, "state": "pending", "ownership": "none"},
         "failure": {"code": "STORAGE_UNAVAILABLE", "message": "Storage is unavailable", "failedAt": 2},

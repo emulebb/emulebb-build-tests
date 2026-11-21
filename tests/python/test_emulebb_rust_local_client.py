@@ -470,9 +470,11 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert missing_friend_status == 404
         assert request_json(base_url, "GET", "/api/v1/uploads")["data"]["items"] == []
-        upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue")["data"]
-        assert upload_queue["items"] == []
-        assert {"total", "offset", "limit"} <= upload_queue.keys()
+        upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue?countTotal=true")
+        assert upload_queue["data"] == []
+        assert upload_queue["meta"]["total"] == 0
+        assert upload_queue["meta"]["hasMore"] is False
+        assert upload_queue["meta"]["nextCursor"] is None
         missing_upload_status, missing_upload_error = request_json_status(
             base_url,
             "GET",

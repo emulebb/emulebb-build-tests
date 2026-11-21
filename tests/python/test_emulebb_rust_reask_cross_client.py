@@ -710,8 +710,7 @@ def test_mfc_queue_identity_requires_exact_onqueue_highid_source() -> None:
 def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
     module = _load_module()
     rows = {
-        "data": {
-            "items": [
+        "data": [
                 {
                     "id": "wrong-port",
                     "address": "127.0.0.20",
@@ -726,8 +725,7 @@ def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
                     "requestedFileHash": FILE_HASH.upper(),
                     "waitingQueue": True,
                 },
-            ]
-        }
+        ]
     }
 
     assert module.find_upload_waiter(
