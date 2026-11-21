@@ -25,7 +25,7 @@ def monitor_config(tmp_path: Path):
 def test_rust_summary_uses_only_current_session_offers_and_separates_worker_snapshot(
         monkeypatch, monitor_config, current, expected):
     calls = []
-    payloads = {"/stats": {}, "/uploads": {"items": []}, "/status": {
+    payloads = {"/stats": {}, "/uploads": [], "/status": {
         "servers": {"currentServer": current}, "runtimeDiagnostics": {"ed2kPublish": {
             "publishedEntries": 86, "pendingEntries": 0, "queuedCount": 308, "phase": "idle",
             "lastError": "synthetic-private-response"}}}}

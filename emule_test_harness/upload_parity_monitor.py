@@ -361,7 +361,7 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
 
     stats = stats_payload["data"]  # type: ignore[index]
     status = status_payload["data"]  # type: ignore[index]
-    uploads = uploads_payload["data"].get("items", [])  # type: ignore[union-attr]
+    uploads = uploads_payload["data"]  # type: ignore[union-attr]
     runtime = status.get("runtimeDiagnostics", {})  # type: ignore[union-attr]
     kad = status.get("kad", {})  # type: ignore[union-attr]
     ed2k_publish = runtime.get("ed2kPublish", {}) or {}
@@ -422,7 +422,7 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
         "kadGateAllowed": kad_publish.get("gateAllowed"),
         "kadGateBlockReason": kad_publish.get("gateBlockReason"),
         "uploadRows": len(uploads),
-        "nonzeroUploadRows": sum(1 for row in uploads if float(row.get("uploadSpeedKiBps") or 0) > 0),
+        "nonzeroUploadRows": sum(1 for row in uploads if float(row.get("uploadRateBytesPerSec") or 0) > 0),
     }
 
 

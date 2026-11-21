@@ -1175,12 +1175,12 @@ def run_friend_peer_phase(*, executable: Path, rust_repo: Path, root: Path,
             peer["downloadId"] = require_download_id(admitted, hash_value=file_hash)
 
         def populated():
-            active = data(seeder, "GET", "/api/v1/uploads")["items"]
+            active = data(seeder, "GET", "/api/v1/uploads")
             queued = data(seeder, "GET", "/api/v1/upload-queue")
             def valid(row):
                 return row.get("id") and row.get("userHash") and row.get("requestedFileHash") == file_hash
-            active = next((row for row in active if valid(row) and row.get("uploading")), None)
-            queued = next((row for row in queued if valid(row) and row.get("waitingQueue")), None)
+            active = next((row for row in active if valid(row) and row.get("uploadState") == "uploading"), None)
+            queued = next((row for row in queued if valid(row) and row.get("uploadState") == "queued"), None)
             if active and queued:
                 if active["userHash"] == queued["userHash"]:
                     raise RuntimeError("Local upload peers must have distinct user identities")
