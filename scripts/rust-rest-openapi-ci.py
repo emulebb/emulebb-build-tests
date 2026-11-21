@@ -739,9 +739,11 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Independent complete copy changed before category deletion")
         locations = library_request("GET", f"/api/v1/library/files/{duplicate_hash}/locations",
                                     "/library/files/{hash}/locations", 200)
+        # WHY: Windows may return extended-length paths. Compare file identity,
+        # preserving those native paths rather than interpreting their spelling.
         if (len(locations) != 2 or not all(row["present"] is True for row in locations)
-                or {Path(row["path"]).resolve() for row in locations}
-                != {category_copy.resolve(), independent_copy.resolve()}):
+                or not all(any(Path(row["path"]).samefile(expected) for row in locations)
+                           for expected in (category_copy, independent_copy))):
             raise RuntimeError(f"Library locations did not retain both current copies: {locations!r}; "
                                f"expected paths: {[str(category_copy.resolve()), str(independent_copy.resolve())]!r}")
 
