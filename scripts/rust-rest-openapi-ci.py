@@ -742,7 +742,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         if (len(locations) != 2 or not all(row["present"] is True for row in locations)
                 or {Path(row["path"]).resolve() for row in locations}
                 != {category_copy.resolve(), independent_copy.resolve()}):
-            raise RuntimeError("Library locations did not retain both current copies")
+            raise RuntimeError(f"Library locations did not retain both current copies: {locations!r}; "
+                               f"expected paths: {[str(category_copy.resolve()), str(independent_copy.resolve())]!r}")
 
         # Both physical copies are eligible here. Keep one connection and its
         # cached complete reader across REST rotation; a fresh request must fail.
