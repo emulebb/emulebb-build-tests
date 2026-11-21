@@ -79,6 +79,29 @@ def test_download_waiting_reason_is_closed_and_matches_lifecycle(component):
         validate_openapi_schema(document, schema, payload)
 
 
+@pytest.mark.parametrize("method,path,status,code,details", [
+    ("GET", "/uploads", 409, "CONFLICT", {}),
+    ("GET", "/upload-queue", 409, "CONFLICT", {}),
+    ("POST", "/library/roots", 409, "ROOT_CONFLICT", {}),
+    ("DELETE", "/library/roots/{id}", 409, "ROOT_MANAGED", {}),
+    ("GET", "/shared-files", 500, "INTERNAL_ERROR", {}),
+    ("GET", "/library/ignores", 500, "INTERNAL_ERROR", {}),
+    ("POST", "/diagnostics/bundles", 503, "SERVICE_BUSY", {}),
+    *[("POST", "/downloads", 409, "LOCAL_CONTENT_CHOICE_REQUIRED", {"availability": value})
+      for value in ("present", "unavailable", "absent")],
+])
+def test_current_operation_errors_match_the_closed_schema(method, path, status, code, details):
+    validate_openapi_operation_response_payload(method, path, status,
+        {"error": {"code": code, "message": "Current operation outcome", "details": details}})
+
+
+@pytest.mark.parametrize("details", [{}, {"availability": None}, {"availability": "unknown"}, {"availability": 1}])
+def test_local_content_choice_requires_typed_availability(details):
+    with pytest.raises(jsonschema.ValidationError):
+        validate_openapi_operation_response_payload("POST", "/downloads", 409,
+            {"error": {"code": "LOCAL_CONTENT_CHOICE_REQUIRED", "message": "Explicit choice required", "details": details}})
+
+
 def test_response_component_schema_resolves_validation_refs(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
