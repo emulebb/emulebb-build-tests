@@ -146,10 +146,6 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
         roots = conn.execute("SELECT count(*) FROM shared_directory_roots WHERE enabled = 1").fetchone()[0]
         servers = conn.execute("SELECT address, port, name FROM servers").fetchall()
         kad = conn.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchall()
-        daemon_settings = {
-            key: json.loads(value_json)
-            for key, value_json in conn.execute("SELECT key, value_json FROM settings WHERE section = 'daemon'")
-        }
         identity = conn.execute(
             "SELECT lower(hex(public_identity)) FROM local_identities WHERE identity_kind = 'ed2k-user-hash'"
         ).fetchone()[0]
@@ -168,9 +164,11 @@ def test_import_stock_mfc_profile_creates_fresh_rust_profile(tmp_path: Path, mon
     assert roots == 1
     assert servers == [("45.82.80.155", 5687, "Local")]
     assert kad == [("1.2.3.4:4672",)]
-    assert daemon_settings.get("p2pBindInterface") == "hide.me"
-    assert daemon_settings.get("initialSharedDirectoryReload") is False
-    assert "p2pBindIp" not in daemon_settings
+    revision, settings = rust_metadata.read_app_settings(db_path)
+    assert revision > 1
+    assert settings["network"]["p2p"]["bindInterface"] == {"mode": "custom", "value": "hide.me"}
+    assert settings["sharing"]["scanOnStartup"] == {"mode": "custom", "value": False}
+    assert settings["network"]["p2p"]["bindIp"]["value"] is None
     assert identity == "aaaaaaaaaa0eccddeeff001122336f55"
     from emule_test_harness.rust_native_fingerprint import decode_fingerprint
     imported=[(*r[:3],decode_fingerprint(r[3]).modified.seconds,*r[4:]) for r in imported]

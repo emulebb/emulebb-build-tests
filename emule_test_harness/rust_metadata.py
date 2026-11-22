@@ -666,8 +666,11 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
     now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
+        # WHY: root IDs identify a resource lifetime. Replacing a fixture retires
+        # its previous roots; reusing the same path must allocate a fresh ID.
         conn.execute(
-            "UPDATE shared_directory_roots SET deleted_at_s = ? WHERE deleted_at_s IS NULL",
+            "UPDATE shared_directory_roots SET monitor_owned=0, shareable=0, "
+            "accessible=0, enabled=0, deleted_at_s=? WHERE deleted_at_s IS NULL",
             (now,),
         )
         for root in roots:
@@ -682,12 +685,6 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
                     enabled, created_at_s, deleted_at_s
                 )
                 VALUES (?, ?, ?, ?, 1, ?, NULL)
-                ON CONFLICT(path_id) DO UPDATE SET
-                    monitor_owned = excluded.monitor_owned,
-                    shareable = excluded.shareable,
-                    accessible = excluded.accessible,
-                    enabled = 1,
-                    deleted_at_s = NULL
                 """,
                 (
                     path_id,
