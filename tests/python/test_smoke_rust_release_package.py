@@ -708,9 +708,9 @@ def test_parallel_source_ownership_drains_every_started_peer(tmp_path, monkeypat
     assert all(log.closed for log in logs)
 
 
-def test_parallel_waits_until_every_job_is_complete(tmp_path, monkeypatch):
+def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(tmp_path, monkeypatch):
     from emule_test_harness import rust_shared_library_io
-    monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 2)
+    monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 3)
     monkeypatch.setattr(smoke, "PARALLEL_PAYLOAD_BYTES", 1024)
     monkeypatch.setattr(smoke.time, "sleep", lambda *_: None)
     class Sampler:
@@ -735,10 +735,13 @@ def test_parallel_waits_until_every_job_is_complete(tmp_path, monkeypatch):
             return job
         if path == "/api/v1/snapshot":
             snapshot_calls.append(path)
-            return {"downloads": {"unfinished": 0, "completed": 1 if len(snapshot_calls) == 1 else 3}}
+            return {"downloads": {"unfinished": 0, "completed": 1 if len(snapshot_calls) == 1 else 4}}
         if path == "/api/v1/status":
-            return {"stats": {"downloadResources": {"active": 2, "preparing": 0, "waiting": 0,
-                "concurrency": {"mode": "fixed", "configuredLimit": 2, "target": 2, "burstActive": 0},
+            # The overlap ends before the final start. Sampling only the
+            # completion loop must not manufacture evidence of this peak.
+            active = 2 if len(starts) == 2 and not page_calls else 0
+            return {"stats": {"downloadResources": {"active": active, "preparing": 0, "waiting": 0,
+                "concurrency": {"mode": "fixed", "configuredLimit": 3, "target": 3, "burstActive": 0},
                 "residentMemory": {"usedBytes": 1024, "softTargetBytes": 64 * 1024 * 1024,
                                    "limitBytes": 128 * 1024 * 1024}}}}
         raise AssertionError(path)
@@ -755,12 +758,15 @@ def test_parallel_waits_until_every_job_is_complete(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "_start_parallel_job", start)
     monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda url, job_id, *args, **kwargs: {"id": job_id})
     result = smoke._parallel_download_jobs(tmp_path, sources=[
-        {"url": f"http://127.0.0.1:{port}", "port": port, "process": object()} for port in (24001, 24002)],
+        {"url": f"http://127.0.0.1:{port}", "port": port, "process": object()} for port in (24001, 24002, 24003)],
         leecher_base_url="http://127.0.0.1:24000", p2p_ip="127.0.0.1", incoming=tmp_path / "incoming",
         leecher_process=object())
-    assert len(page_calls) == result["resourceSamples"] == 2
-    assert starts == [("start", "2"), ("start", "3")]
-    assert len(result["deliveries"]) == 2 and result["controlRetries"] == 0
+    assert len(page_calls) == 2
+    assert result["admissionResourceSamples"] == 4
+    assert result["resourceSamples"] == 6
+    assert result["sampledPeaks"]["chargedActive"] == 2
+    assert starts == [("start", "2"), ("start", "3"), ("start", "4")]
+    assert len(result["deliveries"]) == 3 and result["controlRetries"] == 0
 
 
 @pytest.mark.parametrize("outcome", ["success", "busy-then-success", "exhausted", "storage", "other-503", "wrong-status", "unchanged"])

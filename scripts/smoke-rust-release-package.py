@@ -53,7 +53,7 @@ TRANSFER_FILE_NAME = "eMuleBB.Native.Package.Transfer.bin"
 TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
 PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND = 512 * 1024
 PARALLEL_DOWNLOAD_COUNT = 16
-PARALLEL_PAYLOAD_BYTES = 1024 * 1024
+PARALLEL_PAYLOAD_BYTES = 4 * 1024 * 1024
 PARALLEL_START_ATTEMPTS = 5
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
@@ -690,26 +690,33 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
     for sampler in samplers.values():
         sampler.maybe_sample(force=True)
-    # WHY: mutation admission shares bounded capacity with active payload work.
-    # Keep each caller retry explicit in evidence; execution/storage failures
-    # never pass through this admission-only retry path.
-    control_attempts: list[dict] = []
-    try:
-        for job_id in jobs:
-            _start_parallel_job(leecher_base_url, job_id, control_attempts)
-    except Exception as error:
-        error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")
-        raise
     peaks: dict[str, int] = {}
     samples = 0
 
-    def completed() -> bool | None:
+    def observe_resources() -> None:
         nonlocal samples
         for sampler in samplers.values():
             sampler.maybe_sample()
         status = request_json(leecher_base_url, "GET", "/api/v1/status", API_KEY)
         _record_download_resources(status["stats"]["downloadResources"], peaks)
         samples += 1
+
+    # WHY: mutation admission shares bounded capacity with active payload work.
+    # Keep each caller retry explicit in evidence; execution/storage failures
+    # never pass through this admission-only retry path.
+    control_attempts: list[dict] = []
+    try:
+        observe_resources()
+        for job_id in jobs:
+            _start_parallel_job(leecher_base_url, job_id, control_attempts)
+            observe_resources()
+    except Exception as error:
+        error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")
+        raise
+    admission_samples = samples
+
+    def completed() -> bool | None:
+        observe_resources()
         rows = {row["id"]: row for row in _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100")}
         if any(rows.get(job_id, {}).get("state") == "failed" for job_id in jobs):
             raise RuntimeError("A parallel download entered failed state")
@@ -727,7 +734,8 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
             "controlRequests": len(control_attempts), "controlBatchSize": 1,
             "controlRetries": len(control_attempts) - len(jobs), "controlAttempts": control_attempts,
-            "deliveries": deliveries, "resourceSamples": samples, "sampledPeaks": peaks,
+            "deliveries": deliveries, "resourceSamples": samples,
+            "admissionResourceSamples": admission_samples, "sampledPeaks": peaks,
             "processes": {name: sampler.summary() for name, sampler in samplers.items()},
             "snapshotCounts": counts, "qualificationScope": {"realPayload": True,
                 "maximumGeometry": False, "containerMemoryLimitQualified": False}}
