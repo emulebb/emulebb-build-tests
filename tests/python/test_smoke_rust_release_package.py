@@ -751,6 +751,7 @@ def test_parallel_resources_preserve_budget_and_fixed_burst_contract(fault):
         smoke._record_download_resources(resources, peaks)
         assert peaks["active"] == 20 and peaks["preparing"] == 2
         assert peaks["residentBytes"] == 128 * 1024 * 1024
+        assert peaks["chargedActive"] == 20
 
 
 @pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke",

@@ -563,6 +563,8 @@ def _record_download_resources(resources: dict, peaks: dict[str, int]) -> None:
         raise RuntimeError("Packaged parallel download resource contract failed") from error
     for key, value in values.items():
         peaks[key] = max(peaks.get(key, 0), value)
+    if values["residentBytes"] > 0:
+        peaks["chargedActive"] = max(peaks.get("chargedActive", 0), values["active"])
 
 
 @contextmanager
@@ -642,6 +644,13 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         detail = published["sharedFiles"]["matched"]
         file_hash = detail["hash"]
         hashes.add(file_hash)
+        # WHY: tiny files can finish before the first status response. Pace the
+        # real sources so overlapping charged owners remain observable, keeping
+        # the concurrency and resident-budget assertions strict.
+        source_settings = request_document(source["url"], "GET", "/api/v1/settings", API_KEY)
+        request_document(source["url"], "PATCH", "/api/v1/settings", API_KEY,
+                         settings_patch(source_settings, set_values={"transfers": {
+                             "uploadLimitBytesPerSecond": 64 * 1024}}))
         created = request_json(leecher_base_url, "POST", "/api/v1/downloads", API_KEY,
                                {"source": {"type": "ed2k-link", "link": ed2k_link_with_source(
                                    detail["ed2kLink"], p2p_ip, source["port"])}, "intent": "stopped"},
@@ -650,14 +659,16 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         jobs[job_id] = (file_hash, payload)
     if len(jobs) != PARALLEL_DOWNLOAD_COUNT or len(hashes) != PARALLEL_DOWNLOAD_COUNT:
         raise RuntimeError("Parallel admission did not produce distinct jobs and hashes")
+    samplers = {f"seeder-{index:02d}": ProcessSampler(source["process"], 0.5)
+                for index, source in enumerate(sources)}
+    samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
+    for sampler in samplers.values():
+        sampler.maybe_sample(force=True)
     started = request_document(leecher_base_url, "POST", "/api/v1/downloads/start", API_KEY,
                                {"ids": list(jobs)}, expected_statuses=(207,))["data"]
     if ([item.get("id") for item in started] != list(jobs)
             or any(item.get("status") != "accepted" or item.get("httpStatus") != 202 for item in started)):
         raise RuntimeError("Parallel download batch did not accept every stopped job")
-    samplers = {f"seeder-{index:02d}": ProcessSampler(source["process"], 0.5)
-                for index, source in enumerate(sources)}
-    samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
     peaks: dict[str, int] = {}
     samples = 0
 
@@ -674,8 +685,8 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         return all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs)
 
     wait_for(completed, timeout_seconds=120.0, interval_seconds=0.5, description="parallel package transfers")
-    if peaks.get("active", 0) < 2 or peaks.get("residentBytes", 0) == 0:
-        raise RuntimeError("Parallel proof did not observe concurrent charged download owners")
+    if peaks.get("chargedActive", 0) < 2:
+        raise RuntimeError(f"Parallel proof did not observe concurrent charged download owners: samples={samples}, peaks={peaks}")
     deliveries = [_wait_for_download_delivery(leecher_base_url, job_id, file_hash,
                     incoming=incoming, expected_size=int(payload["sizeBytes"]), expected_sha256=str(payload["sha256"]))
                   for job_id, (file_hash, payload) in jobs.items()]
