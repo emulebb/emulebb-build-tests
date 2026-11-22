@@ -43,7 +43,7 @@ from emule_test_harness.diag_event_runs import select_latest_diag_run
 from emule_test_harness import hideme_split_tunnel
 from emule_test_harness import mfc_known_met, rust_native_fingerprint
 from emule_test_harness import soak_launch
-from emule_test_harness.rust_rest_contract import iter_library_roots, settings_patch
+from emule_test_harness.rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots, settings_patch
 from emule_test_harness.vm_guest_profiles import http_json
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
@@ -2930,11 +2930,11 @@ def summarize_shared_directories(
     include_fingerprints: bool = False,
     sample_limit: int = 20,
     timeout_seconds: float = 120.0,
-    shared_files_pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Returns sanitized shared-directory and shared-file totals for one client."""
 
-    if shared_files_pagination == "cursor":
+    if client == "rust":
         root_rows = list(iter_library_roots(lambda path: request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds)))
         item_rows = []
         directories = request_json(base_url, "/library/scan", api_key=api_key, timeout_seconds=timeout_seconds)
@@ -2943,7 +2943,7 @@ def summarize_shared_directories(
         root_rows, item_rows = directories.get("roots"), directories.get("items")
     files = request_json(
         base_url,
-        shared_file_page_path(page_size=1, pagination=shared_files_pagination),
+        "/library/files?view=shared&limit=1&countTotal=true" if client == "rust" else mfc_shared_file_page_path(page_size=1),
         api_key=api_key,
         timeout_seconds=timeout_seconds,
     )
@@ -2966,7 +2966,7 @@ def summarize_shared_directories(
         if isinstance(directories.get("reload"), dict)
         else {}
     )
-    total = files.get("total")
+    total = files["meta"]["total"] if client == "rust" else files.get("total")
     root_set = set(root_fingerprints)
     item_set = set(item_fingerprints)
     return {
@@ -3261,8 +3261,8 @@ def shared_file_hash_fingerprint(file_hash: str) -> str:
     return hashlib.sha256(file_hash.encode("ascii", errors="ignore")).hexdigest()[:16]
 
 
-def shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, object]], int | None]:
-    """Extracts one shared-files page from either envelope shape."""
+def mfc_shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, object]], int | None]:
+    """Extracts one MFC shared-files page."""
 
     items = payload.get("items")
     if not isinstance(items, list):
@@ -3271,74 +3271,57 @@ def shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, o
     return [item for item in items if isinstance(item, dict)], total
 
 
-def shared_file_page_path(*, page_size: int, pagination: str, offset: int = 0, cursor: str | None = None) -> str:
-    """Builds one client-specific shared-files page path."""
-
-    if pagination == "cursor":
-        cursor_query = "" if cursor is None else f"&cursor={quote(cursor, safe='')}"
-        return f"/shared-files?limit={page_size}{cursor_query}"
-    if pagination == "offset":
-        return f"/shared-files?offset={offset}&limit={page_size}"
-    raise ValueError(f"unsupported shared-files pagination mode: {pagination}")
+def mfc_shared_file_page_path(*, page_size: int, offset: int = 0) -> str:
+    """Build one page of the MFC native catalog."""
+    return f"/shared-files?offset={offset}&limit={page_size}"
 
 
-def iter_shared_file_pages(
-    base_url: str,
-    api_key: str,
-    *,
-    page_size: int,
-    timeout_seconds: float,
-    sleep_seconds: float,
-    pagination: str,
-):
-    """Yields complete shared-file pages using one explicit client contract."""
-
-    offset = 0
-    cursor: str | None = None
-    seen_cursors: set[str] = set()
-    observed_rows = 0
-    expected_total: int | None = None
+def iter_mfc_shared_file_pages(base_url, api_key, *, page_size, timeout_seconds, sleep_seconds):
+    """Traverse the MFC offset collection with exact total accounting."""
+    offset, expected_total = 0, None
     while True:
-        payload = request_json(
-            base_url,
-            shared_file_page_path(
-                page_size=page_size,
-                pagination=pagination,
-                offset=offset,
-                cursor=cursor,
-            ),
-            api_key=api_key,
-            timeout_seconds=timeout_seconds,
-        )
-        page, page_total = shared_file_page_items(payload)
-        if expected_total is None:
-            expected_total = page_total
-        elif page_total != expected_total:
-            raise RuntimeError("shared-files total changed during paging")
-        observed_rows += len(page)
+        payload = request_json(base_url, mfc_shared_file_page_path(page_size=page_size, offset=offset),
+                               api_key=api_key, timeout_seconds=timeout_seconds)
+        page, total = mfc_shared_file_page_items(payload)
+        if expected_total is not None and total != expected_total:
+            raise RuntimeError("MFC shared-files total changed during paging")
+        expected_total = total
+        offset += len(page)
         yield page, expected_total
-        if pagination == "cursor":
-            next_cursor = payload.get("nextCursor")
-            if next_cursor is None:
-                if expected_total is not None and observed_rows != expected_total:
-                    raise RuntimeError("shared-files cursor ended before the reported total")
-                break
-            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
-                raise RuntimeError("shared-files response contained an invalid nextCursor")
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-        else:
-            if not page:
-                if expected_total is not None and observed_rows != expected_total:
-                    raise RuntimeError("shared-files offset paging ended before the reported total")
-                break
-            offset += len(page)
-            if expected_total is not None and observed_rows >= expected_total:
-                if observed_rows != expected_total:
-                    raise RuntimeError("shared-files offset paging exceeded the reported total")
-                break
+        if not page or expected_total is not None and offset >= expected_total:
+            if expected_total is not None and offset != expected_total:
+                raise RuntimeError("MFC shared-files paging disagrees with its total")
+            return
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
+
+
+def iter_rust_library_files(base_url, api_key, *, page_size, timeout_seconds, sleep_seconds):
+    """Stream canonical hash rows through the existing bounded request owner."""
+    def fetch(path):
+        page = request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+        return page
+    yield from iter_library_files(fetch, view="shared", limit=page_size)
+
+
+def iter_shared_copy_facts(base_url, api_key, *, page_size, timeout_seconds, sleep_seconds, client):
+    """Yield comparison facts directly from each client's native resources."""
+    options = dict(page_size=page_size, timeout_seconds=timeout_seconds, sleep_seconds=sleep_seconds)
+    if client == "rust":
+        for file in iter_rust_library_files(base_url, api_key, **options):
+            locations = iter_library_locations(
+                lambda path: request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds),
+                file["hash"],
+            )
+            for location in locations:
+                if location["present"]:
+                    yield file["hash"], normalize_private_path(location["path"])
+    else:
+        for page, _total in iter_mfc_shared_file_pages(base_url, api_key, **options):
+            for row in page:
+                yield shared_file_row_hash(row), shared_file_row_path(row)
 
 
 def fetch_shared_file_hashes(
@@ -3348,23 +3331,19 @@ def fetch_shared_file_hashes(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Fetches all shared-file hashes without retaining names or paths."""
 
     hashes: list[str] = []
     total: int | None = None
-    for page, total in iter_shared_file_pages(
-        base_url,
-        api_key,
-        page_size=page_size,
-        timeout_seconds=timeout_seconds,
-        sleep_seconds=sleep_seconds,
-        pagination=pagination,
-    ):
-        page_hashes = [shared_file_row_hash(row) for row in page]
-        page_hashes = [file_hash for file_hash in page_hashes if file_hash]
-        hashes.extend(page_hashes)
+    options = dict(page_size=page_size, timeout_seconds=timeout_seconds, sleep_seconds=sleep_seconds)
+    if client == "rust":
+        hashes.extend(row["hash"] for row in iter_rust_library_files(base_url, api_key, **options))
+        total = len(hashes)
+    else:
+        for page, total in iter_mfc_shared_file_pages(base_url, api_key, **options):
+            hashes.extend(value for row in page if (value := shared_file_row_hash(row)))
     counts = Counter(hashes)
     duplicate_hashes = sorted(file_hash for file_hash, count in counts.items() if count > 1)
     return {
@@ -3397,34 +3376,26 @@ def fetch_shared_file_catalog(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Fetches all shared-file rows as path fingerprints and hashes only."""
 
     by_path: dict[str, str] = {}
     path_duplicates = 0
     row_count = 0
-    total: int | None = None
-    for page, total in iter_shared_file_pages(
-        base_url,
-        api_key,
-        page_size=page_size,
-        timeout_seconds=timeout_seconds,
-        sleep_seconds=sleep_seconds,
-        pagination=pagination,
+    for file_hash, path in iter_shared_copy_facts(
+        base_url, api_key, page_size=page_size, timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds, client=client,
     ):
-        for row in page:
-            file_hash = shared_file_row_hash(row)
-            path = shared_file_row_path(row)
-            if not file_hash or not path:
-                continue
-            path_fingerprint = private_path_fingerprint(path)
-            if path_fingerprint in by_path:
-                path_duplicates += 1
-            by_path[path_fingerprint] = file_hash
-        row_count += len(page)
+        row_count += 1
+        if not file_hash or not path:
+            continue
+        path_fingerprint = private_path_fingerprint(path)
+        if path_fingerprint in by_path:
+            path_duplicates += 1
+        by_path[path_fingerprint] = file_hash
     return {
-        "total": total,
+        "total": row_count,
         "rowCount": row_count,
         "pathCount": len(by_path),
         "duplicatePathCount": path_duplicates,
@@ -3511,11 +3482,11 @@ def fetch_shared_file_catalog_by_root(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Fetches shared-file catalog counts grouped by sanitized shared root."""
 
-    if pagination == "cursor":
+    if client == "rust":
         rows = list(iter_library_roots(lambda path: request_json(base_url, path, api_key=api_key)))
     else:
         model = request_json(base_url, "/shared-directories", api_key=api_key)
@@ -3524,40 +3495,32 @@ def fetch_shared_file_catalog_by_root(
     groups: dict[str, dict[str, object]] = {}
     unmatched_prefix_groups: dict[int, dict[str, dict[str, object]]] = {}
     row_count = 0
-    total: int | None = None
-    for page, total in iter_shared_file_pages(
-        base_url,
-        api_key,
-        page_size=page_size,
-        timeout_seconds=timeout_seconds,
-        sleep_seconds=sleep_seconds,
-        pagination=pagination,
+    for file_hash, path in iter_shared_copy_facts(
+        base_url, api_key, page_size=page_size, timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds, client=client,
     ):
-        for row in page:
-            file_hash = shared_file_row_hash(row)
-            path = shared_file_row_path(row)
-            if not file_hash or not path:
-                continue
-            root = shared_root_for_path(path, roots)
-            if root == "unmatched":
-                add_unmatched_prefix_groups(unmatched_prefix_groups, path, file_hash)
-            group = groups.setdefault(
-                root,
-                {
-                    "rootFingerprint": root,
-                    "rowCount": 0,
-                    "pathFingerprints": set(),
-                    "hashes": set(),
-                },
-            )
-            group["rowCount"] = int(group["rowCount"]) + 1
-            path_fingerprints = group["pathFingerprints"]
-            hashes = group["hashes"]
-            assert isinstance(path_fingerprints, set)
-            assert isinstance(hashes, set)
-            path_fingerprints.add(private_path_fingerprint(path))
-            hashes.add(file_hash)
-        row_count += len(page)
+        row_count += 1
+        if not file_hash or not path:
+            continue
+        root = shared_root_for_path(path, roots)
+        if root == "unmatched":
+            add_unmatched_prefix_groups(unmatched_prefix_groups, path, file_hash)
+        group = groups.setdefault(
+            root,
+            {
+                "rootFingerprint": root,
+                "rowCount": 0,
+                "pathFingerprints": set(),
+                "hashes": set(),
+            },
+        )
+        group["rowCount"] = int(group["rowCount"]) + 1
+        path_fingerprints = group["pathFingerprints"]
+        hashes = group["hashes"]
+        assert isinstance(path_fingerprints, set)
+        assert isinstance(hashes, set)
+        path_fingerprints.add(private_path_fingerprint(path))
+        hashes.add(file_hash)
     compact_groups = []
     for group in groups.values():
         path_fingerprints = group["pathFingerprints"]
@@ -3574,7 +3537,7 @@ def fetch_shared_file_catalog_by_root(
         )
     compact_groups.sort(key=lambda group: (-int(group["rowCount"]), str(group["rootFingerprint"])))
     return {
-        "total": total,
+        "total": row_count,
         "rowCount": row_count,
         "rootCount": len(roots),
         "groupCount": len(compact_groups),
@@ -3583,25 +3546,23 @@ def fetch_shared_file_catalog_by_root(
     }
 
 
-def fetch_shared_file_rows(
+def fetch_mfc_shared_file_rows(
     base_url: str,
     api_key: str,
     *,
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str,
 ) -> list[dict[str, object]]:
     """Fetches all shared-file rows from one REST endpoint."""
 
     rows: list[dict[str, object]] = []
-    for page, _total in iter_shared_file_pages(
+    for page, _total in iter_mfc_shared_file_pages(
         base_url,
         api_key,
         page_size=page_size,
         timeout_seconds=timeout_seconds,
         sleep_seconds=sleep_seconds,
-        pagination=pagination,
     ):
         rows.extend(row for row in page if isinstance(row, dict))
     return rows
@@ -3770,7 +3731,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
                 include_fingerprints=True,
                 sample_limit=args.fingerprint_sample_limit,
                 timeout_seconds=args.shared_file_timeout_seconds,
-                shared_files_pagination="offset",
+                client="mfc",
             )
         except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
             mfc = unavailable_shared_endpoint_summary("mfc", exc)
@@ -3797,7 +3758,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
-            pagination="offset",
+            client="mfc",
         )
         result["sharedFileHashes"] = {
             "rust": compact_shared_hash_summary(rust_hashes),
@@ -3822,7 +3783,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
-            pagination="offset",
+            client="mfc",
         )
         result["sharedFilePaths"] = {
             "rust": compact_shared_catalog_summary(rust_catalog),
@@ -3847,7 +3808,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
-            pagination="offset",
+            client="mfc",
         )
         result["sharedFileRootGroups"] = {
             "rust": rust_root_catalog
@@ -4192,13 +4153,12 @@ def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, ob
             known_met_source = "soak-output"
     if known_met is None or not known_met.is_file():
         raise RuntimeError("MFC known.met could not be resolved")
-    rows = fetch_shared_file_rows(
+    rows = fetch_mfc_shared_file_rows(
         args.mfc_base_url,
         args.mfc_api_key,
         page_size=args.shared_file_page_size,
         timeout_seconds=args.shared_file_timeout_seconds,
         sleep_seconds=args.shared_file_sleep_seconds,
-        pagination="offset",
     )
     root_entries = mfc_rest_shared_root_entries(
         args.mfc_base_url,
@@ -4296,113 +4256,6 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
         "duplicateSourcePathCount": duplicate_source_paths,
         "duplicateSourcePathRows": duplicate_source_rows,
         "roots": roots,
-    }
-
-
-def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, object]:
-    """Sets one source-root subset to high priority and suppresses the rest from publish."""
-
-    if not args.metadata_db.is_file():
-        raise RuntimeError("--metadata-db does not exist")
-    high_prefix = normalized_root_prefix(args.high_root)
-    connection = sqlite3.connect(args.metadata_db)
-    try:
-        # WHY: cached paths survive root withdrawal; only current eligible
-        # memberships may satisfy the guard or receive a publishing priority.
-        rows = connection.execute(
-            """
-            SELECT verified_local_content.known_file_id,
-                   verified_local_content.upload_priority,
-                   verified_local_content.auto_upload_priority,
-                   local_paths.display_path
-            FROM verified_local_content
-            JOIN local_file_instances
-              ON local_file_instances.known_file_id = verified_local_content.known_file_id
-            JOIN local_paths ON local_paths.id = local_file_instances.path_id
-            WHERE EXISTS (
-                SELECT 1 FROM shared_file_memberships AS membership
-                JOIN shared_directory_roots AS root ON root.id = membership.root_id
-                WHERE membership.path_id = local_file_instances.path_id
-                  AND membership.removed_at_s IS NULL
-                  AND root.deleted_at_s IS NULL
-                  AND root.enabled = 1 AND root.accessible = 1 AND root.shareable = 1
-            )
-            ORDER BY verified_local_content.known_file_id
-            """
-        ).fetchall()
-        target_by_id: dict[int, str] = {}
-        current_by_id: dict[int, tuple[str, int]] = {}
-        source_rows = 0
-        high_source_rows = 0
-        suppressed_source_rows = 0
-        for known_file_id, upload_priority, auto_upload_priority, source_path in rows:
-            known_file_id = int(known_file_id)
-            current_by_id[known_file_id] = (str(upload_priority), int(auto_upload_priority or 0))
-            target_by_id.setdefault(known_file_id, "not-published")
-            source_rows += 1
-            source_is_high = normalized_windows_path_key(source_path).startswith(high_prefix)
-            if source_is_high:
-                high_source_rows += 1
-                target_by_id[known_file_id] = "high"
-            else:
-                suppressed_source_rows += 1
-                target_by_id.setdefault(known_file_id, "not-published")
-
-        high_ids = [known_file_id for known_file_id, priority in target_by_id.items() if priority == "high"]
-        suppressed_ids = [
-            known_file_id for known_file_id, priority in target_by_id.items() if priority == "not-published"
-        ]
-        unchanged = sum(
-            1
-            for known_file_id, target_priority in target_by_id.items()
-            if current_by_id[known_file_id] == (target_priority, 0)
-        )
-
-        if not high_ids and not args.allow_empty_high_root:
-            raise RuntimeError("--high-root matched no shared source rows; refusing to suppress the whole catalog")
-
-        if not args.dry_run:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                for known_file_id in high_ids:
-                    connection.execute(
-                        """
-                        UPDATE verified_local_content
-                        SET upload_priority = 'high',
-                            auto_upload_priority = 0
-                        WHERE known_file_id = ?
-                        """,
-                        (known_file_id,),
-                    )
-                for known_file_id in suppressed_ids:
-                    connection.execute(
-                        """
-                        UPDATE verified_local_content
-                        SET upload_priority = 'not-published',
-                            auto_upload_priority = 0
-                        WHERE known_file_id = ?
-                        """,
-                        (known_file_id,),
-                    )
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-    finally:
-        connection.close()
-
-    return {
-        "schema": "emulebb-build-tests.rust-shared-publish-priority-split.v1",
-        "metadataDb": str(args.metadata_db),
-        "highRootFingerprint": private_path_fingerprint(high_prefix),
-        "matchedSharedSourceRows": source_rows,
-        "highPrioritySourceRows": high_source_rows,
-        "notPublishedSourceRows": suppressed_source_rows,
-        "matchedSharedFiles": len(target_by_id),
-        "highPriorityFiles": len(high_ids),
-        "notPublishedFiles": len(suppressed_ids),
-        "changedFiles": len(target_by_id) - unchanged,
-        "dryRun": args.dry_run,
     }
 
 
@@ -6850,7 +6703,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include every sanitized per-root group when comparing shared-file roots.",
     )
-    shared_summary_parser.add_argument("--shared-file-page-size", type=int, default=1000)
+    shared_summary_parser.add_argument("--shared-file-page-size", type=int, default=200)
     shared_summary_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
     shared_summary_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
     shared_summary_parser.set_defaults(func=shared_summary)
@@ -6979,16 +6832,6 @@ def build_parser() -> argparse.ArgumentParser:
     metadata_summary_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
     metadata_summary_parser.add_argument("--root", action="append", type=Path, default=[])
     metadata_summary_parser.set_defaults(func=metadata_source_summary)
-
-    priority_split_parser = sub.add_parser(
-        "set-shared-publish-priority-split",
-        help="Set one source-root subset high and all other shared files not-published.",
-    )
-    priority_split_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
-    priority_split_parser.add_argument("--high-root", type=Path, required=True)
-    priority_split_parser.add_argument("--allow-empty-high-root", action="store_true")
-    priority_split_parser.add_argument("--dry-run", action="store_true")
-    priority_split_parser.set_defaults(func=set_shared_publish_priority_split)
 
     metadata_stat_parser = sub.add_parser(
         "metadata-source-stat-sample",

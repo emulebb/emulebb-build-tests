@@ -5,6 +5,12 @@ import pytest
 from emule_test_harness.rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots
 
 
+@pytest.mark.parametrize("limit", [0, 201, True, "1"])
+def test_library_page_limit_is_bounded_before_request(limit):
+    with pytest.raises(ValueError, match="between 1 and 200"):
+        list(iter_library_files(lambda _path: pytest.fail("invalid page limit reached HTTP"), limit=limit))
+
+
 def test_library_pages_keep_filters_and_continue_without_total_cap():
     calls = []
     def fetch(path):

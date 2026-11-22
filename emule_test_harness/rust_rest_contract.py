@@ -108,9 +108,11 @@ def iter_downloads(fetch_page: Callable[[str], dict[str, Any]], *,
 def iter_library_files(fetch_page: Callable[[str], dict[str, Any]], *,
                        view: Literal["present", "shared", "unavailable", "allKnown"] = "present",
                        search: str | None = None, root_id: str | None = None,
-                       count_total: bool = False) -> Iterator[dict[str, Any]]:
+                       count_total: bool = False, limit: int = 200) -> Iterator[dict[str, Any]]:
     """Stream thin canonical library rows without a total-result cap."""
-    query: dict[str, Any] = {"view": view, "limit": 200}
+    if type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError("library file page limit must be between 1 and 200")
+    query: dict[str, Any] = {"view": view, "limit": limit}
     if search is not None:
         query["q"] = search
     if root_id is not None:

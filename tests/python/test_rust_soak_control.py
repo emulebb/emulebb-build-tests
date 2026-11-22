@@ -217,14 +217,14 @@ def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -
                     "reusedCount": 10,
                 },
             }
-        return {"items": [], "total": 42}
+        return {"data": [], "meta": {"total": 42, "hasMore": False, "nextCursor": None}}
 
     monkeypatch.setattr(control, "request_json", fake_request_json)
     summary = control.summarize_shared_directories("http://192.0.2.10:4731/api/v1", "rust", "rust")
 
     assert summary["hashingCount"] == 4
     assert summary["sharedFilesTotal"] == 42
-    assert calls == ["/library/roots?limit=100", "/library/scan", "/shared-files?limit=1"]
+    assert calls == ["/library/roots?limit=100", "/library/scan", "/library/files?view=shared&limit=1&countTotal=true"]
     assert summary["reload"] == {
         "phase": "hashing",
         "running": True,
@@ -240,37 +240,26 @@ def test_summarize_shared_directories_reads_reload_progress_shape(monkeypatch) -
     }
 
 
-def test_iter_shared_file_pages_uses_rust_keyset_cursor(monkeypatch) -> None:
+def test_iter_rust_library_files_uses_bounded_canonical_cursor(monkeypatch) -> None:
     control = _load_rust_soak_control()
-    calls: list[str] = []
-    cursor = '{"sortPath":"b","hash":"0123456789abcdef0123456789abcdef"}'
-
-    def fake_request_json(_base_url: str, path: str, **_kwargs) -> dict[str, object]:
+    calls = []
+    cursor = "opaque +/ cursor"
+    def fake_request_json(_base_url, path, **kwargs):
         calls.append(path)
-        if len(calls) == 1:
-            return {"items": [{"hash": "a" * 32}], "total": 2, "nextCursor": cursor}
-        return {"items": [{"hash": "b" * 32}], "total": 2, "nextCursor": None}
-
+        assert kwargs["timeout_seconds"] == 1.0
+        first = len(calls) == 1
+        return {"data": [{"hash": ("a" if first else "b") * 32, "displayName": "Sample.bin"}],
+                "meta": {"hasMore": first, "nextCursor": cursor if first else None}}
     monkeypatch.setattr(control, "request_json", fake_request_json)
-    pages = list(
-        control.iter_shared_file_pages(
-            "http://127.0.0.1:4731/api/v1",
-            "rust",
-            page_size=1,
-            timeout_seconds=1.0,
-            sleep_seconds=0.0,
-            pagination="cursor",
-        )
-    )
-
-    assert [len(page) for page, _total in pages] == [1, 1]
-    assert calls == [
-        "/shared-files?limit=1",
-        f"/shared-files?limit=1&cursor={control.quote(cursor, safe='')}",
-    ]
+    rows = list(control.iter_rust_library_files(
+        "http://127.0.0.1:4731/api/v1", "rust", page_size=1, timeout_seconds=1.0, sleep_seconds=0.0,
+    ))
+    assert [row["hash"] for row in rows] == ["a" * 32, "b" * 32]
+    assert calls == ["/library/files?view=shared&limit=1",
+                     "/library/files?view=shared&limit=1&cursor=opaque+%2B%2F+cursor"]
 
 
-def test_iter_shared_file_pages_uses_mfc_offsets(monkeypatch) -> None:
+def test_iter_mfc_shared_file_pages_uses_offsets(monkeypatch) -> None:
     control = _load_rust_soak_control()
     calls: list[str] = []
 
@@ -282,13 +271,12 @@ def test_iter_shared_file_pages_uses_mfc_offsets(monkeypatch) -> None:
 
     monkeypatch.setattr(control, "request_json", fake_request_json)
     pages = list(
-        control.iter_shared_file_pages(
+        control.iter_mfc_shared_file_pages(
             "http://127.0.0.1:4732/api/v1",
             "mfc",
             page_size=1,
             timeout_seconds=1.0,
             sleep_seconds=0.0,
-            pagination="offset",
         )
     )
 
@@ -297,6 +285,53 @@ def test_iter_shared_file_pages_uses_mfc_offsets(monkeypatch) -> None:
         "/shared-files?offset=0&limit=1",
         "/shared-files?offset=1&limit=1",
     ]
+
+
+def test_rust_catalog_compares_all_cached_copies_without_flat_file_projection(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    control = _load_rust_soak_control()
+    calls = []
+    first_hash, second_hash = "a" * 32, "b" * 32
+    paths = [r"C:\Share\One.bin", r"C:\Share\Copy.bin", r"D:\Share\Two.bin"]
+    def read(_base, path, **kwargs):
+        calls.append(path)
+        route, query = urlsplit(path).path, parse_qs(urlsplit(path).query)
+        meta = {"hasMore": False, "nextCursor": None}
+        if route == "/library/roots":
+            return {"data": [{"id": "1", "path": r"C:\Share"}, {"id": "2", "path": r"D:\Share"}], "meta": meta}
+        if route == "/library/files":
+            assert query == {"view": ["shared"], "limit": ["2"]}
+            return {"data": [{"hash": first_hash, "displayName": "One.bin"},
+                             {"hash": second_hash, "displayName": "Two.bin"}], "meta": meta}
+        assert query["limit"] == ["200"]
+        if route == f"/library/files/{first_hash}/locations":
+            if "cursor" not in query:
+                return {"data": [{"path": paths[0], "present": True}],
+                        "meta": {"hasMore": True, "nextCursor": "copy + cursor"}}
+            assert query["cursor"] == ["copy + cursor"]
+            return {"data": [{"path": paths[1], "present": True},
+                             {"path": r"E:\Withdrawn\One.bin", "present": False}], "meta": meta}
+        assert route == f"/library/files/{second_hash}/locations"
+        return {"data": [{"path": paths[2], "present": True}], "meta": meta}
+
+    monkeypatch.setattr(control, "request_json", read)
+    options = dict(page_size=2, timeout_seconds=1.0, sleep_seconds=0.0)
+    hashes = control.fetch_shared_file_hashes("http://rust.test/api/v1", "key", **options)
+    assert hashes["total"] == hashes["uniqueHashCount"] == 2
+    assert hashes["hashes"] == {first_hash, second_hash}
+    assert len(calls) == 1, "content comparison must not load copies"
+
+    catalog = control.fetch_shared_file_catalog("http://rust.test/api/v1", "key", **options)
+    assert catalog["total"] == catalog["rowCount"] == catalog["pathCount"] == 3
+    assert catalog["duplicatePathCount"] == 0
+    assert catalog["byPath"] == {control.private_path_fingerprint(path): file_hash
+                                 for path, file_hash in zip(paths, [first_hash, first_hash, second_hash])}
+    roots = control.fetch_shared_file_catalog_by_root("http://rust.test/api/v1", "key", **options)
+    assert roots["rootCount"] == roots["groupCount"] == 2
+    assert roots["total"] == roots["rowCount"] == 3
+    assert sorted((group["pathCount"], group["uniqueHashCount"]) for group in roots["groups"]) == [(1, 1), (2, 1)]
+    assert not any(group["rootFingerprint"] == "unmatched" for group in roots["groups"])
 
 
 def test_sanitize_status_reads_shared_directory_reload_progress() -> None:
@@ -1198,7 +1233,7 @@ def test_repair_rust_metadata_accepts_extra_shared_roots(tmp_path: Path, monkeyp
     known_met.write_bytes(b"\x00")
     captured = {}
 
-    monkeypatch.setattr(control, "fetch_shared_file_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(control, "fetch_mfc_shared_file_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr(control, "mfc_rest_shared_root_entries", lambda *args, **kwargs: [r"C:\Shared"])
 
     def fake_import(**kwargs):
@@ -3567,69 +3602,6 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
     assert result["watch"]["findings"] == ["watch-not-running", "watch-stale"]
 
 
-def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: Path) -> None:
-    control = _load_rust_soak_control()
-    metadata_db = tmp_path / "metadata.sqlite"
-    connection = sqlite3.connect(metadata_db)
-    try:
-        connection.execute(
-            """
-            CREATE TABLE verified_local_content (
-                known_file_id INTEGER PRIMARY KEY,
-                upload_priority TEXT,
-                auto_upload_priority INTEGER
-            )
-            """
-        )
-        connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
-        connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
-        connection.execute("CREATE TABLE shared_directory_roots(id INTEGER, enabled INTEGER, "
-                           "accessible INTEGER, shareable INTEGER, deleted_at_s INTEGER)")
-        connection.execute("INSERT INTO shared_directory_roots VALUES(1, 1, 1, 1, NULL)")
-        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_s INTEGER)")
-        rows = [
-            (1, "F:/share/keep/a.bin"),
-            (2, "F:/share/keep/nested/b.bin"),
-            (3, "F:/share/other/c.bin"),
-        ]
-        for known_file_id, path in rows:
-            connection.execute(
-                "INSERT INTO verified_local_content VALUES (?, 'normal', 1)",
-                (known_file_id,),
-            )
-            connection.execute("INSERT INTO local_paths VALUES (?, ?)", (known_file_id, path))
-            connection.execute("INSERT INTO local_file_instances VALUES (?, ?)", (known_file_id, known_file_id))
-        connection.execute("INSERT INTO local_paths VALUES (4, 'F:/share/other/duplicate-b.bin')")
-        connection.execute("INSERT INTO local_file_instances VALUES (2, 4)")
-        connection.execute("INSERT INTO verified_local_content VALUES (5, 'normal', 1)")
-        connection.execute("INSERT INTO shared_file_memberships SELECT id, 1, NULL FROM local_paths")
-        connection.commit()
-    finally:
-        connection.close()
-
-    result = control.set_shared_publish_priority_split(
-        SimpleNamespace(
-            metadata_db=metadata_db,
-            high_root=Path("F:/share/keep"),
-            allow_empty_high_root=False,
-            dry_run=False,
-        )
-    )
-
-    assert result["highPrioritySourceRows"] == 2
-    assert result["notPublishedSourceRows"] == 2
-    assert result["matchedSharedFiles"] == 3
-    assert result["highPriorityFiles"] == 2
-    assert result["notPublishedFiles"] == 1
-    assert result["changedFiles"] == 3
-    assert "F:/share/keep" not in json.dumps(result)
-    with sqlite3.connect(metadata_db) as conn:
-        priorities = dict(conn.execute("SELECT known_file_id, upload_priority FROM verified_local_content").fetchall())
-        auto = dict(conn.execute("SELECT known_file_id, auto_upload_priority FROM verified_local_content").fetchall())
-    assert priorities == {1: "high", 2: "high", 3: "not-published", 5: "normal"}
-    assert auto == {1: 0, 2: 0, 3: 0, 5: 1}
-
-
 def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) -> None:
     from emule_test_harness import rust_native_fingerprint as native
 
@@ -3666,49 +3638,6 @@ def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) ->
     assert sample["mismatchSamples"] == []
     assert sample["newestSamples"][0]["updatedAt"] == 123
     assert sample["counters"]["updatedSince"] == 1
-
-
-def test_set_shared_publish_priority_split_refuses_empty_high_root(tmp_path: Path) -> None:
-    control = _load_rust_soak_control()
-    metadata_db = tmp_path / "metadata.sqlite"
-    connection = sqlite3.connect(metadata_db)
-    try:
-        connection.execute(
-            """
-            CREATE TABLE verified_local_content (
-                known_file_id INTEGER PRIMARY KEY,
-                upload_priority TEXT,
-                auto_upload_priority INTEGER
-            )
-            """
-        )
-        connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
-        connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
-        connection.execute("CREATE TABLE shared_directory_roots(id INTEGER, enabled INTEGER, "
-                           "accessible INTEGER, shareable INTEGER, deleted_at_s INTEGER)")
-        connection.execute("INSERT INTO shared_directory_roots VALUES(1, 1, 1, 1, NULL)")
-        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_s INTEGER)")
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 'normal', 0)")
-        connection.execute("INSERT INTO local_paths VALUES (1, 'F:/share/other/c.bin')")
-        connection.execute("INSERT INTO local_file_instances VALUES (1, 1)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES(1, 1, NULL)")
-        connection.execute("INSERT INTO verified_local_content VALUES(2, 'normal', 0)")
-        connection.execute("INSERT INTO local_paths VALUES(2, 'F:/share/keep/removed.bin')")
-        connection.execute("INSERT INTO local_file_instances VALUES(2, 2)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES(2, 1, 123)")
-        connection.commit()
-    finally:
-        connection.close()
-
-    with pytest.raises(RuntimeError, match="matched no shared source rows"):
-        control.set_shared_publish_priority_split(
-            SimpleNamespace(
-                metadata_db=metadata_db,
-                high_root=Path("F:/share/keep"),
-                allow_empty_high_root=False,
-                dry_run=False,
-            )
-        )
 
 
 def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, monkeypatch) -> None:
