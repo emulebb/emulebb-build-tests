@@ -79,6 +79,22 @@ def selected_rust_openapi():
     return path, load_openapi_document(path)
 
 
+def test_remote_note_observation_fields_preserve_text_and_claimed_identity(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "SearchObservation")
+    assert {"publisherId", "comment"} <= set(schema["required"])
+    for field, valid, invalid in (
+        ("publisherId", (None, "53" * 16), ("ab" * 15, "AB" * 16, "ab" * 16 + "\n", 1)),
+        ("comment", (None, "", "Exact remote note"), (1, False, [])),
+    ):
+        property_schema = schema["properties"][field]
+        for value in valid:
+            validate_openapi_schema(document, property_schema, value)
+        for value in invalid:
+            with pytest.raises(jsonschema.ValidationError):
+                validate_openapi_schema(document, property_schema, value)
+
+
 def test_diagnostic_bundle_producer_and_webui_match_the_published_schema(selected_rust_openapi):
     _, document = selected_rust_openapi
     schema = openapi_schema_component(document, "DiagnosticBundle")
