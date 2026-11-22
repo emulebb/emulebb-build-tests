@@ -38,6 +38,7 @@ def test_library_read_qualification_checks_late_pages_and_literal_filters(fault)
         selected = rows if query["order"] == ["asc"] else rows[::-1]
         search = query.get("q", [None])[0]
         if search:
+            assert len(search.strip()) >= 3, "query must meet the public substring minimum"
             selected = [row for row in selected if search.lower() in row["displayName"].lower()]
         if fault == "missing":
             selected = selected[:-1]

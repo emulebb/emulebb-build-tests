@@ -30,6 +30,15 @@ def test_library_pages_keep_filters_and_continue_without_total_cap():
         assert query["sort"] == ["sizeBytes"] and query["order"] == ["desc"]
 
 
+def test_library_pages_preserve_descending_order_with_the_default_sort():
+    paths = []
+    def fetch(path):
+        paths.append(path)
+        return {"data": [], "meta": {"hasMore": False, "nextCursor": None}}
+    assert list(iter_library_files(fetch, order="desc")) == []
+    assert parse_qs(urlsplit(paths[0]).query)["order"] == ["desc"]
+
+
 def test_library_locations_use_separate_cached_pages():
     paths = []
     def fetch(path):

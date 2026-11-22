@@ -68,7 +68,7 @@ LIBRARY_FILE_SORTS = (
     "sessionAcceptedUploads", "lifetimeUploadedBytes", "lifetimeUploadRequests",
     "lifetimeAcceptedUploads", "lastUploadRequestedAt", "lastUploadedAt",
 )
-LIBRARY_SUBSTRING_PROBES = ("FiLe-000", "CASE-VARIANT", "[bracketed]", "_%", "CAF\u00c9")
+LIBRARY_SUBSTRING_PROBES = ("FiLe-000", "CASE-VARIANT", "[bracketed]", "a_%", "CAF\u00c9")
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024

@@ -115,7 +115,9 @@ def iter_library_files(fetch_page: Callable[[str], dict[str, Any]], *,
         raise ValueError("library file page limit must be between 1 and 200")
     query: dict[str, Any] = {"view": view, "limit": limit}
     if sort is not None:
-        query.update(sort=sort, order=order)
+        query["sort"] = sort
+    if sort is not None or order != "asc":
+        query["order"] = order
     if search is not None:
         query["q"] = search
     if root_id is not None:
