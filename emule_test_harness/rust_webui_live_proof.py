@@ -578,6 +578,26 @@ def _matched_shared_catalog(
     return sorted(matched, key=lambda row: str(row["relativePath"]))
 
 
+def _require_empty_ed2k_catalog(baseline: dict[str, Any]) -> None:
+    """Admit the disposable publication proof only before any catalog is present."""
+    counts = (baseline.get("totalEntries"), baseline.get("publishedEntries"))
+    if not all(type(value) is int and value == 0 for value in counts):
+        raise RuntimeError("consumer sharing proof requires an empty baseline eD2K catalog")
+
+
+def _ed2k_fixture_published(current: dict[str, Any], expected_count: int) -> bool:
+    """Prove a new fixture catalog after the caller established an empty baseline."""
+    success = current.get("lastSuccessAt")
+    return (type(expected_count) is int and expected_count > 0
+            and type(success) is int and success >= 0
+            and all(type(current.get(name)) is int for name in
+                    ("totalEntries", "publishedEntries", "pendingEntries"))
+            and current["totalEntries"] == expected_count
+            and current["publishedEntries"] == expected_count
+            and current["pendingEntries"] == 0
+            and "lastError" in current and current["lastError"] is None)
+
+
 def _sharing_publish_actions(
     page,
     *,
@@ -592,6 +612,7 @@ def _sharing_publish_actions(
     expected_count = len(options.shared_files)
     baseline_status = api_data(base_url, "status", api_key)
     baseline_ed2k, baseline_kad = _publish_diagnostics(baseline_status)
+    _require_empty_ed2k_catalog(baseline_ed2k)
 
     _click_primary_nav(page, "Sharing")
     sharing_panel = page.locator("section.panel").filter(
@@ -677,14 +698,7 @@ def _sharing_publish_actions(
     def published_fixture() -> dict[str, Any] | None:
         status = api_data(base_url, "status", api_key)
         ed2k, kad = _publish_diagnostics(status)
-        ed2k_ready = (
-            _integer_field(ed2k, "lastSuccessAtMs")
-            > _integer_field(baseline_ed2k, "lastSuccessAtMs")
-            and _integer_field(ed2k, "totalEntries") == expected_count
-            and _integer_field(ed2k, "publishedEntries") == expected_count
-            and _integer_field(ed2k, "pendingEntries") == 0
-            and not ed2k.get("lastError")
-        )
+        ed2k_ready = _ed2k_fixture_published(ed2k, expected_count)
         kad_ready = (
             kad.get("bootstrapped") is True
             and kad.get("gateAllowed") is True

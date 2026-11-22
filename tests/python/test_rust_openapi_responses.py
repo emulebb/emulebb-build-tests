@@ -28,6 +28,10 @@ def write(path: Path, text: str) -> Path:
     ("ProcessResources", "sampledAt", True),
     ("SharedFilePublishLane", "lastSuccessAt", True),
     ("SharedFileKadKeywordPublish", "lastSuccessAt", True),
+    ("Ed2kPublishDiagnostics", "lastAttemptAt", True),
+    ("Ed2kPublishDiagnostics", "lastSuccessAt", True),
+    ("Ed2kPublishDiagnostics", "updatedAt", True),
+    ("KadPublishDiagnostics", "updatedAt", True),
 ])
 @pytest.mark.parametrize("value", [None, 0, 1_800_000_000, -1, 1.5, True])
 def test_native_calendar_fields_use_nullable_or_required_integer_seconds(component, field, nullable, value):

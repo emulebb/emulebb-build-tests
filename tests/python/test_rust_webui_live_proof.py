@@ -805,3 +805,28 @@ def test_sanitize_report_text_applies_runtime_redactions() -> None:
     )
 
     assert text == "{redacted} {redacted} {hash} {path}"
+
+
+@pytest.mark.parametrize("counts", [{}, {"totalEntries": 1, "publishedEntries": 0},
+    {"totalEntries": 0, "publishedEntries": 1}, {"totalEntries": False, "publishedEntries": 0}])
+def test_sharing_publication_proof_requires_a_known_empty_baseline(counts):
+    with pytest.raises(RuntimeError, match="empty baseline"):
+        rust_webui_live_proof._require_empty_ed2k_catalog(counts)
+
+
+@pytest.mark.parametrize("success", [0, 1_800_000_000])
+def test_fresh_catalog_publication_is_proven_without_a_later_clock_tick(success):
+    baseline = {"totalEntries": 0, "publishedEntries": 0, "lastSuccessAt": success}
+    rust_webui_live_proof._require_empty_ed2k_catalog(baseline)
+    current = {"totalEntries": 3, "publishedEntries": 3, "pendingEntries": 0,
+               "lastError": None, "lastSuccessAt": success}
+    assert rust_webui_live_proof._ed2k_fixture_published(current, 3)
+
+
+@pytest.mark.parametrize("changes", [{"totalEntries": 4}, {"publishedEntries": 2},
+    {"pendingEntries": 1}, {"lastSuccessAt": None}, {"lastSuccessAt": True},
+    {"lastError": "synthetic failure"}])
+def test_catalog_publication_requires_complete_successful_fixture_outcomes(changes):
+    current = {"totalEntries": 3, "publishedEntries": 3, "pendingEntries": 0,
+               "lastError": None, "lastSuccessAt": 10, **changes}
+    assert not rust_webui_live_proof._ed2k_fixture_published(current, 3)
