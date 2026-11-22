@@ -664,11 +664,12 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
     for sampler in samplers.values():
         sampler.maybe_sample(force=True)
-    started = request_document(leecher_base_url, "POST", "/api/v1/downloads/start", API_KEY,
-                               {"ids": list(jobs)}, expected_statuses=(207,))["data"]
-    if ([item.get("id") for item in started] != list(jobs)
-            or any(item.get("status") != "accepted" or item.get("httpStatus") != 202 for item in started)):
-        raise RuntimeError("Parallel download batch did not accept every stopped job")
+    # WHY: this phase measures live payload ownership, not a control-plane burst.
+    # Release each bounded action's reply before the next start; every job must
+    # still be accepted once, without retries or relaxed resource checks.
+    for job_id in jobs:
+        if _download_action(leecher_base_url, "start", job_id) != "accepted":
+            raise RuntimeError(f"Parallel job {job_id} did not accept its first start")
     peaks: dict[str, int] = {}
     samples = 0
 
@@ -694,6 +695,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     if counts != {"unfinished": 0, "completed": baseline["completed"] + PARALLEL_DOWNLOAD_COUNT}:
         raise RuntimeError("Parallel jobs did not remain in completed history")
     return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
+            "controlRequests": len(jobs), "controlBatchSize": 1, "controlRetries": 0,
             "deliveries": deliveries, "resourceSamples": samples, "sampledPeaks": peaks,
             "processes": {name: sampler.summary() for name, sampler in samplers.items()},
             "snapshotCounts": counts, "qualificationScope": {"realPayload": True,
