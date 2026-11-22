@@ -595,7 +595,7 @@ def test_local_kad_exchange_requires_decoded_two_way_bootstrap(tmp_path: Path) -
 def test_cross_client_shared_root_uses_current_object_contract(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     calls = []
-    monkeypatch.setattr(module, "request_json", lambda *args, **kwargs: calls.append((args, kwargs)) or {})
+    monkeypatch.setattr(module, "request_json", lambda *args, **kwargs: calls.append((args, kwargs)) or {"id": "1"})
     monkeypatch.setattr(module, "wait_for_rust_shared_file", lambda *_args, **_kwargs: {"name": "fixture.bin"})
 
     module.publish_rust_shared_tree(
@@ -1066,7 +1066,7 @@ def test_cross_client_requirements_accept_unicode_and_manifest_metadata() -> Non
                 "rust_shared_tree_publish": {
                     "sharedFiles": {
                         "matched": {
-                            "name": shared_tree_name,
+                                "displayName": shared_tree_name,
                             "ed2kLink": "ed2k://|file|fixture.bin|1|00112233445566778899aabbccddeeff|/",
                         }
                     }
@@ -1102,7 +1102,7 @@ def test_cross_client_requirements_accept_single_part_empty_hashsets() -> None:
             "emulebb_fixture": {"name": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin"},
             "rust_shared_tree": {"name": shared_tree_name, "recursive": True},
             "checks": {
-                "rust_shared_tree_publish": {"sharedFiles": {"matched": {"name": shared_tree_name}}},
+                "rust_shared_tree_publish": {"sharedFiles": {"matched": {"displayName": shared_tree_name}}},
                 "rust_emulebb_manifest_metadata": {
                     "canonicalName": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin",
                     "sourceUserHashCount": 1,
@@ -1196,21 +1196,26 @@ def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monke
     module = load_suite_module()
     calls: list[tuple[str, str, object]] = []
 
-    def fake_request_json(_base_url, method, path, _api_key, body=None):
+    def fake_request_json(_base_url, method, path, _api_key, body=None, **kwargs):
         calls.append((method, path, body))
         if path == "/api/v1/library/roots":
                 return {"id": "1", **body}
         if path == "/api/v1/library/scan":
             return {"ok": True}
-        if path == "/api/v1/shared-files":
+        if path.startswith("/api/v1/library/files?"):
+            assert kwargs == {"include_meta": True}
             return {
-                "items": [
+                "data": [
                     {
-                        "name": "Nested.bin",
-                        "ed2kLink": "ed2k://|file|Nested.bin|1|00112233445566778899aabbccddeeff|/",
+                        "displayName": "Nested.bin",
+                        "hash": "00112233445566778899aabbccddeeff",
                     }
-                ]
+                ],
+                "meta": {"nextCursor": None, "hasMore": False},
             }
+        if path == "/api/v1/library/files/00112233445566778899aabbccddeeff":
+            return {"displayName": "Nested.bin", "hash": "00112233445566778899aabbccddeeff",
+                    "ed2kLink": "ed2k://|file|Nested.bin|1|00112233445566778899aabbccddeeff|/"}
         if path == "/api/v1/status":
             return {"stats": {"sharedHashingCount": 0}}
         raise AssertionError(path)
@@ -1231,9 +1236,10 @@ def test_publish_rust_shared_tree_configures_current_root_and_returns_link(monke
         {"path": str(tmp_path / "shared-tree"), "watchEnabled": False},
     )
     assert calls[1] == ("POST", "/api/v1/library/scan", None)
-    assert calls[2] == ("GET", "/api/v1/shared-files", None)
+    assert calls[2] == ("GET", "/api/v1/library/files?view=shared&limit=200&q=Nested.bin&rootId=1", None)
     assert calls[3] == ("GET", "/api/v1/status", None)
-    assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"
+    assert calls[4] == ("GET", "/api/v1/library/files/00112233445566778899aabbccddeeff", None)
+    assert result["sharedFiles"]["matched"]["displayName"] == "Nested.bin"
 
 
 def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tmp_path: Path) -> None:

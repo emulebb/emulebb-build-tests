@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import rust_client  # noqa: E402
-from emule_test_harness.rust_rest_contract import iter_library_roots, settings_patch
+from emule_test_harness.rust_rest_contract import iter_library_locations, iter_library_roots, settings_patch
 from emule_test_harness.build_provenance import require_clean_git_source  # noqa: E402
 from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
@@ -56,7 +56,7 @@ PANEL_ROUTES = {
     "downloads": "/api/v1/downloads",
     "search": "/api/v1/searches",
     "sharing": "/api/v1/library/scan",
-    "shared-files": "/api/v1/shared-files",
+    "library": "/api/v1/library/files",
     "uploads": "/api/v1/uploads",
     "network": "/api/v1/network",
     "servers": "/api/v1/servers",
@@ -352,7 +352,7 @@ def _wait_for_download_delivery(
 
     def probe() -> dict[str, object] | None:
         # Completion remains a durable job; its delivery path and the complete
-        # shared-file registration must agree on the actual delivered bytes.
+        # library location must agree on the actual delivered bytes.
         download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", API_KEY)
         delivery = download.get("delivery")
         if (download.get("id") != download_id or download.get("hash") != expected_hash):
@@ -363,28 +363,34 @@ def _wait_for_download_delivery(
                 or delivery.get("ownership") not in ("owned", "unowned")):
             return None
         try:
-            shared = request_json(base_url, "GET", f"/api/v1/shared-files/{expected_hash}", API_KEY)
+            library_file = request_json(base_url, "GET", f"/api/v1/library/files/{expected_hash}", API_KEY)
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 return None
             raise
+        delivered_value = delivery.get("path")
+        if not isinstance(delivered_value, str) or not delivered_value:
+            return None
+        locations = iter_library_locations(
+            lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY), expected_hash
+        )
+        registered = any(
+            location["present"] and Path(location["path"]).resolve() == Path(delivered_value).resolve()
+            for location in locations
+        )
         observations.append(
             {
-                "complete": shared.get("complete"),
-                "sizeBytes": shared.get("sizeBytes"),
-                "deliveredPathPresent": bool(shared.get("path")),
+                "present": library_file.get("present"),
+                "sizeBytes": library_file.get("sizeBytes"),
+                "deliveredLocationPresent": registered,
             }
         )
-        delivered_value = delivery.get("path")
         if (
-            str(shared.get("hash") or "").lower() != expected_hash
-            or shared.get("complete") is not True
-            or shared.get("partFile") is not False
-            or int(shared.get("sizeBytes") or 0) != expected_size
-            or shared.get("path") != delivered_value
+            library_file.get("hash") != expected_hash
+            or library_file.get("present") is not True
+            or library_file.get("sizeBytes") != expected_size
+            or not registered
         ):
-            return None
-        if not delivered_value:
             return None
         delivered = Path(str(delivered_value))
         if not delivered.is_file():

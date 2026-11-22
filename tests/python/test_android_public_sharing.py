@@ -2,6 +2,7 @@
 import hashlib
 import json
 from types import SimpleNamespace
+from pathlib import Path
 import shlex
 from urllib.parse import parse_qs, urlsplit
 
@@ -175,21 +176,27 @@ def test_public_request_is_distinct_from_increasing_payload_and_local_peer():
         subject.public_upload_evidence({"items": [{**row, "requestedFileHash": "b" * 32}]}, catalog, previous)
 
 
-def test_catalog_paginates_and_rejects_foreign_rows():
-    value = receipt()
-    row = {"hash": "a" * 32, "path": value["destination"] + "/Sample Folder/Sample Audio.bin",
-           "sizeBytes": 4, "complete": True, "partFile": False}
-    pages = [{"items": [], "total": 1, "nextCursor": "opaque token"},
-             {"items": [row], "total": 1, "nextCursor": None}]
-    calls = []
+def catalog_phone(rows, locations):
     def request(method, path):
-        calls.append(path)
-        return pages.pop(0)
-    result, _ = subject.shared_catalog(SimpleNamespace(request=request), value)
-    assert result["status"] == "observed" and "cursor=opaque+token" in calls[1]
-    foreign = {"items": [{**row, "path": subject.INCOMING + "/Other.bin"}], "total": 1, "nextCursor": None}
+        assert method == "GET"
+        if urlsplit(path).path == "/library/files":
+            return {"data": rows, "meta": {"total": len(rows), "hasMore": False, "nextCursor": None}}
+        file_hash = urlsplit(path).path.split("/")[3]
+        return {"data": locations[file_hash], "meta": {"hasMore": False, "nextCursor": None}}
+    return SimpleNamespace(request=request)
+
+
+def test_catalog_reads_separate_locations_and_rejects_foreign_rows():
+    value = receipt()
+    row = {"hash": "a" * 32, "displayName": "Sample Audio.bin", "sizeBytes": 4}
+    path = value["destination"] + "/Sample Folder/Sample Audio.bin"
+    phone = catalog_phone([row], {row["hash"]: [{"path": path, "present": True}]})
+    result, rows = subject.shared_catalog(phone, value)
+    assert result["status"] == result["allFileInstancesIndexed"] == "observed"
+    assert result["catalogFileLocations"] == 1 and rows == [row]
+    foreign = catalog_phone([row], {row["hash"]: [{"path": subject.INCOMING + "/Other.bin", "present": True}]})
     with pytest.raises(RuntimeError):
-        subject.shared_catalog(SimpleNamespace(request=lambda *a: foreign), value)
+        subject.shared_catalog(foreign, value)
 
 
 def test_history_is_bounded_and_retains_only_one_predecessor(tmp_path):
@@ -543,7 +550,7 @@ def test_safe_failure_reason_matches_exact_runtime_literals_only():
     ("POST", "/servers/operations/connect", 60.0),
     ("PATCH", "/settings", 60.0),
     ("GET", "/settings", 10.0), ("GET", "/stats", 10.0), ("GET", "/nat", 10.0),
-    ("GET", "/shared-files?limit=200&cursor=opaque", 10.0),
+    ("GET", "/library/files?limit=200&cursor=opaque", 10.0),
 ])
 def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline(monkeypatch, method, path, timeout):
     phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
@@ -1121,26 +1128,28 @@ def test_os_lease_metadata_remains_on_same_file_after_release(tmp_path):
         assert path.stat().st_ino == before
 
 
-def test_content_catalog_collapses_duplicate_instances_without_claiming_all_paths_indexed():
+def test_content_catalog_checks_every_duplicate_location_and_distinct_content():
     value = receipt()
     original = value["inventory"]["files"][0]
     duplicate = {**original, "path": "Other Folder/Sample Audio Copy.bin"}
     distinct = {**original, "path": "Other Folder/Sample Text.bin", "sha256": hashlib.sha256(b"more").hexdigest()}
     value["inventory"]["files"] = [original, duplicate, distinct]
     value["fileCount"] = 3
-    rows = [{"hash": file_hash, "path": value["destination"] + "/" + item["path"], "sizeBytes": item["sizeBytes"],
-             "complete": True, "partFile": False} for file_hash, item in (("a" * 32, duplicate), ("b" * 32, distinct))]
-    phone = SimpleNamespace(request=lambda *a: {"items": rows, "total": 2, "nextCursor": None})
-    result, _ = subject.shared_catalog(phone, value)
-    assert result["status"] == "observed" and result["approvedFileInstances"] == 3
+    rows = [{"hash": file_hash, "displayName": Path(item["path"]).name, "sizeBytes": item["sizeBytes"]}
+            for file_hash, item in (("a" * 32, duplicate), ("b" * 32, distinct))]
+    def location(item):
+        return {"path": value["destination"] + "/" + item["path"], "present": True}
+    locations = {"a" * 32: [location(original), location(duplicate)], "b" * 32: [location(distinct)]}
+    result, _ = subject.shared_catalog(catalog_phone(rows, locations), value)
+    assert result["status"] == result["allFileInstancesIndexed"] == "observed"
+    assert result["approvedFileInstances"] == result["catalogFileLocations"] == 3
     assert result["expectedDistinctContents"] == result["matchedDistinctContents"] == 2
-    assert result["catalogRepresentativePaths"] == 2 and result["duplicateFileInstances"] == 1
-    assert result["allFileInstancesIndexed"] == "evidence-incomplete"
-    # Two incompatible content IDs for byte-identical approved copies are not
-    # proof of complete distinct-content coverage.
-    rows.append({**rows[0], "hash": "c" * 32, "path": value["destination"] + "/" + original["path"]})
-    ambiguous = SimpleNamespace(request=lambda *a: {"items": rows, "total": 3, "nextCursor": None})
-    assert subject.shared_catalog(ambiguous, value)[0]["status"] == "evidence-incomplete"
+    assert result["duplicateFileInstances"] == 1
+    locations["a" * 32] = [location(duplicate)]
+    assert subject.shared_catalog(catalog_phone(rows, locations), value)[0]["allFileInstancesIndexed"] == "not-observed"
+    rows.append({**rows[0], "hash": "c" * 32})
+    locations["c" * 32] = [location(original)]
+    assert subject.shared_catalog(catalog_phone(rows, locations), value)[0]["status"] == "evidence-incomplete"
 
 
 def test_content_catalog_reads_realistic_cursor_after_first_200_of_221_rows():
@@ -1149,22 +1158,28 @@ def test_content_catalog_reads_realistic_cursor_after_first_200_of_221_rows():
     value["inventory"]["files"] = [{"path": f"Sample Folder/Sample-{index:03d}.bin", "sizeBytes": index + 1,
                                      "sha256": hashlib.sha256(f"sample-{index}".encode()).hexdigest()}
                                     for index in range(221)]
-    rows = [{"path": value["destination"] + "/" + item["path"], "sizeBytes": item["sizeBytes"],
-             "hash": f"{index + 1:032x}", "complete": True, "partFile": False}
+    rows = [{"displayName": Path(item["path"]).name, "sizeBytes": item["sizeBytes"], "hash": f"{index + 1:032x}"}
             for index, item in enumerate(value["inventory"]["files"])]
-    cursor = json.dumps({"sortPath": rows[199]["path"], "hash": rows[199]["hash"]}, separators=(",", ":"))
+    locations = {row["hash"]: [{"path": value["destination"] + "/" + item["path"], "present": True}]
+                 for row, item in zip(rows, value["inventory"]["files"])}
+    cursor = "opaque library cursor +/"
     calls = []
     def request(method, path):
         query = parse_qs(urlsplit(path).query)
-        calls.append(query)
         assert query["limit"] == ["200"]
+        if urlsplit(path).path != "/library/files":
+            return {"data": locations[urlsplit(path).path.split("/")[3]],
+                    "meta": {"hasMore": False, "nextCursor": None}}
+        calls.append(query)
+        assert query["view"] == ["shared"] and query["countTotal"] == ["true"]
         if len(calls) == 1:
             assert "cursor" not in query
-            return {"items": rows[:200], "total": 221, "nextCursor": cursor}
+            return {"data": rows[:200], "meta": {"total": 221, "hasMore": True, "nextCursor": cursor}}
         assert query["cursor"] == [cursor]
-        return {"items": rows[200:], "total": 221, "nextCursor": None}
+        return {"data": rows[200:], "meta": {"total": 221, "hasMore": False, "nextCursor": None}}
     result, actual = subject.shared_catalog(SimpleNamespace(request=request), value)
-    assert result["status"] == "observed" and result["matchedDistinctContents"] == 221
+    assert result["status"] == result["allFileInstancesIndexed"] == "observed"
+    assert result["matchedDistinctContents"] == 221
     assert len(actual) == 221 and len(calls) == 2
 
 

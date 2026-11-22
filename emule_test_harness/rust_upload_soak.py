@@ -496,10 +496,10 @@ def wait_for_download_state(base_url: str, api_key: str, download_id: str, *,
                     description=f"download {download_id} state in {sorted(states)}")
 
 
-def find_shared_file(base_url: str, api_key: str, file_hash: str) -> dict[str, object] | None:
+def find_library_file(base_url: str, api_key: str, file_hash: str) -> dict[str, object] | None:
     """Read this fixture's exact library hash without scanning the catalog."""
     try:
-        return request_json(base_url, "GET", f"/api/v1/shared-files/{file_hash}", api_key)
+        return request_json(base_url, "GET", f"/api/v1/library/files/{file_hash}", api_key)
     except RustRestFailure as error:
         if error.status != 404:
             raise
@@ -883,7 +883,7 @@ def run(argv: list[str] | None = None) -> int:
                 seeder_status = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
                 leecher_download = download_detail(leecher_base, args.api_key, download_id, expected_hash=file_hash)
                 part_totals = _download_progress_totals(leecher_base, args.api_key, leecher_download)
-                leecher_share = find_shared_file(leecher_base, args.api_key, file_hash)
+                leecher_library_file = find_library_file(leecher_base, args.api_key, file_hash)
                 seeder_uploads = request_json(seeder_base, "GET", "/api/v1/uploads", args.api_key)
                 seeder_stats = seeder_status.get("stats", {}) if isinstance(seeder_status.get("stats"), dict) else {}
                 upload_items = seeder_uploads
@@ -903,7 +903,7 @@ def run(argv: list[str] | None = None) -> int:
                         "sizeBytes": leecher_download.get("sizeBytes"),
                         "progress": leecher_download.get("progress"),
                     },
-                    "leecherSharedFile": leecher_share,
+                    "leecherLibraryFile": leecher_library_file,
                     "seederUploads": seeder_uploads,
                     "seederKad": request_json(seeder_base, "GET", "/api/v1/kad", args.api_key) if kad_wsl else None,
                     "seederKadPublish": request_json(
@@ -935,7 +935,7 @@ def run(argv: list[str] | None = None) -> int:
         report["finalSeederStatus"] = request_json(seeder_base, "GET", "/api/v1/status", args.api_key)
         final_download = download_detail(leecher_base, args.api_key, download_id, expected_hash=file_hash)
         report["finalLeecherDownload"] = final_download
-        report["finalLeecherSharedFile"] = find_shared_file(leecher_base, args.api_key, file_hash)
+        report["finalLeecherLibraryFile"] = find_library_file(leecher_base, args.api_key, file_hash)
         verification_download = final_download
         delivery = final_download.get("delivery")
         if (kad_wsl and final_download.get("state") == "completed" and final_download.get("payloadVerified") is True

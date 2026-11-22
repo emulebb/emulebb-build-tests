@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 import re
 import subprocess
 import time
@@ -620,19 +621,12 @@ def wait_for_download_completed(
     )
 
 
-def require_shared_file_item(shared_files: dict[str, object], file_name: str) -> dict[str, object]:
-    """Returns one Rust shared-file row from a paged shared-files payload."""
-
-    items = shared_files.get("items")
-    if not isinstance(items, list):
-        raise RuntimeError("Rust shared-files response did not expose an items list.")
+def require_library_file(items: Iterable[dict[str, object]], file_name: str) -> dict[str, object]:
+    """Find the exact accepted label in current thin library rows."""
     for item in items:
-        if isinstance(item, dict) and item.get("name") == file_name:
-            link = str(item.get("ed2kLink") or "")
-            if not link.startswith("ed2k://|file|"):
-                raise RuntimeError(f"Rust shared-file row for {file_name} did not expose an ED2K link.")
+        if item.get("displayName") == file_name:
             return item
-    raise RuntimeError(f"Rust shared-files response did not include {file_name}.")
+    raise RuntimeError(f"Rust library response did not include {file_name}.")
 
 
 def publish_shared_tree(
@@ -658,22 +652,29 @@ def publish_shared_tree(
         "/api/v1/library/scan",
         api_key,
     )
-    observations: list[dict[str, object]] = []
+    from collections import deque
+    from .rust_rest_contract import iter_library_files
+    observations: deque[dict[str, object]] = deque(maxlen=20)
 
     def resolve_shared_file() -> tuple[dict[str, object], dict[str, object]] | None:
-        shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-        items = shared_files.get("items")
-        observations.append(
-            {
-                "count": len(items) if isinstance(items, list) else None,
-                "total": shared_files.get("total"),
-                "observedAt": round(time.time(), 3),
-            }
-        )
-        try:
-            return shared_files, require_shared_file_item(shared_files, file_name)
-        except RuntimeError:
-            return None
+        last_page: dict[str, object] = {}
+        def fetch(path: str) -> dict[str, object]:
+            nonlocal last_page
+            last_page = request_json(base_url, "GET", "/api/v1" + path, api_key)
+            rows, meta = last_page.get("data"), last_page.get("meta", {})
+            observations.append({"count": len(rows) if isinstance(rows,list) else None,
+                                 "total": meta.get("total"), "observedAt": round(time.time(),3)})
+            return last_page
+        rows = iter_library_files(fetch, view="shared", root_id=str(directories["id"]),
+                                  search=file_name if len(file_name)>=3 else None, count_total=True)
+        for row in rows:
+            if row["displayName"] != file_name:
+                continue
+            detail = request_json(base_url, "GET", f"/api/v1/library/files/{row['hash']}", api_key)
+            if not str(detail.get("ed2kLink") or "").startswith("ed2k://|file|"):
+                raise RuntimeError(f"Rust library detail for {file_name} did not expose an ED2K link")
+            return last_page, detail
+        return None
 
     shared_files, shared_file = wait_for(
         resolve_shared_file,
@@ -685,9 +686,9 @@ def publish_shared_tree(
         "directories": directories,
         "reload": reload_result,
         "sharedFiles": {
-            "count": len(shared_files.get("items", [])) if isinstance(shared_files.get("items"), list) else 0,
+            "count": len(shared_files["data"]),
             "matched": shared_file,
-            "observations": observations[-20:],
+            "observations": list(observations),
         },
     }
 

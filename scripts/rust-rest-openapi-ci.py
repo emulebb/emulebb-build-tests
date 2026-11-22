@@ -370,12 +370,14 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
     def categories() -> list[dict[str, Any]]:
         return request("GET", "/api/v1/categories")["items"]
 
-    def shared_files() -> dict[str, Any]:
-        return request("GET", "/api/v1/shared-files")
+    def library_files() -> list[dict[str, Any]]:
+        from emule_test_harness.rust_rest_contract import iter_library_files
+        return list(iter_library_files(lambda path: http_json(base_url, "/api/v1" + path,
+            api_key=package.API_KEY, timeout_seconds=min(5.0,remaining()))))
 
-    def shared_file_or_none(hash_value: str) -> dict[str, Any] | None:
+    def library_file_or_none(hash_value: str) -> dict[str, Any] | None:
         try:
-            return request("GET", f"/api/v1/shared-files/{hash_value}")
+            return request("GET", f"/api/v1/library/files/{hash_value}")
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 return None
@@ -444,10 +446,10 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         return int(row[0]), int(row[1])
 
     def live_upload_counts(hash_value: str) -> tuple[int, int]:
-        row = shared_file_or_none(hash_value)
+        row = library_file_or_none(hash_value)
         if row is None:
             raise RuntimeError("Live upload accounting lost the physical library entry")
-        return int(row["allTimeRequests"]), int(row["allTimeAccepts"])
+        return int(row["lifetimeUploadRequests"]), int(row["lifetimeAcceptedUploads"])
 
     def upload_timestamps(hash_value: str) -> tuple[int | None, int | None]:
         with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
@@ -702,20 +704,21 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
         wait_until("category root reload", remaining(), reload_settled)
 
         def category_shares_ready() -> tuple[dict[str, Any], dict[str, Any]] | None:
-            rows = shared_files()
+            rows = library_files()
             try:
-                only = rust_local_ed2k.require_shared_file_item(rows, category_only.name)
-                duplicate = rust_local_ed2k.require_shared_file_item(rows, duplicate_name)
+                only = rust_local_ed2k.require_library_file(rows, category_only.name)
+                duplicate = rust_local_ed2k.require_library_file(rows, duplicate_name)
             except RuntimeError:
                 return None
-            if all(row.get("complete") is True and row.get("partFile") is False
-                   for row in (only, duplicate)):
+            if all(row["present"] is True for row in (only, duplicate)):
                 return only, duplicate
             return None
 
         only_row, duplicate_row = wait_until("category complete shares", remaining(), category_shares_ready)
         only_hash, duplicate_hash = only_row["hash"], duplicate_row["hash"]
-        if only_hash == duplicate_hash or Path(duplicate_row["path"]).resolve() != category_copy.resolve():
+        initial_copies = library_request("GET", f"/api/v1/library/files/{duplicate_hash}/locations",
+                                         "/library/files/{hash}/locations", 200)
+        if only_hash == duplicate_hash or len(initial_copies) != 1 or not Path(initial_copies[0]["path"]).samefile(category_copy):
             raise RuntimeError("Category root did not own the initial complete shares")
         library_request("POST", "/api/v1/library/tags", "/library/tags", 201, {"name": "Rotate"})
         library_request("GET", "/api/v1/library/tags/rotate", "/library/tags/{tagName}", 200)
@@ -785,15 +788,23 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             raise RuntimeError("Category deletion did not clear only matching assignments")
 
         def category_share_withdrawal() -> dict[str, Any] | None:
-            survivor = shared_file_or_none(duplicate_hash)
-            if (shared_file_or_none(only_hash) is None and survivor is not None
-                    and survivor.get("complete") is True and survivor.get("partFile") is False
-                    and Path(survivor["path"]).resolve() == independent_copy.resolve()
-                    and shared_files().get("total") == 1):
+            only = library_file_or_none(only_hash)
+            survivor = library_file_or_none(duplicate_hash)
+            copies = library_request("GET", f"/api/v1/library/files/{duplicate_hash}/locations",
+                                    "/library/files/{hash}/locations", 200)
+            if (only is not None and only["present"] is False and survivor is not None and survivor["present"] is True
+                    and any(row["present"] and Path(row["path"]).samefile(independent_copy) for row in copies)
+                    and len(library_files()) == 1):
                 return survivor
             return None
 
         wait_until("category share withdrawal and independent copy", remaining(), category_share_withdrawal)
+        library_request("PATCH", f"/api/v1/library/files/{only_hash}", "/library/files/{hash}", 204,
+                        {"uploadPriority": "release", "comment": "Retained local note", "rating": 4})
+        local_metadata = library_request("GET", f"/api/v1/library/files/{only_hash}", "/library/files/{hash}", 200)
+        if (local_metadata["present"] is not False or local_metadata["uploadPriority"] != "release"
+                or local_metadata["comment"] != "Retained local note" or local_metadata["rating"] != 4):
+            raise RuntimeError("Copyless library hash did not retain its explicit user metadata")
         if (category_only.read_bytes(), category_copy.read_bytes(), independent_copy.read_bytes()) != (
             category_only_bytes, duplicate_bytes, duplicate_bytes
         ):
@@ -878,6 +889,9 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             "restartHydrationRefusedNewRequest": True, "reEnabledRequestsSucceeded": True,
             "wireTranscript": sharing_wire}
         wait_until("restarted independent complete share", remaining(), category_share_withdrawal)
+        reopened_metadata = library_request("GET", f"/api/v1/library/files/{only_hash}", "/library/files/{hash}", 200)
+        if any(reopened_metadata[key] != local_metadata[key] for key in ("uploadPriority", "comment", "rating")):
+            raise RuntimeError("Explicit hash metadata changed across profile reopen")
         if (category_only.read_bytes(), category_copy.read_bytes(), independent_copy.read_bytes()) != (
             category_only_bytes, duplicate_bytes, duplicate_bytes
         ):
@@ -906,7 +920,7 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
                              "materialized": False, "sourceLessStartPreserved": True,
                              "persistedAcrossReopen": True}
         report["sharing"] = {"withdrawnHash": only_hash, "survivingHash": duplicate_hash,
-                             "categoryOnlyWithdrawn": True, "independentCompleteCopyRetained": True,
+                             "categoryOnlyWithdrawn": True, "libraryMetadataRetained": True, "independentCompleteCopyRetained": True,
                              "fixtureBytesUnchanged": True}
         report["status"] = "passed"
     except Exception as error:

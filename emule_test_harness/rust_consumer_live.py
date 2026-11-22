@@ -517,11 +517,18 @@ def _shared_persistence_snapshot(
 ) -> dict[str, Any]:
     """Verify that the synthetic root and exact shared catalog survive restart."""
 
-    from .rust_rest_contract import iter_library_roots
-    files = api_data(base_url, "shared-files?limit=100", api_key)
-    matched = _matched_shared_catalog(files, fixtures)
-    roots = [row for row in iter_library_roots(lambda path: api_document(base_url, path, api_key))
-             if matched and any(Path(file["path"]).is_relative_to(Path(row["path"])) for file in files["items"])]
+    from .rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots
+    fetch = lambda path: api_document(base_url, path, api_key)
+    files = list(iter_library_files(fetch, view="shared"))
+    matched = _matched_shared_catalog(
+        files, fixtures, lambda file_hash: api_data(base_url, f"library/files/{file_hash}", api_key)
+    )
+    paths = [Path(location["path"]).resolve()
+             for file in files
+             for location in iter_library_locations(fetch, file["hash"])
+             if location["present"]]
+    roots = [row for row in iter_library_roots(fetch)
+             if matched and paths and all(path.is_relative_to(Path(row["path"]).resolve()) for path in paths)]
     if not isinstance(roots, list) or len(roots) != 1 or matched is None:
         raise RuntimeError("synthetic shared root or catalog did not persist across restart")
     return {

@@ -886,18 +886,11 @@ def test_shared_catalog_identity_and_fixture_withdrawal(
     assert not withdrawn.exists()
 
 
-@pytest.mark.parametrize(
-    "shared_files_path",
-    [
-        "/api/v1/shared-files?offset=0&limit=100",
-        "/api/v1/shared-files",
-    ],
-)
-def test_shared_catalog_presence_uses_selected_client_route(
+def test_mfc_shared_catalog_presence_uses_mfc_route(
     monkeypatch,
-    shared_files_path: str,
 ) -> None:
     module = _load_module()
+    shared_files_path = module.MFC_SHARED_FILES_PATH
     calls: list[str] = []
 
     def request_json(_base_url, _method, path, _api_key):
@@ -925,14 +918,12 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
     fixture = tmp_path / "fixture" / "client-udp-file-not-found.bin"
     fixture.parent.mkdir()
     fixture.write_bytes(b"fixture")
-    observed_states: list[tuple[bool, str]] = []
+    observed_states: list[bool] = []
 
     monkeypatch.setattr(
         module,
-        "wait_for_shared_file_presence",
-        lambda *_args, present, shared_files_path, **_kwargs: observed_states.append(
-            (present, shared_files_path)
-        ),
+        "wait_for_rust_library_presence",
+        lambda *_args, present, **_kwargs: observed_states.append(present),
     )
     monkeypatch.setattr(
         module.cc.rust_local_ed2k,
@@ -961,10 +952,25 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
         "absentAfter": True,
     }
     assert fixture.read_bytes() == b"fixture"
-    assert observed_states == [
-        (True, module.RUST_SHARED_FILES_PATH),
-        (False, module.RUST_SHARED_FILES_PATH),
-    ]
+    assert observed_states == [True, False]
+
+
+@pytest.mark.parametrize("detail,present", [
+    ({"hash": FILE_HASH, "present": True, "sharingEnabled": True}, True),
+    ({"hash": FILE_HASH, "present": False, "sharingEnabled": True}, False),
+    ({"hash": FILE_HASH, "present": True, "sharingEnabled": False}, False),
+    (None, False),
+])
+def test_rust_presence_checks_hash_detail_without_scanning_catalog(monkeypatch, detail, present):
+    module = _load_module()
+    calls = []
+    monkeypatch.setattr(module.cc.rust_upload_soak, "find_library_file",
+                        lambda *args: calls.append(args) or detail)
+    result = module.wait_for_rust_library_presence(
+        "http://responder.test", "secret", file_hash=FILE_HASH, present=present, timeout=0.1
+    )
+    assert result == (detail if present else None)
+    assert calls == [("http://responder.test", "secret", FILE_HASH)]
 
 
 def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None:

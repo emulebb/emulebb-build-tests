@@ -25,6 +25,7 @@ from emule_test_harness import packet_trace_diff  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
+from emule_test_harness.rust_rest_contract import iter_library_files  # noqa: E402
 from emule_test_harness import kad_nodes  # noqa: E402
 from emule_test_harness import rust_upload_soak  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
@@ -124,7 +125,7 @@ def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = F
 
 
 def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None,
-                 *, expected_status: int = 200) -> dict[str, object]:
+                 *, expected_status: int = 200, include_meta: bool = False) -> dict[str, object]:
     result = dtt.retry_rest_request(
         base_url,
         path,
@@ -135,11 +136,11 @@ def request_json(base_url: str, method: str, path: str, api_key: str, body: dict
     )
     if int(result.get("status", 0)) != expected_status:
         raise RuntimeError(f"REST request failed: {method} {path} {dtt.rest_smoke.compact_http_result(result)!r}")
-    if expected_status == 207:
+    if include_meta or expected_status == 207:
         dtt.rest_smoke.require_success_envelope(result)
         envelope = result.get("raw_json")
         if not isinstance(envelope, dict):
-            raise RuntimeError(f"REST request lost its batch envelope: {method} {path}")
+            raise RuntimeError(f"REST request lost its envelope: {method} {path}")
         return envelope
     return dtt.rest_smoke.require_json_object(result, expected_status)
 
@@ -1049,49 +1050,26 @@ def materialize_local_profile_seed(
     return output_dir
 
 
-def require_shared_file_item(shared_files: dict[str, object], file_name: str) -> dict[str, object]:
-    """Returns one shared-file row from a paged Rust REST shared-files payload."""
-
-    items = shared_files.get("items")
-    if not isinstance(items, list):
-        raise RuntimeError("Rust shared-files response did not expose an items list.")
-    item = find_shared_file_item(items, file_name)
-    if item is not None:
-        return item
-    raise RuntimeError(f"Rust shared-files response did not include {file_name}.")
-
-
-def find_shared_file_item(items: list[object], file_name: str) -> dict[str, object] | None:
-    """Returns a matching Rust shared-file row without treating a miss as fatal."""
-
-    for item in items:
-        if isinstance(item, dict) and item.get("name") == file_name:
-            link = str(item.get("ed2kLink") or "")
-            if not link.startswith("ed2k://|file|"):
-                raise RuntimeError(f"Rust shared-file row for {file_name} did not expose an ED2K link.")
-            return item
-    return None
-
-
 def wait_for_rust_shared_file(
     base_url: str,
     api_key: str,
     *,
     file_name: str,
     timeout_seconds: float,
+    root_id: str | None = None,
 ) -> dict[str, object]:
     """Waits for detached Rust shared-directory hashing to expose one file row."""
 
     observations: list[dict[str, object]] = []
 
     def resolve():
-        shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-        items = shared_files.get("items")
-        if not isinstance(items, list):
-            raise RuntimeError("Rust shared-files response did not expose an items list.")
+        items = list(iter_library_files(
+            lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key, include_meta=True),
+            view="shared", root_id=root_id, search=file_name if len(file_name) >= 3 else None,
+        ))
         status = request_json(base_url, "GET", "/api/v1/status", api_key)
         stats = status.get("stats") if isinstance(status, dict) else None
-        matched = find_shared_file_item(items, file_name)
+        matched = next((item for item in items if item["displayName"] == file_name), None)
         observations.append(
             {
                 "count": len(items),
@@ -1101,9 +1079,13 @@ def wait_for_rust_shared_file(
         )
         if matched is None:
             return None
+        detail = request_json(base_url, "GET", f"/api/v1/library/files/{matched['hash']}", api_key)
+        if (detail.get("hash") != matched["hash"]
+                or not str(detail.get("ed2kLink") or "").startswith("ed2k://|file|")):
+            raise RuntimeError("Rust library detail did not expose the selected hash's ED2K link")
         return {
             "count": len(items),
-            "matched": matched,
+            "matched": detail,
             "observations": observations[-20:],
         }
 
@@ -1136,6 +1118,7 @@ def publish_rust_shared_tree(
         api_key,
         file_name=file_name,
         timeout_seconds=timeout_seconds,
+        root_id=directories["id"],
     )
     return {
         "directories": directories,
@@ -1156,11 +1139,11 @@ def wait_for_rust_shared_file_absent(
     observations: list[dict[str, object]] = []
 
     def resolve():
-        shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-        items = shared_files.get("items")
-        if not isinstance(items, list):
-            raise RuntimeError("Rust shared-files response did not expose an items list.")
-        present = find_shared_file_item(items, file_name) is not None
+        items = list(iter_library_files(
+            lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key, include_meta=True),
+            view="shared", search=file_name if len(file_name) >= 3 else None,
+        ))
+        present = any(item["displayName"] == file_name for item in items)
         observations.append(
             {
                 "count": len(items),
@@ -1555,7 +1538,7 @@ def require_cross_client_requirements(report: dict[str, object]) -> dict[str, ob
     if not isinstance(tree_publish, dict):
         raise RuntimeError("Rust/eMuleBB cross-client report is missing Rust shared-tree publish evidence.")
     matched = tree_publish.get("sharedFiles", {}).get("matched") if isinstance(tree_publish.get("sharedFiles"), dict) else None
-    if not isinstance(matched, dict) or matched.get("name") != shared_tree.get("name"):
+    if not isinstance(matched, dict) or matched.get("displayName") != shared_tree.get("name"):
         raise RuntimeError("Rust/eMuleBB cross-client report did not match the shared-tree fixture in Rust shared files.")
     manifest_metadata = checks.get("rust_emulebb_manifest_metadata")
     if not isinstance(manifest_metadata, dict):

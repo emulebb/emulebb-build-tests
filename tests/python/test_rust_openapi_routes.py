@@ -1427,10 +1427,10 @@ components:
       properties:
         expectedRevision:
           type: string
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
-      enum: [auto, not-published, verylow, low, normal, high, release]
-    SharedFilePatch:
+      enum: [auto, verylow, low, normal, high, release]
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
@@ -1438,8 +1438,8 @@ components:
         comment: [rating]
         rating: [comment]
       properties:
-        priority:
-          $ref: "#/components/schemas/SharedFilePriority"
+        uploadPriority:
+          $ref: "#/components/schemas/LibraryUploadPriority"
         rating:
           type: integer
           minimum: 0
@@ -2046,10 +2046,10 @@ def test_openapi_schema_component_drift_requires_priority_constraints(
         r"""
 components:
   schemas:
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
       enum: [auto, verylow, low, normal, high]
-    SharedFilePatch:
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
@@ -2057,7 +2057,7 @@ components:
         comment: [rating]
         rating: [comment]
       properties:
-        priority:
+        uploadPriority:
           type: string
           enum: [auto, normal, release]
         rating:
@@ -2103,7 +2103,19 @@ components:
 """,
     )
 
-    assert openapi_schema_component_drift(openapi_yaml) == (
+    expected = (
+        SchemaComponentDrift(
+            component="LibraryFilePatch.properties.uploadPriority",
+            issue="library file patch priority must reference #/components/schemas/LibraryUploadPriority",
+        ),
+        SchemaComponentDrift(
+            component="LibraryFilePatch.properties.rating",
+            issue="library file rating range must be 0..5",
+        ),
+        SchemaComponentDrift(
+            component="LibraryUploadPriority",
+            issue="library file priority enum must be auto, verylow, low, normal, high, release",
+        ),
         SchemaComponentDrift(
             component="ServerCreateRequest.properties.priority",
             issue="server priority enum must be low, normal, high",
@@ -2112,19 +2124,8 @@ components:
             component="ServerPatch.properties.priority",
             issue="server priority enum must be low, normal, high",
         ),
-        SchemaComponentDrift(
-            component="SharedFilePatch.properties.priority",
-            issue="shared file patch priority must reference #/components/schemas/SharedFilePriority",
-        ),
-        SchemaComponentDrift(
-            component="SharedFilePatch.properties.rating",
-            issue="shared file rating range must be 0..5",
-        ),
-        SchemaComponentDrift(
-            component="SharedFilePriority",
-            issue="shared file priority enum must be auto, not-published, verylow, low, normal, high, release",
-        ),
     )
+    assert openapi_schema_component_drift(openapi_yaml) == tuple(sorted(expected))
 
 
 def test_openapi_schema_component_drift_accepts_priority_constraints(
@@ -2135,10 +2136,10 @@ def test_openapi_schema_component_drift_accepts_priority_constraints(
         r"""
 components:
   schemas:
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
-      enum: [auto, not-published, verylow, low, normal, high, release]
-    SharedFilePatch:
+      enum: [auto, verylow, low, normal, high, release]
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
@@ -2146,8 +2147,8 @@ components:
         comment: [rating]
         rating: [comment]
       properties:
-        priority:
-          $ref: "#/components/schemas/SharedFilePriority"
+        uploadPriority:
+          $ref: "#/components/schemas/LibraryUploadPriority"
         rating:
           type: integer
           minimum: 0
@@ -2194,7 +2195,7 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
-def test_openapi_schema_component_drift_requires_shared_file_comment_rating_dependency(
+def test_openapi_schema_component_drift_requires_library_file_comment_rating_dependency(
     tmp_path: Path,
 ) -> None:
     openapi_yaml = write(
@@ -2202,16 +2203,16 @@ def test_openapi_schema_component_drift_requires_shared_file_comment_rating_depe
         r"""
 components:
   schemas:
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
-      enum: [auto, not-published, verylow, low, normal, high, release]
-    SharedFilePatch:
+      enum: [auto, verylow, low, normal, high, release]
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
       properties:
-        priority:
-          $ref: "#/components/schemas/SharedFilePriority"
+        uploadPriority:
+          $ref: "#/components/schemas/LibraryUploadPriority"
         rating:
           type: integer
           minimum: 0
@@ -2223,8 +2224,8 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
-            component="SharedFilePatch",
-            issue="shared file comment and rating must be mutually dependent",
+            component="LibraryFilePatch",
+            issue="library file comment and rating must be mutually dependent",
         ),
     )
 
@@ -2237,10 +2238,10 @@ def test_openapi_schema_component_drift_requires_shared_file_comment_schema(
         r"""
 components:
   schemas:
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
-      enum: [auto, not-published, verylow, low, normal, high, release]
-    SharedFilePatch:
+      enum: [auto, verylow, low, normal, high, release]
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
@@ -2248,8 +2249,8 @@ components:
         comment: [rating]
         rating: [comment]
       properties:
-        priority:
-          $ref: "#/components/schemas/SharedFilePriority"
+        uploadPriority:
+          $ref: "#/components/schemas/LibraryUploadPriority"
         rating:
           type: integer
           minimum: 0
@@ -2261,8 +2262,8 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
-            component="SharedFilePatch.properties.comment",
-            issue="shared file comment type must be string",
+            component="LibraryFilePatch.properties.comment",
+            issue="library file comment type must be string",
         ),
     )
 
@@ -2275,10 +2276,10 @@ def test_openapi_schema_component_drift_accepts_shared_file_comment_schema(
         r"""
 components:
   schemas:
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
-      enum: [auto, not-published, verylow, low, normal, high, release]
-    SharedFilePatch:
+      enum: [auto, verylow, low, normal, high, release]
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
@@ -2286,8 +2287,8 @@ components:
         comment: [rating]
         rating: [comment]
       properties:
-        priority:
-          $ref: "#/components/schemas/SharedFilePriority"
+        uploadPriority:
+          $ref: "#/components/schemas/LibraryUploadPriority"
         rating:
           type: integer
           minimum: 0
@@ -2300,7 +2301,7 @@ components:
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
-def test_openapi_schema_component_drift_accepts_shared_file_comment_rating_dependency(
+def test_openapi_schema_component_drift_accepts_library_file_comment_rating_dependency(
     tmp_path: Path,
 ) -> None:
     openapi_yaml = write(
@@ -2308,10 +2309,10 @@ def test_openapi_schema_component_drift_accepts_shared_file_comment_rating_depen
         r"""
 components:
   schemas:
-    SharedFilePriority:
+    LibraryUploadPriority:
       type: string
-      enum: [auto, not-published, verylow, low, normal, high, release]
-    SharedFilePatch:
+      enum: [auto, verylow, low, normal, high, release]
+    LibraryFilePatch:
       type: object
       additionalProperties: false
       minProperties: 1
@@ -2319,8 +2320,8 @@ components:
         comment: [rating]
         rating: [comment]
       properties:
-        priority:
-          $ref: "#/components/schemas/SharedFilePriority"
+        uploadPriority:
+          $ref: "#/components/schemas/LibraryUploadPriority"
         rating:
           type: integer
           minimum: 0
@@ -4307,6 +4308,41 @@ def test_selected_library_sharing_requires_explicit_bool_and_bounded_distinct_ha
     operation = document["paths"]["/library/files/sharing"]["post"]
     assert operation["operationId"] == "setLibrarySharing"
     assert operation["requestBody"]["required"] is True
+
+
+def test_selected_library_collection_and_detail_preserve_nullable_identity(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    summary = {"hash": "41" * 16, "displayName": "Sample.bin", "sizeBytes": None,
+               "present": False, "sharingEnabled": True,
+               **{key: 0 for key in ("sessionUploadedBytes", "sessionUploadRequests", "sessionAcceptedUploads",
+                                     "lifetimeUploadedBytes", "lifetimeUploadRequests", "lifetimeAcceptedUploads")},
+               "lastUploadRequestedAt": None, "lastUploadedAt": None}
+    validate_openapi_schema(document, openapi_schema_component(document, "LibraryFile"), summary)
+    lane = {"state": "unavailable", "lastSuccessAt": None}
+    detail = {**summary, "uploadPriority": "high", "comment": "Operator note",
+              "rating": 4, "ed2kLink": None, "publication": {"ed2k": lane, "kadSource": lane,
+              "kadKeyword": {**lane, "publishedKeywords": 0, "totalKeywords": 0}}}
+    schema = openapi_schema_component(document, "LibraryFileDetail")
+    validate_openapi_schema(document, schema, detail)
+    for invalid in ({**detail, "rating": 6}, {**detail, "comment": None}, {**detail, "ed2kLink": 1}):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, invalid)
+    page = openapi_schema_component(document, "LibraryFilePageEnvelope")
+    assert page["properties"]["data"]["maxItems"] == 200
+    assert page["properties"]["data"]["items"] == {"$ref": "#/components/schemas/LibraryFile"}
+
+
+def test_selected_library_patch_finishes_without_a_response_read(selected_rust_openapi):
+    _, document = selected_rust_openapi
+    schema = openapi_schema_component(document, "LibraryFilePatch")
+    for valid in ({"uploadPriority": "auto"}, {"uploadPriority": "release"}, {"comment": "", "rating": 0}):
+        validate_openapi_schema(document, schema, valid)
+    for invalid in ({}, {"rating": 4}, {"comment": "note"}, {"uploadPriority": 1}, {"comment": "note", "rating": 6}):
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, invalid)
+    operation = document["paths"]["/library/files/{hash}"]["patch"]
+    assert operation["operationId"] == "patchLibraryFile"
+    assert operation["responses"]["204"] == {"$ref": "#/components/responses/NoContentResponse"}
 
 
 def test_selected_library_sharing_outcomes_preserve_error_status_and_commit_meaning(selected_rust_openapi):

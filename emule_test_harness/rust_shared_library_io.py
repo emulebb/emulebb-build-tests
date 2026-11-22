@@ -62,7 +62,7 @@ CATALOG_HYDRATION_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
-SHARED_FILES_PROBE_PATH = "/shared-files?limit=1"
+LIBRARY_FILES_PROBE_PATH = "/library/files?view=shared&limit=1&countTotal=true"
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
@@ -826,9 +826,9 @@ def wait_for_shared_catalog_hydration(
                 f"emulebb-rust exited during catalog hydration with code {process.returncode}"
             )
         shared = client.request(
-            "GET", SHARED_FILES_PROBE_PATH, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", LIBRARY_FILES_PROBE_PATH, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
-        last_total = shared.get("total")
+        last_total = shared["meta"]["total"]
         if last_total == expected:
             return {
                 "sharedFilesTotal": last_total,
@@ -947,13 +947,13 @@ def wait_for_reload(
     disk_after = disk_io_snapshot(disk_counter_key)
     shared = client.request(
         "GET",
-        SHARED_FILES_PROBE_PATH,
+        LIBRARY_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
         "label": label,
         "elapsedSeconds": round(time.monotonic() - started, 3),
-        "sharedFilesTotal": shared.get("total"),
+        "sharedFilesTotal": shared["meta"]["total"],
         "progress": completed_reload if completed_reload is not None else final,
         "settledProgress": final,
         "completionSource": "structuredLog" if completion_logs is not None else "liveProgress",
@@ -1072,13 +1072,13 @@ def run_dynamic_reload_phase(
     disk_after = disk_io_snapshots(counter_keys)
     shared = client.request(
         "GET",
-        SHARED_FILES_PROBE_PATH,
+        LIBRARY_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
         "label": label,
         "elapsedSeconds": round(time.monotonic() - started, 3),
-        "sharedFilesTotal": shared.get("total"),
+        "sharedFilesTotal": shared["meta"]["total"],
         "progress": final,
         "maxActiveHashCount": max_active,
         "maxPerDiskActiveCount": max_disk_active,
@@ -1677,7 +1677,7 @@ def _lan_startup_observation(
     )
     shared = target_client.request(
         "GET",
-        SHARED_FILES_PROBE_PATH,
+        LIBRARY_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     status = target_client.request(
@@ -1718,7 +1718,7 @@ def _lan_startup_observation(
         "observedAtUtc": utc_now(),
         "progress": compact_progress(directories),
         "hashingCount": directories.get("hashingCount"),
-        "sharedFilesTotal": shared.get("total"),
+        "sharedFilesTotal": shared["meta"]["total"],
         "ed2kConnected": stats.get("ed2kConnected"),
         "ed2kPublish": diagnostics.get("ed2kPublish"),
         "kadPublish": diagnostics.get("kadPublish"),
@@ -2669,15 +2669,23 @@ def _sample_watcher_rest(
     for key, row in selected:
         data = client.request(
             "GET",
-            f"/shared-files/{row['hash']}",
+            f"/library/files/{row['hash']}",
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
-        source_path = data.get("path")
+        locations = rust_rest_contract.iter_library_locations(
+            lambda path: client.request(
+                "GET", path, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            ),
+            str(row["hash"]).lower(),
+        )
+        matching_location = any(
+            location["present"] and _normalized_path_key(location["path"]) == key
+            for location in locations
+        )
         if (
             str(data.get("hash") or "").casefold() != str(row["hash"]).casefold()
             or int(data.get("sizeBytes") or -1) != int(row["sizeBytes"])
-            or not isinstance(source_path, str)
-            or _normalized_path_key(source_path) != key
+            or not matching_location
         ):
             failures += 1
     return {
@@ -2768,10 +2776,10 @@ def run_watcher_phase(
         try:
             shared = client.request(
                 "GET",
-                SHARED_FILES_PROBE_PATH,
+                LIBRARY_FILES_PROBE_PATH,
                 timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
             )
-            shared_total = int(shared.get("total") or 0)
+            shared_total = int(shared["meta"]["total"] or 0)
             rows = _watcher_database_rows(profile_dir)
             evidence, rows_ok = _watcher_row_evidence(
                 rows,
@@ -3316,14 +3324,14 @@ def run_campaign(
         report["downloadSnapshots"].append(retained_download_observation(client))
         warm_shared = client.request(
             "GET",
-            SHARED_FILES_PROBE_PATH,
+            LIBRARY_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
             "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["warmRestart"] = {
-            "sharedFilesTotal": warm_shared.get("total"),
+            "sharedFilesTotal": warm_shared["meta"]["total"],
             "hashingCount": warm_dirs.get("hashingCount"),
             "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
@@ -3442,14 +3450,14 @@ def run_campaign(
         report["downloadSnapshots"].append(retained_download_observation(client))
         final_shared = client.request(
             "GET",
-            SHARED_FILES_PROBE_PATH,
+            LIBRARY_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         final_dirs = client.request(
             "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["finalRestart"] = {
-            "sharedFilesTotal": final_shared.get("total"),
+            "sharedFilesTotal": final_shared["meta"]["total"],
             "hashingCount": final_dirs.get("hashingCount"),
             "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
@@ -3702,14 +3710,14 @@ def run_media_campaign(
         clients.append(client)
         warm_shared = client.request(
             "GET",
-            SHARED_FILES_PROBE_PATH,
+            LIBRARY_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
             "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["warmRestart"] = {
-            "sharedFilesTotal": warm_shared.get("total"),
+            "sharedFilesTotal": warm_shared["meta"]["total"],
             "hashingCount": warm_dirs.get("hashingCount"),
             "storage": profile_storage_snapshot(profile_dir),
         }

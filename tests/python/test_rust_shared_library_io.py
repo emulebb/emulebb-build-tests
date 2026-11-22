@@ -288,9 +288,9 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
         assert method == "GET"
         if path == "/library/scan":
             return responses.pop(0)
-        assert path == subject.SHARED_FILES_PROBE_PATH
+        assert path == subject.LIBRARY_FILES_PROBE_PATH
         assert not responses, "catalog checked before the queued worker settled"
-        return {"total": 100000}
+        return {"data": [], "meta": {"total": 100000}}
     monkeypatch.setattr(subject, "disk_io_snapshot", lambda _: {})
     monkeypatch.setattr(subject.time, "sleep", lambda _: None)
     result = subject.wait_for_reload(
@@ -507,7 +507,7 @@ def test_prepare_refuses_unowned_or_invalid_owner_before_writing(tmp_path, monke
 @pytest.mark.unit
 def test_production_fixture_is_exactly_100k_and_ten_gib_decimal() -> None:
     assert len(subject.API_KEY.encode("utf-8")) >= 32
-    assert subject.SHARED_FILES_PROBE_PATH == "/shared-files?limit=1"
+    assert subject.LIBRARY_FILES_PROBE_PATH == "/library/files?view=shared&limit=1&countTotal=true"
     assert subject.PRODUCTION_SPEC.file_count == 100_000
     assert subject.PRODUCTION_SPEC.total_bytes == 10_485_760_000
     assert len(subject.mutation_indices()) == 1_000
@@ -524,7 +524,7 @@ def test_restart_accepts_validated_cohort_then_requires_full_hydration(
     assert not subject.startup_catalog_cohort_accepted(100_001, 100_000)
 
     totals = iter((200, 2_248, 100_000))
-    client = SimpleNamespace(request=lambda *_args, **_kwargs: {"total": next(totals)})
+    client = SimpleNamespace(request=lambda *_args, **_kwargs: {"data": [], "meta": {"total": next(totals)}})
     process = SimpleNamespace(poll=lambda: None)
     monkeypatch.setattr(subject.time, "sleep", lambda _seconds: None)
     hydrated = subject.wait_for_shared_catalog_hydration(
@@ -1146,8 +1146,8 @@ def test_watcher_recovery_requires_new_loss_before_another_acknowledgment(monkey
             if state["scans"] and mode not in ("persistent-loss", "continuous-loss"):
                 lost = mode == "new-loss" and state["scans"] == 1
             return {"watchEnabled": True, "scanRequired": lost}
-        assert path == subject.SHARED_FILES_PROBE_PATH
-        return {"total": 0}
+        assert path == subject.LIBRARY_FILES_PROBE_PATH
+        return {"data": [], "meta": {"total": 0}}
 
     def recover(**kwargs):
         kwargs["action"]()
@@ -1225,7 +1225,7 @@ def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) ->
 
 
 @pytest.mark.unit
-def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
+def test_watcher_rest_sample_reads_separate_cached_locations(tmp_path: Path) -> None:
     path = tmp_path / "watch-probe-0000.bin"
     key = subject._normalized_path_key(path)
     rows = {key: {"hash": "a" * 32, "sizeBytes": 16}}
@@ -1236,8 +1236,13 @@ def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
             self, method: str, route: str, **_kwargs: object
         ) -> dict[str, object]:
             assert method == "GET"
-            assert route == f"/shared-files/{'a' * 32}"
-            return {"hash": "a" * 32, "sizeBytes": 16, "path": str(path)}
+            if route == f"/library/files/{'a' * 32}":
+                return {"hash": "a" * 32, "sizeBytes": 16}
+            assert route == f"/library/files/{'a' * 32}/locations?limit=200"
+            return {
+                "data": [{"path": str(path), "present": True}],
+                "meta": {"hasMore": False, "nextCursor": None},
+            }
 
     sample = subject._sample_watcher_rest(FakeClient(), rows, expected)
     assert sample["sampleCount"] == 1
@@ -1633,7 +1638,7 @@ def test_dynamic_reload_checkpoints_running_progress(
         def request(self, _method: str, route: str, **_kwargs: object):
             if route == "/library/scan":
                 return self.directories.pop(0)
-            return {"total": 8}
+            return {"data": [], "meta": {"total": 8}}
 
     class FakeProcess:
         returncode = None

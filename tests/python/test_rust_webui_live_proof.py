@@ -326,23 +326,20 @@ def test_matched_shared_catalog_requires_exact_fixture_identity() -> None:
         ),
     )
     matched = rust_webui_live_proof._matched_shared_catalog(
-        {
-            "items": [
+        [
                 {
-                    "name": "nested.bin",
+                    "displayName": "nested.bin",
                     "sizeBytes": 64,
                     "hash": "b" * 32,
-                    "ed2kLink": "ed2k://|file|nested.bin|64|" + "b" * 32 + "|/",
                 },
                 {
-                    "name": "root.txt",
+                    "displayName": "root.txt",
                     "sizeBytes": 32,
                     "hash": "a" * 32,
-                    "ed2kLink": "ed2k://|file|root.txt|32|" + "a" * 32 + "|/",
                 },
-            ]
-        },
+        ],
         fixtures,
+        lambda file_hash: {"hash": file_hash, "ed2kLink": "ed2k://|file|fixture|1|" + file_hash + "|/"},
     )
 
     assert matched == [
@@ -362,7 +359,8 @@ def test_matched_shared_catalog_requires_exact_fixture_identity() -> None:
         },
     ]
     assert rust_webui_live_proof._matched_shared_catalog(
-        {"items": [{"name": "root.txt", "sizeBytes": 31}]}, fixtures
+        [{"displayName": "root.txt", "sizeBytes": 31}], fixtures,
+        lambda _file_hash: pytest.fail("incomplete collection must not request details"),
     ) is None
 
 
@@ -435,7 +433,7 @@ def test_steady_request_load_rejects_broad_secondary_polling() -> None:
         {
             "snapshot?limit=500": 6,
             "logs?limit=300": 6,
-            "shared-files?limit=500": 6,
+            "library/files?limit=200": 6,
             "uploads": 6,
             "downloads?view=all&limit=200": 6,
             "downloads?view=all&limit=12&cursor=sample": 6,
@@ -446,7 +444,7 @@ def test_steady_request_load_rejects_broad_secondary_polling() -> None:
         "ok": False,
         "repeatedSecondaryEndpoints": {
             "logs?limit=300": 6,
-            "shared-files?limit=500": 6,
+            "library/files?limit=200": 6,
             "uploads": 6,
             "downloads?view=all&limit=200": 6,
             "downloads?view=all&limit=12&cursor=sample": 6,

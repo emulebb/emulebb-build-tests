@@ -19,7 +19,7 @@ from .rust_local_ed2k import RustRestFailure, ed2k_link_with_source, publish_sha
 from .rust_shared_library_fixture import deterministic_payload
 from .android_adb_failure import AdbOperationFailure
 from .android_apk_cleanup import COLLISION_OCCUPANT, OwnedFixtureFailure, remove_owned_fixture
-from .rust_rest_contract import iter_library_roots, settings_patch, restore_settings_patch
+from .rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots, settings_patch, restore_settings_patch
 from .vm_guest_profiles import http_json
 
 PREFIX = ("-s", "emulator-5554")
@@ -161,11 +161,6 @@ def _complete_items(document, *, kind):
     rows = document.get("items")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise RuntimeError("Qualification collection is invalid")
-    if kind == "shared-files":
-        if (type(document.get("total")) is not int or document["total"] != len(rows)
-                or type(document.get("limit")) is not int or document["limit"] < max(1, len(rows))
-                or document.get("nextCursor") is not None):
-            raise RuntimeError("Qualification requires a complete bounded collection")
     return rows
 
 
@@ -594,7 +589,7 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         raise RuntimeError("APK transfer refuses to interrupt preexisting unfinished downloads")
     rows = _complete_items(request("GET", "/api/v1/downloads?view=all&limit=200"), kind="downloads")
     prior_hashes = {row.get("hash", "").lower() for row in rows}
-    shared = _complete_items(request("GET", "/api/v1/shared-files"), kind="shared-files")
+    shared = iter_library_files(lambda path: request("GET", "/api/v1" + path), view="allKnown")
     prior_hashes.update(row.get("hash", "").lower() for row in shared)
     campaign.mark("admit-network-binding")
     network = request_json(base, "GET", "/api/v1/network", api_key)
@@ -689,14 +684,14 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                     while True:
                         shared_lookup = "unavailable"
                         try:
-                            result = request("GET", "/api/v1/shared-files/" + file_hash)
+                            result = request("GET", "/api/v1/library/files/" + file_hash)
                         except RustRestFailure as error:
                             if error.safe_failure["httpStatus"] != 404:
                                 raise
                             result = None
                             shared_lookup = "missing"
                         if result is not None and (result.get("hash", "").lower() != file_hash
-                                or result.get("complete") is not True or result.get("partFile") is not False):
+                                or result.get("present") is not True):
                             result = None
                             shared_lookup = "metadata-mismatch"
                         job = request("GET", "/api/v1/downloads/" + download_id)
@@ -709,9 +704,12 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
                             and delivery.get("ownership") in {"owned", "unowned"})
                         if result is not None and verified:
                             campaign.mark("verify-delivered-path-and-size")
-                            if delivery.get("path") != result.get("path"):
-                                raise RuntimeError("APK delivered job and shared catalog disagree on the output path")
-                            path = PurePosixPath(result.get("path", ""))
+                            locations = iter_library_locations(
+                                lambda path: request("GET", "/api/v1" + path), file_hash
+                            )
+                            if not any(location["present"] and location["path"] == delivery.get("path") for location in locations):
+                                raise RuntimeError("APK delivered job has no matching verified library location")
+                            path = PurePosixPath(delivery.get("path", ""))
                             if path.parent != PurePosixPath(incoming) or path.name == name or result.get("sizeBytes") != len(content):
                                 raise RuntimeError("APK delivered file has invalid size, location or collision handling")
                             campaign.mark("verify-delivered-bytes")
@@ -747,10 +745,11 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         restart_service()
         campaign.mark("verify-completed-delivery-metadata")
         # Delivery and the durable completed job must survive the service restart.
-        shared_file = request("GET", "/api/v1/shared-files/" + file_hash)
-        if (shared_file.get("hash", "").lower() != file_hash or shared_file.get("path") != str(path)
-                or shared_file.get("sizeBytes") != len(content) or shared_file.get("complete") is not True
-                or shared_file.get("partFile") is not False):
+        shared_file = request("GET", "/api/v1/library/files/" + file_hash)
+        locations = iter_library_locations(lambda route: request("GET", "/api/v1" + route), file_hash)
+        if (shared_file.get("hash", "").lower() != file_hash
+                or shared_file.get("sizeBytes") != len(content) or shared_file.get("present") is not True
+                or not any(location["present"] and location["path"] == str(path) for location in locations)):
             raise RuntimeError("APK completed delivery metadata did not survive restart")
         retained = request("GET", "/api/v1/downloads/" + download_id)
         retained_delivery = retained.get("delivery") if isinstance(retained, dict) else None

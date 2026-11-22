@@ -216,26 +216,26 @@ def test_safe_counter_helpers_tolerate_missing_values() -> None:
     assert rust_upload_soak.safe_float("bad") == 0.0
 
 
-def test_find_shared_file_uses_the_exact_hash_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_library_file_uses_the_exact_hash_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     file_hash = "00112233445566778899aabbccddeeff"
     row = {"hash": file_hash, "path": "/sample/incoming/payload.bin"}
     def read(_base, method, path, _key):
-        assert method == "GET" and path == f"/api/v1/shared-files/{file_hash}"
+        assert method == "GET" and path == f"/api/v1/library/files/{file_hash}"
         return row
     monkeypatch.setattr(rust_upload_soak, "request_json", read)
-    assert rust_upload_soak.find_shared_file("http://127.0.0.1", "key", file_hash) == row
+    assert rust_upload_soak.find_library_file("http://127.0.0.1", "key", file_hash) == row
 
 
-def test_find_shared_file_distinguishes_absence_and_failure(monkeypatch):
+def test_find_library_file_distinguishes_absence_and_failure(monkeypatch):
     def missing(*_args):
         raise rust_upload_soak.RustRestFailure("not found", status=404, detail='{"error":{"code":"NOT_FOUND"}}')
     monkeypatch.setattr(rust_upload_soak, "request_json", missing)
-    assert rust_upload_soak.find_shared_file("http://127.0.0.1", "key", "a" * 32) is None
+    assert rust_upload_soak.find_library_file("http://127.0.0.1", "key", "a" * 32) is None
     def failed(*_args):
         raise rust_upload_soak.RustRestFailure("busy", status=503, detail='{"error":{"code":"PERSISTENCE_BUSY"}}')
     monkeypatch.setattr(rust_upload_soak, "request_json", failed)
     with pytest.raises(rust_upload_soak.RustRestFailure):
-        rust_upload_soak.find_shared_file("http://127.0.0.1", "key", "a" * 32)
+        rust_upload_soak.find_library_file("http://127.0.0.1", "key", "a" * 32)
 
 
 def test_verify_download_delivery_checks_retained_terminal_job_and_exact_bytes(tmp_path: Path) -> None:

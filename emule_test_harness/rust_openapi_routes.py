@@ -71,11 +71,10 @@ DOWNLOAD_STATE_VALUES = ("queued", "waiting-metadata", "downloading", "stopping"
 DOWNLOAD_CREATE_REQUEST_COMPONENT = "DownloadCreateRequest"
 DOWNLOAD_LINK_PATTERN = r"^[eE][dD]2[kK]://[^\s\x00-\x1F\x7F-\x9F]+(?![\s\S])"
 DOWNLOAD_PATCH_COMPONENT = "DownloadPatch"
-SHARED_FILE_PATCH_COMPONENT = "SharedFilePatch"
-SHARED_FILE_PRIORITY_COMPONENT = "SharedFilePriority"
-SHARED_FILE_PRIORITY_VALUES = (
+LIBRARY_FILE_PATCH_COMPONENT = "LibraryFilePatch"
+LIBRARY_UPLOAD_PRIORITY_COMPONENT = "LibraryUploadPriority"
+LIBRARY_UPLOAD_PRIORITY_VALUES = (
     "auto",
-    "not-published",
     "verylow",
     "low",
     "normal",
@@ -1224,16 +1223,16 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
         append_download_schema_drift(drift, schemas)
     if "SearchId" in schemas:
         assert_decimal_id_schema(drift, "SearchId", schemas["SearchId"], "search session ID")
-    if SHARED_FILE_PRIORITY_COMPONENT in schemas:
+    if LIBRARY_UPLOAD_PRIORITY_COMPONENT in schemas:
         assert_priority_enum_schema(
             drift,
-            SHARED_FILE_PRIORITY_COMPONENT,
-            schemas.get(SHARED_FILE_PRIORITY_COMPONENT),
-            SHARED_FILE_PRIORITY_VALUES,
-            "shared file priority",
+            LIBRARY_UPLOAD_PRIORITY_COMPONENT,
+            schemas.get(LIBRARY_UPLOAD_PRIORITY_COMPONENT),
+            LIBRARY_UPLOAD_PRIORITY_VALUES,
+            "library file priority",
         )
-    if SHARED_FILE_PATCH_COMPONENT in schemas:
-        append_shared_file_patch_schema_drift(drift, schemas)
+    if LIBRARY_FILE_PATCH_COMPONENT in schemas:
+        append_library_file_patch_schema_drift(drift, schemas)
     if SEARCH_CREATE_REQUEST_COMPONENT in schemas:
         append_search_create_schema_drift(drift, schemas)
     if SEARCH_SESSION_COMPONENT in schemas:
@@ -1544,16 +1543,16 @@ def assert_priority_ref_schema(
         )
 
 
-def append_shared_file_patch_schema_drift(
+def append_library_file_patch_schema_drift(
     drift: list[SchemaComponentDrift],
     schemas: dict[str, object],
 ) -> None:
-    schema = schemas.get(SHARED_FILE_PATCH_COMPONENT)
+    schema = schemas.get(LIBRARY_FILE_PATCH_COMPONENT)
     if not isinstance(schema, dict):
         drift.append(
             SchemaComponentDrift(
-                component=SHARED_FILE_PATCH_COMPONENT,
-                issue="missing shared file patch request schema component",
+                component=LIBRARY_FILE_PATCH_COMPONENT,
+                issue="missing library file patch request schema component",
             )
         )
         return
@@ -1561,61 +1560,61 @@ def append_shared_file_patch_schema_drift(
     if not isinstance(properties, dict):
         drift.append(
             SchemaComponentDrift(
-                component=SHARED_FILE_PATCH_COMPONENT,
+                component=LIBRARY_FILE_PATCH_COMPONENT,
                 issue="must declare request properties",
             )
         )
         return
-    assert_shared_file_comment_rating_dependency_schema(drift, schema)
+    assert_library_file_comment_rating_dependency_schema(drift, schema)
     assert_priority_ref_schema(
         drift,
-        "SharedFilePatch.properties.priority",
-        properties.get("priority"),
-        "#/components/schemas/SharedFilePriority",
-        "shared file patch priority",
+        "LibraryFilePatch.properties.uploadPriority",
+        properties.get("uploadPriority"),
+        "#/components/schemas/LibraryUploadPriority",
+        "library file patch priority",
     )
     rating = properties.get("rating")
     if not isinstance(rating, dict):
         drift.append(
             SchemaComponentDrift(
-                component="SharedFilePatch.properties.rating",
-                issue="shared file rating schema must be an object",
+                component="LibraryFilePatch.properties.rating",
+                issue="library file rating schema must be an object",
             )
         )
         return
     if rating.get("type") != "integer":
         drift.append(
             SchemaComponentDrift(
-                component="SharedFilePatch.properties.rating",
-                issue="shared file rating type must be integer",
+                component="LibraryFilePatch.properties.rating",
+                issue="library file rating type must be integer",
             )
         )
     if rating.get("minimum") != 0 or rating.get("maximum") != 5:
         drift.append(
             SchemaComponentDrift(
-                component="SharedFilePatch.properties.rating",
-                issue="shared file rating range must be 0..5",
+                component="LibraryFilePatch.properties.rating",
+                issue="library file rating range must be 0..5",
             )
         )
     comment = properties.get("comment")
     if not isinstance(comment, dict):
         drift.append(
             SchemaComponentDrift(
-                component="SharedFilePatch.properties.comment",
-                issue="shared file comment schema must be an object",
+                component="LibraryFilePatch.properties.comment",
+                issue="library file comment schema must be an object",
             )
         )
         return
     if comment.get("type") != "string":
         drift.append(
             SchemaComponentDrift(
-                component="SharedFilePatch.properties.comment",
-                issue="shared file comment type must be string",
+                component="LibraryFilePatch.properties.comment",
+                issue="library file comment type must be string",
             )
         )
 
 
-def assert_shared_file_comment_rating_dependency_schema(
+def assert_library_file_comment_rating_dependency_schema(
     drift: list[SchemaComponentDrift],
     schema: dict[str, object],
 ) -> None:
@@ -1626,8 +1625,8 @@ def assert_shared_file_comment_rating_dependency_schema(
         return
     drift.append(
         SchemaComponentDrift(
-            component=SHARED_FILE_PATCH_COMPONENT,
-            issue="shared file comment and rating must be mutually dependent",
+            component=LIBRARY_FILE_PATCH_COMPONENT,
+            issue="library file comment and rating must be mutually dependent",
         )
     )
 
@@ -3151,7 +3150,7 @@ def parameterized_body_field_returns(route_body_metadata_rs_text: str) -> dict[R
     for pattern, method, path in (
         (r'\("PATCH",\s*\["library", "roots", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/library/roots/{id}"),
         (r'\("PATCH",\s*\["downloads", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/downloads/{id}"),
-        (r'\("PATCH",\s*\["shared-files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/shared-files/{hash}"),
+        (r'\("PATCH",\s*\["library", "files", _\]\)\s*=>\s*Some\((\w+)\)', "PATCH", "/library/files/{hash}"),
         (
             r'\("PATCH",\s*\["library", "ignores", "defaults", _\]\)\s*=>\s*(?:\{\s*)?Some\((\w+)\)',
             "PATCH",

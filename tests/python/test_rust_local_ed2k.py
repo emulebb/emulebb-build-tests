@@ -474,15 +474,12 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
             return {"id": "1", **body}
         if path == "/api/v1/library/scan":
             return {"ok": True}
-        if path == "/api/v1/shared-files":
-            return {
-                "items": [
-                    {
-                        "name": "Nested.bin",
-                        "ed2kLink": "ed2k://|file|Nested.bin|1|00112233445566778899aabbccddeeff|/",
-                    }
-                ]
-            }
+        if path.startswith("/api/v1/library/files?"):
+            return {"data": [{"hash": "41"*16,"displayName": "Nested.bin"}],
+                    "meta": {"hasMore": False,"nextCursor": None,"total": 1}}
+        if path == "/api/v1/library/files/"+"41"*16:
+            return {"hash": "41"*16,"displayName": "Nested.bin",
+                    "ed2kLink": "ed2k://|file|Nested.bin|1|"+"41"*16+"|/"}
         raise AssertionError(path)
 
     monkeypatch.setattr(rust_local_ed2k, "request_json", fake_request_json)
@@ -500,8 +497,8 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
         {"path": str(tmp_path / "shared-tree"), "watchEnabled": False},
     )
     assert calls[1] == ("POST", "/api/v1/library/scan", None)
-    assert calls[2] == ("GET", "/api/v1/shared-files", None)
-    assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"
+    assert calls[2] == ("GET", "/api/v1/library/files?view=shared&limit=200&q=Nested.bin&rootId=1&countTotal=true", None)
+    assert result["sharedFiles"]["matched"]["displayName"] == "Nested.bin"
 
 
 @pytest.mark.parametrize("ownership", ["owned", "unowned"])

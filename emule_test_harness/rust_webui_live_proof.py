@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .paths import get_workspace_output_root
-from .rust_rest_contract import restore_settings_patch, settings_patch
+from .rust_rest_contract import iter_library_files, restore_settings_patch, settings_patch
 
 DEFAULT_API_KEY = "converged-soak"
 DEFAULT_STEADY_SECONDS = 18.0
@@ -31,7 +32,7 @@ TAB_LABELS = (
     "Transfers",
     "Search",
     "Sharing",
-    "Shared Files",
+    "Library",
     "Uploads",
     "Network",
     "Servers",
@@ -539,12 +540,12 @@ def _publish_diagnostics(status: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _matched_shared_catalog(
-    value: Any,
+    rows: list[dict[str, Any]],
     expected: tuple[ConsumerSharedFixture, ...],
+    fetch_detail: Callable[[str], Any],
 ) -> list[dict[str, Any]] | None:
     """Return exact synthetic fixture rows once the shared catalog is complete."""
 
-    rows = value.get("items", []) if isinstance(value, dict) else []
     if not isinstance(rows, list):
         return None
     expected_by_name = {fixture.name: fixture for fixture in expected}
@@ -554,17 +555,19 @@ def _matched_shared_catalog(
     for row in rows:
         if not isinstance(row, dict):
             return None
-        name = str(row.get("name") or "")
+        name = str(row.get("displayName") or "")
         fixture = expected_by_name.get(name)
         transfer_hash = str(row.get("hash") or "").lower()
-        ed2k_link = str(row.get("ed2kLink") or "")
         if (
             fixture is None
             or row.get("sizeBytes") != fixture.size_bytes
             or len(transfer_hash) != 32
             or any(character not in "0123456789abcdef" for character in transfer_hash)
-            or not ed2k_link.startswith("ed2k://|file|")
         ):
+            return None
+        detail = fetch_detail(transfer_hash)
+        if (not isinstance(detail, dict) or detail.get("hash") != transfer_hash
+                or not str(detail.get("ed2kLink") or "").startswith("ed2k://|file|")):
             return None
         matched.append(
             {
@@ -650,8 +653,13 @@ def _sharing_publish_actions(
             return None
         if _integer_field(reload_progress, "failedHashCount") != 0:
             raise RuntimeError("synthetic shared-file hashing reported failures")
-        files = api_data(base_url, "shared-files?limit=100", api_key)
-        matched = _matched_shared_catalog(files, options.shared_files)
+        files = list(iter_library_files(
+            lambda path: api_document(base_url, path, api_key), view="shared", root_id=root_id
+        ))
+        matched = _matched_shared_catalog(
+            files, options.shared_files,
+            lambda file_hash: api_data(base_url, f"library/files/{file_hash}", api_key),
+        )
         if matched is None:
             return None
         return {
@@ -687,9 +695,9 @@ def _sharing_publish_actions(
         lambda: indexed_fixture(_integer_field(initial_catalog, "updatedAtMs")),
     )
 
-    _click_primary_nav(page, "Shared Files")
+    _click_primary_nav(page, "Library")
     shared_files_panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Shared Files", exact=True)
+        has=page.get_by_role("heading", name="Library", exact=True)
     )
     for fixture in options.shared_files:
         row = shared_files_panel.locator("tbody tr").filter(has_text=fixture.name).first

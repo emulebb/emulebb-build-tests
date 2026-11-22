@@ -55,20 +55,33 @@ def restore_settings_patch(snapshot: dict[str, Any], saved_leaves: dict[str, dic
     return settings_patch(snapshot, set_values=values, reset=tuple(reset))
 
 
-def _iter_id_resources(fetch_page: Callable[[str], dict[str, Any]], path: str,
-                       query: dict[str, Any], *, descending: bool) -> Iterator[dict[str, Any]]:
-    """Traverse bounded current resource pages with strict immutable-ID order."""
+def _iter_resource_pages(fetch_page: Callable[[str], dict[str, Any]], path: str,
+                         query: dict[str, Any]) -> Iterator[list[dict[str, Any]]]:
+    """Traverse current bounded envelopes using the existing request owner."""
     cursor: str | None = None
-    previous_id = 9223372036854775808 if descending else 0
     while True:
         parameters = dict(query)
         if cursor is not None:
             parameters["cursor"] = cursor
         document = fetch_page(path + "?" + urlencode(parameters))
-        rows, meta = document.get("data"), document.get("meta")
+        rows, meta = (document.get("data"), document.get("meta")) if isinstance(document, dict) else (None, None)
         if (not isinstance(rows, list) or len(rows) > query["limit"] or not isinstance(meta, dict)
                 or not {"hasMore", "nextCursor"}.issubset(meta)):
             raise RuntimeError(f"{path} collection requires a bounded data page and metadata")
+        yield rows
+        more, next_cursor = meta.get("hasMore"), meta.get("nextCursor")
+        if more is False and next_cursor is None:
+            return
+        if more is not True or not rows or not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+            raise RuntimeError(f"{path} continuation did not advance")
+        cursor = next_cursor
+
+
+def _iter_id_resources(fetch_page: Callable[[str], dict[str, Any]], path: str,
+                       query: dict[str, Any], *, descending: bool) -> Iterator[dict[str, Any]]:
+    """Traverse bounded current resource pages with strict immutable-ID order."""
+    previous_id = 9223372036854775808 if descending else 0
+    for rows in _iter_resource_pages(fetch_page, path, query):
         for row in rows:
             value = row.get("id") if isinstance(row, dict) else None
             if not isinstance(value, str) or not 1 <= len(value) <= 19 or not value.isascii() or not value.isdecimal():
@@ -79,12 +92,6 @@ def _iter_id_resources(fetch_page: Callable[[str], dict[str, Any]], path: str,
                 raise RuntimeError(f"{path} page did not advance its immutable identities")
             previous_id = number
             yield row
-        more, next_cursor = meta.get("hasMore"), meta.get("nextCursor")
-        if more is False and next_cursor is None:
-            return
-        if more is not True or not rows or not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
-            raise RuntimeError(f"{path} continuation did not advance")
-        cursor = next_cursor
 
 
 def iter_library_roots(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -96,6 +103,39 @@ def iter_downloads(fetch_page: Callable[[str], dict[str, Any]], *,
                    view: Literal["all", "completed", "unfinished"] = "all") -> Iterator[dict[str, Any]]:
     """Stream all retained jobs in native descending-ID order without a total cap."""
     return _iter_id_resources(fetch_page, "/downloads", {"view": view, "limit": 200}, descending=True)
+
+
+def iter_library_files(fetch_page: Callable[[str], dict[str, Any]], *,
+                       view: Literal["present", "shared", "unavailable", "allKnown"] = "present",
+                       search: str | None = None, root_id: str | None = None,
+                       count_total: bool = False) -> Iterator[dict[str, Any]]:
+    """Stream thin canonical library rows without a total-result cap."""
+    query: dict[str, Any] = {"view": view, "limit": 200}
+    if search is not None:
+        query["q"] = search
+    if root_id is not None:
+        query["rootId"] = root_id
+    if count_total:
+        query["countTotal"] = "true"
+    for rows in _iter_resource_pages(fetch_page, "/library/files", query):
+        for row in rows:
+            value = row.get("hash") if isinstance(row, dict) else None
+            if (not isinstance(value, str) or len(value) != 32
+                    or any(character not in "0123456789abcdef" for character in value)
+                    or not isinstance(row.get("displayName"), str)):
+                raise RuntimeError("/library/files identity or displayName is invalid")
+            yield row
+
+
+def iter_library_locations(fetch_page: Callable[[str], dict[str, Any]], file_hash: str) -> Iterator[dict[str, Any]]:
+    """Read separate cached copy pages; no path is inferred from a hash row."""
+    if len(file_hash) != 32 or any(character not in "0123456789abcdef" for character in file_hash):
+        raise ValueError("library locations require a lowercase hexadecimal content hash")
+    for rows in _iter_resource_pages(fetch_page, f"/library/files/{file_hash}/locations", {"limit": 200}):
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("path"), str) or type(row.get("present")) is not bool:
+                raise RuntimeError("library location requires its cached path and presence")
+            yield row
 
 
 # Compile-time packet-diagnostics controls are private harness surfaces. They

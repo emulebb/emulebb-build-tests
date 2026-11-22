@@ -24,7 +24,6 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from urllib.parse import urlencode
 from uuid import uuid4
 
 from . import windows_processes
@@ -41,7 +40,7 @@ from .vm_guest_profiles import http_json
 from .rust_shared_library_io import compact_progress, path_fingerprint, utc_now, write_json
 from .soak_launch import DEFAULT_SERVER_MET_URL
 from .upload_parity_monitor import rust_summary
-from .rust_rest_contract import iter_library_roots
+from .rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots
 
 SCHEMA = "emulebb.android.public-sharing/1"
 MAX_RECEIPT_BYTES = 4 * 1024**2
@@ -98,7 +97,7 @@ REST_OPERATIONS = {
     ("GET", "/kad"): ("kad-status-read", 10.0),
     ("GET", "/library/roots"): ("sharing-settings-read", 10.0),
     ("GET", "/library/scan"): ("sharing-status-read", 10.0),
-    ("GET", "/shared-files"): ("shared-catalog-read", 10.0),
+    ("GET", "/library/files"): ("library-catalog-read", 10.0),
     ("GET", "/downloads"): ("download-queue-read", 10.0),
     ("GET", "/uploads"): ("uploads-read", 10.0),
 }
@@ -864,48 +863,49 @@ def resume_failed_preparation(phone: Phone, receipt: dict, *, campaign: Path, ou
 
 
 def shared_catalog(phone: Phone, receipt: dict):
-    """Join content-level catalog representatives to approved SHA-256/size groups.
-
-    REST returns distinct known contents, choosing one eligible path per hash.
-    Duplicate approved instances can therefore collapse to one row. Coverage of
-    every content group does not prove that every duplicate path was indexed.
-    """
+    """Join canonical hash rows and cached copies to the approved content groups."""
     expected = {receipt["destination"] + "/" + row["path"]: (row["sha256"], row["sizeBytes"])
                 for row in receipt["inventory"]["files"]}
     groups = set(expected.values())
-    rows, cursors, cursor, total, stable = [], set(), None, None, True
-    while True:
-        query = {"limit": 200}
-        if cursor is not None:
-            query["cursor"] = cursor
-        page = phone.request("GET", "/shared-files?" + urlencode(query))
-        if (not isinstance(page.get("items"), list) or type(page.get("total")) is not int
-                or not 0 <= page["total"] <= receipt["fileCount"]):
+    total, stable = None, True
+
+    def fetch_files(path):
+        nonlocal total, stable
+        page = phone.request("GET", path)
+        page_total = page.get("meta", {}).get("total")
+        if type(page_total) is not int or not 0 <= page_total <= receipt["fileCount"]:
             raise RuntimeError("Shared catalog collection exceeds its approved scope")
-        stable &= total is None or page["total"] == total
-        total = page["total"]
-        rows.extend(page["items"])
-        cursor = page.get("nextCursor")
-        if cursor is None:
-            break
-        if not isinstance(cursor, str) or not cursor or cursor in cursors or len(rows) > receipt["fileCount"]:
-            raise RuntimeError("Shared catalog pagination is incomplete")
-        cursors.add(cursor)
-    stable &= len(rows) == total and len({row.get("path") for row in rows}) == len(rows)
-    group_hashes, hash_groups = {}, {}
-    for row in rows:
-        if (row.get("path") not in expected or row.get("sizeBytes") != expected[row["path"]][1]
-                or row.get("complete") is not True or row.get("partFile") is not False
-                or re.fullmatch(r"[0-9a-fA-F]{32}", row.get("hash", "")) is None):
-            raise RuntimeError("Shared catalog contains an unapproved file")
-        group, file_hash = expected[row["path"]], row["hash"].lower()
+        stable &= total is None or page_total == total
+        total = page_total
+        return page
+
+    rows, seen_paths, group_hashes, hash_groups = [], set(), {}, {}
+    for row in iter_library_files(fetch_files, view="shared", count_total=True):
+        if len(rows) >= receipt["fileCount"]:
+            raise RuntimeError("Shared catalog collection exceeds its approved scope")
+        rows.append(row)
+        file_hash = row["hash"]
+        content_groups = set()
+        for location in iter_library_locations(lambda path: phone.request("GET", path), file_hash):
+            if not location["present"]:
+                continue
+            path = location["path"]
+            if path not in expected or row.get("sizeBytes") != expected[path][1]:
+                raise RuntimeError("Shared catalog contains an unapproved file")
+            stable &= path not in seen_paths
+            seen_paths.add(path)
+            content_groups.add(expected[path])
+        if len(content_groups) != 1:
+            raise RuntimeError("Shared library hash has no unambiguous approved locations")
+        group = content_groups.pop()
         stable &= group not in group_hashes and file_hash not in hash_groups
         group_hashes[group] = file_hash
         hash_groups[file_hash] = group
-    return {"catalogRepresentativePaths": len({row["path"] for row in rows}),
+    stable &= len(rows) == total
+    return {"catalogFileLocations": len(seen_paths),
             "approvedFileInstances": len(expected), "duplicateFileInstances": len(expected) - len(groups),
             "matchedDistinctContents": len(group_hashes), "expectedDistinctContents": len(groups),
-            "allFileInstancesIndexed": "evidence-incomplete",
+            "allFileInstancesIndexed": "observed" if stable and seen_paths == set(expected) else "not-observed",
             "comparisonScope": "approved-raw-content-groups",
             "eligibilityAccounting": "evidence-incomplete",
             "status": ("evidence-incomplete" if not stable else

@@ -271,8 +271,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     monkeypatch.setattr(subject, "publish_shared_tree", lambda *args, **kwargs: {
         "sharedFiles": {"matched": {"hash": "b" * 32,
                                     "ed2kLink": "ed2k://|file|Android Sample.bin|262144|" + "b" * 32 + "|/"}}})
-    def page(items, *, shared=False):
-        return {"items": items, "total": len(items), "limit": 100, **({"nextCursor": None} if shared else {"offset": 0})}
+    def page(items):
+        return {"items": items, "total": len(items), "limit": 100, "offset": 0}
 
     def downloads(items, *, more=False):
         return {"data": items, "meta": {"apiVersion": "v1", "hasMore": more,
@@ -346,24 +346,27 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             assert body == {"ids": ["12"], "deleteData": False}
             state["deleted"] = True
             return {"data": [{"id": "12", "status": "accepted", "httpStatus": 200}]}
-        if route == "/api/v1/shared-files":
+        if route == "/api/v1/library/files?view=allKnown&limit=200":
             if not state["created"]:
-                return page([{"hash": "b" * 32}] if failure == "known-hash" else [], shared=True)
+                return downloads([{"hash": "b" * 32, "displayName": "Android Sample.bin"}]
+                                 if failure == "known-hash" else [])
             pytest.fail("known delivered hash must use its exact endpoint, not a first page")
-        if route == "/api/v1/shared-files/" + "b" * 32:
+        if route == "/api/v1/library/files/" + "b" * 32:
             shared_reads.append(clock[0])
             if failure == "transient-completion" and len(shared_reads) == 1:
                 raise subject.RustRestFailure("synthetic-private-error", status=404, detail="{}")
             if failure in {"completion-missing", "completion-diagnostics"}:
                 raise subject.RustRestFailure("synthetic-private-error", status=404, detail="{}")
             if failure == "completion-mismatch":
-                return {"hash": "b" * 32, "complete": False, "partFile": True}
+                return {"hash": "b" * 32, "present": False}
             if failure == "completion-lookup":
                 raise subject.RustRestFailure("synthetic-private-error", status=503, detail="{}")
             state["promoted"] = True
-            return {"hash": "b" * 32, "complete": True, "partFile": False,
-                              "sizeBytes": len(content),
-                              "path": ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2 else state["incoming"]) + "/Android Sample_01.bin"}
+            return {"hash": "b" * 32, "present": True, "sizeBytes": len(content)}
+        if route == "/api/v1/library/files/" + "b" * 32 + "/locations?limit=200":
+            path = ("/unexpected" if failure == "path" or failure == "restart" and state["restarts"] >= 2
+                    else state["incoming"]) + "/Android Sample_01.bin"
+            return downloads([{"path": path, "present": True}])
         if route == "/api/v1/downloads/12":
             assert not state["deleted"]
             detail_reads.append(clock[0])
@@ -676,8 +679,6 @@ def test_listener_delete_is_exact_owned_disabled_tombstone_and_preserves_every_p
     ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": "next"}}),
     ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": False}}),
     ("downloads", {"items": []}),
-    ("shared-files", {"items": [], "total": 1, "limit": 100, "nextCursor": "private cursor"}),
-    ("shared-files", {"items": [], "total": 0, "limit": False, "nextCursor": None}),
 ])
 def test_initial_inventory_never_treats_a_truncated_or_unknown_page_as_exhaustive(kind, document):
     with pytest.raises(RuntimeError, match="complete bounded"):

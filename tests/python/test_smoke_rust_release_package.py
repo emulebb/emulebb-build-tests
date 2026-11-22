@@ -299,10 +299,8 @@ def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path, o
                     "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": ownership}}
         return {
             "hash": transfer_hash,
-            "complete": True,
-            "partFile": False,
+            "present": True,
             "sizeBytes": delivered.stat().st_size,
-            "path": str(delivered),
         }
 
     monkeypatch.setattr(
@@ -310,6 +308,11 @@ def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path, o
         "request_json",
         completed_shared_file,
     )
+    def locations(_base, method, path, _key):
+        requests.append((method, path))
+        return {"data": [{"path": str(delivered), "present": True}],
+                "meta": {"hasMore": False, "nextCursor": None}}
+    monkeypatch.setattr(smoke, "request_document", locations)
 
     report = smoke._wait_for_download_delivery(
         "http://127.0.0.1:4711",
@@ -323,13 +326,15 @@ def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path, o
     assert report["deliveredPathWithinIncoming"] is True
     assert report["sharedFileRegistered"] is True
     assert report["deliveryOwnership"] == ownership
-    assert requests == [("GET", "/api/v1/downloads/7"), ("GET", f"/api/v1/shared-files/{transfer_hash}")]
+    assert requests == [("GET", "/api/v1/downloads/7"),
+                        ("GET", f"/api/v1/library/files/{transfer_hash}"),
+                        ("GET", f"/api/v1/library/files/{transfer_hash}/locations?limit=200")]
     assert str(tmp_path) not in json.dumps(report)
 
 
 @pytest.mark.parametrize(
     "field,value",
-    [("hash", "ff" * 16), ("complete", False), ("partFile", True), ("sizeBytes", 99)],
+    [("hash", "ff" * 16), ("present", False), ("sizeBytes", 99)],
 )
 def test_download_delivery_rejects_wrong_or_incomplete_shared_content(
     monkeypatch, tmp_path, field, value,
@@ -339,10 +344,8 @@ def test_download_delivery_rejects_wrong_or_incomplete_shared_content(
     transfer_hash = "00112233445566778899aabbccddeeff"
     shared = {
         "hash": transfer_hash,
-        "complete": True,
-        "partFile": False,
+        "present": True,
         "sizeBytes": 7,
-        "path": str(delivered),
     }
     shared[field] = value
     def response(_base, _method, path, _key):
@@ -351,6 +354,10 @@ def test_download_delivery_rejects_wrong_or_incomplete_shared_content(
                     "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "owned"}}
         return shared
     monkeypatch.setattr(smoke, "request_json", response)
+    monkeypatch.setattr(smoke, "request_document", lambda *_args: {
+        "data": [{"path": str(delivered), "present": True}],
+        "meta": {"hasMore": False, "nextCursor": None},
+    })
     monkeypatch.setattr(smoke, "wait_for", lambda probe, **_kwargs: probe())
 
     assert (

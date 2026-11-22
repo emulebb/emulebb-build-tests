@@ -71,7 +71,6 @@ QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-
 QUEUE_PRESSURE_PATH = "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
 MFC_SHARED_FILES_PATH = "/api/v1/shared-files?offset=0&limit=100"
 MFC_SHARED_RELOAD_PATH = "/api/v1/shared-files/operations/reload"
-RUST_SHARED_FILES_PATH = "/api/v1/shared-files"
 RUST_SHARED_RELOAD_PATH = "/api/v1/library/scan"
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
@@ -975,31 +974,24 @@ def start_rust(
 def rust_shared_file_link(base_url, api_key, *, file_name, timeout):
     """Wait for one Rust shared-file link and return its normalized hash and link."""
 
+    result = cc.wait_for_rust_shared_file(
+        base_url, api_key, file_name=file_name, timeout_seconds=timeout
+    )
+    detail = result["matched"]
+    return _canonical_hash(detail["hash"], field="Rust library hash"), detail["ed2kLink"]
+
+
+def wait_for_rust_library_presence(base_url, api_key, *, file_hash, present, timeout):
+    """Check sharing eligibility by point detail, including retained copyless hashes."""
+    file_hash = _canonical_hash(file_hash, field="Rust library hash")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = cc.request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-        data = _api_data(response)
-        if isinstance(data, dict):
-            rows = data.get("sharedFiles")
-            if not isinstance(rows, list):
-                rows = data.get("items")
-        else:
-            rows = None
-        for row in rows or []:
-            if isinstance(row, dict) and row.get("name") == file_name:
-                file_hash = _canonical_hash(row.get("hash"), field="Rust shared hash")
-                link_response = cc.request_json(
-                    base_url,
-                    "GET",
-                    f"/api/v1/shared-files/{file_hash}/ed2k-link",
-                    api_key,
-                )
-                link_payload = _api_data(link_response)
-                if not isinstance(link_payload, dict) or not link_payload.get("link"):
-                    raise RuntimeError("Rust shared-file link response is incomplete")
-                return file_hash, str(link_payload["link"])
-        time.sleep(2.0)
-    raise RuntimeError(f"Rust never published shared file {file_name!r}")
+        detail = cc.rust_upload_soak.find_library_file(base_url, api_key, file_hash)
+        eligible = detail is not None and detail.get("present") is True and detail.get("sharingEnabled") is True
+        if eligible is present:
+            return detail if eligible else None
+        time.sleep(0.25)
+    raise RuntimeError("Rust library did not reach the requested sharing eligibility")
 
 
 def find_shared_file_by_hash(
@@ -1163,12 +1155,11 @@ def withdraw_rust_shared_root(
 ) -> dict[str, object]:
     """Withdraw one Rust fixture by clearing its ephemeral production roots."""
 
-    wait_for_shared_file_presence(
+    wait_for_rust_library_presence(
         base_url,
         api_key,
         file_hash=file_hash,
         present=True,
-        shared_files_path=RUST_SHARED_FILES_PATH,
         timeout=timeout,
     )
     library_roots = cc.rust_local_ed2k.clear_explicit_library_roots(base_url, api_key)
@@ -1177,12 +1168,11 @@ def withdraw_rust_shared_root(
         api_key,
         reload_path=RUST_SHARED_RELOAD_PATH,
     )
-    wait_for_shared_file_presence(
+    wait_for_rust_library_presence(
         base_url,
         api_key,
         file_hash=file_hash,
         present=False,
-        shared_files_path=RUST_SHARED_FILES_PATH,
         timeout=timeout,
     )
     return {

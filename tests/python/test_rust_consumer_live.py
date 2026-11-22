@@ -279,3 +279,35 @@ def test_persistence_snapshot_refuses_substituted_job_identity(monkeypatch):
     monkeypatch.setattr(rust_consumer_live, "api_data", read)
     with pytest.raises(RuntimeError, match="identity differs"):
         rust_consumer_live._persistence_snapshot("http://127.0.0.1", "key", "7", expected_hash="a" * 32)
+
+
+def test_shared_persistence_uses_thin_rows_details_and_cached_locations(tmp_path, monkeypatch):
+    root = tmp_path / "library"
+    fixture = rust_consumer_live.ConsumerSharedFixture(
+        name="Sample.bin", relative_path="nested/Sample.bin", size_bytes=64, sha256="2" * 64,
+    )
+    file_hash = "a" * 32
+    calls = []
+
+    def document(_base, path, _key):
+        calls.append(path)
+        meta = {"hasMore": False, "nextCursor": None}
+        if path.startswith("/library/files?"):
+            return {"data": [{"hash": file_hash, "displayName": fixture.name, "sizeBytes": 64}], "meta": meta}
+        if path == f"/library/files/{file_hash}/locations?limit=200":
+            return {"data": [{"path": str(root / fixture.relative_path), "present": True}], "meta": meta}
+        assert path == "/library/roots?limit=100"
+        return {"data": [{"id": "1", "path": str(root)}], "meta": meta}
+
+    def detail(_base, path, _key):
+        assert path == f"library/files/{file_hash}"
+        calls.append(path)
+        return {"hash": file_hash, "ed2kLink": f"ed2k://|file|Sample.bin|64|{file_hash}|/"}
+
+    monkeypatch.setattr(rust_consumer_live, "api_document", document)
+    monkeypatch.setattr(rust_consumer_live, "api_data", detail)
+    result = rust_consumer_live._shared_persistence_snapshot("http://127.0.0.1", "key", (fixture,))
+    assert result["exactCatalog"] is True
+    assert result["rootCount"] == result["fileCount"] == 1
+    assert result["files"][0]["ed2kHash"] == file_hash
+    assert len(calls) == 4
