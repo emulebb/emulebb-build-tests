@@ -20,6 +20,25 @@ def write(path: Path, text: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize("component,field,nullable", [
+    ("EnvelopeMeta", "generatedAt", False), ("DiagnosticBundle", "capturedAt", False),
+    ("Server", "hostNameResolvedAt", True), ("KadNode", "hostNameResolvedAt", True),
+    ("KadNode", "createdAt", False), ("KadNode", "lastSeen", False),
+    ("LogEntry", "timestamp", False),
+])
+@pytest.mark.parametrize("value", [None, 0, 1_800_000_000, -1, 1.5, True])
+def test_native_calendar_fields_use_nullable_or_required_integer_seconds(component, field, nullable, value):
+    from emule_test_harness.rust_openapi_responses import validate_openapi_schema
+    document = load_openapi_document()
+    schema = document["components"]["schemas"][component]["properties"][field]
+    valid = value is None and nullable or type(value) is int and value >= 0
+    if valid:
+        validate_openapi_schema(document, schema, value)
+    else:
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema(document, schema, value)
+
+
 @pytest.mark.parametrize("value,valid", [(None, True), (0, True), (1_800_000_000, True), (-1, False), (1.5, False), (True, False)])
 def test_friend_calendar_time_is_nullable_nonnegative_integer_seconds(value, valid):
     payload = {"userHash": "11" * 16, "lastSeen": value}
