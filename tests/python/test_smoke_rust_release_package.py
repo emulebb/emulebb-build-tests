@@ -746,13 +746,13 @@ def test_parallel_waits_until_every_job_is_complete(tmp_path, monkeypatch):
         page_calls.append(True)
         return [{**job, "state": "downloading" if len(page_calls) == 1 else "completed"} for job in sequence]
     starts = []
-    def start(url, operation, job_id):
-        starts.append((operation, job_id))
-        return "accepted"
+    def start(url, job_id, attempts):
+        starts.append(("start", job_id))
+        attempts.append({"id": job_id, "attempt": 1, "status": "accepted", "httpStatus": 202})
     monkeypatch.setattr(smoke, "publish_shared_tree", publish)
     monkeypatch.setattr(smoke, "request_json", request)
     monkeypatch.setattr(smoke, "_download_page", page)
-    monkeypatch.setattr(smoke, "_download_action", start)
+    monkeypatch.setattr(smoke, "_start_parallel_job", start)
     monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda url, job_id, *args, **kwargs: {"id": job_id})
     result = smoke._parallel_download_jobs(tmp_path, sources=[
         {"url": f"http://127.0.0.1:{port}", "port": port, "process": object()} for port in (24001, 24002)],
@@ -761,6 +761,40 @@ def test_parallel_waits_until_every_job_is_complete(tmp_path, monkeypatch):
     assert len(page_calls) == result["resourceSamples"] == 2
     assert starts == [("start", "2"), ("start", "3")]
     assert len(result["deliveries"]) == 2 and result["controlRetries"] == 0
+
+
+@pytest.mark.parametrize("outcome", ["success", "busy-then-success", "exhausted", "storage", "other-503", "wrong-status", "unchanged"])
+def test_parallel_start_retries_only_recorded_admission_backpressure(monkeypatch, outcome):
+    calls, delays, attempts = [], [], []
+    def response(url, method, path, key, body, **kwargs):
+        calls.append(body)
+        assert method == "POST" and path == "/api/v1/downloads/start"
+        assert kwargs["expected_statuses"] == (207,)
+        row = {"id": "7", "status": "accepted", "httpStatus": 202}
+        if outcome == "exhausted" or (outcome == "busy-then-success" and len(calls) < 3):
+            row.update(status="failed", httpStatus=503, error={"code": "DOWNLOAD_UNAVAILABLE"})
+        elif outcome == "storage":
+            row.update(status="failed", httpStatus=500, error={"code": "DOWNLOAD_FAILED"})
+        elif outcome == "other-503":
+            row.update(status="failed", httpStatus=503, error={"code": "INTERNAL_SERVER_ERROR"})
+        elif outcome == "wrong-status":
+            row.update(status="failed", httpStatus=500, error={"code": "DOWNLOAD_UNAVAILABLE"})
+        elif outcome == "unchanged":
+            row.update(status="unchanged", httpStatus=200)
+        return {"data": [row], "meta": {"apiVersion": "v1"}}
+    monkeypatch.setattr(smoke, "request_document", response)
+    monkeypatch.setattr(smoke.time, "sleep", delays.append)
+    if outcome in ("success", "busy-then-success"):
+        smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts)
+    else:
+        with pytest.raises(RuntimeError, match="did not settle"):
+            smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts)
+    expected = 3 if outcome == "busy-then-success" else 5 if outcome == "exhausted" else 1
+    assert len(calls) == len(attempts) == expected
+    assert all(body == {"ids": ["7"]} for body in calls)
+    assert [row["attempt"] for row in attempts] == list(range(1, expected + 1))
+    assert delays == [0.25 * 2 ** index for index in range(expected - 1)]
+    assert [row["retryDelaySeconds"] for row in attempts[:-1]] == delays
 
 
 def test_parallel_payload_identity_is_distinct_and_repeatable(tmp_path):

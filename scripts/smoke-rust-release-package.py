@@ -54,6 +54,7 @@ TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
 PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND = 512 * 1024
 PARALLEL_DOWNLOAD_COUNT = 16
 PARALLEL_PAYLOAD_BYTES = 1024 * 1024
+PARALLEL_START_ATTEMPTS = 5
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
     "downloads": "/api/v1/downloads",
@@ -621,6 +622,31 @@ def _parallel_download_proof(
     return result
 
 
+def _start_parallel_job(base_url: str, job_id: str, attempts: list[dict]) -> None:
+    """Record bounded caller retries for explicit admission backpressure only."""
+    for attempt in range(1, PARALLEL_START_ATTEMPTS + 1):
+        document = request_document(base_url, "POST", "/api/v1/downloads/start", API_KEY,
+                                    {"ids": [job_id]}, expected_statuses=(207,))
+        rows = document["data"]
+        if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or rows[0].get("id") != job_id):
+            raise RuntimeError("Parallel start returned an invalid action result")
+        row = rows[0]
+        error = row.get("error")
+        error_code = error.get("code") if isinstance(error, dict) else None
+        recorded = {"id": job_id, "attempt": attempt, "status": row.get("status"),
+                    "httpStatus": row.get("httpStatus"), "errorCode": error_code}
+        attempts.append(recorded)
+        if row.get("status") == "accepted" and row.get("httpStatus") == 202 and "error" not in row:
+            return
+        if (row.get("status") != "failed" or row.get("httpStatus") != 503
+                or error_code != "DOWNLOAD_UNAVAILABLE" or attempt == PARALLEL_START_ATTEMPTS):
+            raise RuntimeError(f"Parallel start did not settle: {recorded}")
+        delay = 0.25 * 2 ** (attempt - 1)
+        recorded["retryDelaySeconds"] = delay
+        time.sleep(delay)
+
+
 def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_base_url: str,
                             p2p_ip: str, incoming: Path, leecher_process: subprocess.Popen[str]) -> dict:
     """Observe admission and verify every delivered byte across independent peers."""
@@ -664,12 +690,16 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
     for sampler in samplers.values():
         sampler.maybe_sample(force=True)
-    # WHY: this phase measures live payload ownership, not a control-plane burst.
-    # Release each bounded action's reply before the next start; every job must
-    # still be accepted once, without retries or relaxed resource checks.
-    for job_id in jobs:
-        if _download_action(leecher_base_url, "start", job_id) != "accepted":
-            raise RuntimeError(f"Parallel job {job_id} did not accept its first start")
+    # WHY: mutation admission shares bounded capacity with active payload work.
+    # Keep each caller retry explicit in evidence; execution/storage failures
+    # never pass through this admission-only retry path.
+    control_attempts: list[dict] = []
+    try:
+        for job_id in jobs:
+            _start_parallel_job(leecher_base_url, job_id, control_attempts)
+    except Exception as error:
+        error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")
+        raise
     peaks: dict[str, int] = {}
     samples = 0
 
@@ -695,7 +725,8 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     if counts != {"unfinished": 0, "completed": baseline["completed"] + PARALLEL_DOWNLOAD_COUNT}:
         raise RuntimeError("Parallel jobs did not remain in completed history")
     return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
-            "controlRequests": len(jobs), "controlBatchSize": 1, "controlRetries": 0,
+            "controlRequests": len(control_attempts), "controlBatchSize": 1,
+            "controlRetries": len(control_attempts) - len(jobs), "controlAttempts": control_attempts,
             "deliveries": deliveries, "resourceSamples": samples, "sampledPeaks": peaks,
             "processes": {name: sampler.summary() for name, sampler in samplers.items()},
             "snapshotCounts": counts, "qualificationScope": {"realPayload": True,
