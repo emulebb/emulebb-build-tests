@@ -80,6 +80,8 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
             return {"watchEnabled": False}
         if operation_id == "setLibrarySharing":
             return {"enabled": False, "hashes": ["ff" * 16]}
+        if operation_id == "patchLibraryFile":
+            return {"uploadPriority": "normal"}
         if operation_id == "createLibraryTag":
             return {}
         if operation_id in {"addLibraryFileTags", "removeLibraryFileTags"}:
@@ -109,6 +111,8 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         "updateLibraryRoot": (404,),
         "deleteLibraryRoot": (404,),
         "getLibraryTag": (404,),
+        "getLibraryFile": (404,),
+        "patchLibraryFile": (404,),
         "listLibraryFileTags": (404,),
         "listLibraryFileLocations": (404,),
         "listSearchResultObservations": (404,),

@@ -283,15 +283,23 @@ def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
     }
 
 
-def test_library_locations_probe_requires_missing_hash_response() -> None:
+def test_library_point_probes_have_valid_bodies_and_require_missing_hash_response() -> None:
     tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
     module = rust_rest_conformance.load_rest_smoke_module(
         tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
-    route = next(row for row in module.REST_CONTRACT_ROUTES
-                 if row["operationId"] == "listLibraryFileLocations")
-    assert route["path"] == "/api/v1/library/files/0123456789abcdef0123456789abcdef/locations"
-    assert route["successResponseStatuses"] == ["200"]
-    assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES["listLibraryFileLocations"] == (404,)
+    routes = {row["operationId"]: row for row in module.REST_CONTRACT_ROUTES}
+    base_path = "/api/v1/library/files/0123456789abcdef0123456789abcdef"
+    for operation, suffix, success in (
+        ("getLibraryFile", "", "200"),
+        ("patchLibraryFile", "", "204"),
+        ("listLibraryFileLocations", "/locations", "200"),
+    ):
+        assert routes[operation]["path"] == base_path + suffix
+        assert routes[operation]["successResponseStatuses"] == [success]
+        assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES[operation] == (404,)
+    report = module.assert_contract_routes_match_openapi()
+    assert report["ok"] is True, json.dumps(report, sort_keys=True)
+    assert module.get_contract_route_body("patchLibraryFile") == {"uploadPriority": "normal"}
 
 
 def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
