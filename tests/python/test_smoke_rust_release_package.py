@@ -18,6 +18,28 @@ from emule_test_harness.script_modules import load_script_module
 smoke = load_script_module("smoke_rust_release_package", "smoke-rust-release-package.py")
 
 
+@pytest.mark.parametrize("body,code", [
+    (b'{"error":{"code":"PERSISTENCE_BUSY","message":"private detail"}}', "PERSISTENCE_BUSY"),
+    (b'not-json', None), (b'[]', None),
+])
+def test_http_failure_keeps_status_and_bounded_error_code_without_secrets(monkeypatch, body, code):
+    reads = []
+    class Body(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            return super().read(size)
+    error = smoke.urllib.error.HTTPError("http://127.0.0.1/status", 503, "busy", {}, Body(body))
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(smoke.urllib.request, "urlopen", fail)
+    with pytest.raises(smoke.urllib.error.HTTPError) as failure:
+        smoke._request("http://127.0.0.1/status", api_key="private-api-key")
+    assert failure.value is error and error.code == 503
+    assert reads == [8192]
+    assert error.__notes__ == [f"GET http://127.0.0.1/status: HTTP 503; API error code={code!r}"]
+    assert "private" not in str(error.__notes__)
+
+
 @pytest.mark.parametrize("field", [None, "version", "build", "platform", "channel", "sourceRevision"])
 def test_explicit_build_identity_rejects_mismatched_runtime_and_cli(monkeypatch, field):
     expected = {"version": "0.1.0-beta.2", "build": "release", "platform": "x64",

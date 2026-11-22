@@ -446,11 +446,23 @@ def _request(
         body = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=3) as response:
-        accepted = expected_statuses or ((200,) if method == "GET" else (200, 201, 202))
-        if response.status not in accepted:
-            raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
-        return response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            accepted = expected_statuses or ((200,) if method == "GET" else (200, 201, 202))
+            if response.status not in accepted:
+                raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
+            return response.read()
+    except urllib.error.HTTPError as error:
+        code = None
+        try:
+            document = json.loads(error.read(8192))
+            detail = document.get("error") if isinstance(document, dict) else None
+            if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+                code = detail["code"][:128]
+        except (ValueError, UnicodeError):
+            pass
+        error.add_note(f"{method} {url}: HTTP {error.code}; API error code={code!r}")
+        raise
 
 
 def request_document(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
