@@ -167,6 +167,23 @@ def test_server_fixture_mutation_rolls_back_when_initialization_row_missing(tmp_
         assert conn.execute("SELECT address, port FROM servers").fetchall() == before
 
 
+def test_profile_and_identity_fixture_calendar_times_are_seconds(tmp_path):
+    database = tmp_path / "metadata.db"
+    before = int(time.time())
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    rust_metadata.seed_local_user_hash(database, bytes([0x11]) * 16)
+    with sqlite3.connect(database) as conn:
+        rows = conn.execute("SELECT created_at_s FROM metadata_schema UNION ALL SELECT created_at_s FROM profile UNION ALL SELECT updated_at_s FROM profile UNION ALL SELECT created_at_s FROM local_identities UNION ALL SELECT updated_at_s FROM local_identities").fetchall()
+        assert len(rows) == 5
+        assert all(before <= row[0] <= int(time.time()) for row in rows)
+        conn.execute("UPDATE local_identities SET created_at_s=1")
+    rust_metadata.seed_local_user_hash(database, bytes([0x22]) * 16)
+    with sqlite3.connect(database) as conn:
+        created, updated = conn.execute("SELECT created_at_s,updated_at_s FROM local_identities").fetchone()
+        assert created == 1
+        assert before <= updated <= int(time.time())
+
+
 def test_server_fixture_calendar_times_are_seconds_and_preserve_first_seen(tmp_path):
     database = tmp_path / "metadata.db"
     rust_metadata.create_metadata_db(rust_repo(), database)

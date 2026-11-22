@@ -320,10 +320,10 @@ def test_frontdoor_evidence_requires_sql_failure_consistency_and_retry(friend_fi
             with closing(sqlite3.connect(database)) as connection:
                 with connection:
                     if path.endswith("add-friend"):
-                        connection.execute("INSERT INTO friends(user_hash,name,first_seen_at_ms) VALUES (?, 'Peer', 1)",
+                        connection.execute("INSERT INTO friends(user_hash,name,first_seen_at_s) VALUES (?, 'Peer', 1)",
                                            (bytes.fromhex(user_hash),))
                     else:
-                        connection.execute("UPDATE friends SET deleted_at_ms=2 WHERE user_hash=?", (bytes.fromhex(user_hash),))
+                        connection.execute("UPDATE friends SET deleted_at_s=2 WHERE user_hash=?", (bytes.fromhex(user_hash),))
         except sqlite3.IntegrityError:
             assert expected == 500
             return {"status": 500, "json": {"error": {"code": "PERSISTENCE_FAILED", "message": "Injected write failure", "details": {}}}}
@@ -360,7 +360,7 @@ def test_frontdoor_unexpected_response_still_removes_fixture_faults(friend_fixtu
         )
     with closing(sqlite3.connect(database)) as connection:
         assert connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'harness_friend_failure_%'").fetchall() == []
-        connection.execute("INSERT INTO friends(user_hash,name,first_seen_at_ms) VALUES (zeroblob(16),'Peer',1)")
+        connection.execute("INSERT INTO friends(user_hash,name,first_seen_at_s) VALUES (zeroblob(16),'Peer',1)")
 
 
 def test_friend_fault_refuses_missing_database(tmp_path):

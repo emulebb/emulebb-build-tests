@@ -71,16 +71,16 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
     defaults = saved_settings_defaults(rust_repo)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     schema_id, schema_version = _schema_marker(rust_repo)
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.executescript(_schema_sql(rust_repo))
         conn.execute(
-            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, ?, ?)",
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_s) VALUES (?, ?, ?)",
             (schema_id, schema_version, now),
         )
         conn.execute(
             """
-            INSERT INTO profile(id, uuid, created_by, created_at_ms, updated_at_ms)
+            INSERT INTO profile(id, uuid, created_by, created_at_s, updated_at_s)
             VALUES (1, ?, 'emulebb-rust', ?, ?)
             """,
             (str(uuid.uuid4()), now, now),
@@ -265,18 +265,18 @@ def seed_local_user_hash(db_path: Path, user_hash: bytes) -> None:
     normalized[14] = 0x6F
     if _user_hash_is_bad(bytes(normalized)):
         raise ValueError("ED2K user hash must not be an eMule bad hash")
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             INSERT INTO local_identities(
-                identity_kind, public_identity, private_secret, created_at_ms, updated_at_ms
+                identity_kind, public_identity, private_secret, created_at_s, updated_at_s
             )
             VALUES ('ed2k-user-hash', ?, NULL, ?, ?)
             ON CONFLICT(identity_kind) DO UPDATE SET
                 public_identity = excluded.public_identity,
                 private_secret = NULL,
-                updated_at_ms = excluded.updated_at_ms
+                updated_at_s = excluded.updated_at_s
             """,
             (bytes(normalized), now, now),
         )

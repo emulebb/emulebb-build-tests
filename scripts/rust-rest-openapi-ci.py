@@ -946,8 +946,8 @@ def friend_database_rows(database: Path) -> list[tuple]:
     """Reopen the disposable database read-only for independent durable evidence."""
     with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         return connection.execute(
-            "SELECT lower(hex(user_hash)), name, last_address, last_port, first_seen_at_ms, "
-            "last_seen_at_ms, deleted_at_ms, id FROM friends ORDER BY user_hash"
+            "SELECT lower(hex(user_hash)), name, last_address, last_port, first_seen_at_s, "
+            "last_seen_at_s, deleted_at_s, id FROM friends ORDER BY user_hash"
         ).fetchall()
 
 

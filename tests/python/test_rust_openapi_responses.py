@@ -20,6 +20,16 @@ def write(path: Path, text: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize("value,valid", [(None, True), (0, True), (1_800_000_000, True), (-1, False), (1.5, False), (True, False)])
+def test_friend_calendar_time_is_nullable_nonnegative_integer_seconds(value, valid):
+    payload = {"userHash": "11" * 16, "lastSeen": value}
+    if valid:
+        validate_openapi_schema_component_payload("Friend", payload)
+    else:
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema_component_payload("Friend", payload)
+
+
 @pytest.mark.parametrize("mode,limit,valid", [
     ("automatic", None, True), ("fixed", 16, True),
     ("automatic", 16, False), ("fixed", None, False), ("fixed", 0, False),
