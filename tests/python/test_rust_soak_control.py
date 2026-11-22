@@ -3643,26 +3643,29 @@ def test_native_library_diagnostics_need_no_complete_download(tmp_path: Path) ->
         size_bytes=stat.st_size, modified=native.NativeTimestamp(seconds, nanoseconds),
         changed=None,
     ))
+    from emule_test_harness import rust_metadata
+    from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
     metadata_db = tmp_path / "metadata.sqlite"
+    rust_repo = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    rust_metadata.create_metadata_db(rust_repo, metadata_db)
     with sqlite3.connect(metadata_db) as conn:
-        conn.execute("CREATE TABLE download_job_counts(id INTEGER PRIMARY KEY, unfinished INTEGER, completed INTEGER)")
-        conn.execute("INSERT INTO download_job_counts VALUES(1, 0, 0)")
-        conn.execute("CREATE TABLE local_paths(id INTEGER, display_path TEXT)")
-        conn.execute("CREATE TABLE local_file_instances(path_id INTEGER, file_size INTEGER, "
-                     "verified_fingerprint BLOB, verified_at_ms INTEGER)")
-        conn.execute("INSERT INTO local_paths VALUES(1, ?)", (str(source),))
-        conn.execute("INSERT INTO local_file_instances VALUES(1, ?, ?, 123)",
-                     (stat.st_size, fingerprint))
+        known_id = conn.execute("INSERT INTO known_files(ed2k_hash,display_name,first_seen_at_s,last_seen_at_s,updated_at_s) VALUES(zeroblob(16),'Sample.bin',0,0,0)").lastrowid
+        path_id = rust_metadata._upsert_local_path(conn, str(source), 123)
+        conn.execute("INSERT INTO local_file_instances(path_id,known_file_id,size_bytes,native_identity,verified_fingerprint,verified_at_s) VALUES(?,?,?,?,?,?)",
+                     (path_id, known_id, stat.st_size, bytes(16), fingerprint, 123))
     summary = control.metadata_source_summary(SimpleNamespace(metadata_db=metadata_db, root=[tmp_path]))
     assert summary["downloadJobsTotal"] == 0
     assert summary["localFileInstances"] == 1
     assert summary["localFileInstancesWithMtime"] == 1
     sample = control.metadata_source_stat_sample(SimpleNamespace(
-        metadata_db=metadata_db, since_utc=None, sample_limit=2, mismatch_limit=2,
+        metadata_db=metadata_db, since_utc="1970-01-01T00:02:03Z", sample_limit=2, mismatch_limit=2,
     ))
     assert sample["counters"]["mtimeMatches"] == 1
     assert sample["counters"]["sizeMatches"] == 1
     assert sample["mismatchSamples"] == []
+    assert sample["newestSamples"][0]["updatedAt"] == 123
+    assert sample["counters"]["updatedSince"] == 1
 
 
 def test_set_shared_publish_priority_split_refuses_empty_high_root(tmp_path: Path) -> None:

@@ -4259,7 +4259,7 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
         ).fetchone()
         rows = connection.execute(
             """
-            SELECT local_paths.display_path, local_file_instances.file_size, local_file_instances.verified_fingerprint
+            SELECT local_paths.display_path, local_file_instances.size_bytes, local_file_instances.verified_fingerprint
             FROM local_file_instances
             JOIN local_paths ON local_paths.id = local_file_instances.path_id
             """
@@ -4412,8 +4412,8 @@ def source_stat_record(
     source_path: str,
     db_file_size: int,
     db_source_mtime_ms: int | None,
-    created_at_ms: int | None,
-    updated_at_ms: int | None,
+    created_at_s: int | None,
+    updated_at_s: int | None,
 ) -> dict[str, object]:
     """Compares one persisted shared-file source identity with current stat data."""
 
@@ -4422,8 +4422,8 @@ def source_stat_record(
         "pathFingerprint": private_path_fingerprint(source_path),
         "dbFileSize": db_file_size,
         "dbSourceMtimeMs": db_source_mtime_ms,
-        "createdAtMs": created_at_ms,
-        "updatedAtMs": updated_at_ms,
+        "createdAt": created_at_s,
+        "updatedAt": updated_at_s,
     }
     try:
         stat_result = os.stat(source_path)
@@ -4458,23 +4458,23 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
 
     if not args.metadata_db.is_file():
         raise RuntimeError("--metadata-db does not exist")
-    since_ms = None
+    since_s = None
     if args.since_utc:
         since_text = args.since_utc.strip().replace("Z", "+00:00")
-        since_ms = int(datetime.fromisoformat(since_text).timestamp() * 1000)
+        since_s = int(datetime.fromisoformat(since_text).timestamp())
     connection = sqlite3.connect(f"file:{args.metadata_db}?mode=ro", uri=True)
     try:
         rows = connection.execute(
             """
             SELECT local_file_instances.path_id,
                    local_paths.display_path,
-                   local_file_instances.file_size,
+                   local_file_instances.size_bytes,
                    local_file_instances.verified_fingerprint,
                    NULL,
-                   local_file_instances.verified_at_ms
+                   local_file_instances.verified_at_s
             FROM local_file_instances
             JOIN local_paths ON local_paths.id = local_file_instances.path_id
-            ORDER BY local_file_instances.verified_at_ms DESC, local_file_instances.path_id DESC
+            ORDER BY local_file_instances.verified_at_s DESC, local_file_instances.path_id DESC
             """
         ).fetchall()
     finally:
@@ -4486,7 +4486,7 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
     null_mtime_samples: list[dict[str, object]] = []
     path_counts: Counter[str] = Counter()
 
-    for row_id, source_path, db_file_size, fingerprint, created_at_ms, updated_at_ms in rows:
+    for row_id, source_path, db_file_size, fingerprint, created_at_s, updated_at_s in rows:
         db_source_mtime_ms = fingerprint_modified_ms(fingerprint)
         source_key = normalized_windows_path_key(source_path)
         path_counts[source_key] += 1
@@ -4495,18 +4495,18 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
             source_path=str(source_path),
             db_file_size=int(db_file_size),
             db_source_mtime_ms=None if db_source_mtime_ms is None else int(db_source_mtime_ms),
-            created_at_ms=None if created_at_ms is None else int(created_at_ms),
-            updated_at_ms=None if updated_at_ms is None else int(updated_at_ms),
+            created_at_s=None if created_at_s is None else int(created_at_s),
+            updated_at_s=None if updated_at_s is None else int(updated_at_s),
         )
         counters["rows"] += 1
         if record.get("exists") is True:
             counters["exists"] += 1
         else:
             counters["missing"] += 1
-        if since_ms is not None:
-            if created_at_ms is not None and int(created_at_ms) >= since_ms:
+        if since_s is not None:
+            if created_at_s is not None and int(created_at_s) >= since_s:
                 counters["createdSince"] += 1
-            if updated_at_ms is not None and int(updated_at_ms) >= since_ms:
+            if updated_at_s is not None and int(updated_at_s) >= since_s:
                 counters["updatedSince"] += 1
         if record.get("sizeMatches") is True:
             counters["sizeMatches"] += 1

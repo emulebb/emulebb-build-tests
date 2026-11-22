@@ -55,9 +55,6 @@ def normalize_search_text(value: str) -> str:
     return " ".join(spaced.split())
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
 
 def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
     """Create ``emulebb-rust-metadata.db`` with the canonical schema and marker row.
@@ -239,7 +236,7 @@ def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
 def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None:
     """Replace the ordered Rust Kad bootstrap endpoint list."""
 
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("DELETE FROM kad_bootstrap_endpoints")
         for position, endpoint in enumerate(endpoints):
@@ -247,7 +244,7 @@ def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None
                 raise ValueError("Kad bootstrap endpoint must not be empty")
             conn.execute(
                 """
-                INSERT INTO kad_bootstrap_endpoints(position, endpoint, updated_at_ms)
+                INSERT INTO kad_bootstrap_endpoints(position, endpoint, updated_at_s)
                 VALUES (?, ?, ?)
                 """,
                 (position, endpoint, now),
