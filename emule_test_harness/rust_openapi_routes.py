@@ -42,7 +42,7 @@ PATH_LOWERCASE_MD4_PARAMETER_SCHEMAS = {
 ENDPOINT_PORT_PATTERN = (
     r"6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3}"
 )
-SERVER_ID_PATTERN = rf"^[^/]+:({ENDPOINT_PORT_PATTERN})$"
+SERVER_ID_PATTERN = r"^[1-9][0-9]*$"
 CLIENT_ID_PATTERN = rf"^([0-9a-f]{{32}}|[^/]+:({ENDPOINT_PORT_PATTERN}))$"
 PATH_TOKEN_PARAMETER_SCHEMAS = {
     "ServerId": ("serverId", SERVER_ID_PATTERN),
@@ -1251,16 +1251,14 @@ def openapi_schema_component_drift(openapi_yaml: Path) -> tuple[SchemaComponentD
             "ServerCreateRequest.properties.address",
             "ServerCreateRequest.properties.port",
         )
-        append_server_name_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
         append_server_priority_schema_drift(drift, schemas, SERVER_CREATE_REQUEST_COMPONENT)
         append_server_boolean_schema_drift(
             drift,
             schemas,
             SERVER_CREATE_REQUEST_COMPONENT,
-            ("static", "connect"),
+            ("static", "enabled"),
         )
     if SERVER_PATCH_COMPONENT in schemas:
-        append_server_name_schema_drift(drift, schemas, SERVER_PATCH_COMPONENT)
         append_server_priority_schema_drift(drift, schemas, SERVER_PATCH_COMPONENT)
         append_server_boolean_schema_drift(
             drift,
@@ -2290,46 +2288,6 @@ def assert_endpoint_port_schema(
             SchemaComponentDrift(
                 component=component,
                 issue="endpoint port range must be 1..65535",
-            )
-        )
-
-
-def append_server_name_schema_drift(
-    drift: list[SchemaComponentDrift],
-    schemas: dict[str, object],
-    component: str,
-) -> None:
-    schema = schemas.get(component)
-    if not isinstance(schema, dict):
-        return
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return
-    assert_server_name_schema(
-        drift,
-        f"{component}.properties.name",
-        properties.get("name"),
-    )
-
-
-def assert_server_name_schema(
-    drift: list[SchemaComponentDrift],
-    component: str,
-    schema: object,
-) -> None:
-    if not isinstance(schema, dict):
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="server name schema must be an object",
-            )
-        )
-        return
-    if schema.get("type") != "string":
-        drift.append(
-            SchemaComponentDrift(
-                component=component,
-                issue="server name type must be string",
             )
         )
 

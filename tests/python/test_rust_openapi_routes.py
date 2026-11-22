@@ -1023,7 +1023,7 @@ components:
     assert openapi_parameter_metadata_drift(openapi_yaml) == ()
 
 
-def test_openapi_parameter_metadata_drift_requires_endpoint_path_token_patterns(tmp_path: Path) -> None:
+def test_openapi_parameter_metadata_drift_requires_resource_identity_patterns(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -1035,7 +1035,7 @@ components:
       required: true
       schema:
         type: string
-        pattern: "^[^/]+:[0-9]+$"
+        pattern: ".*"
     ClientId:
       name: clientId
       in: path
@@ -1062,7 +1062,7 @@ components:
     )
 
 
-def test_openapi_parameter_metadata_drift_accepts_endpoint_path_token_patterns(tmp_path: Path) -> None:
+def test_openapi_parameter_metadata_drift_accepts_resource_identity_patterns(tmp_path: Path) -> None:
     openapi_yaml = write(
         tmp_path / "REST-API-OPENAPI.yaml",
         """
@@ -1074,7 +1074,7 @@ components:
       required: true
       schema:
         type: string
-        pattern: "^[^/]+:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})$"
+        pattern: "^[1-9][0-9]*$"
     ClientId:
       name: clientId
       in: path
@@ -2085,7 +2085,7 @@ components:
           enum: [normal, high]
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     ServerPatch:
       type: object
@@ -2174,7 +2174,7 @@ components:
           enum: [low, normal, high]
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     ServerPatch:
       type: object
@@ -2357,7 +2357,7 @@ components:
           type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     KadBootstrapRequest:
       type: object
@@ -2409,7 +2409,7 @@ components:
           type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     KadBootstrapRequest:
       type: object
@@ -2449,18 +2449,14 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
-        name:
-          type: string
         static:
           type: string
-        connect:
+        enabled:
           type: string
     ServerPatch:
       type: object
       minProperties: 1
       properties:
-        name:
-          type: string
         static:
           type: string
         enabled:
@@ -2470,7 +2466,7 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == (
         SchemaComponentDrift(
-            component="ServerCreateRequest.properties.connect",
+            component="ServerCreateRequest.properties.enabled",
             issue="server boolean control type must be boolean",
         ),
         SchemaComponentDrift(
@@ -2508,18 +2504,14 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
-        name:
-          type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     ServerPatch:
       type: object
       minProperties: 1
       properties:
-        name:
-          type: string
         static:
           type: boolean
         enabled:
@@ -2529,96 +2521,6 @@ components:
 
     assert openapi_schema_component_drift(openapi_yaml) == ()
 
-
-def test_openapi_schema_component_drift_requires_server_name_schema(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    ServerCreateRequest:
-      type: object
-      required: [address, port]
-      properties:
-        address:
-          type: string
-          minLength: 1
-          pattern: '\S'
-        port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-        static:
-          type: boolean
-        connect:
-          type: boolean
-    ServerPatch:
-      type: object
-      minProperties: 1
-      properties:
-        name:
-          type: integer
-        static:
-          type: boolean
-        enabled:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == (
-        SchemaComponentDrift(
-            component="ServerCreateRequest.properties.name",
-            issue="server name schema must be an object",
-        ),
-        SchemaComponentDrift(
-            component="ServerPatch.properties.name",
-            issue="server name type must be string",
-        ),
-    )
-
-
-def test_openapi_schema_component_drift_accepts_server_name_schema(
-    tmp_path: Path,
-) -> None:
-    openapi_yaml = write(
-        tmp_path / "REST-API-OPENAPI.yaml",
-        r"""
-components:
-  schemas:
-    ServerCreateRequest:
-      type: object
-      required: [address, port]
-      properties:
-        address:
-          type: string
-          minLength: 1
-          pattern: '\S'
-        port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-        name:
-          type: string
-        static:
-          type: boolean
-        connect:
-          type: boolean
-    ServerPatch:
-      type: object
-      minProperties: 1
-      properties:
-        name:
-          type: string
-        static:
-          type: boolean
-        enabled:
-          type: boolean
-""",
-    )
-
-    assert openapi_schema_component_drift(openapi_yaml) == ()
 
 
 def test_openapi_schema_component_drift_requires_endpoint_port_constraints(
@@ -2645,7 +2547,7 @@ components:
           type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     KadBootstrapRequest:
       type: object
@@ -2706,7 +2608,7 @@ components:
           type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     KadBootstrapRequest:
       type: object
@@ -2750,7 +2652,7 @@ components:
           type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     KadBootstrapRequest:
       type: object
@@ -2802,7 +2704,7 @@ components:
           type: string
         static:
           type: boolean
-        connect:
+        enabled:
           type: boolean
     KadBootstrapRequest:
       type: object
