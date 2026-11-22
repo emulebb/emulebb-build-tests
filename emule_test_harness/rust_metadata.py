@@ -535,11 +535,12 @@ def seed_download_job(
                 """INSERT INTO known_files(
                    ed2k_hash, display_name, aich_root, aich_root_origin,
                    all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
-                   last_upload_requested_at_s, first_seen_at_s, last_seen_at_s, updated_at_s)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   last_upload_requested_at_s, first_seen_at_s, last_seen_at_s, updated_at_s,
+                   upload_priority, auto_upload_priority, comment, rating)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (hash_blob, name, root_blob, aich_root_origin, all_time_uploaded_bytes,
                  all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_s,
-                 now_s, now_s, now_s),
+                 now_s, now_s, now_s, upload_priority, int(auto_upload_priority), comment, rating),
             )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
@@ -547,13 +548,12 @@ def seed_download_job(
         job_id = conn.execute(
             """INSERT INTO download_jobs(
                known_file_id, expected_size_bytes, display_name, part_size_bytes, part_count,
-               upload_priority, auto_upload_priority, comment, rating, completed,
+               completed,
                md4_hashset_acquired, aich_hashset_acquired, aich_root, aich_root_origin,
                aich_trust_generation, visible_state, delivery_state, created_at_s,
                updated_at_s, completed_at_s)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-            (known_file_id, size_bytes, name, piece_size, piece_count, upload_priority,
-             int(auto_upload_priority), comment, rating, int(completed), int(md4_hashset_acquired),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+            (known_file_id, size_bytes, name, piece_size, piece_count, int(completed), int(md4_hashset_acquired),
              int(aich_hashset_acquired), root_blob, aich_root_origin,
              1 if root_blob is not None else 0, "completed" if completed else "queued",
              now_s, now_s, now_s if completed else None),
@@ -718,7 +718,7 @@ def read_download_job_manifest(db_path: Path, job_id: str) -> dict | None:
                       jobs.md4_hashset_acquired, jobs.aich_hashset_acquired,
                       CASE WHEN jobs.aich_root IS NULL THEN NULL ELSE lower(hex(jobs.aich_root)) END,
                       jobs.aich_root_origin, jobs.aich_trust_generation,
-                      jobs.upload_priority, jobs.comment, jobs.rating, jobs.auto_upload_priority,
+                      known.upload_priority, known.comment, known.rating, known.auto_upload_priority,
                       known.all_time_uploaded_bytes, known.all_time_upload_requests,
                       known.all_time_upload_accepts, known.last_upload_requested_at_s,
                       jobs.execution_generation, jobs.selected_temp_path_id, jobs.storage_path_id,
