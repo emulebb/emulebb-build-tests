@@ -166,6 +166,27 @@ def test_server_fixture_mutation_rolls_back_when_initialization_row_missing(tmp_
         assert conn.execute("SELECT address, port FROM servers").fetchall() == before
 
 
+def test_server_fixture_ids_preserve_updates_and_do_not_revive_or_reuse(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    rust_metadata.seed_server(database, {"host": "seed.example", "port": 4661})
+    with sqlite3.connect(database) as conn:
+        first = conn.execute("SELECT id FROM servers").fetchone()[0]
+    rust_metadata.seed_server(database, {"host": "SEED.EXAMPLE", "port": 4661, "name": "Updated Server"})
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT id,address,name FROM servers").fetchall() == [(first, "seed.example", "Updated Server")]
+        conn.execute("UPDATE servers SET deleted_at_ms=0 WHERE id=?", (first,))
+    rust_metadata.seed_server(database, {"host": "seed.example", "port": 4661})
+    with sqlite3.connect(database) as conn:
+        second = conn.execute("SELECT id FROM servers WHERE deleted_at_ms IS NULL").fetchone()[0]
+        assert second > first
+        assert conn.execute("SELECT deleted_at_ms FROM servers WHERE id=?", (first,)).fetchone() == (0,)
+    rust_metadata.clear_servers(database)
+    rust_metadata.seed_server(database, {"host": "192.0.2.1", "port": 4661})
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT id FROM servers").fetchone()[0] > second
+
+
 def test_failed_server_seed_does_not_complete_initialization(tmp_path):
     database = tmp_path / "metadata.db"
     rust_metadata.create_metadata_db(rust_repo(), database)

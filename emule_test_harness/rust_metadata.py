@@ -307,7 +307,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
                 version, obfuscation_tcp_port, udp_flags, first_seen_at_ms, last_seen_at_ms, deleted_at_ms
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0, 0, 0, ?, ?, ?, ?, ?, NULL)
-            ON CONFLICT(address, port) DO UPDATE SET
+            ON CONFLICT(address, port) WHERE deleted_at_ms IS NULL DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 server_priority = excluded.server_priority,
@@ -316,8 +316,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
                 version = excluded.version,
                 obfuscation_tcp_port = excluded.obfuscation_tcp_port,
                 udp_flags = excluded.udp_flags,
-                last_seen_at_ms = excluded.last_seen_at_ms,
-                deleted_at_ms = NULL
+                last_seen_at_ms = excluded.last_seen_at_ms
             """,
             (
                 address,
