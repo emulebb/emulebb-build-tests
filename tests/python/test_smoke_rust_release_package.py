@@ -647,10 +647,11 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
     monkeypatch.setattr(smoke, "_request", request)
     monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "--profile"))
     monkeypatch.setattr(smoke, "publish_shared_tree", lambda *args, **kwargs: {"sharedFiles": {"matched": {
-        "hash": "a" * 32, "name": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
+        "hash": "a" * 32, "displayName": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
         "ed2kLink": "ed2k://|file|Sample.Payload.bin|12582912|" + "a" * 32 + "|/"}}})
     monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda *args, **kwargs: {
         "id": args[1], "state": "completed", "deliveredSha256": kwargs["expected_sha256"]})
+    monkeypatch.setattr(smoke, "_parallel_download_proof", lambda *args, **kwargs: {"status": "passed"})
     if fault:
         with pytest.raises(RuntimeError, match="did not survive|did not preserve"):
             smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
@@ -670,6 +671,86 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monke
         ["/api/v1/downloads/stop"] if fault else ["/api/v1/downloads/stop", "/api/v1/downloads/start"]
     )
     assert all(process.poll() == 0 for process in processes)
+
+
+@pytest.mark.parametrize("fault", [None, "startup", "shutdown"])
+def test_parallel_source_ownership_drains_every_started_peer(tmp_path, monkeypatch, fault):
+    monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 4)
+    ports, logs, stopped = iter(range(24000, 24100)), [], []
+    monkeypatch.setattr(smoke, "_available_unique_port", lambda *args, **kwargs: next(ports))
+    monkeypatch.setattr(smoke, "_write_profile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, "request_json", lambda *args, **kwargs: {})
+    def start(*args):
+        log = io.StringIO()
+        logs.append(log)
+        return SimpleNamespace(pid=len(logs)), log
+    def ready(url, process, path):
+        if fault == "startup" and process.pid == 2:
+            raise RuntimeError("seed setup failed")
+    def stop(url, process):
+        stopped.append(process.pid)
+        if fault == "shutdown" and process.pid == 2:
+            raise RuntimeError("seed cleanup failed")
+    monkeypatch.setattr(smoke, "_start_daemon", start)
+    monkeypatch.setattr(smoke, "_wait_for_rest", ready)
+    monkeypatch.setattr(smoke, "_shutdown_or_stop", stop)
+    def run():
+        with smoke._parallel_sources(Path("daemon"), tmp_path, rust_repo=tmp_path, p2p_ip="127.0.0.1",
+                                     reserved_ports=set(), first_url="http://127.0.0.1:23000",
+                                     first_port=23001, first_process=SimpleNamespace(pid=0)) as sources:
+            assert len(sources) == 4
+    if fault:
+        with pytest.raises(RuntimeError, match="seed setup|seed cleanup"):
+            run()
+    else:
+        run()
+    assert stopped == ([2, 1] if fault == "startup" else [3, 2, 1])
+    assert all(log.closed for log in logs)
+
+
+def test_parallel_payload_identity_is_distinct_and_repeatable(tmp_path):
+    first = smoke._write_transfer_payload(tmp_path / "a.bin", 4096, identity=b"a")
+    second = smoke._write_transfer_payload(tmp_path / "b.bin", 4096, identity=b"b")
+    repeated = smoke._write_transfer_payload(tmp_path / "again.bin", 4096, identity=b"a")
+    assert first["sha256"] != second["sha256"]
+    assert first["sha256"] == repeated["sha256"]
+    assert first["sizeBytes"] == second["sizeBytes"] == 4096
+
+
+@pytest.mark.parametrize("fault", [None, "resident", "limit", "soft-target", "active", "mode", "configured", "counter", "missing"])
+def test_parallel_resources_preserve_budget_and_fixed_burst_contract(fault):
+    resources = {"active": 20, "preparing": 2, "waiting": 3,
+                 "concurrency": {"mode": "fixed", "configuredLimit": 16, "target": 16, "burstActive": 4},
+                 "residentMemory": {"usedBytes": 128 * 1024 * 1024,
+                                    "softTargetBytes": 64 * 1024 * 1024, "limitBytes": 128 * 1024 * 1024}}
+    if fault == "resident":
+        resources["residentMemory"]["usedBytes"] += 1
+    elif fault == "limit":
+        resources["residentMemory"]["limitBytes"] *= 2
+    elif fault == "soft-target":
+        resources["residentMemory"]["softTargetBytes"] = 0
+    elif fault == "active":
+        resources["active"] = 21
+    elif fault == "mode":
+        resources["concurrency"]["mode"] = "automatic"
+    elif fault == "configured":
+        resources["concurrency"]["configuredLimit"] = 17
+    elif fault == "counter":
+        resources["preparing"] = True
+    elif fault == "missing":
+        del resources["residentMemory"]
+    peaks = {}
+    if fault:
+        with pytest.raises(RuntimeError, match="resource contract"):
+            smoke._record_download_resources(resources, peaks)
+        assert peaks == {}
+    else:
+        smoke._record_download_resources(resources, peaks)
+        resources.update(active=0, preparing=0, waiting=0)
+        resources["residentMemory"]["usedBytes"] = 0
+        smoke._record_download_resources(resources, peaks)
+        assert peaks["active"] == 20 and peaks["preparing"] == 2
+        assert peaks["residentBytes"] == 128 * 1024 * 1024
 
 
 @pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke",

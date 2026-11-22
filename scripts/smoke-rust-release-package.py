@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke two daemons, a local download job, and embedded WebUI from each native artifact.
+"""Smoke local transfers, restart, resources and embedded WebUI from native artifacts.
 
 This uses fresh, local-only, non-autoconnecting profiles on the native runner.
 It never installs a package into the runner's system directories or launches
@@ -27,7 +27,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import TextIO
 
@@ -42,6 +42,7 @@ from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
     file_sha256,
     publish_shared_tree,
+    require_download_id,
     wait_for,
 )
 from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noqa: E402
@@ -51,6 +52,8 @@ WEBUI_TITLE = "eMuleBB WebUI"
 TRANSFER_FILE_NAME = "eMuleBB.Native.Package.Transfer.bin"
 TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
 PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND = 512 * 1024
+PARALLEL_DOWNLOAD_COUNT = 16
+PARALLEL_PAYLOAD_BYTES = 1024 * 1024
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
     "downloads": "/api/v1/downloads",
@@ -247,11 +250,11 @@ def _shutdown_or_stop(base_url: str, process: subprocess.Popen[str] | None) -> N
         _stop_process(process)
 
 
-def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES) -> dict[str, object]:
+def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES, *, identity: bytes = b"") -> dict[str, object]:
     path.parent.mkdir(parents=True, exist_ok=True)
     # WHY: a repeating payload compresses into one burst and cannot establish a
     # reliable partial checkpoint. SHAKE supplies deterministic incompressible bytes.
-    path.write_bytes(hashlib.shake_256(b"emulebb-rust native package transfer smoke").digest(size_bytes))
+    path.write_bytes(hashlib.shake_256(b"emulebb-rust native package transfer smoke" + identity).digest(size_bytes))
     return {
         "name": path.name,
         "path": str(path),
@@ -541,6 +544,151 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
     return contenders
 
 
+def _record_download_resources(resources: dict, peaks: dict[str, int]) -> None:
+    """Validate live admission observations and retain only bounded maxima."""
+    try:
+        concurrency, resident = resources["concurrency"], resources["residentMemory"]
+        values = {"active": resources["active"], "preparing": resources["preparing"],
+                  "waiting": resources["waiting"], "residentBytes": resident["usedBytes"],
+                  "target": concurrency["target"], "burstActive": concurrency["burstActive"]}
+        if (any(type(value) is not int or value < 0 for value in values.values())
+                or concurrency["mode"] != "fixed"
+                or concurrency["configuredLimit"] != PARALLEL_DOWNLOAD_COUNT
+                or resident["softTargetBytes"] != 64 * 1024 * 1024
+                or resident["limitBytes"] != 128 * 1024 * 1024
+                or values["residentBytes"] > resident["limitBytes"]
+                or values["active"] > PARALLEL_DOWNLOAD_COUNT + (PARALLEL_DOWNLOAD_COUNT + 3) // 4):
+            raise ValueError("resource contract violated")
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("Packaged parallel download resource contract failed") from error
+    for key, value in values.items():
+        peaks[key] = max(peaks.get(key, 0), value)
+
+
+@contextmanager
+def _parallel_sources(binary: Path, temp_root: Path, *, rust_repo: Path, p2p_ip: str,
+                      reserved_ports: set[int], first_url: str, first_port: int,
+                      first_process: subprocess.Popen[str]):
+    """Give each job an independent real peer; always drain fixture processes."""
+    sources = [{"url": first_url, "port": first_port, "process": first_process,
+                "logPath": temp_root / "seeder.log"}]
+    cleanup = ExitStack()
+    try:
+        for index in range(1, PARALLEL_DOWNLOAD_COUNT):
+            root = temp_root / f"parallel-source-{index:02d}"
+            root.mkdir()
+            rest_port = _available_unique_port(reserved_ports)
+            tcp_port = _available_unique_port(reserved_ports, host=p2p_ip)
+            _write_profile(root / "profile", rust_repo=rust_repo, incoming=root / "incoming",
+                           rest_port=rest_port, ed2k_port=tcp_port,
+                           kad_port=_available_unique_port(reserved_ports, host=p2p_ip, socket_type=socket.SOCK_DGRAM),
+                           runtime_server_port=_available_unique_port(reserved_ports), p2p_ip=p2p_ip)
+            url = f"http://127.0.0.1:{rest_port}"
+            process, log = _start_daemon(binary, root / "profile", root / "daemon.log")
+            cleanup.callback(log.close)
+            cleanup.callback(_shutdown_or_stop, url, process)
+            _wait_for_rest(url, process, root / "daemon.log")
+            request_json(url, "POST", "/api/v1/servers/operations/connect", API_KEY)
+            sources.append({"url": url, "port": tcp_port, "process": process, "logPath": root / "daemon.log"})
+        yield sources
+    finally:
+        cleanup.close()
+
+
+def _parallel_download_proof(
+    temp_root: Path, *, seeder_base_url: str, leecher_base_url: str,
+    p2p_ip: str, seeder_ed2k_port: int, incoming: Path,
+    seeder_process: subprocess.Popen[str], leecher_process: subprocess.Popen[str],
+    binary: Path, rust_repo: Path, reserved_ports: set[int],
+) -> dict[str, object]:
+    """Run distinct jobs against independent packaged peers."""
+    with _parallel_sources(binary, temp_root, rust_repo=rust_repo, p2p_ip=p2p_ip,
+                           reserved_ports=reserved_ports, first_url=seeder_base_url,
+                           first_port=seeder_ed2k_port, first_process=seeder_process) as sources:
+        try:
+            result = _parallel_download_jobs(temp_root, sources=sources, leecher_base_url=leecher_base_url,
+                                             p2p_ip=p2p_ip, incoming=incoming, leecher_process=leecher_process)
+        except Exception as error:
+            for index, source in enumerate(sources):
+                _attach_failure_diagnostics(error, f"parallel-source-{index:02d}", source["url"], source["logPath"])
+            raise
+    exits = [source["process"].poll() for source in sources[1:]]
+    if any(code != 0 for code in exits):
+        raise RuntimeError(f"Parallel source shutdown failed: {exits}")
+    result["auxiliarySourceExitCodes"] = exits
+    return result
+
+
+def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_base_url: str,
+                            p2p_ip: str, incoming: Path, leecher_process: subprocess.Popen[str]) -> dict:
+    """Observe admission and verify every delivered byte across independent peers."""
+    from emule_test_harness.rust_shared_library_io import ProcessSampler
+
+    settings = request_document(leecher_base_url, "GET", "/api/v1/settings", API_KEY)
+    request_document(leecher_base_url, "PATCH", "/api/v1/settings", API_KEY,
+                     settings_patch(settings, set_values={"transfers": {
+                         "maxConcurrentDownloads": PARALLEL_DOWNLOAD_COUNT,
+                         "downloadLimitBytesPerSecond": 1024 * 1024}}))
+    baseline = request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY)["downloads"]
+    if baseline["unfinished"] != 0:
+        raise RuntimeError("Parallel proof requires the preceding transfer to be complete")
+    jobs, hashes = {}, set()
+    for index, source in enumerate(sources):
+        name = f"Parallel-{index:02d}.bin"
+        path = temp_root / "parallel-shared" / f"source-{index:02d}" / name
+        payload = _write_transfer_payload(path, PARALLEL_PAYLOAD_BYTES, identity=name.encode("ascii"))
+        published = publish_shared_tree(source["url"], API_KEY, root=path.parent,
+                                        file_name=name, timeout_seconds=60.0)
+        detail = published["sharedFiles"]["matched"]
+        file_hash = detail["hash"]
+        hashes.add(file_hash)
+        created = request_json(leecher_base_url, "POST", "/api/v1/downloads", API_KEY,
+                               {"source": {"type": "ed2k-link", "link": ed2k_link_with_source(
+                                   detail["ed2kLink"], p2p_ip, source["port"])}, "intent": "stopped"},
+                               expected_statuses=(201,))
+        job_id = require_download_id(created, expected_hash=file_hash)
+        jobs[job_id] = (file_hash, payload)
+    if len(jobs) != PARALLEL_DOWNLOAD_COUNT or len(hashes) != PARALLEL_DOWNLOAD_COUNT:
+        raise RuntimeError("Parallel admission did not produce distinct jobs and hashes")
+    started = request_document(leecher_base_url, "POST", "/api/v1/downloads/start", API_KEY,
+                               {"ids": list(jobs)}, expected_statuses=(207,))["data"]
+    if ([item.get("id") for item in started] != list(jobs)
+            or any(item.get("status") != "accepted" or item.get("httpStatus") != 202 for item in started)):
+        raise RuntimeError("Parallel download batch did not accept every stopped job")
+    samplers = {f"seeder-{index:02d}": ProcessSampler(source["process"], 0.5)
+                for index, source in enumerate(sources)}
+    samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
+    peaks: dict[str, int] = {}
+    samples = 0
+
+    def completed() -> bool:
+        nonlocal samples
+        for sampler in samplers.values():
+            sampler.maybe_sample()
+        status = request_json(leecher_base_url, "GET", "/api/v1/status", API_KEY)
+        _record_download_resources(status["stats"]["downloadResources"], peaks)
+        samples += 1
+        rows = {row["id"]: row for row in _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100")}
+        if any(rows.get(job_id, {}).get("state") == "failed" for job_id in jobs):
+            raise RuntimeError("A parallel download entered failed state")
+        return all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs)
+
+    wait_for(completed, timeout_seconds=120.0, interval_seconds=0.5, description="parallel package transfers")
+    if peaks.get("active", 0) < 2 or peaks.get("residentBytes", 0) == 0:
+        raise RuntimeError("Parallel proof did not observe concurrent charged download owners")
+    deliveries = [_wait_for_download_delivery(leecher_base_url, job_id, file_hash,
+                    incoming=incoming, expected_size=int(payload["sizeBytes"]), expected_sha256=str(payload["sha256"]))
+                  for job_id, (file_hash, payload) in jobs.items()]
+    counts = request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY)["downloads"]
+    if counts != {"unfinished": 0, "completed": baseline["completed"] + PARALLEL_DOWNLOAD_COUNT}:
+        raise RuntimeError("Parallel jobs did not remain in completed history")
+    return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
+            "deliveries": deliveries, "resourceSamples": samples, "sampledPeaks": peaks,
+            "processes": {name: sampler.summary() for name, sampler in samplers.items()},
+            "snapshotCounts": counts, "qualificationScope": {"realPayload": True,
+                "maximumGeometry": False, "containerMemoryLimitQualified": False}}
+
+
 def _smoke_binary(
     binary: Path,
     webui: Path,
@@ -742,6 +890,11 @@ def _smoke_binary(
         if counts != {"unfinished": 0, "completed": 1}:
             raise RuntimeError(f"Packaged download snapshot counts differ: {counts}")
 
+        parallel_downloads = _parallel_download_proof(
+            temp_root, seeder_base_url=seeder_base_url, leecher_base_url=leecher_base_url,
+            p2p_ip=p2p_ip, seeder_ed2k_port=seeder_ed2k_port, incoming=leecher_incoming,
+            seeder_process=seeder_process, leecher_process=leecher_process,
+            binary=binary, rust_repo=rust_repo, reserved_ports=reserved_ports)
         _graceful_shutdown(leecher_base_url, leecher_process)
         _graceful_shutdown(seeder_base_url, seeder_process)
         ownership = {}
@@ -765,7 +918,8 @@ def _smoke_binary(
             "restStatus": True,
             "webuiPanelBackends": panel_routes,
             "gracefulShutdown": True,
-            "sharedRoots": 1,
+            "sharedRoots": PARALLEL_DOWNLOAD_COUNT + 1,
+            "parallelDownloads": parallel_downloads,
             "profile": "fresh-local-only",
             "renderedWebui": bool(rendered_webui),
             **({"webuiSettings": rendered_webui["checks"]["settingsForm"]} if rendered_webui else {}),
@@ -779,7 +933,7 @@ def _smoke_binary(
                 },
                 "sharedFile": {
                     "hash": transfer_hash,
-                    "name": matched.get("name"),
+                    "displayName": matched.get("displayName"),
                     "sizeBytes": matched.get("sizeBytes"),
                 },
                 "jobId": download_id,
