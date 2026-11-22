@@ -259,10 +259,22 @@ def completion_event(**overrides):
     fields = {field: 0 for field in subject.PROGRESS_FIELDS if field not in {
         "phase", "running", "pending", "readRateBytesPerSec",
     }}
-    fields.update(scannedCount=100000, hashedCount=100000, startedAtMs=1, updatedAtMs=2)
+    fields.update(scannedCount=100000, hashedCount=100000, startedAt=1, updatedAt=2)
     fields.update(overrides)
     return {"target": "emulebb_core::shared_directories",
             "fields": fields | {"message": "shared-directory reload completed"}}
+
+
+@pytest.mark.parametrize("started,updated", [(1, 1), (5, 1), (0, 0)])
+def test_completion_log_calendar_values_do_not_order_the_pass(tmp_path, started, updated):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "emulebb-rust.test.jsonl").write_text(
+        json.dumps(completion_event(startedAt=started, updatedAt=updated)) + "\n", encoding="utf-8"
+    )
+    result = subject.completed_reload_from_logs(tmp_path, {}, 100000)
+    assert result["hashedCount"] == 100000
+    assert (result["startedAt"], result["updatedAt"]) == (started, updated)
 
 
 def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settles(monkeypatch, tmp_path):
@@ -1611,8 +1623,10 @@ def test_partial_media_inspector_accepts_duplicate_source_paths(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("observe_activity", [True, False])
 def test_dynamic_reload_checkpoints_running_progress(
     monkeypatch: pytest.MonkeyPatch,
+    observe_activity: bool,
 ) -> None:
     def response(*, running: bool, started: int, scanned: int) -> dict[str, object]:
         return {
@@ -1621,7 +1635,7 @@ def test_dynamic_reload_checkpoints_running_progress(
                 "running": running,
                 "pending": False,
                 "scannedCount": scanned,
-                "startedAtMs": started,
+                "startedAt": started,
                 "activeHashCount": int(running),
                 "disks": [{"activeCount": int(running)}],
             },
@@ -1629,11 +1643,10 @@ def test_dynamic_reload_checkpoints_running_progress(
 
     class FakeClient:
         def __init__(self) -> None:
-            self.directories = [
-                response(running=False, started=1, scanned=0),
-                response(running=True, started=2, scanned=4),
-                response(running=False, started=2, scanned=8),
-            ]
+            # Completion can occur before the first poll, or within the same
+            # calendar second as the active observation.
+            self.directories = ([response(running=True, started=1, scanned=4)] if observe_activity else [])
+            self.directories.append(response(running=False, started=1, scanned=8))
 
         def request(self, _method: str, route: str, **_kwargs: object):
             if route == "/library/scan":
@@ -1683,7 +1696,7 @@ def test_dynamic_reload_checkpoints_running_progress(
 
     assert phase["progress"]["scannedCount"] == 8
     assert checkpoints[0]["status"] == "running"
-    assert checkpoints[0]["progress"]["scannedCount"] == 4
+    assert checkpoints[0]["progress"]["scannedCount"] == (4 if observe_activity else 8)
     assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {"read_count": 1}
 
 

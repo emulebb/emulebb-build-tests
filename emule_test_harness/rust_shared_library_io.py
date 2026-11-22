@@ -778,8 +778,8 @@ PROGRESS_FIELDS = (
     "plannedReadBytes",
     "completedReadBytes",
     "readRateBytesPerSec",
-    "startedAtMs",
-    "updatedAtMs",
+    "startedAt",
+    "updatedAt",
 )
 
 
@@ -876,8 +876,6 @@ def completed_reload_from_logs(
                     continue
                 if any(type(data.get(field)) is not int or data[field] < 0 for field in fields):
                     raise RuntimeError("reload completion log has invalid counters")
-                if data["startedAtMs"] <= 0 or data["updatedAtMs"] < data["startedAtMs"]:
-                    raise RuntimeError("reload completion log has invalid timing")
                 if data["scannedCount"] == expected_scanned:
                     return {field: data[field] for field in fields} | {"phase": "idle"}
     return None
@@ -995,11 +993,6 @@ def run_dynamic_reload_phase(
 ) -> dict[str, object]:
     """Run a reload whose real-media file count is intentionally unknown."""
 
-    before_dirs = client.request(
-        "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
-    )
-    before_progress = compact_progress(before_dirs)
-    before_started = before_progress.get("startedAtMs")
     disk_before = disk_io_snapshots(counter_keys)
     process_start = len(sampler.samples)
     started = time.monotonic()
@@ -1009,7 +1002,6 @@ def run_dynamic_reload_phase(
     max_disk_active = 0
     observations: list[dict[str, object]] = []
     final: dict[str, object] | None = None
-    saw_activity = False
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -1021,14 +1013,6 @@ def run_dynamic_reload_phase(
         )
         progress = compact_progress(data)
         scanned = int(progress.get("scannedCount") or 0)
-        saw_activity = (
-            saw_activity
-            or bool(progress.get("running"))
-            or (
-                progress.get("startedAtMs") is not None
-                and progress.get("startedAtMs") != before_started
-            )
-        )
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
             max_disk_active,
@@ -1057,8 +1041,7 @@ def run_dynamic_reload_phase(
                 )
         count_ok = expected_scanned is None or scanned == expected_scanned
         if (
-            saw_activity
-            and count_ok
+            count_ok
             and progress.get("running") is False
             and progress.get("pending") is False
             and int(data.get("hashingCount") or 0) == 0

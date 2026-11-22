@@ -638,7 +638,7 @@ def _sharing_publish_actions(
     )
     root_id = str(add_root_response.value.json()["data"]["id"])
 
-    def indexed_fixture(min_updated_at_ms: int = 0) -> dict[str, Any] | None:
+    def indexed_fixture() -> dict[str, Any] | None:
         directories = api_data(base_url, "library/scan", api_key)
         root = api_data(base_url, f"library/roots/{root_id}", api_key)
         reload_progress = (
@@ -647,9 +647,6 @@ def _sharing_publish_actions(
         if not isinstance(root, dict) or root.get("id") != root_id or not isinstance(reload_progress, dict):
             return None
         if reload_progress.get("running") or reload_progress.get("pending"):
-            return None
-        updated_at_ms = _integer_field(reload_progress, "updatedAtMs")
-        if updated_at_ms <= min_updated_at_ms:
             return None
         if _integer_field(reload_progress, "failedHashCount") != 0:
             raise RuntimeError("synthetic shared-file hashing reported failures")
@@ -667,7 +664,7 @@ def _sharing_publish_actions(
             "hashedCount": _integer_field(reload_progress, "hashedCount"),
             "newCount": _integer_field(reload_progress, "newCount"),
             "reusedCount": _integer_field(reload_progress, "reusedCount"),
-            "updatedAtMs": updated_at_ms,
+            "updatedAt": _integer_field(reload_progress, "updatedAt"),
         }
 
     initial_catalog = _wait_for_api(
@@ -692,7 +689,7 @@ def _sharing_publish_actions(
     reloaded_catalog = _wait_for_api(
         "synthetic shared-tree reload",
         options.network_timeout_seconds,
-        lambda: indexed_fixture(_integer_field(initial_catalog, "updatedAtMs")),
+        indexed_fixture,
     )
 
     _click_primary_nav(page, "Library")
