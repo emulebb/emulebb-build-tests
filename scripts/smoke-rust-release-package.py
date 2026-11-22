@@ -673,7 +673,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     peaks: dict[str, int] = {}
     samples = 0
 
-    def completed() -> bool:
+    def completed() -> bool | None:
         nonlocal samples
         for sampler in samplers.values():
             sampler.maybe_sample()
@@ -683,7 +683,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         rows = {row["id"]: row for row in _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100")}
         if any(rows.get(job_id, {}).get("state") == "failed" for job_id in jobs):
             raise RuntimeError("A parallel download entered failed state")
-        return all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs)
+        return True if all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs) else None
 
     wait_for(completed, timeout_seconds=120.0, interval_seconds=0.5, description="parallel package transfers")
     if peaks.get("chargedActive", 0) < 2:

@@ -708,6 +708,61 @@ def test_parallel_source_ownership_drains_every_started_peer(tmp_path, monkeypat
     assert all(log.closed for log in logs)
 
 
+def test_parallel_waits_until_every_job_is_complete(tmp_path, monkeypatch):
+    from emule_test_harness import rust_shared_library_io
+    monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 2)
+    monkeypatch.setattr(smoke, "PARALLEL_PAYLOAD_BYTES", 1024)
+    monkeypatch.setattr(smoke.time, "sleep", lambda *_: None)
+    class Sampler:
+        def __init__(self, *args):
+            self.samples = 0
+        def maybe_sample(self, **kwargs):
+            self.samples += 1
+        def summary(self):
+            return {"sampleCount": self.samples}
+    monkeypatch.setattr(rust_shared_library_io, "ProcessSampler", Sampler)
+    monkeypatch.setattr(smoke, "request_document", lambda *args, **kwargs: {
+        "data": {}, "meta": {"apiVersion": "v1", "settingsRevision": "1"}})
+    sequence, snapshot_calls, page_calls = [], [], []
+    def publish(*args, **kwargs):
+        file_hash = f"{len(sequence) + 1:032x}"
+        return {"sharedFiles": {"matched": {"hash": file_hash,
+            "ed2kLink": f"ed2k://|file|Sample.bin|1024|{file_hash}|/"}}}
+    def request(url, method, path, key, body=None, **kwargs):
+        if path == "/api/v1/downloads":
+            job = {"id": str(len(sequence) + 2), "hash": body["source"]["link"].split("|")[4]}
+            sequence.append(job)
+            return job
+        if path == "/api/v1/snapshot":
+            snapshot_calls.append(path)
+            return {"downloads": {"unfinished": 0, "completed": 1 if len(snapshot_calls) == 1 else 3}}
+        if path == "/api/v1/status":
+            return {"stats": {"downloadResources": {"active": 2, "preparing": 0, "waiting": 0,
+                "concurrency": {"mode": "fixed", "configuredLimit": 2, "target": 2, "burstActive": 0},
+                "residentMemory": {"usedBytes": 1024, "softTargetBytes": 64 * 1024 * 1024,
+                                   "limitBytes": 128 * 1024 * 1024}}}}
+        raise AssertionError(path)
+    def page(*args):
+        page_calls.append(True)
+        return [{**job, "state": "downloading" if len(page_calls) == 1 else "completed"} for job in sequence]
+    starts = []
+    def start(url, operation, job_id):
+        starts.append((operation, job_id))
+        return "accepted"
+    monkeypatch.setattr(smoke, "publish_shared_tree", publish)
+    monkeypatch.setattr(smoke, "request_json", request)
+    monkeypatch.setattr(smoke, "_download_page", page)
+    monkeypatch.setattr(smoke, "_download_action", start)
+    monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda url, job_id, *args, **kwargs: {"id": job_id})
+    result = smoke._parallel_download_jobs(tmp_path, sources=[
+        {"url": f"http://127.0.0.1:{port}", "port": port, "process": object()} for port in (24001, 24002)],
+        leecher_base_url="http://127.0.0.1:24000", p2p_ip="127.0.0.1", incoming=tmp_path / "incoming",
+        leecher_process=object())
+    assert len(page_calls) == result["resourceSamples"] == 2
+    assert starts == [("start", "2"), ("start", "3")]
+    assert len(result["deliveries"]) == 2 and result["controlRetries"] == 0
+
+
 def test_parallel_payload_identity_is_distinct_and_repeatable(tmp_path):
     first = smoke._write_transfer_payload(tmp_path / "a.bin", 4096, identity=b"a")
     second = smoke._write_transfer_payload(tmp_path / "b.bin", 4096, identity=b"b")
