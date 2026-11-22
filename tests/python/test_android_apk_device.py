@@ -784,7 +784,7 @@ class Phone:
         if route == "/api/v1/diagnostics":
             assert key == KEY
             return 200, json.dumps({"data": {"processResources": {
-                "sampledAtMs": 1700000000000, "residentMemoryBytes": 67108864,
+                "sampledAt": 1700000000, "residentMemoryBytes": 67108864,
                 "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500}, "privateOtherData": KEY}}).encode()
         if key is None:
             return self.unauthenticated, b"{}"
@@ -1239,18 +1239,19 @@ def test_permission_controller_resource_namespace_can_differ_from_package(tmp_pa
     assert json.loads(report.read_text())["status"] == "passed" and phone.notifications is True
 
 
-@pytest.mark.parametrize("changes", [{"residentMemoryBytes": 0}, {"sampledAtMs": None},
+@pytest.mark.parametrize("changes", [{"residentMemoryBytes": 0}, {"sampledAt": None},
     {"cpuUsagePercent": float("nan")}, {"cpuUsagePercent": float("inf")}, {"cpuUsagePercent": -1},
     {"cpuUsagePercent": True}, {"cpuSampleIntervalMs": -1}])
 def test_physical_resource_counters_reject_missing_or_nonfinite_samples(monkeypatch, changes):
-    record = {"sampledAtMs": 1700000000000, "residentMemoryBytes": 67108864,
+    record = {"sampledAt": 1700000000, "residentMemoryBytes": 67108864,
               "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500, **changes}
     monkeypatch.setattr(subject, "_request", lambda *args: (200, json.dumps({"data": {"processResources": record}}).encode()))
     with pytest.raises(RuntimeError, match="sample"):
         subject._physical_process_resources(54321, KEY)
 
 
-def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypatch):
+@pytest.mark.parametrize("sampled_at", [0, 1700000000])
+def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypatch, sampled_at):
     attempts = [0]
     clock = [0.0]
     monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
@@ -1258,12 +1259,13 @@ def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypa
 
     def request(*args):
         attempts[0] += 1
-        return 200, json.dumps({"data": {"processResources": {"sampledAtMs": 1700000000000,
+        return 200, json.dumps({"data": {"processResources": {"sampledAt": sampled_at,
             "residentMemoryBytes": 67108864, "cpuUsagePercent": None if attempts[0] == 1 else 250.0,
             "cpuSampleIntervalMs": None if attempts[0] == 1 else 500}, "operatorData": KEY}}).encode()
 
     monkeypatch.setattr(subject, "_request", request)
     result = subject._physical_process_resources(54321, KEY)
+    assert result["sampledAt"] == sampled_at
     assert attempts[0] == 2 and result["cpuUsagePercent"] == 250.0 and KEY not in json.dumps(result)
 
 

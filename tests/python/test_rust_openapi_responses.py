@@ -25,6 +25,9 @@ def write(path: Path, text: str) -> Path:
     ("Server", "hostNameResolvedAt", True), ("KadNode", "hostNameResolvedAt", True),
     ("KadNode", "createdAt", False), ("KadNode", "lastSeen", False),
     ("LogEntry", "timestamp", False),
+    ("ProcessResources", "sampledAt", True),
+    ("SharedFilePublishLane", "lastSuccessAt", True),
+    ("SharedFileKadKeywordPublish", "lastSuccessAt", True),
 ])
 @pytest.mark.parametrize("value", [None, 0, 1_800_000_000, -1, 1.5, True])
 def test_native_calendar_fields_use_nullable_or_required_integer_seconds(component, field, nullable, value):

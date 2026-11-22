@@ -582,18 +582,18 @@ def _physical_process_resources(port: int, key: str) -> dict:
         resources = document.get("data", {}).get("processResources") if isinstance(document, dict) else None
         if status != 200 or not isinstance(resources, dict):
             raise RuntimeError("Physical diagnostics did not expose process resource counters")
-        sampled = resources.get("sampledAtMs")
+        sampled = resources.get("sampledAt")
         memory = resources.get("residentMemoryBytes")
         cpu = resources.get("cpuUsagePercent")
         interval = resources.get("cpuSampleIntervalMs")
-        if type(sampled) is not int or sampled <= 0 or type(memory) is not int or memory <= 0:
+        if type(sampled) is not int or sampled < 0 or type(memory) is not int or memory <= 0:
             raise RuntimeError("Physical process memory sample is missing or invalid")
         if cpu is not None and (type(cpu) not in {int, float} or not math.isfinite(cpu) or cpu < 0):
             raise RuntimeError("Physical process CPU sample is invalid")
         if interval is not None and (type(interval) is not int or interval < 0):
             raise RuntimeError("Physical process CPU sample interval is invalid")
         if cpu is not None and interval is not None and interval > 0:
-            return {"sampledAtMs": sampled, "residentMemoryBytes": memory,
+            return {"sampledAt": sampled, "residentMemoryBytes": memory,
                     "cpuUsagePercent": cpu, "cpuSampleIntervalMs": interval}
         if time.monotonic() >= deadline:
             raise RuntimeError("Physical process CPU sample did not settle within its bound")
