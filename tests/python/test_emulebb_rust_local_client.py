@@ -474,6 +474,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path, local_kad_peer:
         observed_kad = wait_for_condition("the declared local Kad peer exchange", 30, observed_local_kad)
         # One real peer proves routing exchange, not the ten-contact readiness threshold.
         assert observed_kad["connected"] is False and observed_kad["bootstrapping"] is True
+        assert observed_kad["bootstrapProgress"] is None
         recheck_kad = request_json(
             base_url,
             "POST",

@@ -7,10 +7,22 @@ from types import SimpleNamespace
 import urllib.parse
 
 import pytest
+import jsonschema
 
 from emule_test_harness import rust_rest_conformance
 from emule_test_harness.rust_rest_contract import iter_downloads, iter_library_roots
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
+
+def test_kad_bootstrap_progress_uses_nullable_fractions():
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schema = module.load_openapi_document()["components"]["schemas"]["Kad"]["properties"]["bootstrapProgress"]
+    validator = jsonschema.Draft202012Validator(schema)
+    for value in (None, 0, 0.5, 1):
+        validator.validate(value)
+    for value in (-0.1, 1.1, "0.5", True):
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(value)
 
 
 def test_library_roots_follow_short_pages_without_skipping_id_gaps():
