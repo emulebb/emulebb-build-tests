@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
@@ -166,6 +167,25 @@ def test_server_fixture_mutation_rolls_back_when_initialization_row_missing(tmp_
         assert conn.execute("SELECT address, port FROM servers").fetchall() == before
 
 
+def test_server_fixture_calendar_times_are_seconds_and_preserve_first_seen(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    before = int(time.time())
+    rust_metadata.seed_server(database, {"host": "seed.example", "port": 4661})
+    with sqlite3.connect(database) as conn:
+        first, last, deleted = conn.execute(
+            "SELECT first_seen_at_s,last_seen_at_s,deleted_at_s FROM servers"
+        ).fetchone()
+        assert before <= first <= int(time.time())
+        assert last == first and deleted is None
+        conn.execute("UPDATE servers SET first_seen_at_s=1,last_seen_at_s=2")
+    rust_metadata.seed_server(database, {"host": "seed.example", "port": 4661})
+    with sqlite3.connect(database) as conn:
+        first, last = conn.execute("SELECT first_seen_at_s,last_seen_at_s FROM servers").fetchone()
+        assert first == 1
+        assert before <= last <= int(time.time())
+
+
 def test_server_fixture_ids_preserve_updates_and_do_not_revive_or_reuse(tmp_path):
     database = tmp_path / "metadata.db"
     rust_metadata.create_metadata_db(rust_repo(), database)
@@ -175,12 +195,12 @@ def test_server_fixture_ids_preserve_updates_and_do_not_revive_or_reuse(tmp_path
     rust_metadata.seed_server(database, {"host": "SEED.EXAMPLE", "port": 4661, "name": "Updated Server"})
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT id,address,name FROM servers").fetchall() == [(first, "seed.example", "Updated Server")]
-        conn.execute("UPDATE servers SET deleted_at_ms=0 WHERE id=?", (first,))
+        conn.execute("UPDATE servers SET deleted_at_s=0 WHERE id=?", (first,))
     rust_metadata.seed_server(database, {"host": "seed.example", "port": 4661})
     with sqlite3.connect(database) as conn:
-        second = conn.execute("SELECT id FROM servers WHERE deleted_at_ms IS NULL").fetchone()[0]
+        second = conn.execute("SELECT id FROM servers WHERE deleted_at_s IS NULL").fetchone()[0]
         assert second > first
-        assert conn.execute("SELECT deleted_at_ms FROM servers WHERE id=?", (first,)).fetchone() == (0,)
+        assert conn.execute("SELECT deleted_at_s FROM servers WHERE id=?", (first,)).fetchone() == (0,)
     rust_metadata.clear_servers(database)
     rust_metadata.seed_server(database, {"host": "192.0.2.1", "port": 4661})
     with sqlite3.connect(database) as conn:

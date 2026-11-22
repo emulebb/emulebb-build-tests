@@ -198,7 +198,7 @@ def read_discovery_snapshot(rust_repo: Path, db_path: Path) -> dict[str, object]
                 raise RuntimeError("discovery snapshot requires the Kad routing revision singleton")
             return {
                 "servers": {"status": states["servers"], "count": conn.execute(
-                    "SELECT count(*) FROM servers WHERE deleted_at_ms IS NULL").fetchone()[0]},
+                    "SELECT count(*) FROM servers WHERE deleted_at_s IS NULL").fetchone()[0]},
                 "kad": {"status": states["kad"], "revision": revision[0], "contactCount": conn.execute(
                     "SELECT count(*) FROM kad_routing_contacts").fetchone()[0], "bootstrapEndpointCount": conn.execute(
                     "SELECT count(*) FROM kad_bootstrap_endpoints").fetchone()[0]},
@@ -296,7 +296,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
     port = int(server.get("port") or 0)
     if not address or not (1 <= port <= 65535):
         raise ValueError("Rust server seed requires host/address and port.")
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         _initialize_server_discovery(conn)
         conn.execute(
@@ -304,10 +304,10 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
             INSERT INTO servers(
                 address, port, name, description, server_priority, static_server,
                 enabled, failed_count, ping_ms, users, files, soft_files, hard_files,
-                version, obfuscation_tcp_port, udp_flags, first_seen_at_ms, last_seen_at_ms, deleted_at_ms
+                version, obfuscation_tcp_port, udp_flags, first_seen_at_s, last_seen_at_s, deleted_at_s
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0, 0, 0, ?, ?, ?, ?, ?, NULL)
-            ON CONFLICT(address, port) WHERE deleted_at_ms IS NULL DO UPDATE SET
+            ON CONFLICT(address, port) WHERE deleted_at_s IS NULL DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 server_priority = excluded.server_priority,
@@ -316,7 +316,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
                 version = excluded.version,
                 obfuscation_tcp_port = excluded.obfuscation_tcp_port,
                 udp_flags = excluded.udp_flags,
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (
                 address,
