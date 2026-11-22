@@ -1258,7 +1258,7 @@ def test_watcher_database_query_returns_only_active_probe_rows(
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys=ON")
         root_path = subject.rust_metadata._upsert_local_path(connection, str(tmp_path), 0)
-        root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_ms) VALUES(?,0)", (root_path,)).lastrowid
+        root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_s) VALUES(?,0)", (root_path,)).lastrowid
         connection.execute("INSERT INTO shared_directory_root_origins VALUES(?,'explicit',0,1,1)", (root,))
         for hash_value, name, removed in (("11", "watch-probe-0000.bin", None), ("33", "watch-probe-0001.bin", 123)):
             known = connection.execute("SELECT id FROM known_files WHERE ed2k_hash=?", (bytes.fromhex(hash_value * 16),)).fetchone()[0]
@@ -1266,16 +1266,16 @@ def test_watcher_database_query_returns_only_active_probe_rows(
             connection.execute("INSERT INTO verified_local_content(known_file_id,display_name,part_size_bytes,part_count,aich_root) VALUES(?,?,16,1,?)", (known, name, bytes.fromhex("22" * 20)))
             connection.execute("INSERT INTO verified_local_md4_hashes VALUES(?,0,?)", (known, bytes(16)))
             connection.execute("INSERT INTO verified_local_aich_hashes VALUES(?,0,?)", (known, bytes(20)))
-            connection.execute("INSERT INTO local_file_instances(path_id,known_file_id,size_bytes,native_identity,verified_fingerprint,verified_at_ms) VALUES(?,?,16,?,?,0)", (path_id, known, b"identity" + bytes([known]), bytes(47)))
-            connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_ms,last_seen_at_ms,removed_at_ms) VALUES(?,?,?,?,0,0,?)", (root, path_id, known, name, removed))
+            connection.execute("INSERT INTO local_file_instances(path_id,known_file_id,size_bytes,native_identity,verified_fingerprint,verified_at_s) VALUES(?,?,16,?,?,0)", (path_id, known, b"identity" + bytes([known]), bytes(47)))
+            connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_s,last_seen_at_s,removed_at_s) VALUES(?,?,?,?,0,0,?)", (root, path_id, known, name, removed))
         parent_path = subject.rust_metadata._upsert_local_path(connection, str(tmp_path.parent), 0)
-        parent_root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_ms) VALUES(?,0)", (parent_path,)).lastrowid
+        parent_root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_s) VALUES(?,0)", (parent_path,)).lastrowid
         connection.execute("INSERT INTO shared_directory_root_origins VALUES(?,'explicit',0,1,1)", (parent_root,))
         path_id, known = connection.execute(
             "SELECT path_id,known_file_id FROM local_file_instances JOIN known_files ON known_files.id=known_file_id WHERE ed2k_hash=?",
             (bytes.fromhex("11" * 16),),
         ).fetchone()
-        connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_ms,last_seen_at_ms) VALUES(?,?,?,?,0,0)",
+        connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_s,last_seen_at_s) VALUES(?,?,?,?,0,0)",
                            (parent_root, path_id, known, f"{tmp_path.name}/watch-probe-0000.bin"))
         plan = connection.execute("EXPLAIN QUERY PLAN " + subject.ACTIVE_LOCAL_SOURCES_SQL).fetchall()
         assert not any("TEMP B-TREE" in str(row[3]) for row in plan)

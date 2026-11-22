@@ -78,9 +78,9 @@ ACTIVE_LOCAL_SOURCES_SQL = """
       JOIN shared_directory_roots
         ON shared_directory_roots.id = shared_file_memberships.root_id
       WHERE shared_file_memberships.path_id = local_file_instances.path_id
-      AND shared_file_memberships.removed_at_ms IS NULL
+      AND shared_file_memberships.removed_at_s IS NULL
       AND shared_directory_roots.enabled = 1
-      AND shared_directory_roots.deleted_at_ms IS NULL
+      AND shared_directory_roots.deleted_at_s IS NULL
       AND shared_directory_roots.accessible = 1
       AND shared_directory_roots.shareable = 1
     )
@@ -1137,7 +1137,7 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
                        OR (SELECT COUNT(*) FROM verified_local_aich_hashes
                            WHERE known_file_id = known_files.id) != verified_local_content.part_count
                 """,
-                "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_ms IS NULL",
+                "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_s IS NULL",
                 "scanFailures": "SELECT COUNT(*) FROM shared_file_scan_failures",
             }.items():
                 counts[key] = int(connection.execute(query).fetchone()[0])
@@ -2523,7 +2523,7 @@ def _watcher_loss_revision(profile_dir: Path, root_id: str) -> int:
     )) as connection:
         row = connection.execute(
             "SELECT watch_loss_revision FROM shared_directory_roots "
-            "WHERE id = ? AND enabled = 1 AND deleted_at_ms IS NULL", (root_id,),
+            "WHERE id = ? AND enabled = 1 AND deleted_at_s IS NULL", (root_id,),
         ).fetchone()
     if row is None:
         raise RuntimeError("Watcher recovery root no longer exists")

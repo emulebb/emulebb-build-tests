@@ -4323,8 +4323,8 @@ def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, obj
                 SELECT 1 FROM shared_file_memberships AS membership
                 JOIN shared_directory_roots AS root ON root.id = membership.root_id
                 WHERE membership.path_id = local_file_instances.path_id
-                  AND membership.removed_at_ms IS NULL
-                  AND root.deleted_at_ms IS NULL
+                  AND membership.removed_at_s IS NULL
+                  AND root.deleted_at_s IS NULL
                   AND root.enabled = 1 AND root.accessible = 1 AND root.shareable = 1
             )
             ORDER BY verified_local_content.known_file_id
@@ -4787,9 +4787,9 @@ def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
         "sharedRootsTotal": "SELECT COUNT(*) FROM shared_directory_roots",
         "sharedRootsEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE enabled!=0",
         "sharedRootsAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE enabled!=0 AND accessible!=0",
-        "sharedRootsActive": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_ms IS NULL",
-        "sharedRootsActiveEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_ms IS NULL AND enabled!=0",
-        "sharedRootsActiveAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_ms IS NULL AND enabled!=0 AND accessible!=0",
+        "sharedRootsActive": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_s IS NULL",
+        "sharedRootsActiveEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_s IS NULL AND enabled!=0",
+        "sharedRootsActiveAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_s IS NULL AND enabled!=0 AND accessible!=0",
         "serversTotal": "SELECT COUNT(*) FROM servers",
         "kadBootstrapEndpoints": "SELECT COUNT(*) FROM kad_bootstrap_endpoints",
         "peersTotal": "SELECT COUNT(*) FROM peers",

@@ -376,14 +376,14 @@ def seed_indexed_file(
         raise ValueError("Indexed file origin is invalid.")
     hash_blob = bytes.fromhex(ed2k_hash)
     normalized = normalize_search_text(name)
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             """
             INSERT INTO known_files(
                 ed2k_hash, size_bytes, display_name,
-                content_type, availability_score, first_seen_at_ms, last_seen_at_ms, updated_at_ms
+                content_type, availability_score, first_seen_at_s, last_seen_at_s, updated_at_s
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
@@ -391,8 +391,8 @@ def seed_indexed_file(
                 display_name = excluded.display_name,
                 content_type = excluded.content_type,
                 availability_score = max(known_files.availability_score, excluded.availability_score),
-                last_seen_at_ms = excluded.last_seen_at_ms,
-                updated_at_ms = excluded.updated_at_ms
+                last_seen_at_s = excluded.last_seen_at_s,
+                updated_at_s = excluded.updated_at_s
             """,
             (hash_blob, size_bytes, name, content_type, availability_score, now, now, now),
         )
@@ -403,7 +403,7 @@ def seed_indexed_file(
             """
             INSERT INTO known_file_origins(
                 known_file_id, origin, size_bytes, content_type,
-                availability_score, first_seen_at_ms, last_seen_at_ms
+                availability_score, first_seen_at_s, last_seen_at_s
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id, origin) DO UPDATE SET
@@ -413,7 +413,7 @@ def seed_indexed_file(
                     known_file_origins.availability_score,
                     excluded.availability_score
                 ),
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (
                 known_file_id,
@@ -427,12 +427,12 @@ def seed_indexed_file(
         )
         conn.execute(
             """
-            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_at_ms, last_seen_at_ms)
+            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_at_s, last_seen_at_s)
             VALUES (?, ?, ?, 1, ?, ?)
             ON CONFLICT(known_file_id, normalized_name) DO UPDATE SET
                 name = excluded.name,
                 seen_count = file_names.seen_count + 1,
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (known_file_id, name, normalized, now, now),
         )
@@ -443,11 +443,11 @@ def seed_indexed_file(
         conn.execute(
             """
             INSERT INTO file_name_origins(
-                file_name_id, origin, first_seen_at_ms, last_seen_at_ms
+                file_name_id, origin, first_seen_at_s, last_seen_at_s
             )
             VALUES (?, ?, ?, ?)
             ON CONFLICT(file_name_id, origin) DO UPDATE SET
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (file_name_id, origin, now, now),
         )
@@ -496,8 +496,7 @@ def seed_download_job(
     aich_hashset = aich_hashset or []
     sources = sources or []
     piece_count = (size_bytes + piece_size - 1) // piece_size
-    now_ms = _now_ms()
-    now_s = now_ms // 1000
+    now_s = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("BEGIN IMMEDIATE")
@@ -539,11 +538,11 @@ def seed_download_job(
                 """INSERT INTO known_files(
                    ed2k_hash, display_name, aich_root, aich_root_origin,
                    all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
-                   last_upload_requested_at_s, first_seen_at_ms, last_seen_at_ms, updated_at_ms)
+                   last_upload_requested_at_s, first_seen_at_s, last_seen_at_s, updated_at_s)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (hash_blob, name, root_blob, aich_root_origin, all_time_uploaded_bytes,
                  all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_s,
-                 now_ms, now_ms, now_ms),
+                 now_s, now_s, now_s),
             )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
@@ -612,8 +611,7 @@ def seed_retained_download_scale(db_path: Path, *, count: int = 100_000) -> dict
     """
     if type(count) is not int or count <= 0:
         raise ValueError("retained download count must be a positive integer")
-    now_ms = _now_ms()
-    now_s = now_ms // 1000
+    now_s = int(time.time())
     result = {"jobs": count, "completed": 0, "stopped": 0, "queued": 0}
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -629,13 +627,13 @@ def seed_retained_download_scale(db_path: Path, *, count: int = 100_000) -> dict
             result[state] += 1
             known_id = conn.execute(
                 """INSERT INTO known_files(ed2k_hash,display_name,size_bytes,
-                   first_seen_at_ms,last_seen_at_ms,updated_at_ms) VALUES(?,?,1024,?,?,?)""",
-                (hash_blob, name, now_ms, now_ms, now_ms),
+                   first_seen_at_s,last_seen_at_s,updated_at_s) VALUES(?,?,1024,?,?,?)""",
+                (hash_blob, name, now_s, now_s, now_s),
             ).lastrowid
             path_id = None
             if complete:
                 path_id = _upsert_local_path(
-                    conn, str(db_path.parent / "absent-scale-outputs" / name), now_ms
+                    conn, str(db_path.parent / "absent-scale-outputs" / name), now_s
                 )
                 conn.execute(
                     """INSERT INTO download_history(ed2k_hash,size_bytes,display_name,
@@ -668,11 +666,11 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
     This helper seeds configuration only; it grants no file serving authority.
     """
 
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
-            "UPDATE shared_directory_roots SET deleted_at_ms = ? WHERE deleted_at_ms IS NULL",
+            "UPDATE shared_directory_roots SET deleted_at_s = ? WHERE deleted_at_s IS NULL",
             (now,),
         )
         for root in roots:
@@ -684,7 +682,7 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
                 """
                 INSERT INTO shared_directory_roots(
                     path_id, monitor_owned, shareable, accessible,
-                    enabled, created_at_ms, deleted_at_ms
+                    enabled, created_at_s, deleted_at_s
                 )
                 VALUES (?, ?, ?, ?, 1, ?, NULL)
                 ON CONFLICT(path_id) DO UPDATE SET
@@ -692,7 +690,7 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
                     shareable = excluded.shareable,
                     accessible = excluded.accessible,
                     enabled = 1,
-                    deleted_at_ms = NULL
+                    deleted_at_s = NULL
                 """,
                 (
                     path_id,

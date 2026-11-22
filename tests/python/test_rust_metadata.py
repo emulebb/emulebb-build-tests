@@ -167,6 +167,18 @@ def test_server_fixture_mutation_rolls_back_when_initialization_row_missing(tmp_
         assert conn.execute("SELECT address, port FROM servers").fetchall() == before
 
 
+def test_library_seed_calendar_times_use_seconds(tmp_path):
+    database = tmp_path / "metadata.db"
+    rust_metadata.create_metadata_db(rust_repo(), database)
+    before = int(time.time())
+    rust_metadata.seed_indexed_file(database, ed2k_hash="11" * 16, name="Sample File.bin",
+                                    size_bytes=32, origin="local_share")
+    with sqlite3.connect(database) as conn:
+        for table in ("known_files", "known_file_origins", "file_names", "file_name_origins"):
+            first, last = conn.execute(f"SELECT first_seen_at_s,last_seen_at_s FROM {table}").fetchone()
+            assert before <= first <= last <= int(time.time())
+
+
 def test_profile_and_identity_fixture_calendar_times_are_seconds(tmp_path):
     database = tmp_path / "metadata.db"
     before = int(time.time())
@@ -396,7 +408,7 @@ def test_download_seed_inherits_stronger_accepted_identity_without_local_rows(tm
     with sqlite3.connect(metadata_db) as conn:
         conn.execute(
             "INSERT INTO known_files(ed2k_hash,size_bytes,display_name,aich_root,aich_root_origin,"
-            "first_seen_at_ms,last_seen_at_ms,updated_at_ms) VALUES (?,8,'Accepted.bin',?,?,0,0,0)",
+            "first_seen_at_s,last_seen_at_s,updated_at_s) VALUES (?,8,'Accepted.bin',?,?,0,0,0)",
             (bytes.fromhex("11" * 16), bytes.fromhex("22" * 20), origin),
         )
     job_id = rust_metadata.seed_download_job(
@@ -418,7 +430,7 @@ def test_download_seed_rejects_accepted_identity_conflicts_before_mutation(tmp_p
     with sqlite3.connect(metadata_db) as conn:
         conn.execute(
             "INSERT INTO known_files(ed2k_hash,size_bytes,display_name,aich_root,aich_root_origin,"
-            "first_seen_at_ms,last_seen_at_ms,updated_at_ms) VALUES (?,8,'Accepted.bin',?,'stock_import',0,0,0)",
+            "first_seen_at_s,last_seen_at_s,updated_at_s) VALUES (?,8,'Accepted.bin',?,'stock_import',0,0,0)",
             (bytes.fromhex("11" * 16), bytes.fromhex("22" * 20)),
         )
     with pytest.raises(ValueError, match="conflicts with accepted"):
@@ -493,7 +505,7 @@ def test_download_seed_preserves_completed_history_authority(tmp_path: Path, con
         if conflict == "inherited-root":
             conn.execute(
                 "INSERT INTO known_files(ed2k_hash,size_bytes,display_name,aich_root,aich_root_origin,"
-                "first_seen_at_ms,last_seen_at_ms,updated_at_ms) VALUES (?,8,'Accepted.bin',?,'stock_import',0,0,0)",
+                "first_seen_at_s,last_seen_at_s,updated_at_s) VALUES (?,8,'Accepted.bin',?,'stock_import',0,0,0)",
                 (bytes.fromhex("11" * 16), bytes.fromhex("33" * 20)),
             )
         before = list(conn.iterdump())

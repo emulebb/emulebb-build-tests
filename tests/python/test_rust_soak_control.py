@@ -3491,7 +3491,7 @@ def test_profile_status_reports_manifest_processes_and_metadata_counts(tmp_path:
         connection.execute("INSERT INTO known_files VALUES (2, 200, 20, 3, 2)")
         connection.execute("CREATE TABLE verified_local_content(known_file_id INTEGER)")
         connection.execute("INSERT INTO verified_local_content VALUES(1)")
-        connection.execute("CREATE TABLE shared_directory_roots (enabled INTEGER, accessible INTEGER, deleted_at_ms INTEGER)")
+        connection.execute("CREATE TABLE shared_directory_roots (enabled INTEGER, accessible INTEGER, deleted_at_s INTEGER)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (1, 0, NULL)")
         connection.execute("INSERT INTO shared_directory_roots VALUES (0, 1, NULL)")
@@ -3584,9 +3584,9 @@ def test_set_shared_publish_priority_split_updates_only_matching_root(tmp_path: 
         connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
         connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
         connection.execute("CREATE TABLE shared_directory_roots(id INTEGER, enabled INTEGER, "
-                           "accessible INTEGER, shareable INTEGER, deleted_at_ms INTEGER)")
+                           "accessible INTEGER, shareable INTEGER, deleted_at_s INTEGER)")
         connection.execute("INSERT INTO shared_directory_roots VALUES(1, 1, 1, 1, NULL)")
-        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_ms INTEGER)")
+        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_s INTEGER)")
         rows = [
             (1, "F:/share/keep/a.bin"),
             (2, "F:/share/keep/nested/b.bin"),
@@ -3682,9 +3682,9 @@ def test_set_shared_publish_priority_split_refuses_empty_high_root(tmp_path: Pat
         connection.execute("CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT)")
         connection.execute("CREATE TABLE local_file_instances (known_file_id INTEGER, path_id INTEGER)")
         connection.execute("CREATE TABLE shared_directory_roots(id INTEGER, enabled INTEGER, "
-                           "accessible INTEGER, shareable INTEGER, deleted_at_ms INTEGER)")
+                           "accessible INTEGER, shareable INTEGER, deleted_at_s INTEGER)")
         connection.execute("INSERT INTO shared_directory_roots VALUES(1, 1, 1, 1, NULL)")
-        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_ms INTEGER)")
+        connection.execute("CREATE TABLE shared_file_memberships(path_id INTEGER, root_id INTEGER, removed_at_s INTEGER)")
         connection.execute("INSERT INTO verified_local_content VALUES (1, 'normal', 0)")
         connection.execute("INSERT INTO local_paths VALUES (1, 'F:/share/other/c.bin')")
         connection.execute("INSERT INTO local_file_instances VALUES (1, 1)")
