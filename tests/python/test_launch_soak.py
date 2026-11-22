@@ -500,7 +500,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
     assert all(path.read_bytes() == b"a" * 512 for path in adjacent_artifacts)
 
 
-def test_capture_rust_diagnostic_bundle_rejects_non_v6_response(
+def test_capture_rust_diagnostic_bundle_requires_schema_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -543,7 +543,7 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v6_response(
         module,
         "retry_http_bytes",
         lambda *_args, **_kwargs: json.dumps(
-            {"schema": "emulebb.diagnostic-bundle.v3"}, separators=(",", ":")
+            {"schema": None}, separators=(",", ":")
         ).encode("utf-8"),
     )
 

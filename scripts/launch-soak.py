@@ -67,7 +67,7 @@ from emule_test_harness.vm_guest_profiles import retry_http_bytes, retry_http_js
 
 DEFAULT_PROFILE_SECONDS = 300.0
 DEFAULT_PROCESS_SAMPLE_INTERVAL_SECONDS = 2.0
-RUST_DIAGNOSTIC_BUNDLE_SCHEMA = "emulebb.diagnostic-bundle.v7"
+RUST_DIAGNOSTIC_BUNDLE_SCHEMA = "emulebb.diagnostic-bundle.v8"
 
 
 @dataclass(frozen=True)
