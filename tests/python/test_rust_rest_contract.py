@@ -19,13 +19,15 @@ def test_library_pages_keep_filters_and_continue_without_total_cap():
         index = 1 if cursor else 0
         return {"data": [{"hash": f"{index + 1:032x}", "displayName": "Sample.bin"}],
                 "meta": {"hasMore": not index, "nextCursor": None if index else "next"}}
-    rows = list(iter_library_files(fetch, view="shared", search="Sample", root_id="7", count_total=True))
+    rows = list(iter_library_files(fetch, view="shared", search="Sample", root_id="7", count_total=True,
+                                   sort="sizeBytes", order="desc"))
     assert [row["hash"] for row in rows] == [f"{n:032x}" for n in (1, 2)]
     assert len(calls) == 2
     for path in calls:
         query = parse_qs(urlsplit(path).query)
         assert {key: query[key] for key in ("view", "q", "rootId", "limit", "countTotal")} == {
             "view": ["shared"], "q": ["Sample"], "rootId": ["7"], "limit": ["200"], "countTotal": ["true"]}
+        assert query["sort"] == ["sizeBytes"] and query["order"] == ["desc"]
 
 
 def test_library_locations_use_separate_cached_pages():

@@ -63,6 +63,12 @@ DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
 LIBRARY_FILES_PROBE_PATH = "/library/files?view=shared&limit=1&countTotal=true"
+LIBRARY_FILE_SORTS = (
+    "displayName", "sizeBytes", "sessionUploadedBytes", "sessionUploadRequests",
+    "sessionAcceptedUploads", "lifetimeUploadedBytes", "lifetimeUploadRequests",
+    "lifetimeAcceptedUploads", "lastUploadRequestedAt", "lastUploadedAt",
+)
+LIBRARY_SUBSTRING_PROBES = ("FiLe-000", "CASE-VARIANT", "[bracketed]", "_%", "CAF\u00c9")
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
@@ -1175,6 +1181,79 @@ def retained_download_observation(client: RestClient) -> dict[str, object]:
         "started": RETAINED_DOWNLOAD_EXPECTED["startedDownloads"],
     }
     return observed
+
+
+def prove_library_reads(
+    fetch_page: Callable[[str], dict], *, spec: FixtureSpec,
+    sample: Callable[[], object],
+) -> dict[str, object]:
+    """Stream all sort directions and literal searches, retaining only page summaries.
+
+    Run against the unchanged baseline, before watcher mutations or uploads.
+    These statistics therefore exercise large equal-key cohorts, not live counters.
+    """
+    traversals = []
+    for sort, order, search in [
+        (sort, order, None) for sort in LIBRARY_FILE_SORTS for order in ("asc", "desc")
+    ] + [("displayName", "asc", query) for query in LIBRARY_SUBSTRING_PROBES]:
+        started = time.monotonic()
+        page_count = 0
+        first_page = last_page = None
+        previous = None
+        row_count = 0
+
+        def fetch(path: str) -> dict:
+            nonlocal page_count, first_page, last_page
+            document = fetch_page(path)
+            rows = document.get("data", [])
+            summary = {
+                "rows": len(rows),
+                "firstHash": rows[0].get("hash") if rows else None,
+                "lastHash": rows[-1].get("hash") if rows else None,
+            }
+            page_count += 1
+            if first_page is None:
+                first_page = summary
+            last_page = summary
+            sample()
+            return document
+
+        for row in rust_rest_contract.iter_library_files(
+            fetch, view="shared", sort=sort, order=order, search=search,
+        ):
+            name = row["displayName"].lower()
+            if row.get("present") is not True or row.get("sharingEnabled") is not True:
+                raise RuntimeError("library shared traversal returned an ineligible row")
+            if search is not None and search.lower() not in name:
+                raise RuntimeError("library substring traversal returned a nonmatching name")
+            if sort == "displayName":
+                key = (name, row["hash"])
+            else:
+                value = row.get(sort)
+                nullable = sort in ("sizeBytes", "lastUploadRequestedAt", "lastUploadedAt")
+                if (value is None and not nullable) or (
+                    value is not None and (type(value) is not int or value < 0)
+                ):
+                    raise RuntimeError(f"library sort {sort} returned an invalid value")
+                key = (value is not None, value if value is not None else 0, row["hash"])
+            if previous is not None and not (key > previous if order == "asc" else key < previous):
+                raise RuntimeError(f"library {sort}/{order} traversal did not strictly advance")
+            previous = key
+            row_count += 1
+            if row_count > spec.file_count:
+                raise RuntimeError("library traversal exceeded the unchanged baseline")
+        expected = spec.file_count if search is None else sum(
+            search.lower() in fixture.relative_file_for_index(index, spec).name.lower()
+            for index in range(spec.file_count)
+        )
+        if row_count != expected:
+            raise RuntimeError(f"library {sort}/{order} traversal returned {row_count}, expected {expected}")
+        traversals.append({
+            "sort": sort, "order": order, "search": search, "rows": row_count,
+            "pages": page_count, "firstPage": first_page, "lastPage": last_page,
+            "elapsedSeconds": round(time.monotonic() - started, 3),
+        })
+    return {"ok": True, "traversals": traversals}
 
 
 def start_daemon(
@@ -3182,6 +3261,15 @@ def run_campaign(
             "process": sampler.summary(read_start),
         }
 
+        def fetch_library_page(path: str) -> dict:
+            return client.request("GET", path, timeout_seconds=min(120.0, remaining_seconds()))
+
+        read_start = len(sampler.samples)
+        report["libraryReads"] = prove_library_reads(
+            fetch_library_page, spec=spec, sample=sampler.maybe_sample,
+        )
+        report["libraryReads"]["process"] = sampler.summary(read_start)
+
         root_update_started = time.monotonic()
         roots = list(rust_rest_contract.iter_library_roots(lambda path: client.request("GET", path)))
         baseline = next(row for row in roots if _normalized_path_key(row["path"]) == _normalized_path_key(paths.fixture_root))
@@ -3483,6 +3571,7 @@ def run_campaign(
         }
         storage_snapshots = [phase["storage"] for phase in report["phases"]] + [warm["storage"], final["storage"]]
         global_checks = {
+            "libraryReadTraversal": report["libraryReads"]["ok"] is True,
             "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
             "optionalRootWatching": report["rootWatchPolicy"] == {"largeRootEnabled": False, "watcherRootEnabled": True},
             "resourceSamplesPresent": len(samplers) == 4

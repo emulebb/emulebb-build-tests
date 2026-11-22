@@ -4,6 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -11,6 +12,65 @@ from emule_test_harness import rust_shared_library_io as subject
 from emule_test_harness import rust_cgroup_budget as cgroup_budget
 from emule_test_harness import rust_shared_library_storage as storage
 from emule_test_harness import workspace_layout
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fault", [None, "missing", "duplicate", "reversed", "filter", "cursor", "counter"])
+def test_library_read_qualification_checks_late_pages_and_literal_filters(fault):
+    spec = subject.FixtureSpec(
+        top_directories=1, leaf_directories_per_top=1, files_per_leaf=3,
+        small_count=1, small_size=16, medium_count=1, medium_size=32,
+        large_count=1, large_size=64,
+    )
+    rows = [
+        {"hash": f"{index + 1:032x}", "displayName": f"file-{index:06d}.bin",
+         "present": True, "sharingEnabled": True,
+         **{sort: (None if sort.startswith("last") and index < 2 else index)
+            for sort in subject.LIBRARY_FILE_SORTS if sort != "displayName"}}
+        for index in range(3)
+    ]
+    calls = []
+    samples = []
+
+    def fetch(path):
+        query = parse_qs(urlsplit(path).query)
+        calls.append(query)
+        selected = rows if query["order"] == ["asc"] else rows[::-1]
+        search = query.get("q", [None])[0]
+        if search:
+            selected = [row for row in selected if search.lower() in row["displayName"].lower()]
+        if fault == "missing":
+            selected = selected[:-1]
+        elif fault == "duplicate" and selected:
+            selected = [selected[0], selected[0], *selected[1:]]
+        elif fault == "reversed":
+            selected = selected[::-1]
+        elif fault == "filter" and search and not selected:
+            selected = rows
+        offset = int(query.get("cursor", ["0"])[0])
+        page = [dict(row) for row in selected[offset:offset + 1]]
+        if fault == "counter" and page:
+            page[0]["sessionUploadRequests"] = True
+        more = offset + len(page) < len(selected)
+        return {"data": page, "meta": {
+            "hasMore": more, "nextCursor": (str(offset if fault == "cursor" else offset + 1) if more else None),
+        }}
+
+    if fault:
+        with pytest.raises(RuntimeError):
+            subject.prove_library_reads(fetch, spec=spec, sample=lambda: samples.append(1))
+        return
+    report = subject.prove_library_reads(fetch, spec=spec, sample=lambda: samples.append(1))
+    assert report["ok"] is True
+    assert len(report["traversals"]) == 25
+    for traversal in report["traversals"][:20]:
+        assert traversal["rows"] == 3 and traversal["pages"] == 3
+        ascending = traversal["order"] == "asc"
+        assert traversal["firstPage"]["firstHash"] == f"{1 if ascending else 3:032x}"
+        assert traversal["lastPage"]["lastHash"] == f"{3 if ascending else 1:032x}"
+    assert [item["rows"] for item in report["traversals"][20:]] == [3, 0, 0, 0, 0]
+    assert len(samples) == len(calls)
+    assert all(query["limit"] == ["200"] and query["view"] == ["shared"] for query in calls)
 
 
 def cgroup_files(tmp_path):
