@@ -1207,15 +1207,15 @@ def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(m
     ("failed to bind REST/WebUI TCP listener at synthetic-private-address: Address in use (os error 98)", "rest-listen-failed"),
     ("failed to install the process logging subscriber: synthetic-private-cause", "logging-init-failed"),
     ("embedded host readiness receiver closed during startup", "native-host-invalid"),
-    ("p2pBindIp or p2pBindInterface is required because no default-route IPv4 interface was detected; start with --p2p-bind-interface <NAME>, then save the P2P bind interface in WebUI Settings > Network", "network-default-route-missing"),
-    ("p2pBindIp or p2pBindInterface is required because multiple default-route IPv4 interfaces were detected; start with --p2p-bind-interface <NAME>, then save the P2P bind interface in WebUI Settings > Network", "network-default-route-ambiguous"),
-    ("p2pBindIp or p2pBindInterface is required when VPN Guard blocks public P2P", "network-binding-invalid"),
-    ("p2pBindInterface synthetic-private-interface did not resolve to an IPv4 address", "network-binding-invalid"),
-    ("p2pBindInterface synthetic-private-interface is ambiguous", "network-binding-invalid"),
-    ("p2pBindInterface synthetic-private-interface resolved to non-IPv4 address synthetic-private-address", "network-binding-invalid"),
+    ("network.p2p.bindIp or network.p2p.bindInterface is required because no default-route IPv4 interface was detected; while stopped, use --profile PATH settings set network.p2p.bindInterface NAME", "network-default-route-missing"),
+    ("network.p2p.bindIp or network.p2p.bindInterface is required because multiple default-route IPv4 interfaces were detected; while the daemon is stopped, run emulebb-rust --profile <PATH> settings set network.p2p.bindInterface <NAME>", "network-default-route-ambiguous"),
+    ("network.p2p.bindIp or network.p2p.bindInterface is required when VPN Guard blocks public P2P", "network-binding-invalid"),
+    ('network.p2p.bindInterface "synthetic-private-interface" did not resolve to an IPv4 address', "network-binding-invalid"),
+    ('network.p2p.bindInterface "synthetic-private-interface" is ambiguous', "network-binding-invalid"),
+    ('network.p2p.bindInterface "synthetic-private-interface" resolved to non-IPv4 address synthetic-private-address', "network-binding-invalid"),
     ("failed to enumerate local interfaces: synthetic-private-cause", "network-interface-inventory-failed"),
-    ("kad.listenPort is required when ED2K servers are configured", "network-config-invalid"),
-    ("ed2k.listenPort is required when ED2K servers are configured", "network-config-invalid"),
+    ("network.p2p.udpPort is required when P2P is enabled", "network-config-invalid"),
+    ("network.p2p.tcpPort is required when P2P is enabled", "network-config-invalid"),
 ])
 def test_post_failure_source_stage_wins_over_dynamic_path_and_lower_level_errno(message, category):
     result = subject._post_failure_error_category(message)

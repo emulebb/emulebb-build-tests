@@ -331,9 +331,9 @@ def _post_failure_error_category(message: str) -> str:
             "profile has no parent", "WebUI assets must belong to the application directory", "current WebUI assets are not ready",
             "asset cleanup escaped application directory", "embedded host readiness receiver closed before startup",
             "embedded host readiness receiver closed during startup"},
-        "network-binding-invalid": {"p2pBindIp or p2pBindInterface is required when VPN Guard blocks public P2P"},
-        "network-config-invalid": {"kad.listenPort is required when ED2K servers are configured",
-            "ed2k.listenPort is required when ED2K servers are configured"},
+        "network-binding-invalid": {"network.p2p.bindIp or network.p2p.bindInterface is required when VPN Guard blocks public P2P"},
+        "network-config-invalid": {"network.p2p.udpPort is required when P2P is enabled",
+            "network.p2p.tcpPort is required when P2P is enabled"},
     }
     for category, messages in exact.items():
         if message in messages:
@@ -352,8 +352,8 @@ def _post_failure_error_category(message: str) -> str:
         "incoming-storage": ("failed to create incoming dir ",),
         "webui-assets-invalid": ("rest.web_root_dir must be an existing directory: ", "rest.web_root_dir must contain index.html: "),
         "rest-listen-failed": ("failed to bind REST/WebUI TCP listener at ",),
-        "network-default-route-missing": ("p2pBindIp or p2pBindInterface is required because no default-route IPv4 interface was detected; ",),
-        "network-default-route-ambiguous": ("p2pBindIp or p2pBindInterface is required because multiple default-route IPv4 interfaces were detected; ",),
+        "network-default-route-missing": ("network.p2p.bindIp or network.p2p.bindInterface is required because no default-route IPv4 interface was detected; ",),
+        "network-default-route-ambiguous": ("network.p2p.bindIp or network.p2p.bindInterface is required because multiple default-route IPv4 interfaces were detected; ",),
     }
     for category, starts in prefixes.items():
         if message.startswith(starts):
@@ -371,7 +371,7 @@ def _post_failure_error_category(message: str) -> str:
             return category
     if message.startswith("profile settings ") and message.endswith("; rest.api_key requires owner-only permissions (chmod 600)"):
         return "bootstrap-invalid"
-    if message.startswith("p2pBindInterface ") and (message.endswith((" did not resolve to an IPv4 address", " is ambiguous"))
+    if message.startswith("network.p2p.bindInterface ") and (message.endswith((" did not resolve to an IPv4 address", " is ambiguous"))
             or " resolved to non-IPv4 address " in message):
         return "network-binding-invalid"
     # WHY: bare Rust/JVM I/O messages can contain only a private path/address.

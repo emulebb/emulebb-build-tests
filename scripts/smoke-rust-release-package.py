@@ -770,6 +770,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         }
         if not progress_history or latest_progress["seconds"] - progress_history[-1]["seconds"] >= 15:
             progress_history.append(latest_progress)
+            print("parallelTransfer: " + json.dumps(latest_progress, sort_keys=True), file=sys.stderr, flush=True)
         if any(rows.get(job_id, {}).get("state") == "failed" for job_id in jobs):
             raise RuntimeError("A parallel download entered failed state")
         return True if all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs) else None
