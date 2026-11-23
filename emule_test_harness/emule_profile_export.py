@@ -249,7 +249,7 @@ def _manifest_known_file(row: dict[str, Any]) -> dict[str, Any]:
         "allTimeUploadedBytes": row["all_time_uploaded_bytes"],
         "allTimeUploadRequests": row["all_time_upload_requests"],
         "allTimeUploadAccepts": row["all_time_upload_accepts"],
-        "lastUploadRequestMs": row["last_upload_request_ms"],
+        "lastUploadRequestedAtSeconds": row["last_upload_requested_at_s"],
     }
 
 

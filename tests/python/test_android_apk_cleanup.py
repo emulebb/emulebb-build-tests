@@ -14,7 +14,7 @@ SIGNER = "c" * 64
 
 
 @pytest.mark.parametrize("fault", [None, "report-hash", "device", "fixture-hash", "zero", "multiple", "bound",
-    "unknown-file", "directory-symlink", "file-symlink", "redirect", "changed-occupant", "current-incoming", "shared-root"])
+    "unknown-file", "directory-symlink", "file-symlink", "redirect", "changed-occupant", "current-incoming", "saved-incoming", "shared-root"])
 @pytest.mark.parametrize("contents", ["occupant", "payload", "both"])
 def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_directory(tmp_path, monkeypatch, fault, contents):
     retained = tmp_path / "retained"
@@ -44,14 +44,16 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
         candidates *= 2
     elif fault == "bound":
         candidates *= 17
-    settings = {"daemon": {"incomingDir": candidate if fault == "current-incoming" else "/operator/Incoming"}}
-    roots = [{"path": canonical if fault == "shared-root" else "/operator/Shared"}]
+    settings = {"data": {"effective": {"storage": {"incomingDirectory": candidate if fault == "current-incoming" else "/operator/Incoming"}},
+                         "saved": {"storage": {"incomingDirectory": {"mode": "custom", "value": candidate if fault == "saved-incoming" else "/operator/Incoming"}}}},
+                "meta": {"settingsRevision": "7"}}
+    roots = [{"id": "1", "path": canonical if fault == "shared-root" else "/operator/Shared", "managed": False}]
     operations, requests, removed = [], [], []
 
     def request(base, method, route, key):
         requests.append((method, route))
         assert method == "GET", "cleanup must not mutate operator configuration"
-        return deepcopy(settings if route.endswith("settings") else {"roots": roots})
+        return deepcopy(settings if route.endswith("settings") else {"data": roots, "meta": {"hasMore": False, "nextCursor": None}})
 
     def command(*args, **kwargs):
         operation = args[2:]
@@ -83,6 +85,7 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
         return ""
 
     monkeypatch.setattr(subject, "request_json", request)
+    monkeypatch.setattr(subject, "http_json", lambda base, route, *, api_key: request(base, "GET", route, api_key))
     arguments = dict(prefix=("-s", "private-serial"), retained_report=retained,
         report_sha256="0" * 64 if fault == "report-hash" else report_sha,
         fixture_sha256="0" * 64 if fault == "fixture-hash" else payload_sha, output_root=tmp_path,
@@ -98,7 +101,7 @@ def test_cleanup_requires_exact_source_report_nonce_content_and_unprotected_dire
         result = subject.cleanup_report_fixture(command, **arguments)
         assert result["status"] == "passed" and result["filesRemoved"] == len(entries) and result["directoriesRemoved"] == 1
         assert result["settingsChanged"] is False and removed == list(entries) + [canonical]
-    if fault in {"current-incoming", "shared-root"}:
+    if fault in {"current-incoming", "saved-incoming", "shared-root"}:
         assert json.loads((tmp_path / "cleanup.json").read_text())["failureCode"] == "protected-root"
     if fault == "changed-occupant":
         assert json.loads((tmp_path / "cleanup.json").read_text())["failureCode"] == "unknown-contents"

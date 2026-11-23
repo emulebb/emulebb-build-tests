@@ -79,16 +79,33 @@ class FixtureSpec:
 
 
 PRODUCTION_SPEC = FixtureSpec()
+LOW_MEMORY_SPEC = FixtureSpec(
+    top_directories=50, small_count=40_000, medium_count=7_500, large_count=2_500,
+)
+QUALIFICATION_SPECS = (LOW_MEMORY_SPEC, PRODUCTION_SPEC)
+
+
+def capacity_tier(file_count: int) -> tuple[FixtureSpec, int]:
+    """Return the operator-approved fixture and total process-tree memory cap."""
+    if file_count == 50_000:
+        return LOW_MEMORY_SPEC, 512 * MIB
+    if file_count == 100_000:
+        return PRODUCTION_SPEC, 1024 * MIB
+    raise ValueError("library capacity must be 50000 or 100000 files")
+
+
+def _unicode_cohort_start(spec: FixtureSpec) -> int:
+    return spec.file_count - 1_100
 
 
 def baseline_long_path_count(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
-    """Reserve one 1,000-file top-level group in the production fixture."""
+    """Reserve one 1,000-file group in either capacity-tier fixture."""
 
-    return 1_000 if spec == PRODUCTION_SPEC else 0
+    return 1_000 if spec in QUALIFICATION_SPECS else 0
 
 
 def unicode_cohort_count(spec: FixtureSpec = PRODUCTION_SPEC) -> int:
-    return len(UNICODE_FILE_NAMES) if spec == PRODUCTION_SPEC else 0
+    return len(UNICODE_FILE_NAMES) if spec in QUALIFICATION_SPECS else 0
 
 
 def unicode_cohort_summary(spec: FixtureSpec = PRODUCTION_SPEC) -> dict[str, object]:
@@ -101,7 +118,7 @@ def unicode_cohort_summary(spec: FixtureSpec = PRODUCTION_SPEC) -> dict[str, obj
         "cjk": True,
         "emoji": True,
         "bracketed": True,
-        "longUnicodePathCount": 4 if spec == PRODUCTION_SPEC else 0,
+        "longUnicodePathCount": 4 if spec in QUALIFICATION_SPECS else 0,
     }
 
 
@@ -136,10 +153,10 @@ def relative_file_for_index(index: int, spec: FixtureSpec = PRODUCTION_SPEC) -> 
     top = index // files_per_top
     leaf = (index % files_per_top) // spec.files_per_leaf
     relative = Path(f"group-{top:03d}") / f"leaf-{leaf:03d}"
-    unicode_offset = index - UNICODE_COHORT_START
-    if spec == PRODUCTION_SPEC and 0 <= unicode_offset < len(UNICODE_FILE_NAMES):
+    unicode_offset = index - _unicode_cohort_start(spec)
+    if spec in QUALIFICATION_SPECS and 0 <= unicode_offset < len(UNICODE_FILE_NAMES):
         relative = (
-            Path("group-098")
+            Path(f"group-{spec.top_directories - 2:03d}")
             / "unicode-cohort"
             / f"case-{unicode_offset:02d}"
         )
@@ -166,11 +183,12 @@ def superseded_unicode_baseline_paths(
 ) -> tuple[Path, ...]:
     """Return the v2 baseline paths replaced by the deterministic Unicode cohort."""
 
-    if spec != PRODUCTION_SPEC:
+    if spec not in QUALIFICATION_SPECS:
         return ()
     paths = []
     files_per_top = spec.leaf_directories_per_top * spec.files_per_leaf
-    for index in range(UNICODE_COHORT_START, UNICODE_COHORT_START + len(UNICODE_FILE_NAMES)):
+    start = _unicode_cohort_start(spec)
+    for index in range(start, start + len(UNICODE_FILE_NAMES)):
         top = index // files_per_top
         leaf = (index % files_per_top) // spec.files_per_leaf
         paths.append(
@@ -215,8 +233,8 @@ def mutation_indices(spec: FixtureSpec = PRODUCTION_SPEC) -> tuple[int, ...]:
     """Select a deterministic, evenly spread 1% sample across all size tiers."""
 
     requested = (
-        MUTATION_COUNTS
-        if spec == PRODUCTION_SPEC
+        tuple(bucket // 100 for bucket in (spec.small_count, spec.medium_count, spec.large_count))
+        if spec in QUALIFICATION_SPECS
         else tuple(
             min(count, bucket)
             for count, bucket in zip(
@@ -262,24 +280,44 @@ def write_payload(path: Path, payload: bytes, *, atomic: bool = True) -> None:
     storage.replace(temporary, path)
 
 
+def _fixture_path_index(relative: Path, spec: FixtureSpec, unicode_indices: dict[Path, int]) -> int | None:
+    """Decode a generated file index, then verify its entire native relative path."""
+    if relative in unicode_indices:
+        return unicode_indices[relative]
+    name = relative.name
+    if not name.casefold().startswith("file-") or not name.casefold().endswith(".bin"):
+        return None
+    try:
+        index = int(name[5:-4])
+    except ValueError:
+        return None
+    if not 0 <= index < spec.file_count or relative != relative_file_for_index(index, spec):
+        return None
+    return index
+
+
 def validate_fixture(
     root: Path, spec: FixtureSpec = PRODUCTION_SPEC
 ) -> dict[str, object]:
-    """Fully inventory a fixture without reading payload bytes."""
+    """Fully inventory a fixture without reading payload bytes or retaining every path."""
 
-    expected_paths = {
-        relative_file_for_index(index, spec): file_size_for_index(index, spec)
-        for index in range(spec.file_count)
+    # WHY: the validator shares the daemon's measured memory group. Retaining
+    # two 100k Path collections can dominate that budget before launch.
+    seen = bytearray(spec.file_count)
+    valid_count = 0
+    unexpected_paths: set[Path] = set()
+    unicode_indices = {
+        relative_file_for_index(index, spec): index
+        for index in range(_unicode_cohort_start(spec), _unicode_cohort_start(spec) + unicode_cohort_count(spec))
     }
-    expected_set = set(expected_paths)
-    seen: set[Path] = set()
     total_bytes = 0
     empty_directory_count = 0
     unexpected_size_count = 0
     long_path_count = 0
     unicode_path_count = 0
-    path_lengths: list[int] = []
-    component_lengths: list[int] = []
+    minimum_path_length: int | None = None
+    maximum_path_length = 0
+    maximum_component_length = 0
     for directory, subdirs, files in storage.walk(root):
         if not subdirs and not files:
             empty_directory_count += 1
@@ -288,22 +326,31 @@ def validate_fixture(
             relative = path.relative_to(root)
             size = storage.stat(path).st_size
             total_bytes += size
-            seen.add(relative)
-            if expected_paths.get(relative) != size:
+            index = _fixture_path_index(relative, spec, unicode_indices)
+            if index is None:
+                unexpected_paths.add(relative)
                 unexpected_size_count += 1
+            else:
+                if not seen[index]:
+                    seen[index] = 1
+                    valid_count += 1
+                if file_size_for_index(index, spec) != size:
+                    unexpected_size_count += 1
             length = storage.absolute_path_length(path)
-            path_lengths.append(length)
-            component_lengths.append(storage.maximum_native_component_length(path))
+            minimum_path_length = length if minimum_path_length is None else min(minimum_path_length, length)
+            maximum_path_length = max(maximum_path_length, length)
+            maximum_component_length = max(maximum_component_length, storage.maximum_native_component_length(path))
             if len(str(relative)) >= LONG_PATH_MIN_RELATIVE_CHARS:
                 long_path_count += 1
-            if relative.parts[:2] == ("group-098", "unicode-cohort"):
+            if relative in unicode_indices:
                 unicode_path_count += 1
-    missing_count = len(expected_set - seen)
-    unexpected_path_count = len(seen - expected_set)
+    missing_count = spec.file_count - valid_count
+    unexpected_path_count = len(unexpected_paths)
+    file_count = valid_count + unexpected_path_count
     expected_long = baseline_long_path_count(spec)
     return {
         "ok": (
-            len(seen) == spec.file_count
+            file_count == spec.file_count
             and total_bytes == spec.total_bytes
             and empty_directory_count == 0
             and unexpected_size_count == 0
@@ -312,13 +359,13 @@ def validate_fixture(
             and long_path_count == expected_long
             and unicode_path_count == unicode_cohort_count(spec)
         ),
-        "fileCount": len(seen),
+        "fileCount": file_count,
         "totalBytes": total_bytes,
         "longPathFileCount": long_path_count,
-        "minimumAbsolutePathLength": min(path_lengths, default=0),
-        "maximumAbsolutePathLength": max(path_lengths, default=0),
+        "minimumAbsolutePathLength": minimum_path_length if minimum_path_length is not None else 0,
+        "maximumAbsolutePathLength": maximum_path_length,
         "pathLengthUnit": storage.native_length_unit(),
-        "maximumComponentLength": max(component_lengths, default=0),
+        "maximumComponentLength": maximum_component_length,
         "unicodePathFileCount": unicode_path_count,
         "nameCapabilities": storage.detect_name_capabilities(root),
         "emptyDirectoryCount": empty_directory_count,

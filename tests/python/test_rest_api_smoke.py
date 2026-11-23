@@ -38,6 +38,19 @@ def load_rest_api_smoke_module():
     return module
 
 
+@pytest.mark.parametrize("template", ["/uploads/{id}", "/upload-queue/{id}",
+                                     "/uploads/{id}/operations/remove",
+                                     "/upload-queue/{id}/operations/remove"])
+def test_upload_uuid_fixture_paths_round_trip_to_openapi(template):
+    import uuid
+
+    module = load_rest_api_smoke_module()
+    path = module.concrete_contract_path(template, "uploadFixture")
+    token = path.split("/")[4]
+    assert str(uuid.UUID(token)) == token
+    assert module.normalize_contract_path_for_openapi(path) == template
+
+
 def section_text(text: str, section: str) -> str:
     start = text.index(f"[{section}]")
     next_section = text.find("\n[", start + 1)
@@ -54,6 +67,42 @@ def test_mfc_rest_smoke_keeps_existing_server_preference_owner() -> None:
     assert module.get_contract_route_body("app_preferences_patch") == {
         "safeServerConnect": True
     }
+
+
+def test_openapi_operation_loader_accepts_valid_yaml_styles(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    source = tmp_path / "REST-API-OPENAPI.yaml"
+    source.write_text("""
+openapi: 3.1.0
+paths:
+  /downloads/start:
+    post:
+      tags:
+        - Downloads
+      operationId: startDownloads
+      requestBody:
+        required: true
+      responses:
+        '207':
+          $ref: '#/components/responses/DownloadBatchResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+  /app:
+    get:
+      tags: [App]
+      operationId: getApp
+      responses:
+        "200":
+          $ref: "#/components/responses/AppResponse"
+""", encoding="utf-8")
+    assert module.load_openapi_operations(source) == [
+        {"operationId": "startDownloads", "method": "POST", "openapiPath": "/downloads/start",
+         "tag": "Downloads", "hasRequestBody": True, "requestBodyRequired": True,
+         "successResponseStatuses": ["207"], "successResponseRefs": ["DownloadBatchResponse"]},
+        {"operationId": "getApp", "method": "GET", "openapiPath": "/app",
+         "tag": "App", "hasRequestBody": False, "requestBodyRequired": False,
+         "successResponseStatuses": ["200"], "successResponseRefs": ["AppResponse"]},
+    ]
 
 
 def test_nat_backend_order_accepts_upnp_first() -> None:
@@ -4572,3 +4621,21 @@ def test_rest_contract_completeness_accepts_category_create_negative_probe(monke
     assert summary["expected_error_count"] == 1
     assert summary["routes"][0]["operationId"] == "createCategory"
     assert summary["routes"][0]["expectedResponseStatuses"] == [200, 400]
+
+
+@pytest.mark.parametrize("body_text,ok", [("", True), ("null", False), ("{}", False)])
+def test_rest_contract_no_content_requires_empty_wire_body(monkeypatch, body_text, ok):
+    module = load_rest_api_smoke_module()
+    route = {"name": "deleteSample", "operationId": "deleteSample", "family": "library",
+             "method": "DELETE", "path": "/api/v1/sample", "safe": True, "safety": "safe",
+             "hasRequestBody": False, "requestBodyRequired": False,
+             "successResponseStatuses": ["204"], "successResponseRefs": ["NoContentResponse"],
+             "responseEnvelope": "NoContentResponse"}
+    monkeypatch.setattr(module, "REST_CONTRACT_ROUTES", (route,))
+    monkeypatch.setattr(module, "assert_contract_routes_match_openapi", lambda: {"ok": True})
+    monkeypatch.setattr(module, "validate_openapi_operation_response_payload", lambda *args: None)
+    monkeypatch.setattr(module, "http_request", lambda *args, **kwargs: {
+        "status": 204, "body_text": body_text, "raw_json": None, "json": None,
+        "content_type": ""})
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
+    assert summary["ok"] is ok

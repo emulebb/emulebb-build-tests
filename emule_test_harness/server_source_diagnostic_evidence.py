@@ -457,7 +457,7 @@ def _rest_evidence(
     expected_size: int,
 ) -> dict[str, Any]:
     value = row if isinstance(row, dict) else {}
-    name_field = "displayName" if client == "rust" else "name"
+    name_field = "name"
     size_bytes = _positive_int(value.get("sizeBytes"))
     source_count = _positive_int(value.get("sources"))
     ok = bool(

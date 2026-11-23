@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .paths import get_workspace_output_root
+from .rust_rest_contract import iter_library_files, restore_settings_patch, settings_patch
 
 DEFAULT_API_KEY = "converged-soak"
 DEFAULT_STEADY_SECONDS = 18.0
@@ -30,7 +32,7 @@ TAB_LABELS = (
     "Transfers",
     "Search",
     "Sharing",
-    "Shared Files",
+    "Library",
     "Uploads",
     "Network",
     "Servers",
@@ -58,27 +60,45 @@ def browser_api_key_read_script() -> str:
     return f"() => sessionStorage.getItem({json.dumps(WEBUI_API_KEY_STORAGE_KEY)})"
 
 
+def _download_rows(base_url: str, api_key: str) -> list[dict[str, Any]]:
+    document = api_document(base_url, "downloads?view=all&limit=200", api_key)
+    rows = document.get("data") if isinstance(document, dict) else None
+    meta = document.get("meta") if isinstance(document, dict) else None
+    if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+            or not isinstance(meta, dict) or meta.get("hasMore") is not False
+            or "nextCursor" not in meta or meta["nextCursor"] is not None
+            or not isinstance(meta.get("apiVersion"), str)):
+        raise RuntimeError("WebUI proof requires a complete bounded download page")
+    return rows
+
+
+def _require_download_batch(document: dict, download_id: str) -> None:
+    rows = document.get("data") if isinstance(document, dict) else None
+    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or rows[0].get("id") != download_id or rows[0].get("status") not in {"accepted", "unchanged"}
+            or type(rows[0].get("httpStatus")) is not int or not 200 <= rows[0]["httpStatus"] < 300
+            or "error" in rows[0]):
+        raise RuntimeError("WebUI download action did not accept the captured job")
+
+
 def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
                            file_hash: str, size_bytes: int, cleanup_evidence: dict,
                            timeout_seconds: float = 30) -> dict:
     """Exercise the real handoff form; inspect actual requests and persisted rows."""
     timeout = int(timeout_seconds * 1000)
     posts = []
+    download_id = None
 
     def observe(request):
-        if request.method == "POST" and urlparse(request.url).path == "/api/v1/transfers":
+        if request.method == "POST" and urlparse(request.url).path == "/api/v1/downloads":
             if len(posts) < 8:
                 posts.append(request.post_data_json)
 
     def rows():
-        value = api_data(base_url, "transfers?limit=100", api_key)
-        items = value.get("items") if isinstance(value, dict) else None
-        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
-            raise RuntimeError("File-link proof received an invalid transfer collection")
-        return items
+        return _download_rows(base_url, api_key)
 
     def identities(items):
-        return sorted((item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
+        return sorted((item.get("id"), item.get("hash", "").lower(), item.get("sizeBytes")) for item in items)
 
     baseline = rows()
     if any(item.get("hash", "").lower() == file_hash for item in baseline):
@@ -108,24 +128,31 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
         field.wait_for(timeout=timeout)
         if field.input_value() != link:
             raise RuntimeError("File-link form did not restore the requested link")
-        # Queue only a paused synthetic fixture: this checks the real POST and
+        # Queue only a stopped synthetic fixture: this checks the real POST and
         # persistence without inventing an available P2P source for these bytes.
-        page.get_by_label("Paused", exact=True).check(timeout=timeout)
+        page.get_by_label("Stopped", exact=True).check(timeout=timeout)
         if identities(rows()) != identities(baseline) or posts:
             raise RuntimeError("File-link handoff queued a transfer before confirmation")
         with page.expect_response(lambda response: response.request.method == "POST"
-                                  and urlparse(response.url).path == "/api/v1/transfers", timeout=timeout) as response:
+                                  and urlparse(response.url).path == "/api/v1/downloads", timeout=timeout) as response:
             page.get_by_role("button", name="Add links", exact=True).click(timeout=timeout)
-        if not response.value.ok or posts != [{"links": [link], "paused": True, "knownFilePolicy": "reject"}]:
-            raise RuntimeError("File-link confirmation did not submit the exact requested paused transfer")
+        created = response.value.json().get("data") if response.value.ok and response.value.status == 201 else None
+        candidate_id = created.get("id") if isinstance(created, dict) else None
+        if (posts != [{"source": {"type": "ed2k-link", "link": link}, "intent": "stopped"}]
+                or not isinstance(candidate_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", candidate_id) is None
+                or int(candidate_id) > 9223372036854775807
+                or created.get("hash", "").lower() != file_hash or created.get("sizeBytes") != size_bytes):
+            raise RuntimeError("File-link confirmation did not submit the exact requested stopped download")
+        download_id = candidate_id
         page.wait_for_function("location.hash === ''", timeout=timeout)
 
         def confirmed():
             items = rows()
-            matched = [item for item in items if item.get("hash", "").lower() == file_hash]
+            matched = [item for item in items if item.get("id") == download_id]
             if (len(matched) == 1 and matched[0].get("sizeBytes") == size_bytes
-                    and matched[0].get("state") == "paused"
-                    and identities(items) == sorted(identities(baseline) + [(file_hash, size_bytes)])):
+                    and matched[0].get("hash", "").lower() == file_hash
+                    and matched[0].get("intent") == "stopped"
+                    and identities(items) == sorted(identities(baseline) + [(download_id, file_hash, size_bytes)])):
                 return items
             return None
 
@@ -138,7 +165,7 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
         page.get_by_role("button", name="Cancel links", exact=True).click(timeout=timeout)
         return {"status": "passed", "signInPreserved": True, "cancelWithoutEnqueue": True,
                 "explicitConfirmation": True, "repeatedNavigationWithoutEnqueue": True,
-                "transferHash": file_hash, "sizeBytes": size_bytes, "state": "paused"}
+                "downloadId": download_id, "hash": file_hash, "sizeBytes": size_bytes, "intent": "stopped"}
     finally:
         active_failure = sys.exc_info()[0] is not None
         errors = []
@@ -146,11 +173,14 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
             page.remove_listener("request", observe)
         except Exception as error:
             errors.append(type(error).__name__)
-        # The hash was absent before this disposable proof. Delete only its own
-        # partial fixture via the canonical public API, even on a failed check.
+        # Remove only the job created by this disposable proof.
         try:
-            if any(item.get("hash", "").lower() == file_hash for item in rows()):
-                request_json(base_url, "DELETE", f"/api/v1/transfers/{file_hash}/files?confirm=true", api_key)
+            if download_id is not None and any(item.get("id") == download_id for item in rows()):
+                result = request_json(base_url, "POST", "/api/v1/downloads/remove", api_key,
+                    {"ids": [download_id], "deleteData": True}, expected_status=207)
+                _require_download_batch(result, download_id)
+            if len(posts) > 1 or download_id is None and identities(rows()) != identities(baseline):
+                raise RuntimeError("File-link proof has an enqueue without a captured creation receipt")
             if identities(rows()) != identities(baseline):
                 raise RuntimeError("File-link proof cleanup did not restore the original transfer collection")
         except Exception as error:
@@ -218,6 +248,7 @@ def _click_primary_nav(page, label: str, *, timeout_ms: int | None = None) -> No
 
 
 ALLOWED_REPEATED_STEADY_PREFIXES = ("snapshot?",)
+ALLOWED_REPEATED_STEADY_PATHS = frozenset({"downloads?view=all&limit=12"})
 HASH_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
 FULL_PROGRESS_RE = re.compile(r"^100(?:\.0+)?%$")
 PERCENT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%$")
@@ -309,15 +340,20 @@ def profile_settings_api_key(settings_path: Path) -> str:
     return api_key.strip()
 
 
-def api_data(base_url: str, path: str, api_key: str) -> Any:
-    """Fetch one authenticated REST resource and unwrap the API envelope."""
-
+def api_document(base_url: str, path: str, api_key: str) -> Any:
+    """Fetch one authenticated REST response with its page metadata."""
     request = Request(
         f"{base_url.rstrip('/')}/api/v1/{path.lstrip('/')}",
         headers={"X-API-Key": api_key},
     )
     with urlopen(request, timeout=5.0) as response:
-        payload = json.loads(response.read())
+        return json.loads(response.read())
+
+
+def api_data(base_url: str, path: str, api_key: str) -> Any:
+    """Fetch one authenticated REST resource and unwrap the API envelope."""
+
+    payload = api_document(base_url, path, api_key)
     return payload.get("data", payload) if isinstance(payload, dict) else payload
 
 
@@ -334,6 +370,150 @@ def _wait_for_api(description: str, timeout_seconds: float, probe) -> Any:
         time.sleep(min(1.0, max(0.1, deadline - time.monotonic())))
     suffix = f": {last_error}" if last_error is not None else ""
     raise RuntimeError(f"timed out waiting for {description}{suffix}")
+
+
+def _saved_setting(snapshot: dict, key: str) -> dict:
+    leaf = snapshot["data"]["saved"]
+    for part in key.split("."):
+        leaf = leaf[part]
+    if leaf["mode"] not in {"default", "custom"} or "value" not in leaf:
+        raise RuntimeError(f"Invalid saved setting: {key}")
+    return leaf
+
+
+def _settings_form_check(surface: dict, snapshot: dict, rows: list[dict]) -> dict:
+    """Require every current daemon field, saved mode and value in the rendered form."""
+    # Reuse the shared exact revision validator without sending any request.
+    settings_patch(snapshot, reset=("transfers.uploadLimitBytesPerSecond",))
+    fields = surface["fields"]
+    keys = [field["key"] for field in fields]
+    rendered = [row["key"] for row in rows]
+    if not keys or len(set(keys)) != len(keys) or len(set(rendered)) != len(rendered) or set(rendered) != set(keys):
+        raise RuntimeError("Rendered settings fields differ from the daemon surface")
+    defaults = 0
+    for row in rows:
+        leaf = _saved_setting(snapshot, row["key"])
+        value = leaf["value"]
+        text = ("" if value is None else "\n".join(value) if isinstance(value, list)
+                else str(value).lower() if isinstance(value, bool) else str(value))
+        default = leaf["mode"] == "default"
+        if row["default"] is not default or row["text"] != text:
+            raise RuntimeError(f"Rendered setting differs from the saved snapshot: {row['key']}")
+        if leaf["mode"] == "custom" and (row["unset"] is True) != (value is None):
+            raise RuntimeError(f"Rendered nullable setting differs: {row['key']}")
+        defaults += default
+    return {"ok": True, "fieldCount": len(keys), "defaultCount": defaults}
+
+
+def _wait_for_settings_form(page, surface: dict, snapshot: dict, timeout_seconds: float) -> dict:
+    def probe():
+        rows = page.locator("fieldset.setting-editor").evaluate_all("""elements => elements.map(element => {
+            const defaults = element.querySelector('input[aria-label^="Use default for "]');
+            const unset = element.querySelector('input[aria-label^="Not set for "]');
+            const control = element.querySelector('input.form-control, textarea, select')
+                ?? Array.from(element.querySelectorAll('input[type="checkbox"]'))
+                    .find(input => input !== defaults && input !== unset);
+            return {key: element.querySelector('code.setting-key')?.textContent,
+                default: defaults?.checked, unset: unset?.checked ?? null,
+                text: control?.type === 'checkbox' ? String(control.checked) : control?.value};
+        })""")
+        return _settings_form_check(surface, snapshot, rows)
+    return _wait_for_api("complete canonical settings form", timeout_seconds, probe)
+
+
+def _settings_editor(page, key: str):
+    return page.locator("fieldset.setting-editor").filter(
+        has=page.locator("code.setting-key").filter(has_text=re.compile("^" + re.escape(key) + "$")))
+
+
+def _save_settings_form(page, expected: dict, timeout_seconds: float) -> dict:
+    """Submit once; an unconfirmed response never authorizes a compensating write."""
+    writes = []
+
+    def observe(request):
+        if request.method == "PATCH" and urlparse(request.url).path == "/api/v1/settings":
+            writes.append(request.post_data_json)
+
+    page.on("request", observe)
+    try:
+        with page.expect_response(lambda response: response.request.method == "PATCH"
+                                  and urlparse(response.url).path == "/api/v1/settings",
+                                  timeout=int(timeout_seconds * 1000)) as observed:
+            page.get_by_role("button", name="Save", exact=True).click()
+        response = observed.value
+        if response.status != 200 or writes != [expected]:
+            raise RuntimeError("Settings form did not confirm exactly one expected revisioned write")
+        snapshot = response.json()
+        revision = settings_patch(snapshot, reset=("transfers.uploadLimitBytesPerSecond",))["expectedRevision"]
+        if int(revision) != int(expected["expectedRevision"]) + 1:
+            raise RuntimeError("Settings form write did not advance its revision exactly once")
+        return snapshot
+    finally:
+        page.remove_listener("request", observe)
+
+
+def _read_settings_form(page, *, base_url: str, api_key: str, timeout_seconds: float) -> tuple[dict, dict, dict]:
+    """Capture a navigation-owned snapshot and prove its complete rendered form."""
+    surface = api_data(base_url, "settings/surface", api_key)
+    # WHY: Settings can already be selected by another proof step. Navigate from
+    # Logs so the captured GET belongs to this load, without an implicit retry.
+    _click_primary_nav(page, "Logs", timeout_ms=int(timeout_seconds * 1000))
+    with page.expect_response(lambda response: response.request.method == "GET"
+                              and urlparse(response.url).path == "/api/v1/settings",
+                              timeout=int(timeout_seconds * 1000)) as observed:
+        _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
+    response = observed.value
+    if response.status != 200:
+        raise RuntimeError("Settings navigation did not load the native snapshot")
+    snapshot = response.json()
+    result = _wait_for_settings_form(page, surface, snapshot, timeout_seconds)
+    return surface, snapshot, result
+
+
+def _verify_settings_form(page, *, base_url: str, api_key: str,
+                          timeout_seconds: float, verify_edits: bool) -> dict:
+    """Read all native fields; optional writes belong only to disposable package profiles."""
+    surface, snapshot, result = _read_settings_form(
+        page, base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
+    result["writes"] = 0
+    if not verify_edits:
+        return result
+
+    key = "transfers.uploadLimitBytesPerSecond"
+    field = next(item for item in surface["fields"] if item["key"] == key)
+    original = _saved_setting(snapshot, key)
+    rule = field["rule"]
+    if field["application"] != "live" or rule["kind"] != "integer":
+        raise RuntimeError("Disposable settings proof requires a live integer upload limit")
+    step = rule["step"]
+    value = original["value"]
+    temporary = next((candidate for candidate in (value + step, value - step, value + 2 * step)
+                      if rule["min"] <= candidate <= rule["max"] and candidate != field["defaultValue"]), None)
+    if temporary is None:
+        raise RuntimeError("Upload limit has no alternate valid proof value")
+    editor = _settings_editor(page, key)
+    editor.locator('input[aria-label^="Use default for "]').uncheck()
+    editor.locator("input.form-control").fill(str(temporary))
+    changed = _save_settings_form(page, settings_patch(snapshot, set_values={
+        "transfers": {"uploadLimitBytesPerSecond": temporary}}), timeout_seconds)
+    _wait_for_settings_form(page, surface, changed, timeout_seconds)
+    if _saved_setting(changed, key) != {"mode": "custom", "value": temporary}:
+        raise RuntimeError("Temporary upload limit was not saved")
+    if changed["data"]["effective"]["transfers"]["uploadLimitBytesPerSecond"] != temporary:
+        raise RuntimeError("Temporary live upload limit was not applied")
+    restore = restore_settings_patch(changed, {key: original})
+    if original["mode"] == "default":
+        editor.locator('input[aria-label^="Use default for "]').check()
+    else:
+        editor.locator("input.form-control").fill(str(value))
+    restored = _save_settings_form(page, restore, timeout_seconds)
+    _wait_for_settings_form(page, surface, restored, timeout_seconds)
+    leaf = _saved_setting(restored, key)
+    if leaf["mode"] != original["mode"] or (leaf["mode"] == "custom" and leaf["value"] != value):
+        raise RuntimeError("Settings form did not restore the original saved mode/value")
+    if restored["data"]["effective"]["transfers"]["uploadLimitBytesPerSecond"] != leaf["value"]:
+        raise RuntimeError("Settings form did not restore the effective live upload limit")
+    return {**result, "writes": 2, "restored": True, "key": key}
 
 
 def _integer_field(value: Any, name: str) -> int:
@@ -360,12 +540,12 @@ def _publish_diagnostics(status: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _matched_shared_catalog(
-    value: Any,
+    rows: list[dict[str, Any]],
     expected: tuple[ConsumerSharedFixture, ...],
+    fetch_detail: Callable[[str], Any],
 ) -> list[dict[str, Any]] | None:
     """Return exact synthetic fixture rows once the shared catalog is complete."""
 
-    rows = value.get("items", []) if isinstance(value, dict) else []
     if not isinstance(rows, list):
         return None
     expected_by_name = {fixture.name: fixture for fixture in expected}
@@ -375,17 +555,19 @@ def _matched_shared_catalog(
     for row in rows:
         if not isinstance(row, dict):
             return None
-        name = str(row.get("name") or "")
+        name = str(row.get("displayName") or "")
         fixture = expected_by_name.get(name)
         transfer_hash = str(row.get("hash") or "").lower()
-        ed2k_link = str(row.get("ed2kLink") or "")
         if (
             fixture is None
             or row.get("sizeBytes") != fixture.size_bytes
             or len(transfer_hash) != 32
             or any(character not in "0123456789abcdef" for character in transfer_hash)
-            or not ed2k_link.startswith("ed2k://|file|")
         ):
+            return None
+        detail = fetch_detail(transfer_hash)
+        if (not isinstance(detail, dict) or detail.get("hash") != transfer_hash
+                or not str(detail.get("ed2kLink") or "").startswith("ed2k://|file|")):
             return None
         matched.append(
             {
@@ -397,6 +579,26 @@ def _matched_shared_catalog(
             }
         )
     return sorted(matched, key=lambda row: str(row["relativePath"]))
+
+
+def _require_empty_ed2k_catalog(baseline: dict[str, Any]) -> None:
+    """Admit the disposable publication proof only before any catalog is present."""
+    counts = (baseline.get("totalEntries"), baseline.get("publishedEntries"))
+    if not all(type(value) is int and value == 0 for value in counts):
+        raise RuntimeError("consumer sharing proof requires an empty baseline eD2K catalog")
+
+
+def _ed2k_fixture_published(current: dict[str, Any], expected_count: int) -> bool:
+    """Prove a new fixture catalog after the caller established an empty baseline."""
+    success = current.get("lastSuccessAt")
+    return (type(expected_count) is int and expected_count > 0
+            and type(success) is int and success >= 0
+            and all(type(current.get(name)) is int for name in
+                    ("totalEntries", "publishedEntries", "pendingEntries"))
+            and current["totalEntries"] == expected_count
+            and current["publishedEntries"] == expected_count
+            and current["pendingEntries"] == 0
+            and "lastError" in current and current["lastError"] is None)
 
 
 def _sharing_publish_actions(
@@ -413,6 +615,7 @@ def _sharing_publish_actions(
     expected_count = len(options.shared_files)
     baseline_status = api_data(base_url, "status", api_key)
     baseline_ed2k, baseline_kad = _publish_diagnostics(baseline_status)
+    _require_empty_ed2k_catalog(baseline_ed2k)
 
     _click_primary_nav(page, "Sharing")
     sharing_panel = page.locator("section.panel").filter(
@@ -421,7 +624,7 @@ def _sharing_publish_actions(
     sharing_panel.get_by_placeholder("Server folder path").fill(options.shared_root_path)
     with page.expect_response(
         lambda response: response.request.method == "POST"
-        and urlparse(response.url).path == "/api/v1/shared-directories/roots",
+        and urlparse(response.url).path == "/api/v1/library/roots",
         timeout=int(options.network_timeout_seconds * 1000),
     ) as add_root_response:
         sharing_panel.get_by_role("button", name="Add root", exact=True).click()
@@ -433,24 +636,27 @@ def _sharing_publish_actions(
     page.get_by_text("Folder added", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
     )
+    root_id = str(add_root_response.value.json()["data"]["id"])
 
-    def indexed_fixture(min_updated_at_ms: int = 0) -> dict[str, Any] | None:
-        directories = api_data(base_url, "shared-directories", api_key)
-        roots = directories.get("roots", []) if isinstance(directories, dict) else []
+    def indexed_fixture() -> dict[str, Any] | None:
+        directories = api_data(base_url, "library/scan", api_key)
+        root = api_data(base_url, f"library/roots/{root_id}", api_key)
         reload_progress = (
             directories.get("reloadProgress", {}) if isinstance(directories, dict) else {}
         )
-        if not isinstance(roots, list) or len(roots) != 1 or not isinstance(reload_progress, dict):
+        if not isinstance(root, dict) or root.get("id") != root_id or not isinstance(reload_progress, dict):
             return None
         if reload_progress.get("running") or reload_progress.get("pending"):
             return None
-        updated_at_ms = _integer_field(reload_progress, "updatedAtMs")
-        if updated_at_ms <= min_updated_at_ms:
-            return None
         if _integer_field(reload_progress, "failedHashCount") != 0:
             raise RuntimeError("synthetic shared-file hashing reported failures")
-        files = api_data(base_url, "shared-files?limit=100", api_key)
-        matched = _matched_shared_catalog(files, options.shared_files)
+        files = list(iter_library_files(
+            lambda path: api_document(base_url, path, api_key), view="shared", root_id=root_id
+        ))
+        matched = _matched_shared_catalog(
+            files, options.shared_files,
+            lambda file_hash: api_data(base_url, f"library/files/{file_hash}", api_key),
+        )
         if matched is None:
             return None
         return {
@@ -458,7 +664,7 @@ def _sharing_publish_actions(
             "hashedCount": _integer_field(reload_progress, "hashedCount"),
             "newCount": _integer_field(reload_progress, "newCount"),
             "reusedCount": _integer_field(reload_progress, "reusedCount"),
-            "updatedAtMs": updated_at_ms,
+            "updatedAt": _integer_field(reload_progress, "updatedAt"),
         }
 
     initial_catalog = _wait_for_api(
@@ -468,7 +674,7 @@ def _sharing_publish_actions(
     )
     with page.expect_response(
         lambda response: response.request.method == "POST"
-        and urlparse(response.url).path == "/api/v1/shared-directories/operations/reload",
+        and urlparse(response.url).path == "/api/v1/library/scan",
         timeout=int(options.network_timeout_seconds * 1000),
     ) as reload_response:
         sharing_panel.get_by_role("button", name="Reload", exact=True).click()
@@ -483,12 +689,12 @@ def _sharing_publish_actions(
     reloaded_catalog = _wait_for_api(
         "synthetic shared-tree reload",
         options.network_timeout_seconds,
-        lambda: indexed_fixture(_integer_field(initial_catalog, "updatedAtMs")),
+        indexed_fixture,
     )
 
-    _click_primary_nav(page, "Shared Files")
+    _click_primary_nav(page, "Library")
     shared_files_panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Shared Files", exact=True)
+        has=page.get_by_role("heading", name="Library", exact=True)
     )
     for fixture in options.shared_files:
         row = shared_files_panel.locator("tbody tr").filter(has_text=fixture.name).first
@@ -497,14 +703,7 @@ def _sharing_publish_actions(
     def published_fixture() -> dict[str, Any] | None:
         status = api_data(base_url, "status", api_key)
         ed2k, kad = _publish_diagnostics(status)
-        ed2k_ready = (
-            _integer_field(ed2k, "lastSuccessAtMs")
-            > _integer_field(baseline_ed2k, "lastSuccessAtMs")
-            and _integer_field(ed2k, "totalEntries") == expected_count
-            and _integer_field(ed2k, "publishedEntries") == expected_count
-            and _integer_field(ed2k, "pendingEntries") == 0
-            and not ed2k.get("lastError")
-        )
+        ed2k_ready = _ed2k_fixture_published(ed2k, expected_count)
         kad_ready = (
             kad.get("bootstrapped") is True
             and kad.get("gateAllowed") is True
@@ -570,6 +769,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
     zero_configuration_defaults = _assert_zero_configuration_defaults(
         page,
+        base_url=base_url,
+        api_key=api_key,
         timeout_seconds=options.network_timeout_seconds,
     )
     _click_primary_nav(page, "Servers")
@@ -707,7 +908,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         return kad if kad.get("connected") and int(kad.get("contactCount") or 0) > 0 else None
 
     kad_status = _wait_for_api(
-        "automatic first-run Kad connection from downloaded nodes.dat",
+        "automatic first-run Kad connection from imported SQLite contacts",
         options.network_timeout_seconds,
         connected_kad,
     )
@@ -887,11 +1088,22 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             result_name = str(download_result["name"])
             result_row = search_panel.locator("tbody tr").filter(has_text=result_name).first
             result_row.wait_for(timeout=int(options.network_timeout_seconds * 1000))
-            result_row.get_by_role("button", name="Download", exact=True).click()
+            with page.expect_response(lambda response: response.request.method == "POST"
+                    and re.fullmatch(r"/api/v1/searches/[^/]+/results/[1-9][0-9]{0,18}/download",
+                        urlparse(response.url).path) is not None,
+                    timeout=int(options.network_timeout_seconds * 1000)) as download_response:
+                result_row.get_by_role("button", name="Download", exact=True).click()
             page.get_by_text("Download queued", exact=True).wait_for(
                 timeout=int(options.network_timeout_seconds * 1000)
             )
+            created = download_response.value.json().get("data") if download_response.value.ok else None
+            download_id = created.get("id") if isinstance(created, dict) else None
+            if (not isinstance(download_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", download_id) is None
+                    or int(download_id) > 9223372036854775807
+                    or created.get("hash", "").lower() != str(download_result["hash"]).lower()):
+                raise RuntimeError("Rendered search download did not return a durable job ID")
             selected_transfer = {
+                "id": download_id,
                 "hash": str(download_result["hash"]).lower(),
                 "name": result_name,
                 "sizeBytes": int(download_result["sizeBytes"]),
@@ -920,13 +1132,13 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     def active_transfer() -> dict[str, Any] | None:
         value = api_data(
             base_url,
-            f"transfers/{selected_transfer['hash']}",
+            f"downloads/{selected_transfer['id']}",
             api_key,
         )
         if not isinstance(value, dict):
             return None
-        completed_bytes = int(value.get("completedBytes") or 0)
-        return value if completed_bytes > 0 else None
+        progress = value.get("progress")
+        return value if value.get("id") == selected_transfer["id"] and type(progress) in {int, float} and progress > 0 else None
 
     transfer_activity_observed = True
     try:
@@ -939,7 +1151,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer_activity_observed = False
         transfer = api_data(
             base_url,
-            f"transfers/{selected_transfer['hash']}",
+            f"downloads/{selected_transfer['id']}",
             api_key,
         )
         if not isinstance(transfer, dict):
@@ -951,27 +1163,47 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
         transfer = _wait_for_api(
             "rendered WebUI allowlisted transfer completion",
             options.transfer_timeout_seconds,
-            lambda: (lambda value: value if int(value.get("completedBytes") or 0) == selected_transfer["sizeBytes"] else None)(
-                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
+            lambda: (lambda value: value if isinstance(value, dict) and value.get("id") == selected_transfer["id"]
+                and value.get("state") == "completed" and value.get("payloadVerified") is True
+                and isinstance(value.get("delivery"), dict) and value["delivery"].get("state") == "delivered"
+                and value["delivery"].get("ownership") in {"owned", "unowned"}
+                and isinstance(value["delivery"].get("path"), str) and value["delivery"]["path"] else None)(
+                api_data(base_url, f"downloads/{selected_transfer['id']}", api_key)
             ),
         )
     else:
         transfer_row = transfer_panel.locator("tbody tr").filter(has_text=selected_transfer["name"]).first
-        transfer_row.get_by_role("button", name="Stop", exact=True).click()
+        with page.expect_response(lambda response: response.request.method == "POST"
+                and urlparse(response.url).path == "/api/v1/downloads/stop",
+                timeout=int(options.network_timeout_seconds * 1000)) as stop_response:
+            transfer_row.get_by_role("button", name="Stop", exact=True).click()
+        if (stop_response.value.status != 207
+                or stop_response.value.request.post_data_json != {"ids": [selected_transfer["id"]]}):
+            raise RuntimeError("Rendered Stop did not return a batch outcome")
+        _require_download_batch(stop_response.value.json(), selected_transfer["id"])
         page.get_by_text("Transfer stopped", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
         )
         transfer = _wait_for_api(
             "rendered WebUI transfer quiescence after Stop",
             min(15.0, options.network_timeout_seconds),
-            lambda: (lambda value: value if isinstance(value, dict) and value.get("stopped") is True else None)(
-                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
+            lambda: (lambda value: value if isinstance(value, dict) and value.get("intent") == "stopped"
+                and value.get("state") == "stopped" else None)(
+                api_data(base_url, f"downloads/{selected_transfer['id']}", api_key)
             ),
         )
         transfer_stop_state = str(transfer.get("state") or "unknown")
-        stopped_after_observation = transfer.get("stopped") is True
+        stopped_after_observation = transfer.get("intent") == "stopped" and transfer.get("state") == "stopped"
         page.once("dialog", lambda dialog: dialog.accept())
-        transfer_row.get_by_role("button", name="Delete", exact=True).click()
+        with page.expect_response(lambda response: response.request.method == "POST"
+                and urlparse(response.url).path == "/api/v1/downloads/remove",
+                timeout=int(options.network_timeout_seconds * 1000)) as remove_response:
+            transfer_row.get_by_role("button", name="Delete", exact=True).click()
+        if (remove_response.value.status != 207
+                or remove_response.value.request.post_data_json != {
+                    "ids": [selected_transfer["id"]], "deleteData": False}):
+            raise RuntimeError("Rendered Delete did not return a batch outcome")
+        _require_download_batch(remove_response.value.json(), selected_transfer["id"])
         page.get_by_text("Transfer deleted", exact=True).wait_for(
             timeout=int(options.network_timeout_seconds * 1000)
         )
@@ -982,7 +1214,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
         def deleted_transfer() -> dict[str, Any] | None:
             try:
-                api_data(base_url, f"transfers/{selected_transfer['hash']}", api_key)
+                api_data(base_url, f"downloads/{selected_transfer['id']}", api_key)
             except HTTPError as error:
                 if error.code == 404:
                     return {"status": 404}
@@ -1005,7 +1237,8 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     transfer_name_round_trip = str(transfer.get("name") or "") == selected_transfer["name"]
     # eD2K protocol identity is hash + byte size. Display names may be normalized
     # by a live result source and are retained as a non-gating diagnostic only.
-    transfer_identity_verified = transfer_hash_verified and transfer_size_verified
+    transfer_identity_verified = (transfer.get("id") == selected_transfer["id"]
+        and transfer_hash_verified and transfer_size_verified)
     failures = []
     if not kad_disconnect_verified:
         failures.append("kad-disconnect")
@@ -1069,16 +1302,16 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
             "displayNameRoundTrip": transfer_name_round_trip,
             "networkActivityRequired": True,
             "networkActivityObserved": transfer_activity_observed,
-            "sourceCount": int(transfer.get("sources") or 0),
-            "sourcesTransferring": int(transfer.get("sourcesTransferring") or 0),
-            "completed": int(transfer.get("completedBytes") or 0) == options.transfer_size,
-            "completedBytes": int(transfer.get("completedBytes") or 0),
+            "downloadId": selected_transfer["id"],
+            "progress": transfer.get("progress"),
+            "completed": transfer.get("state") == "completed" and transfer.get("payloadVerified") is True,
+            "deliveryOwnership": (transfer.get("delivery") or {}).get("ownership"),
             "sizeBytes": int(transfer.get("sizeBytes") or selected_transfer["sizeBytes"]),
             "stopRequested": not options.complete_transfer,
             "deleteRequested": not options.complete_transfer,
             "finalState": transfer_stop_state,
             "stoppedAfterObservation": stopped_after_observation,
-            "stoppedFlag": bool(transfer.get("stopped")),
+            "stoppedFlag": transfer.get("intent") == "stopped",
             "deletedAfterStop": deleted_after_stop,
             "absentAfterDelete": deleted_after_stop,
         },
@@ -1134,33 +1367,26 @@ def _consumer_nat_status(base_url: str, api_key: str) -> dict[str, Any]:
     }
 
 
-def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict[str, Any]:
+def _assert_zero_configuration_defaults(page, *, base_url: str, api_key: str,
+                                         timeout_seconds: float) -> dict[str, Any]:
     """Prove fresh-profile auto-connect and best-effort UPnP in the rendered form."""
 
-    _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
-    panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Settings", exact=True)
-    )
-    advanced = panel.get_by_label(re.compile("Advanced"))
-    if not advanced.is_checked():
-        advanced.check()
-    auto_connect = panel.get_by_role(
-        "checkbox",
-        name=re.compile(r"^Auto connect(?:\s|$)"),
-    )
-    nat_section = panel.locator('[data-settings-section="nat"]')
-    nat_enabled = nat_section.get_by_role("checkbox", name=re.compile(r"^NAT(?:\s|$)"))
-    require_initial = nat_section.get_by_role(
-        "checkbox",
-        name=re.compile(r"^Require initial NAT mapping(?:\s|$)"),
-    )
-    auto_connect.wait_for(timeout=int(timeout_seconds * 1000))
-    nat_enabled.wait_for(timeout=int(timeout_seconds * 1000))
-    require_initial.wait_for(timeout=int(timeout_seconds * 1000))
+    _, snapshot, _ = _read_settings_form(
+        page, base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
+    expected = {"network.autoConnect": True, "network.nat.enabled": True,
+                "network.nat.requireInitialMapping": False}
+    for key, value in expected.items():
+        leaf = _saved_setting(snapshot, key)
+        if leaf != {"mode": "default", "value": value}:
+            raise RuntimeError(f"Fresh-profile setting is not the expected default: {key}")
+    application = snapshot["data"]["application"]
+    if application["pendingRestart"] or application["failed"]:
+        raise RuntimeError("Fresh-profile settings have unapplied changes")
+    network = snapshot["data"]["effective"]["network"]
     observed = {
-        "autoConnect": auto_connect.is_checked(),
-        "upnpEnabled": nat_enabled.is_checked(),
-        "requireInitialMapping": require_initial.is_checked(),
+        "autoConnect": network["autoConnect"],
+        "upnpEnabled": network["nat"]["enabled"],
+        "requireInitialMapping": network["nat"]["requireInitialMapping"],
         "verifiedThroughRenderedWebui": True,
     }
     if (
@@ -1175,35 +1401,36 @@ def _assert_zero_configuration_defaults(page, *, timeout_seconds: float) -> dict
     return observed
 
 
-def _configure_best_effort_upnp(page, *, timeout_seconds: float) -> dict[str, Any]:
+def _configure_best_effort_upnp(page, *, base_url: str, api_key: str,
+                                timeout_seconds: float) -> dict[str, Any]:
     """Enable best-effort NAT mapping through the rendered Settings form."""
 
-    _click_primary_nav(page, "Settings", timeout_ms=int(timeout_seconds * 1000))
-    panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Settings", exact=True)
-    )
-    advanced = panel.get_by_label(re.compile("Advanced"))
-    if not advanced.is_checked():
-        advanced.check()
-    nat_section = panel.locator('[data-settings-section="nat"]')
-    nat_enabled = nat_section.get_by_role("checkbox", name=re.compile(r"^NAT(?:\s|$)"))
-    if not nat_enabled.is_checked():
-        nat_enabled.check()
-    require_initial = nat_section.get_by_role(
-        "checkbox",
-        name=re.compile(r"^Require initial NAT mapping(?:\s|$)"),
-    )
-    if require_initial.is_checked():
-        require_initial.uncheck()
-    panel.get_by_role("button", name="Save", exact=True).click()
-    page.get_by_text(
-        "Settings saved; restart daemon for bind, port, NAT, VPN, and filter changes",
-        exact=True,
-    ).wait_for(timeout=int(timeout_seconds * 1000))
+    surface, snapshot, _ = _read_settings_form(
+        page, base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds)
+    changes = {}
+    for name, value in {"enabled": True, "requireInitialMapping": False}.items():
+        key = "network.nat." + name
+        if _saved_setting(snapshot, key)["value"] is value:
+            continue
+        editor = _settings_editor(page, key)
+        editor.locator('input[aria-label^="Use default for "]').uncheck()
+        editor.locator('input[type="checkbox"]').last.set_checked(value)
+        changes[name] = value
+    if changes:
+        snapshot = _save_settings_form(page, settings_patch(
+            snapshot, set_values={"network": {"nat": changes}}), timeout_seconds)
+        _wait_for_settings_form(page, surface, snapshot, timeout_seconds)
+    for name, value in {"enabled": True, "requireInitialMapping": False}.items():
+        if _saved_setting(snapshot, "network.nat." + name)["value"] is not value:
+            raise RuntimeError("Best-effort NAT settings were not saved")
+    application = snapshot["data"]["application"]
+    if application["failed"]:
+        raise RuntimeError("Best-effort NAT settings application failed")
     return {
         "enabled": True,
         "requireInitialMapping": False,
-        "restartRequired": True,
+        "restartRequired": bool(application["pendingRestart"]),
+        "writes": int(bool(changes)),
         "configuredThroughRenderedWebui": True,
     }
 
@@ -1246,9 +1473,10 @@ class RequestRecorder:
 
 
 def sanitize_api_request_key(key: str) -> str:
-    """Removes live transfer/file hash material from an API request key."""
+    """Remove live download IDs and file hashes from a request key."""
 
-    return HASH_TOKEN_RE.sub("{hash}", key)
+    return HASH_TOKEN_RE.sub("{hash}",
+        re.sub(r"(?<=downloads/)[1-9][0-9]{0,18}(?=/|$)", "{id}", key))
 
 
 def sanitize_report_text(value: str, redactions: tuple[str, ...] = ()) -> str:
@@ -1281,7 +1509,8 @@ def steady_request_load_check(api_counts: dict[str, int]) -> dict[str, Any]:
     repeated_secondary = {
         path: count
         for path, count in sorted(api_counts.items())
-        if count > 1 and not any(path.startswith(prefix) for prefix in ALLOWED_REPEATED_STEADY_PREFIXES)
+        if count > 1 and path not in ALLOWED_REPEATED_STEADY_PATHS
+        and not any(path.startswith(prefix) for prefix in ALLOWED_REPEATED_STEADY_PREFIXES)
     }
     return {
         "ok": not repeated_secondary,
@@ -1448,6 +1677,7 @@ def run_webui_live_proof(
     max_main_thread_busy_ratio: float,
     navigation_only: bool = False,
     verify_stale_key_recovery: bool = False,
+    verify_settings_edits: bool = False,
     consumer_workflow: ConsumerNetworkWorkflow | None = None,
     configure_best_effort_upnp: bool = False,
     shutdown_after_proof: bool = False,
@@ -1600,11 +1830,20 @@ def run_webui_live_proof(
                     "ok": [row["label"] for row in visited_tabs] == list(TAB_LABELS),
                 }
 
+                report["checks"]["settingsForm"] = _verify_settings_form(
+                    page, base_url=base_url, api_key=api_key,
+                    timeout_seconds=timeout_seconds, verify_edits=verify_settings_edits,
+                )
+
                 if configure_best_effort_upnp:
                     report["checks"]["upnpConfiguration"] = _configure_best_effort_upnp(
                         page,
+                        base_url=base_url,
+                        api_key=api_key,
                         timeout_seconds=timeout_seconds,
                     )
+                    if consumer_workflow is not None and report["checks"]["upnpConfiguration"]["restartRequired"]:
+                        raise RuntimeError("Saved NAT configuration requires a daemon restart before consumer-network proof")
 
                 if consumer_workflow is not None:
                     workflow_result = _consumer_network_actions(

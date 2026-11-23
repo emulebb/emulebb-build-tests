@@ -2,6 +2,7 @@
 import hashlib
 import json
 from types import SimpleNamespace
+from pathlib import Path
 import shlex
 from urllib.parse import parse_qs, urlsplit
 
@@ -162,7 +163,7 @@ def test_guest_entries_still_rejects_nonempty_unterminated_output():
 
 def test_public_request_is_distinct_from_increasing_payload_and_local_peer():
     catalog = [{"hash": "a" * 32}]
-    row = {"clientId": "peer", "address": "93.184.216.34", "requestedFileHash": "a" * 32, "uploadedBytes": 100}
+    row = {"id": "peer", "address": "93.184.216.34", "requestedFileHash": "a" * 32, "uploadedBytes": 100}
     first, previous = subject.public_upload_evidence({"items": [row]}, catalog, {})
     assert first["requests"] == "observed" and first["bytesVerdict"] == "not-observed"
     second, _ = subject.public_upload_evidence({"items": [{**row, "uploadedBytes": 150}]}, catalog, previous)
@@ -175,21 +176,27 @@ def test_public_request_is_distinct_from_increasing_payload_and_local_peer():
         subject.public_upload_evidence({"items": [{**row, "requestedFileHash": "b" * 32}]}, catalog, previous)
 
 
-def test_catalog_paginates_and_rejects_foreign_rows():
-    value = receipt()
-    row = {"hash": "a" * 32, "path": value["destination"] + "/Sample Folder/Sample Audio.bin",
-           "sizeBytes": 4, "complete": True, "partFile": False}
-    pages = [{"items": [], "total": 1, "nextCursor": "opaque token"},
-             {"items": [row], "total": 1, "nextCursor": None}]
-    calls = []
+def catalog_phone(rows, locations):
     def request(method, path):
-        calls.append(path)
-        return pages.pop(0)
-    result, _ = subject.shared_catalog(SimpleNamespace(request=request), value)
-    assert result["status"] == "observed" and "cursor=opaque+token" in calls[1]
-    foreign = {"items": [{**row, "path": subject.INCOMING + "/Other.bin"}], "total": 1, "nextCursor": None}
+        assert method == "GET"
+        if urlsplit(path).path == "/library/files":
+            return {"data": rows, "meta": {"total": len(rows), "hasMore": False, "nextCursor": None}}
+        file_hash = urlsplit(path).path.split("/")[3]
+        return {"data": locations[file_hash], "meta": {"hasMore": False, "nextCursor": None}}
+    return SimpleNamespace(request=request)
+
+
+def test_catalog_reads_separate_locations_and_rejects_foreign_rows():
+    value = receipt()
+    row = {"hash": "a" * 32, "displayName": "Sample Audio.bin", "sizeBytes": 4}
+    path = value["destination"] + "/Sample Folder/Sample Audio.bin"
+    phone = catalog_phone([row], {row["hash"]: [{"path": path, "present": True}]})
+    result, rows = subject.shared_catalog(phone, value)
+    assert result["status"] == result["allFileInstancesIndexed"] == "observed"
+    assert result["catalogFileLocations"] == 1 and rows == [row]
+    foreign = catalog_phone([row], {row["hash"]: [{"path": subject.INCOMING + "/Other.bin", "present": True}]})
     with pytest.raises(RuntimeError):
-        subject.shared_catalog(SimpleNamespace(request=lambda *a: foreign), value)
+        subject.shared_catalog(foreign, value)
 
 
 def test_history_is_bounded_and_retains_only_one_predecessor(tmp_path):
@@ -223,7 +230,8 @@ class FakePhone:
         if args[:2] == ("readlink", "-f"): return args[-1]
         if args[0] == "cat": return "1" * 32
         return ""
-    def request(self, *args): return {"total": 0, "items": []}
+    def request(self, *args, **kwargs):
+        return {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
 
 
 def installation_evidence(phone):
@@ -236,8 +244,8 @@ def installation_evidence(phone):
 def mock_observer(monkeypatch, *, fail=False):
     monkeypatch.setattr(subject, "guest_scope", lambda *a, **kw: None)
     monkeypatch.setattr(subject, "wifi_default", lambda *a: None)
-    monkeypatch.setattr(subject, "_settings", lambda *a, **kw: None)
-    monkeypatch.setattr(subject, "configure_public_discovery", lambda *a: {"connectionAndPublication": "require-live-observation"})
+    monkeypatch.setattr(subject, "_settings", lambda *a, **kw: {"application": {"pendingRestart": []}})
+    monkeypatch.setattr(subject, "configure_public_discovery", lambda *a, **kw: {"connectionAndPublication": "require-live-observation"})
     monkeypatch.setattr(subject, "publish_staged_tree", lambda *a: None)
     monkeypatch.setattr(subject, "battery_condition", lambda *a, **kw: {"continuousOperationGuarantee": "not-claimed"})
     monkeypatch.setattr(subject, "_guest_free", lambda *a: 1024**4)
@@ -283,7 +291,7 @@ def test_observer_preserves_primary_closed_failure_through_stop_and_cleanup_erro
     stop_error = subject.AdbOperationFailure(("shell", "input", "tap", "private-coordinate"),
         exit_code=1, stderr="permission denied: synthetic-private-device")
     cleanup_error = subject.RustRestFailure("synthetic-private-response", status=400,
-        detail=json.dumps({"error": {"code": "BAD_REQUEST",
+        detail=json.dumps({"error": {"code": "INVALID_ARGUMENT",
             "message": "failed to bind eD2k TCP listener: synthetic-private-address"}}))
     def stop():
         phone.failed_rest_operation = "settings-update"
@@ -328,12 +336,13 @@ def test_actual_sampler_queue_guard_retains_its_phase_and_exact_safe_reason(tmp_
     calls = []
     def request(method, path):
         calls.append((method, path))
-        return {"total": 1, "items": [{"path": "private-foreign-download"}]}
+        return {"data": [{"name": "private-foreign-download"}],
+                "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
     phone.request = request
     result = subject.observe(phone, receipt(), campaign=tmp_path, output_root=tmp_path)
-    assert result["failurePhase"] == "sample-transfer-queue"
+    assert result["failurePhase"] == "sample-download-queue"
     assert result["failureReason"] == "download-queue-not-empty" and result["service"] == "stopped-after-failure"
-    assert calls == [("GET", "/transfers?limit=1")]
+    assert calls == [("GET", "/downloads?view=unfinished&limit=1")]
     assert "private-foreign" not in (tmp_path / "session.json").read_text()
 
 
@@ -359,7 +368,8 @@ def test_explicit_stop_request_stops_normal_ui_service(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "stop-request.json").read_text())["nonce"] == value["nonce"]
 
 
-def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("restart_pending", [False, True])
+def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_path, monkeypatch, restart_pending):
     source = tmp_path / "source"
     source.mkdir()
     (source / "Sample.bin").write_bytes(b"data")
@@ -367,12 +377,18 @@ def test_prepare_configures_empty_service_before_copy_and_rechecks_source(tmp_pa
     phone = FakePhone()
     mock_observer(monkeypatch)
     monkeypatch.setattr(subject, "_guest_entries", lambda phone, root: {root})
-    def settings(*args, **kwargs): phone.calls.append("cap-configured")
+    def settings(*args, **kwargs):
+        phone.calls.append("cap-configured")
+        return {"application": {"pendingRestart": ["network.kadEnabled"] if restart_pending else []}}
     monkeypatch.setattr(subject, "_settings", settings)
+    discovery = []
+    monkeypatch.setattr(subject, "configure_public_discovery", lambda phone, *, start_networks:
+                        discovery.append(start_networks) or {"connectionAndPublication": "require-live-observation"})
     digest = subject.prepare(phone, campaign=campaign, output_root=tmp_path, source=source, expected_file_count=1,
                              expected_total_bytes=4, installation=installation_evidence(phone), admission={}, limits=subject.Limits(), route="direct-wifi")
     push = next(call for call in phone.calls if isinstance(call, tuple) and call[0] == "push")
     assert phone.calls.index("cap-configured") < phone.calls.index("stop") < phone.calls.index(push)
+    assert discovery == [not restart_pending] and phone.calls.count("start_service") == 1
     value = subject.admit_campaign(campaign, digest, phone.device.serial)
     assert value["sourceUnchanged"] and value["guestSha256Verified"] and (source / "Sample.bin").read_bytes() == b"data"
 
@@ -532,9 +548,9 @@ def test_safe_failure_reason_matches_exact_runtime_literals_only():
     ("POST", "/servers/operations/import-met-url", 60.0),
     ("POST", "/kad/operations/import-nodes-url", 60.0),
     ("POST", "/servers/operations/connect", 60.0),
-    ("PATCH", "/app/settings", 60.0),
-    ("GET", "/app/settings", 10.0), ("GET", "/stats", 10.0), ("GET", "/nat", 10.0),
-    ("GET", "/shared-files?limit=200&cursor=opaque", 10.0),
+    ("PATCH", "/settings", 60.0),
+    ("GET", "/settings", 10.0), ("GET", "/stats", 10.0), ("GET", "/nat", 10.0),
+    ("GET", "/library/files?limit=200&cursor=opaque", 10.0),
 ])
 def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline(monkeypatch, method, path, timeout):
     phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
@@ -550,12 +566,92 @@ def test_phone_request_uses_canonical_http_owner_with_bounded_operation_deadline
     assert phone.failed_rest_operation is None
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_phone_settings_request_keeps_revision_and_bounded_failure_owner(monkeypatch, fail):
+    phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
+    phone.port, phone.key = 12345, "fixture-key"
+    calls = []
+    document = {"data": {}, "meta": {"settingsRevision": "9007199254740993"}}
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        if fail:
+            raise TimeoutError("private-response")
+        return document
+    monkeypatch.setattr(subject, "http_json", request)
+    if fail:
+        with pytest.raises(TimeoutError):
+            phone.request("GET", "/settings", include_meta=True)
+        assert phone.failed_rest_operation == "settings-read"
+    else:
+        assert phone.request("GET", "/settings", include_meta=True) == document
+    assert calls == [(("http://127.0.0.1:12345", "/api/v1/settings"), {
+        "api_key": "fixture-key", "method": "GET", "body": None, "timeout_seconds": 10.0})]
+
+
+@pytest.mark.parametrize("configure,fault", [
+    (False, None), (True, None), (True, "conflict"), (True, "saved-rate"), (True, "apply-failed"),
+    (False, "pending"), (False, "effective-rate"), (False, "binding"), (False, "root"),
+])
+def test_campaign_settings_require_saved_preparation_and_effective_observation(configure, fault):
+    from copy import deepcopy
+    limits = subject.Limits()
+    effective = {"storage": {"incomingDirectory": subject.INCOMING},
+                 "security": {"vpnGuard": {"mode": "off"}},
+                 "network": {"p2p": {"bindInterface": "tun0" if fault == "binding" else None, "bindIp": None},
+                             "autoConnect": not configure, "ed2kEnabled": not configure,
+                             "kadEnabled": not configure, "nat": {"enabled": not configure}},
+                 "transfers": {"uploadLimitBytesPerSecond": limits.upload_limit_kibps * 1024
+                               * (2 if configure or fault == "effective-rate" else 1)}}
+    def saved(values):
+        return {key: saved(value) if isinstance(value, dict) else {"mode": "custom", "value": value}
+                for key, value in values.items()}
+    snapshot = {"data": {"effective": effective, "saved": saved(effective), "application": {
+        "pendingRestart": ["network.nat.enabled"] if fault == "pending" else [], "failed": []}},
+        "meta": {"apiVersion": "v1", "settingsRevision": "9007199254740993"}}
+    calls = []
+    def request(method, path, body=None, *, include_meta=False):
+        calls.append((method, path, body))
+        if path.startswith("/library/roots"):
+            roots = [{"id": "1", "path": subject.SHARED, "managed": False},
+                     {"id": "2", "path": subject.INCOMING, "managed": True}]
+            if fault == "root":
+                roots.append({"id": "3", "path": "/other", "managed": False})
+            return {"data": roots, "meta": {"hasMore": False, "nextCursor": None}}
+        assert path == "/settings" and include_meta is True
+        if method == "PATCH":
+            assert body == {"expectedRevision": "9007199254740993", "set": {
+                "transfers": {"uploadLimitBytesPerSecond": limits.upload_limit_kibps * 1024},
+                "network": {"autoConnect": True, "ed2kEnabled": True, "kadEnabled": True, "nat": {"enabled": True}}}}
+            if fault == "conflict":
+                raise RuntimeError("SETTINGS_CONFLICT")
+            result = deepcopy(snapshot)
+            selected = body["set"]
+            if fault == "saved-rate":
+                selected = deepcopy(selected)
+                selected["transfers"]["uploadLimitBytesPerSecond"] = 1
+            result["data"]["saved"]["network"].update(saved(selected["network"]))
+            result["data"]["saved"]["transfers"] = saved(selected["transfers"])
+            result["data"]["application"] = {"pendingRestart": ["network.kadEnabled"],
+                "failed": [{"key": "network.kadEnabled"}] if fault == "apply-failed" else []}
+            result["meta"]["settingsRevision"] = "9007199254740994"
+            return result
+        return deepcopy(snapshot)
+    phone = SimpleNamespace(request=request)
+    if fault:
+        with pytest.raises(RuntimeError, match="Campaign|SETTINGS_CONFLICT"):
+            subject._settings(phone, limits, configure=configure)
+    else:
+        result = subject._settings(phone, limits, configure=configure)
+        assert bool(result["application"]["pendingRestart"]) is configure
+    assert len([call for call in calls if call[0] == "PATCH"]) == int(configure)
+
+
 def test_phone_request_records_only_closed_failed_operation(monkeypatch):
     phone = subject.Phone(SimpleNamespace(serial="synthetic:5555", command=lambda *a: None), {})
     phone.port, phone.key = 12345, "fixture-key"
     def fail(*args, **kwargs): raise TimeoutError("private-response-and-path")
     monkeypatch.setattr(subject, "request_json", fail)
-    with pytest.raises(TimeoutError): phone.request("PATCH", "/app/settings", {"private": "payload"})
+    with pytest.raises(TimeoutError): phone.request("PATCH", "/settings", {"private": "payload"})
     assert phone.failed_rest_operation == "settings-update"
     with pytest.raises(TimeoutError): phone.request("POST", "/private-unknown-route", {})
     assert phone.failed_rest_operation == "unclassified-rest-operation"
@@ -602,7 +698,7 @@ def test_private_failure_receipt_reuses_only_closed_rest_projection(tmp_path, mo
     def fail_settings(*args, **kwargs):
         phone.failed_rest_operation = "settings-update"
         raise subject.RustRestFailure("private-response-text", status=status,
-            detail=json.dumps({"error": {"code": "BAD_REQUEST", "message": "failed to bind eD2k TCP listener: private-response-text"}}))
+            detail=json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": "failed to bind eD2k TCP listener: private-response-text"}}))
     monkeypatch.setattr(subject, "_settings", fail_settings)
     if mode == "prepare":
         source = tmp_path / "source"
@@ -621,7 +717,7 @@ def test_private_failure_receipt_reuses_only_closed_rest_projection(tmp_path, mo
         path = tmp_path / "session.json"
     assert value["failedRestOperation"] == "settings-update"
     if type(status) is int and 100 <= status <= 599:
-        assert value["failedRestSafeFailure"] == {"httpStatus": status, "apiCode": "BAD_REQUEST", "coreContext": "ed2k-listener-bind"}
+        assert value["failedRestSafeFailure"] == {"httpStatus": status, "apiCode": "INVALID_ARGUMENT", "coreContext": "ed2k-listener-bind"}
     else:
         assert "failedRestSafeFailure" not in value
     assert "private-response" not in path.read_text() and "PRIVATE" not in path.read_text()
@@ -921,7 +1017,7 @@ def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_c
     calls = []
     def request(method, path):
         calls.append((method, path))
-        return {"total": 0, "items": []} if path.startswith("/transfers") else {
+        return {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}} if path.startswith("/downloads") else {
             "items": []} if path == "/uploads" else {"enabled": True, "gatewayDiscovered": True, "mappings": []}
     phone = SimpleNamespace(identity=lambda: None, shell=lambda *args: "", request=request,
                             base="http://127.0.0.1:12345", key="private-key")
@@ -946,10 +1042,11 @@ def test_sample_reads_nat_endpoint_and_keeps_raw_contents_separate_from_intake_c
     assert result["claims"]["perFileServedBytes"] == "evidence-incomplete"
     assert "private-key" not in json.dumps(result)
     assert phases == ["sample-app-identity", "sample-direct-route", "sample-guest-scope", "sample-settings",
-        "sample-transfer-queue", "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads"]
+        "sample-download-queue", "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads"]
 
 
-def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch):
+@pytest.mark.parametrize("start_networks", [True, False])
+def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch, start_networks):
     calls = []
     server_pages = iter([[], [{"enabled": True}]])
     def request(method, path, body=None):
@@ -959,11 +1056,12 @@ def test_public_discovery_uses_existing_approved_seed_owners(monkeypatch):
         if path == "/kad": return {"connected": False}
         if path == "/kad/operations/import-nodes-url": return {"imported": True}
         return {}
-    value = subject.configure_public_discovery(SimpleNamespace(request=request))
+    value = subject.configure_public_discovery(SimpleNamespace(request=request), start_networks=start_networks)
     assert ("POST", "/servers/operations/import-met-url", {"url": subject.DEFAULT_SERVER_MET_URL}) in calls
     assert ("POST", "/kad/operations/import-nodes-url", {"url": subject.DEFAULT_NODES_DAT_URL}) in calls
-    assert ("POST", "/servers/operations/connect", {}) in calls
-    assert ("POST", "/kad/operations/start", {}) in calls
+    assert (("POST", "/servers/operations/connect", {}) in calls) is start_networks
+    assert (("POST", "/kad/operations/start", {}) in calls) is start_networks
+    assert value["networkStartDeferred"] is not start_networks
     assert value["connectionAndPublication"] == "require-live-observation"
     assert not any("transfers" in path or "searches" in path for _, path, _ in calls)
 
@@ -1030,26 +1128,28 @@ def test_os_lease_metadata_remains_on_same_file_after_release(tmp_path):
         assert path.stat().st_ino == before
 
 
-def test_content_catalog_collapses_duplicate_instances_without_claiming_all_paths_indexed():
+def test_content_catalog_checks_every_duplicate_location_and_distinct_content():
     value = receipt()
     original = value["inventory"]["files"][0]
     duplicate = {**original, "path": "Other Folder/Sample Audio Copy.bin"}
     distinct = {**original, "path": "Other Folder/Sample Text.bin", "sha256": hashlib.sha256(b"more").hexdigest()}
     value["inventory"]["files"] = [original, duplicate, distinct]
     value["fileCount"] = 3
-    rows = [{"hash": file_hash, "path": value["destination"] + "/" + item["path"], "sizeBytes": item["sizeBytes"],
-             "complete": True, "partFile": False} for file_hash, item in (("a" * 32, duplicate), ("b" * 32, distinct))]
-    phone = SimpleNamespace(request=lambda *a: {"items": rows, "total": 2, "nextCursor": None})
-    result, _ = subject.shared_catalog(phone, value)
-    assert result["status"] == "observed" and result["approvedFileInstances"] == 3
+    rows = [{"hash": file_hash, "displayName": Path(item["path"]).name, "sizeBytes": item["sizeBytes"]}
+            for file_hash, item in (("a" * 32, duplicate), ("b" * 32, distinct))]
+    def location(item):
+        return {"path": value["destination"] + "/" + item["path"], "present": True}
+    locations = {"a" * 32: [location(original), location(duplicate)], "b" * 32: [location(distinct)]}
+    result, _ = subject.shared_catalog(catalog_phone(rows, locations), value)
+    assert result["status"] == result["allFileInstancesIndexed"] == "observed"
+    assert result["approvedFileInstances"] == result["catalogFileLocations"] == 3
     assert result["expectedDistinctContents"] == result["matchedDistinctContents"] == 2
-    assert result["catalogRepresentativePaths"] == 2 and result["duplicateFileInstances"] == 1
-    assert result["allFileInstancesIndexed"] == "evidence-incomplete"
-    # Two incompatible content IDs for byte-identical approved copies are not
-    # proof of complete distinct-content coverage.
-    rows.append({**rows[0], "hash": "c" * 32, "path": value["destination"] + "/" + original["path"]})
-    ambiguous = SimpleNamespace(request=lambda *a: {"items": rows, "total": 3, "nextCursor": None})
-    assert subject.shared_catalog(ambiguous, value)[0]["status"] == "evidence-incomplete"
+    assert result["duplicateFileInstances"] == 1
+    locations["a" * 32] = [location(duplicate)]
+    assert subject.shared_catalog(catalog_phone(rows, locations), value)[0]["allFileInstancesIndexed"] == "not-observed"
+    rows.append({**rows[0], "hash": "c" * 32})
+    locations["c" * 32] = [location(original)]
+    assert subject.shared_catalog(catalog_phone(rows, locations), value)[0]["status"] == "evidence-incomplete"
 
 
 def test_content_catalog_reads_realistic_cursor_after_first_200_of_221_rows():
@@ -1058,22 +1158,28 @@ def test_content_catalog_reads_realistic_cursor_after_first_200_of_221_rows():
     value["inventory"]["files"] = [{"path": f"Sample Folder/Sample-{index:03d}.bin", "sizeBytes": index + 1,
                                      "sha256": hashlib.sha256(f"sample-{index}".encode()).hexdigest()}
                                     for index in range(221)]
-    rows = [{"path": value["destination"] + "/" + item["path"], "sizeBytes": item["sizeBytes"],
-             "hash": f"{index + 1:032x}", "complete": True, "partFile": False}
+    rows = [{"displayName": Path(item["path"]).name, "sizeBytes": item["sizeBytes"], "hash": f"{index + 1:032x}"}
             for index, item in enumerate(value["inventory"]["files"])]
-    cursor = json.dumps({"sortPath": rows[199]["path"], "hash": rows[199]["hash"]}, separators=(",", ":"))
+    locations = {row["hash"]: [{"path": value["destination"] + "/" + item["path"], "present": True}]
+                 for row, item in zip(rows, value["inventory"]["files"])}
+    cursor = "opaque library cursor +/"
     calls = []
     def request(method, path):
         query = parse_qs(urlsplit(path).query)
-        calls.append(query)
         assert query["limit"] == ["200"]
+        if urlsplit(path).path != "/library/files":
+            return {"data": locations[urlsplit(path).path.split("/")[3]],
+                    "meta": {"hasMore": False, "nextCursor": None}}
+        calls.append(query)
+        assert query["view"] == ["shared"] and query["countTotal"] == ["true"]
         if len(calls) == 1:
             assert "cursor" not in query
-            return {"items": rows[:200], "total": 221, "nextCursor": cursor}
+            return {"data": rows[:200], "meta": {"total": 221, "hasMore": True, "nextCursor": cursor}}
         assert query["cursor"] == [cursor]
-        return {"items": rows[200:], "total": 221, "nextCursor": None}
+        return {"data": rows[200:], "meta": {"total": 221, "hasMore": False, "nextCursor": None}}
     result, actual = subject.shared_catalog(SimpleNamespace(request=request), value)
-    assert result["status"] == "observed" and result["matchedDistinctContents"] == 221
+    assert result["status"] == result["allFileInstancesIndexed"] == "observed"
+    assert result["matchedDistinctContents"] == 221
     assert len(actual) == 221 and len(calls) == 2
 
 

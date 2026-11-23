@@ -61,7 +61,8 @@ def test_run_pytest_case_invokes_workspace_orchestration(monkeypatch, tmp_path: 
                 "test",
                 "python",
                 "--path",
-                "..\\emulebb-build-tests\\tests\\python\\test_emulebb_rust_rest_contract.py",
+                "..\\emulebb-build-tests\\tests\\python\\test_rust_openapi_routes.py"
+                "::test_selected_rust_route_contract_matches_selected_openapi",
                 "--quiet",
             ],
             "cwd": tmp_path / "emulebb-build",

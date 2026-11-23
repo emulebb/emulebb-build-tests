@@ -226,7 +226,7 @@ def transfer_row(client: str) -> dict[str, object]:
         "sizeBytes": FILE_SIZE,
         "sources": 1,
     }
-    row["displayName" if client == "rust" else "name"] = FILE_NAME
+    row["name"] = FILE_NAME
     return row
 
 
@@ -728,7 +728,7 @@ def test_application_contract_is_exact(field: str, value: object) -> None:
     ("client", "field", "value"),
     [
         ("rust", "hash", "ff" * 16),
-        ("rust", "displayName", "wrong.bin"),
+        ("rust", "name", "wrong.bin"),
         ("rust", "sizeBytes", FILE_SIZE + 1),
         ("rust", "sizeBytes", True),
         ("rust", "sources", 0),

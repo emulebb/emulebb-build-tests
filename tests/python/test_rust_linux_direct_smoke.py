@@ -155,11 +155,12 @@ def test_safe_transfers_reject_non_linux_pdf(tmp_path: Path) -> None:
 def test_safe_transfer_add_percent_encodes_stock_filename(monkeypatch) -> None:
     module = load_module()
     calls = []
-    monkeypatch.setattr(module, "post_json", lambda *args: calls.append(args))
+    monkeypatch.setattr(module, "post_json", lambda *args: calls.append(args) or {"data": {"id": "7", "hash": "a" * 32}})
 
-    module.add_allowlisted_transfer("http://192.0.2.1:4731", transfer("Linux Guide é.pdf", "a" * 32))
+    assert module.add_allowlisted_transfer("http://192.0.2.1:4731", transfer("Linux Guide é.pdf", "a" * 32)) == "7"
 
-    assert calls[0][2]["link"] == "ed2k://|file|Linux%20Guide%20%C3%A9.pdf|123|" + "A" * 32 + "|/"
+    assert calls[0][1] == "/api/v1/downloads"
+    assert calls[0][2] == {"source": {"type": "ed2k-link", "link": "ed2k://|file|Linux%20Guide%20%C3%A9.pdf|123|" + "A" * 32 + "|/"}, "intent": "started"}
 
 
 def test_server_connect_request_outlives_initial_upnp_reconcile(monkeypatch) -> None:
@@ -250,6 +251,12 @@ def test_beta_probe_selection_reserves_required_iso_and_pdf() -> None:
     assert len(selected) == 3
 
 
+def completed_download(row, delivered):
+    return {"id": "7", "hash": row["hash"], "state": "completed",
+            "sizeBytes": row["size"], "payloadVerified": True,
+            "delivery": {"state": "delivered", "path": str(delivered)}}
+
+
 def test_beta_completed_probe_requires_delivered_verified_bytes(tmp_path: Path) -> None:
     module = load_module()
     payload = b"safe fixture\n"
@@ -262,7 +269,7 @@ def test_beta_completed_probe_requires_delivered_verified_bytes(tmp_path: Path) 
         "size": len(payload),
         "sha256": module.sha256_file(delivered),
     }
-    probe = {"hash": row["hash"], "completedBytes": len(payload)}
+    probe = completed_download(row, delivered)
 
     assert module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"}) == {"pdf": True}
     delivered.write_bytes(b"bad  fixture\n")
@@ -281,9 +288,9 @@ def test_beta_completed_probe_accepts_sanitized_delivery_name(tmp_path: Path) ->
         "size": delivered.stat().st_size,
         "sha256": module.sha256_file(delivered),
     }
-    probe = {"hash": row["hash"], "completedBytes": row["size"]}
+    probe = completed_download(row, delivered)
 
-    assert module.verified_delivered_path(tmp_path, row) == delivered
+    assert module.verified_delivered_path(tmp_path, row, probe) == delivered
     assert module.verify_completed_probe_types([probe], [row], tmp_path, {"pdf"}) == {"pdf": True}
 
 
@@ -308,7 +315,7 @@ def test_delivery_audit_preserves_failed_campaign_report(tmp_path: Path) -> None
         "status": "failed",
         "error": "RuntimeError: Completed allowlisted .pdf probe was not delivered intact.",
         "safeTransfers": [{**source, "suffix": ".pdf"}],
-        "probes": [{"hash": source["hash"], "completedBytes": source["size"]}],
+        "probes": [completed_download(source, delivered)],
     }
     del campaign["safeTransfers"][0]["name"]
     report_path = run_dir / "report.json"
@@ -396,3 +403,46 @@ def test_diagnostic_run_monitor_attributes_only_accepted_payload(tmp_path: Path)
     assert summary["stockIdentifiedAcceptedBytes"] == 128
     assert summary["acceptedSourceCount"] == 1
     assert summary["peakSourceCount"] == 4
+
+
+def test_piece_presence_does_not_prove_completed_delivery():
+    module = load_module()
+    row = {"size": 123}
+    snapshot = {"state": "verifying", "sizeBytes": 123, "presentBytes": 123,
+                "payloadVerified": False, "delivery": {"state": "pending"}}
+    assert not module.download_completed(snapshot, row)
+    assert not module.download_completed({**snapshot, "state": "completed", "payloadVerified": True}, row)
+
+
+def test_recorded_missing_output_cannot_be_replaced_by_another_copy(tmp_path):
+    module = load_module()
+    copy = tmp_path / "another.pdf"
+    copy.write_bytes(b"safe fixture\n")
+    row = {"hash": "a" * 32, "size": copy.stat().st_size, "sha256": module.sha256_file(copy)}
+    snapshot = completed_download(row, tmp_path / "missing.pdf")
+    assert module.verified_delivered_path(tmp_path, row, snapshot) is None
+
+
+def test_completion_reads_only_the_created_job(monkeypatch, tmp_path):
+    module = load_module()
+    delivered = tmp_path / "fixture.pdf"
+    delivered.write_bytes(b"safe fixture\n")
+    row = {"hash": "a" * 32, "suffix": ".pdf", "size": delivered.stat().st_size,
+           "sha256": module.sha256_file(delivered)}
+    calls = []
+    monkeypatch.setattr(module, "add_allowlisted_transfer", lambda _base, _row: "7")
+    def snapshot(base, job_id, expected_hash):
+        calls.append((job_id, expected_hash))
+        return completed_download(row, delivered)
+    monkeypatch.setattr(module, "transfer_snapshot", snapshot)
+    result = module.completed_transfer_evidence("http://localhost", row, tmp_path, 1)
+    assert calls == [("7", row["hash"])]
+    assert result["id"] == "7" and result["verifiedBytes"] == row["size"]
+
+
+def test_failed_download_stops_before_reading_parts(monkeypatch):
+    module = load_module()
+    monkeypatch.setattr(module, "download_detail", lambda *_args, **_kwargs: {"state": "failed"})
+    monkeypatch.setattr(module, "download_part_totals", lambda *_args: pytest.fail("failed download"))
+    with pytest.raises(RuntimeError, match="explicit operator action"):
+        module.transfer_snapshot("http://localhost", "7", "a" * 32)

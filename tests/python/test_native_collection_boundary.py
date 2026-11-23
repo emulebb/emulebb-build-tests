@@ -52,12 +52,18 @@ def load_local_client():
 @pytest.mark.parametrize("missing", ["executable", "lan"])
 def test_native_bind_preconditions_fail_before_any_launch(monkeypatch, tmp_path: Path, missing: str) -> None:
     module = load_local_client()
-    executable = tmp_path / "staged-daemon"
-    if missing != "executable":
-        executable.write_bytes(b"prebuilt")
+    rust_checkout = tmp_path / "emulebb-rust"
+    monkeypatch.setattr(module, "resolve_selected_workspace_repo", lambda *args: rust_checkout)
     monkeypatch.setattr(module, "get_workspace_output_root", lambda: tmp_path)
-    monkeypatch.setattr(module.rust_client, "staged_executable", lambda root: executable)
     monkeypatch.delenv("X_LOCAL_IP", raising=False)
+
+    def verify_stage(repo, output):
+        assert (repo, output) == (rust_checkout, tmp_path)
+        if missing == "executable":
+            raise RuntimeError("Registered runtime admission failed: missing executable")
+        return {"executable": str(tmp_path / "staged-daemon")}
+
+    monkeypatch.setattr(module.rust_client, "verified_runtime_stage", verify_stage)
 
     def forbidden(*args, **kwargs):
         pytest.fail("preflight attempted sockets, Cargo or daemon launch")
@@ -65,7 +71,10 @@ def test_native_bind_preconditions_fail_before_any_launch(monkeypatch, tmp_path:
     monkeypatch.setattr(module, "free_lan_port", forbidden)
     monkeypatch.setattr(module.rust_client, "start_rust_client", forbidden)
     monkeypatch.setattr(module.rust_client, "start_rust_client_executable", forbidden)
-    with pytest.raises(pytest.fail.Exception, match="orchestrator-staged|X_LOCAL_IP"):
+    error, message = (RuntimeError, "missing executable") if missing == "executable" else (
+        pytest.fail.Exception, "X_LOCAL_IP",
+    )
+    with pytest.raises(error, match=message):
         getattr(module, BIND_CASE)(tmp_path)
 
 
@@ -73,9 +82,11 @@ def test_native_bind_uses_only_selected_staged_executable(monkeypatch, tmp_path:
     module = load_local_client()
     executable = tmp_path / "staged-daemon"
     executable.write_bytes(b"prebuilt")
+    rust_checkout = tmp_path / "emulebb-rust"
+    stage = {"schema": "emulebb.rust-runtime-stage/1", "executable": str(executable)}
+    monkeypatch.setattr(module, "resolve_selected_workspace_repo", lambda *args: rust_checkout)
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
     monkeypatch.setattr(module, "get_workspace_output_root", lambda: tmp_path)
-    monkeypatch.setattr(module.rust_client, "staged_executable", lambda root: executable)
     monkeypatch.setattr(module, "free_lan_port", lambda host: 12345)
     monkeypatch.setattr(module, "write_profile", lambda *args, **kwargs: None)
     calls = []
@@ -86,7 +97,7 @@ def test_native_bind_uses_only_selected_staged_executable(monkeypatch, tmp_path:
         return process
 
     def forbidden(*args, **kwargs):
-        pytest.fail("native bind attempted a Cargo fallback")
+        pytest.fail("native bind attempted a fallback from the verified runtime")
 
     class StopBeforeRest(Exception):
         pass
@@ -94,6 +105,12 @@ def test_native_bind_uses_only_selected_staged_executable(monkeypatch, tmp_path:
     def stop_before_rest(*args):
         raise StopBeforeRest
 
+    def verify_stage(repo, output):
+        assert (repo, output) == (rust_checkout, tmp_path)
+        return stage
+
+    monkeypatch.setattr(module.rust_client, "verified_runtime_stage", verify_stage)
+    monkeypatch.setattr(module.rust_client, "staged_executable", forbidden)
     monkeypatch.setattr(module.rust_client, "start_rust_client", forbidden)
     monkeypatch.setattr(module.rust_client, "start_rust_client_executable", launch)
     monkeypatch.setattr(module, "wait_for_rest", stop_before_rest)
@@ -104,5 +121,5 @@ def test_native_bind_uses_only_selected_staged_executable(monkeypatch, tmp_path:
     assert calls == [(executable, tmp_path / "profile", tmp_path / "emulebb-rust.out")]
     assert stopped == [process]
     observed = json.loads((tmp_path / "native-input.json").read_text(encoding="utf-8"))
-    assert observed["executableSha256"] == hashlib.sha256(b"prebuilt").hexdigest()
-    assert observed["sourceProvenance"] == "unverified"
+    assert observed["stage"] == stage
+    assert observed["harnessSha256"] == hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()

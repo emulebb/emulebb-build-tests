@@ -9,6 +9,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from .rust_rest_contract import settings_patch
+
 
 PCP_BACKEND = "pcp_natpmp"
 MINIUPNPC_BACKEND = "upnp_miniupnpc"
@@ -64,7 +66,7 @@ def matrix_cases(
     return (
         {
             "name": "default-auto",
-            "backendOrder": [],
+            "backendOrder": None,
             "bindIp": bind_ip,
             "pcpServerIp": pcp_server_ip,
             "igdIp": igd_ip,
@@ -73,7 +75,7 @@ def matrix_cases(
         },
         {
             "name": "pcp-only",
-            "backendOrder": [PCP_BACKEND],
+            "backendOrder": ["pcp-natpmp"],
             "bindIp": bind_ip,
             "pcpServerIp": pcp_server_ip,
             "igdIp": igd_ip,
@@ -82,7 +84,7 @@ def matrix_cases(
         },
         {
             "name": "miniupnpc-only",
-            "backendOrder": [MINIUPNPC_BACKEND],
+            "backendOrder": ["upnp"],
             "bindIp": bind_ip,
             "pcpServerIp": None,
             "igdIp": igd_ip,
@@ -91,7 +93,7 @@ def matrix_cases(
         },
         {
             "name": "forced-pcp-failure-miniupnpc-fallback",
-            "backendOrder": [PCP_BACKEND, MINIUPNPC_BACKEND],
+            "backendOrder": ["pcp-natpmp", "upnp"],
             "bindIp": bind_ip,
             "pcpServerIp": forced_pcp_server_ip,
             "igdIp": igd_ip,
@@ -101,38 +103,31 @@ def matrix_cases(
     )
 
 
-def settings_patch(case: dict[str, Any]) -> dict[str, object]:
-    """Builds one restart-required settings update with obfuscation disabled."""
-
-    return {
-        "ed2k": {
-            "obfuscationEnabled": False,
-            "listenPort": LIVE_ED2K_PORT,
-        },
-        "kad": {"listenPort": LIVE_KAD_PORT},
-        "nat": {
-            "enabled": True,
-            "requireInitialMapping": False,
-            "backendOrder": list(case["backendOrder"]),
-            "bindIp": case["bindIp"],
-            "pcpServerIp": case["pcpServerIp"],
-            "igdIp": case["igdIp"],
-            # Match hide-port-forward's proven finite UPnP retry lease.
-            "leaseDurationSecs": 86400,
-            # Match the proven hide-port-forward helper's command budget. The
-            # VPN gateway first rejects PCP v2, then the native client retries
-            # as NAT-PMP v0; a two-second budget can expire after the successful
-            # fallback response has arrived but before the flow settles.
-            "discoveryTimeoutSecs": 15,
-        },
-    }
+def settings_values(case: dict[str, Any]) -> dict[str, Any]:
+    """Return current product values for one restart-bound NAT case."""
+    nat = {"enabled": True, "requireInitialMapping": False,
+           "pcpServerIp": case["pcpServerIp"], "igdIp": case["igdIp"]}
+    if case["backendOrder"] is not None:
+        nat["backendOrder"] = list(case["backendOrder"])
+    return {"security": {"obfuscationEnabled": False}, "network": {
+        "p2p": {"bindIp": case["bindIp"], "tcpPort": LIVE_ED2K_PORT, "udpPort": LIVE_KAD_PORT},
+        "nat": nat}}
 
 
 def _response_data(payload: dict[str, Any]) -> dict[str, Any]:
-    data = payload.get("data", payload)
+    data = payload.get("data")
     if not isinstance(data, dict):
-        raise RuntimeError("REST response data was not an object")
+        raise RuntimeError("REST response requires an object data envelope")
     return data
+
+
+def _verify_values(actual: dict[str, Any], expected: dict[str, Any], *, saved: bool) -> None:
+    """Require each selected current value to be retained or effective."""
+    for key, value in expected.items():
+        if isinstance(value, dict):
+            _verify_values(actual[key], value, saved=saved)
+        elif (actual[key]["value"] if saved else actual[key]) != value:
+            raise RuntimeError(f"NAT settings did not retain or apply the requested {key}")
 
 
 def evaluate_case(
@@ -155,7 +150,7 @@ def evaluate_case(
     error = str(status.get("lastError") or "")
     result: dict[str, Any] = {
         "name": case["name"],
-        "backendOrder": list(case["backendOrder"]),
+        "backendOrder": case["backendOrder"],
         "bindIp": case["bindIp"],
         "pcpServerIp": case["pcpServerIp"],
         "igdIp": case["igdIp"],
@@ -219,6 +214,7 @@ def evaluate_case(
 
 def run_matrix(
     *,
+    read_settings: Callable[[], dict[str, Any]],
     apply_settings: Callable[[dict[str, object]], dict[str, Any]],
     restart_daemon: Callable[[], None],
     read_nat_status: Callable[[], dict[str, Any]],
@@ -240,20 +236,23 @@ def run_matrix(
         igd_ip=igd_ip,
     ):
         started = time.monotonic()
-        updated = _response_data(apply_settings(settings_patch(case)))
-        ed2k = updated.get("ed2k") or {}
-        nat = updated.get("nat") or {}
-        if not isinstance(ed2k, dict) or ed2k.get("obfuscationEnabled") is not False:
-            raise RuntimeError("settings update did not disable protocol obfuscation")
-        if not isinstance(nat, dict) or nat.get("backendOrder") != case["backendOrder"]:
-            raise RuntimeError("settings update did not retain the requested NAT backend order")
-        if nat.get("pcpServerIp") != case["pcpServerIp"]:
-            raise RuntimeError("settings update did not retain the PCP server override")
-        if nat.get("bindIp") != case["bindIp"]:
-            raise RuntimeError("settings update did not retain the NAT bind address")
-        if nat.get("igdIp") != case["igdIp"]:
-            raise RuntimeError("settings update did not retain the IGD address")
+        values = settings_values(case)
+        reset = ("network.nat.backendOrder",) if case["backendOrder"] is None else ()
+        updated = _response_data(apply_settings(settings_patch(
+            read_settings(), set_values=values, reset=reset)))
+        _verify_values(updated["saved"], values, saved=True)
+        order = updated["saved"]["network"]["nat"]["backendOrder"]
+        if reset and order["mode"] != "default":
+            raise RuntimeError("Default NAT case did not reset the backend order")
+        if updated["application"]["failed"]:
+            raise RuntimeError("NAT settings application failed")
         restart_daemon()
+        restarted = _response_data(read_settings())
+        _verify_values(restarted["effective"], values, saved=False)
+        if restarted["effective"]["network"]["nat"]["backendOrder"] != order["value"]:
+            raise RuntimeError("NAT backend order did not apply after restart")
+        if restarted["application"]["pendingRestart"] or restarted["application"]["failed"]:
+            raise RuntimeError("NAT settings remain unapplied after restart")
         status_payload = read_nat_status()
         while (
             _response_data(status_payload).get("lastRefreshUnixSecs") is None

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke two daemons, local transfer, and embedded WebUI from each native artifact.
+"""Smoke local transfers, restart, resources and embedded WebUI from native artifacts.
 
 This uses fresh, local-only, non-autoconnecting profiles on the native runner.
 It never installs a package into the runner's system directories or launches
@@ -27,20 +27,24 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from collections import deque
 from pathlib import Path, PurePosixPath
-from typing import TextIO
+from typing import Any, Callable, TextIO
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness.rust_rest_contract import iter_library_locations, iter_library_roots, settings_patch
 from emule_test_harness.build_provenance import require_clean_git_source  # noqa: E402
 from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     ed2k_link_with_source,
     file_sha256,
     publish_shared_tree,
+    require_download_id,
+    RustRestFailure,
     wait_for,
 )
 from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noqa: E402
@@ -49,20 +53,24 @@ API_KEY = "native-package-smoke-secret-0001"
 WEBUI_TITLE = "eMuleBB WebUI"
 TRANSFER_FILE_NAME = "eMuleBB.Native.Package.Transfer.bin"
 TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
-PARTIAL_DOWNLOAD_LIMIT_KIBPS = 512
+PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND = 512 * 1024
+PARALLEL_DOWNLOAD_COUNT = 16
+PARALLEL_PAYLOAD_BYTES = 4 * 1024 * 1024
+PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND = 64 * 1024
+PARALLEL_START_ATTEMPTS = 5
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
-    "transfers": "/api/v1/transfers",
+    "downloads": "/api/v1/downloads",
     "search": "/api/v1/searches",
-    "sharing": "/api/v1/shared-directories",
-    "shared-files": "/api/v1/shared-files",
+    "sharing": "/api/v1/library/scan",
+    "library": "/api/v1/library/files",
     "uploads": "/api/v1/uploads",
     "network": "/api/v1/network",
     "servers": "/api/v1/servers",
     "kad": "/api/v1/kad",
     "categories": "/api/v1/categories",
     "friends": "/api/v1/friends",
-    "settings": "/api/v1/app/settings",
+    "settings": "/api/v1/settings",
     "diagnostics": "/api/v1/diagnostics",
     "logs": "/api/v1/logs?limit=20",
 }
@@ -163,20 +171,24 @@ def _write_profile(
     rust_client.write_rust_profile(
         profile,
         rust_repo=rust_repo,
-        incoming_dir=incoming,
-        rest_addr="127.0.0.1",
+        rest_addr='127.0.0.1',
         rest_port=rest_port,
         api_key=API_KEY,
-        auto_connect=False,
-        network_kademlia=False,
-        p2p_bind_ip=p2p_ip,
-        ed2k_port=ed2k_port,
-        kad_port=kad_port,
-        server_endpoint=f"127.0.0.1:{runtime_server_port}",
-        nat_enabled=False,
+        server_endpoint=f'127.0.0.1:{runtime_server_port}',
         replace_servers=True,
-        initial_shared_directory_reload=False,
         local_only_discovery=True,
+        settings={
+            'storage.incomingDirectory': str(incoming),
+            'network.autoConnect': False,
+            'network.kadEnabled': False,
+            'network.p2p.bindIp': p2p_ip,
+            'network.p2p.tcpPort': ed2k_port,
+            'network.p2p.udpPort': kad_port,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': False,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
 
@@ -187,7 +199,7 @@ def _start_daemon(binary: Path, profile: Path, log_path: Path) -> tuple[subproce
             [str(binary), "--profile", str(profile)],
             stdout=log,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "RUST_LOG": "warn"},
+            env={**os.environ, "RUST_LOG": "warn,emulebb_core::download_preparation=debug"},
             text=True,
         )
     except Exception:
@@ -242,11 +254,11 @@ def _shutdown_or_stop(base_url: str, process: subprocess.Popen[str] | None) -> N
         _stop_process(process)
 
 
-def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES) -> dict[str, object]:
+def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES, *, identity: bytes = b"") -> dict[str, object]:
     path.parent.mkdir(parents=True, exist_ok=True)
     # WHY: a repeating payload compresses into one burst and cannot establish a
     # reliable partial checkpoint. SHAKE supplies deterministic incompressible bytes.
-    path.write_bytes(hashlib.shake_256(b"emulebb-rust native package transfer smoke").digest(size_bytes))
+    path.write_bytes(hashlib.shake_256(b"emulebb-rust native package transfer smoke" + identity).digest(size_bytes))
     return {
         "name": path.name,
         "path": str(path),
@@ -255,48 +267,58 @@ def _write_transfer_payload(path: Path, size_bytes: int = TRANSFER_SIZE_BYTES) -
     }
 
 
-def _partial_snapshot(details: dict, *, transfer_hash: str, expected_size: int) -> dict | None:
-    """Describe verified parts only while the original transfer remains incomplete."""
-    transfer, parts = details.get("transfer"), details.get("parts")
-    if (not isinstance(transfer, dict) or not isinstance(parts, list)
-            or str(transfer.get("hash", "")).lower() != transfer_hash.lower()
-            or transfer.get("sizeBytes") != expected_size or transfer.get("partsTotal") != len(parts)):
-        raise RuntimeError("Packaged transfer details do not match the expected file")
-    completed = transfer.get("completedBytes")
-    if type(completed) is not int or not 0 <= completed <= expected_size:
-        raise RuntimeError("Packaged transfer has an invalid completed byte count")
-    markers = transfer.get("partsProgressText")
-    if (not isinstance(markers, str) or len(markers) != len(parts)
-            or set(markers) - {"#", "0"}):
-        raise RuntimeError("Packaged transfer has invalid verified part markers")
-    verified, seen = {}, set()
+def _partial_snapshot(details: dict, *, download_id: str, expected_hash: str, expected_size: int) -> dict | None:
+    """Describe independently verified parts of the same unfinished job."""
+    download, parts = details.get("download"), details.get("parts")
+    if (not isinstance(download, dict) or not isinstance(parts, list) or not parts
+            or download.get("id") != download_id or download.get("hash") != expected_hash
+            or download.get("sizeBytes") != expected_size):
+        raise RuntimeError("Packaged download details do not match the admitted job")
+    verified, seen, geometry = {}, set(), []
     for part in parts:
         if (not isinstance(part, dict) or type(part.get("index")) is not int
                 or not 0 <= part["index"] < len(parts) or part["index"] in seen
-                or type(part.get("size")) is not int or part["size"] <= 0):
-            raise RuntimeError("Packaged transfer has invalid part geometry")
+                or type(part.get("sizeBytes")) is not int or part["sizeBytes"] <= 0
+                or type(part.get("start")) is not int or type(part.get("end")) is not int
+                or part["start"] < 0 or part["end"] < part["start"]
+                or part["end"] - part["start"] + 1 != part["sizeBytes"]):
+            raise RuntimeError("Packaged download has invalid part geometry")
         seen.add(part["index"])
-        # WHY: fully received bytes can precede hash verification. Bind the
-        # persisted checkpoint to the exact verified indices in this snapshot.
-        if (markers[part["index"]] == "#" and part.get("complete") is True and part.get("corrupted") is False
-                and part.get("completedBytes") == part["size"] and part.get("gapBytes") == 0):
-            verified[part["index"]] = part["size"]
+        geometry.append((part["index"], part["start"], part["end"]))
+        # Fully received bytes can precede hash verification. The native
+        # DownloadPart contract defines complete as the verification verdict.
+        if (part.get("complete") is True and part.get("corrupted") is False
+                and type(part.get("presentBytes")) is int and part["presentBytes"] == part["sizeBytes"]):
+            verified[part["index"]] = part["sizeBytes"]
+    ordered = sorted(geometry)
+    if (seen != set(range(len(parts))) or ordered[0][1] != 0
+            or ordered[-1][2] != expected_size - 1
+            or any(current[1] != previous[2] + 1 for previous, current in zip(ordered, ordered[1:]))):
+        raise RuntimeError("Packaged download has incomplete part geometry")
     verified_bytes = sum(verified.values())
-    if (not verified or type(transfer.get("partsObtained")) is not int
-            or transfer["partsObtained"] != markers.count("#") or markers.count("#") != len(verified)
-            or not 0 < verified_bytes <= completed < expected_size):
+    if (not verified or not 0 < verified_bytes < expected_size
+            or download.get("completedAt") is not None or download.get("payloadVerified") is not False):
         return None
     return {"partsTotal": len(parts), "verifiedPartIndices": sorted(verified), "verifiedBytes": verified_bytes,
-            "completedBytes": completed, "state": transfer.get("state")}
+            "state": download.get("state"), "intent": download.get("intent")}
 
 
-def _wait_for_verified_partial(base_url: str, transfer_hash: str, expected_size: int, *, paused: bool = False) -> dict:
+def _read_partial_snapshot(base_url: str, download_id: str, expected_hash: str, expected_size: int) -> dict | None:
+    """Read the fixed two-part smoke fixture through separate bounded resources."""
+    download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", API_KEY)
+    parts = _download_page(base_url, f"/api/v1/downloads/{download_id}/parts?limit=200")
+    return _partial_snapshot({"download": download, "parts": parts}, download_id=download_id,
+                             expected_hash=expected_hash, expected_size=expected_size)
+
+
+def _wait_for_verified_partial(base_url: str, download_id: str, expected_hash: str,
+                               expected_size: int, *, stopped: bool = False) -> dict:
     def probe():
-        details = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY)
-        snapshot = _partial_snapshot(details, transfer_hash=transfer_hash, expected_size=expected_size)
-        return snapshot if snapshot and (not paused or snapshot["state"] == "paused") else None
+        snapshot = _read_partial_snapshot(base_url, download_id, expected_hash, expected_size)
+        return snapshot if snapshot and (not stopped or (snapshot["intent"] == "stopped"
+                                              and snapshot["state"] == "stopped")) else None
     return wait_for(probe, timeout_seconds=90.0, interval_seconds=0.1,
-                    description="packaged verified partial transfer" + (" pause" if paused else ""))
+                    description="packaged verified partial download" + (" stop" if stopped else ""))
 
 
 def _app_metadata(app: dict, expected_identity: dict[str, str] | None = None) -> dict:
@@ -324,9 +346,10 @@ def _verify_cli_identity(binary: Path, expected_identity: dict[str, str]) -> str
     return result.stdout.strip()
 
 
-def _wait_for_transfer_delivery(
+def _wait_for_download_delivery(
     base_url: str,
-    transfer_hash: str,
+    download_id: str,
+    expected_hash: str,
     *,
     incoming: Path,
     expected_size: int,
@@ -335,41 +358,64 @@ def _wait_for_transfer_delivery(
     observations: list[dict[str, object]] = []
 
     def probe() -> dict[str, object] | None:
-        # WHY: successful promotion removes the active transfer. The completed
-        # shared-file registration and its exact delivered bytes are durable evidence.
-        shared = request_json(base_url, "GET", f"/api/v1/shared-files/{transfer_hash}", API_KEY)
+        # Completion remains a durable job; its delivery path and the complete
+        # library location must agree on the actual delivered bytes.
+        download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", API_KEY)
+        delivery = download.get("delivery")
+        if (download.get("id") != download_id or download.get("hash") != expected_hash):
+            raise RuntimeError("Packaged download identity changed before delivery")
+        if (download.get("state") != "completed" or download.get("payloadVerified") is not True
+                or not isinstance(download.get("completedAt"), int)
+                or not isinstance(delivery, dict) or delivery.get("state") != "delivered"
+                or delivery.get("ownership") not in ("owned", "unowned")):
+            return None
+        try:
+            library_file = request_json(base_url, "GET", f"/api/v1/library/files/{expected_hash}", API_KEY)
+        except RustRestFailure as error:
+            if error.status == 404:
+                return None
+            raise
+        delivered_value = delivery.get("path")
+        if not isinstance(delivered_value, str) or not delivered_value:
+            return None
+        locations = iter_library_locations(
+            lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY), expected_hash
+        )
+        registered = any(
+            location["present"] and Path(location["path"]).resolve() == Path(delivered_value).resolve()
+            for location in locations
+        )
         observations.append(
             {
-                "complete": shared.get("complete"),
-                "sizeBytes": shared.get("sizeBytes"),
-                "deliveredPathPresent": bool(shared.get("path")),
+                "present": library_file.get("present"),
+                "sizeBytes": library_file.get("sizeBytes"),
+                "deliveredLocationPresent": registered,
             }
         )
-        delivered_value = shared.get("path")
         if (
-            str(shared.get("hash") or "").lower() != transfer_hash.lower()
-            or shared.get("complete") is not True
-            or shared.get("partFile") is not False
-            or int(shared.get("sizeBytes") or 0) != expected_size
+            library_file.get("hash") != expected_hash
+            or library_file.get("present") is not True
+            or library_file.get("sizeBytes") != expected_size
+            or not registered
         ):
-            return None
-        if not delivered_value:
             return None
         delivered = Path(str(delivered_value))
         if not delivered.is_file():
             return None
         if delivered.resolve().parent != incoming.resolve():
-            raise RuntimeError(f"packaged transfer was delivered outside the configured incoming directory: {delivered}")
+            raise RuntimeError(f"packaged download was delivered outside the configured incoming directory: {delivered}")
         delivered_sha256 = file_sha256(delivered)
         if delivered.stat().st_size != expected_size or delivered_sha256 != expected_sha256:
-            raise RuntimeError("packaged transfer delivered bytes do not match the shared payload")
+            raise RuntimeError("packaged download delivered bytes do not match the shared payload")
         return {
-            "hash": transfer_hash,
+            "id": download_id,
+            "hash": expected_hash,
             "state": "completed",
             "completedBytes": expected_size,
             "sharedFileRegistered": True,
             "deliveredPathWithinIncoming": True,
             "deliveredSha256": delivered_sha256,
+            "deliveryOwnership": delivery["ownership"],
             "observations": observations[-20:],
         }
 
@@ -378,15 +424,15 @@ def _wait_for_transfer_delivery(
             probe,
             timeout_seconds=120.0,
             interval_seconds=0.5,
-            description=f"packaged local transfer {transfer_hash} delivery",
+            description=f"packaged local download {download_id} delivery",
         )
     except RuntimeError as error:
         try:
-            transfers = request_json(base_url, "GET", "/api/v1/transfers", API_KEY)
-            detail = json.dumps(transfers, sort_keys=True)[-16000:]
+            downloads = _download_page(base_url, "/api/v1/downloads?view=all")
+            detail = json.dumps(downloads, sort_keys=True)[-16000:]
         except Exception as snapshot_error:
             detail = str(snapshot_error)
-        raise RuntimeError(f"{error}; final transfer state: {detail}") from error
+        raise RuntimeError(f"{error}; final download state: {detail}") from error
 
 
 def _request(
@@ -395,6 +441,7 @@ def _request(
     api_key: str | None = None,
     method: str = "GET",
     json_body: dict[str, object] | None = None,
+    expected_statuses: tuple[int, ...] | None = None,
 ) -> bytes:
     headers = {"X-API-Key": api_key} if api_key else {}
     body = None
@@ -402,19 +449,62 @@ def _request(
         body = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=3) as response:
-        if response.status not in ((200,) if method == "GET" else (200, 201, 202)):
-            raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
-        return response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            accepted = expected_statuses or ((200,) if method == "GET" else (200, 201, 202))
+            if response.status not in accepted:
+                raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
+            return response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read(8192).decode("utf-8", errors="replace")
+        failure = RustRestFailure(f"{method} {url}: HTTP {error.code}", status=error.code, detail=detail)
+        code = failure.response_error.get("code")
+        failure.add_note(f"API error code={code[:128] if isinstance(code, str) else None!r}")
+        raise failure from error
 
 
-def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None) -> dict:
+def request_document(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
+                     *, expected_statuses: tuple[int, ...] | None = None) -> dict:
     """Use this smoke's HTTP transport and require the current REST envelope."""
-    document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body))
-    if (not isinstance(document, dict) or not isinstance(document.get("data"), dict)
+    document = json.loads(_request(base_url + path, method=method, api_key=api_key, json_body=body,
+                                   expected_statuses=expected_statuses))
+    if (not isinstance(document, dict) or not isinstance(document.get("data"), (dict, list))
             or not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"):
         raise RuntimeError("Packaged REST must return the current v1 data/meta envelope")
-    return document["data"]
+    return document
+
+
+def request_json(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
+                 *, expected_statuses: tuple[int, ...] | None = None) -> dict:
+    """Read this smoke's object data while retaining envelope checks."""
+    data = request_document(base_url, method, path, api_key, body,
+                            expected_statuses=expected_statuses)["data"]
+    if not isinstance(data, dict):
+        raise RuntimeError("Packaged REST object requires the current v1 data/meta envelope")
+    return data
+
+
+def _download_page(base_url: str, path: str) -> list[dict]:
+    document = json.loads(_request(base_url + path, api_key=API_KEY))
+    rows, meta = document.get("data"), document.get("meta")
+    if (not isinstance(rows, list) or not isinstance(meta, dict) or meta.get("apiVersion") != "v1"
+            or meta.get("hasMore") is not False or meta.get("nextCursor") is not None):
+        raise RuntimeError("Packaged download page did not settle")
+    return rows
+
+
+def _download_action(base_url: str, operation: str, download_id: str) -> str:
+    document = json.loads(_request(base_url + f"/api/v1/downloads/{operation}", method="POST",
+                                   api_key=API_KEY, json_body={"ids": [download_id]},
+                                   expected_statuses=(207,)))
+    rows = document.get("data")
+    if (not isinstance(document.get("meta"), dict) or document["meta"].get("apiVersion") != "v1"
+            or not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or rows[0].get("id") != download_id or rows[0].get("status") not in ("accepted", "unchanged")
+            or rows[0].get("httpStatus") not in (200, 202) or "error" in rows[0]
+            or (rows[0]["status"] == "unchanged" and rows[0]["httpStatus"] != 200)):
+        raise RuntimeError(f"Packaged download {operation} failed for job {download_id}: {document}")
+    return rows[0]["status"]
 
 
 def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
@@ -426,8 +516,7 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
 
     fixture = temp_root / "ownership-import"
     create_import_fixture(fixture)
-    # Export only hashes from the stock fixture. Its share paths are a separate
-    # native directory-list input and need no stock Windows path mapping.
+    # Export only hashes so this ownership probe needs no source-path mapping.
     hashes = fixture / "hashes"
     hashes.mkdir()
     for name in ("known.met", "known2_64.met"):
@@ -436,21 +525,21 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
     archive = fixture / "hashes.sqlite"
     write_exchange(ExportJob(fixture / "windows.toml", hashes, "stock", target_platform, archive, ()),
                    hashes_only=True)
-    directory_list = fixture / "shared.txt"
-    directory_list.write_text(f"{fixture / 'shared'}\n", encoding="utf-8")
 
     bootstrap = profile / "emulebb-rust-settings.toml"
     before_bootstrap = file_sha256(bootstrap)
-    before_settings = request_json(base_url, "GET", "/api/v1/app/settings", API_KEY)
-    before_roots = request_json(base_url, "GET", "/api/v1/shared-directories", API_KEY)["roots"]
+    before_settings = request_json(base_url, "GET", "/api/v1/settings", API_KEY)
+    before_roots = list(iter_library_roots(lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY)))
     contenders = []
-    for command, arguments in (
-        ("import-emule-profile", ["--hashes-only", str(archive)]),
-        ("import-shared-directories", [str(directory_list)]),
-        ("reconcile-shared-files", []),
+    for arguments in (
+        ["import", "profile", "--hashes-only", str(archive)],
+        ["settings", "get", "network.nickname"],
+        ["settings", "set", "network.nickname", "Sample"],
+        ["settings", "reset", "network.nickname"],
     ):
+        command = " ".join(arguments[:2])
         result = subprocess.run(
-            [str(binary), "--profile", str(profile), command, *arguments],
+            [str(binary), "--profile", str(profile), *arguments],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=False,
         )
         if (result.returncode == 0 or result.stdout.strip()
@@ -460,10 +549,268 @@ def _reject_offline_profile_writers(binary: Path, profile: Path, base_url: str,
                                f"(exit {result.returncode}): {result.stderr[-2000:]}")
         contenders.append({"command": command, "exitCode": result.returncode, "profileBusy": True})
     if (file_sha256(bootstrap) != before_bootstrap
-            or request_json(base_url, "GET", "/api/v1/app/settings", API_KEY) != before_settings
-            or request_json(base_url, "GET", "/api/v1/shared-directories", API_KEY)["roots"] != before_roots):
+            or request_json(base_url, "GET", "/api/v1/settings", API_KEY) != before_settings
+            or list(iter_library_roots(lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY))) != before_roots):
         raise RuntimeError("denied offline commands changed the owned profile's bootstrap, settings or roots")
     return contenders
+
+
+def _record_download_resources(resources: dict, peaks: dict[str, int]) -> None:
+    """Validate live admission observations and retain only bounded maxima."""
+    try:
+        concurrency, resident = resources["concurrency"], resources["residentMemory"]
+        values = {"active": resources["active"], "preparing": resources["preparing"],
+                  "waiting": resources["waiting"], "residentBytes": resident["usedBytes"],
+                  "target": concurrency["target"], "burstActive": concurrency["burstActive"]}
+        if (any(type(value) is not int or value < 0 for value in values.values())
+                or concurrency["mode"] != "fixed"
+                or concurrency["configuredLimit"] != PARALLEL_DOWNLOAD_COUNT
+                or resident["softTargetBytes"] != 64 * 1024 * 1024
+                or resident["limitBytes"] != 128 * 1024 * 1024
+                or values["residentBytes"] > resident["limitBytes"]
+                or values["active"] > PARALLEL_DOWNLOAD_COUNT + (PARALLEL_DOWNLOAD_COUNT + 3) // 4):
+            raise ValueError("resource contract violated")
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("Packaged parallel download resource contract failed") from error
+    for key, value in values.items():
+        peaks[key] = max(peaks.get(key, 0), value)
+    if values["residentBytes"] > 0:
+        peaks["chargedActive"] = max(peaks.get("chargedActive", 0), values["active"])
+
+
+@contextmanager
+def _parallel_sources(binary: Path, temp_root: Path, *, rust_repo: Path, p2p_ip: str,
+                      reserved_ports: set[int], first_url: str, first_port: int,
+                      first_process: subprocess.Popen[str]):
+    """Give each job an independent real peer; always drain fixture processes."""
+    sources = [{"url": first_url, "port": first_port, "process": first_process,
+                "logPath": temp_root / "seeder.log"}]
+    cleanup = ExitStack()
+    try:
+        for index in range(1, PARALLEL_DOWNLOAD_COUNT):
+            root = temp_root / f"parallel-source-{index:02d}"
+            root.mkdir()
+            rest_port = _available_unique_port(reserved_ports)
+            tcp_port = _available_unique_port(reserved_ports, host=p2p_ip)
+            _write_profile(root / "profile", rust_repo=rust_repo, incoming=root / "incoming",
+                           rest_port=rest_port, ed2k_port=tcp_port,
+                           kad_port=_available_unique_port(reserved_ports, host=p2p_ip, socket_type=socket.SOCK_DGRAM),
+                           runtime_server_port=_available_unique_port(reserved_ports), p2p_ip=p2p_ip)
+            url = f"http://127.0.0.1:{rest_port}"
+            process, log = _start_daemon(binary, root / "profile", root / "daemon.log")
+            cleanup.callback(log.close)
+            cleanup.callback(_shutdown_or_stop, url, process)
+            _wait_for_rest(url, process, root / "daemon.log")
+            request_json(url, "POST", "/api/v1/servers/operations/connect", API_KEY)
+            sources.append({"url": url, "port": tcp_port, "process": process, "logPath": root / "daemon.log"})
+        yield sources
+    finally:
+        cleanup.close()
+
+
+def _parallel_download_proof(
+    temp_root: Path, *, seeder_base_url: str, leecher_base_url: str,
+    p2p_ip: str, seeder_ed2k_port: int, incoming: Path,
+    seeder_process: subprocess.Popen[str], leecher_process: subprocess.Popen[str],
+    binary: Path, rust_repo: Path, reserved_ports: set[int],
+) -> dict[str, object]:
+    """Run distinct jobs against independent packaged peers."""
+    with _parallel_sources(binary, temp_root, rust_repo=rust_repo, p2p_ip=p2p_ip,
+                           reserved_ports=reserved_ports, first_url=seeder_base_url,
+                           first_port=seeder_ed2k_port, first_process=seeder_process) as sources:
+        try:
+            result = _parallel_download_jobs(temp_root, sources=sources, leecher_base_url=leecher_base_url,
+                                             p2p_ip=p2p_ip, incoming=incoming, leecher_process=leecher_process)
+        except Exception as error:
+            for index, source in enumerate(sources):
+                _attach_failure_diagnostics(error, f"parallel-source-{index:02d}", source["url"], source["logPath"])
+            raise
+    exits = [source["process"].poll() for source in sources[1:]]
+    if any(code != 0 for code in exits):
+        raise RuntimeError(f"Parallel source shutdown failed: {exits}")
+    result["auxiliarySourceExitCodes"] = exits
+    return result
+
+
+def _start_parallel_job(base_url: str, job_id: str, attempts: list[dict], *, api_key: str) -> None:
+    """Record bounded caller retries for explicit admission backpressure only."""
+    for attempt in range(1, PARALLEL_START_ATTEMPTS + 1):
+        document = request_document(base_url, "POST", "/api/v1/downloads/start", api_key,
+                                    {"ids": [job_id]}, expected_statuses=(207,))
+        rows = document["data"]
+        if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or rows[0].get("id") != job_id):
+            raise RuntimeError("Parallel start returned an invalid action result")
+        row = rows[0]
+        error = row.get("error")
+        error_code = error.get("code") if isinstance(error, dict) else None
+        recorded = {"id": job_id, "attempt": attempt, "status": row.get("status"),
+                    "httpStatus": row.get("httpStatus"), "errorCode": error_code}
+        attempts.append(recorded)
+        if row.get("status") == "accepted" and row.get("httpStatus") == 202 and "error" not in row:
+            return
+        if (row.get("status") != "failed" or row.get("httpStatus") != 503
+                or error_code != "DOWNLOAD_UNAVAILABLE" or attempt == PARALLEL_START_ATTEMPTS):
+            raise RuntimeError(f"Parallel start did not settle: {recorded}")
+        delay = 0.25 * 2 ** (attempt - 1)
+        recorded["retryDelaySeconds"] = delay
+        time.sleep(delay)
+
+
+def _parallel_read(fetch: Callable[[], Any], attempts: list[dict], *, path: str) -> Any:
+    """Record bounded client retries for typed read-admission pressure only."""
+    for attempt in range(1, PARALLEL_START_ATTEMPTS + 1):
+        receipt = {"path": path, "attempt": attempt}
+        attempts.append(receipt)
+        try:
+            value = fetch()
+        except RustRestFailure as error:
+            code = error.response_error.get("code")
+            receipt.update(httpStatus=error.status, errorCode=code[:128] if isinstance(code, str) else None)
+            if error.status != 503 or code != "PERSISTENCE_BUSY" or attempt == PARALLEL_START_ATTEMPTS:
+                raise
+            delay = 0.25 * 2 ** (attempt - 1)
+            receipt["retryDelaySeconds"] = delay
+            time.sleep(delay)
+        except Exception as error:
+            receipt["errorType"] = type(error).__name__
+            raise
+        else:
+            receipt["httpStatus"] = 200
+            return value
+
+
+def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_base_url: str,
+                            p2p_ip: str, incoming: Path, leecher_process: subprocess.Popen[str]) -> dict:
+    """Observe admission and verify every delivered byte across independent peers."""
+    from emule_test_harness.rust_shared_library_io import ProcessSampler
+
+    settings = request_document(leecher_base_url, "GET", "/api/v1/settings", API_KEY)
+    request_document(leecher_base_url, "PATCH", "/api/v1/settings", API_KEY,
+                     settings_patch(settings, set_values={"transfers": {
+                         "maxConcurrentDownloads": PARALLEL_DOWNLOAD_COUNT,
+                         "downloadLimitBytesPerSecond": 1024 * 1024}}))
+    baseline = request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY)["downloads"]
+    if baseline["unfinished"] != 0:
+        raise RuntimeError("Parallel proof requires the preceding transfer to be complete")
+    jobs, hashes = {}, set()
+    for index, source in enumerate(sources):
+        name = f"Parallel-{index:02d}.bin"
+        path = temp_root / "parallel-shared" / f"source-{index:02d}" / name
+        payload = _write_transfer_payload(path, PARALLEL_PAYLOAD_BYTES, identity=name.encode("ascii"))
+        published = publish_shared_tree(source["url"], API_KEY, root=path.parent,
+                                        file_name=name, timeout_seconds=60.0)
+        detail = published["sharedFiles"]["matched"]
+        file_hash = detail["hash"]
+        hashes.add(file_hash)
+        # WHY: tiny files can finish before the first status response. Pace the
+        # real sources so overlapping charged owners remain observable, keeping
+        # the concurrency and resident-budget assertions strict.
+        source_settings = request_document(source["url"], "GET", "/api/v1/settings", API_KEY)
+        request_document(source["url"], "PATCH", "/api/v1/settings", API_KEY,
+                         settings_patch(source_settings, set_values={"transfers": {
+                             "uploadLimitBytesPerSecond": PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND}}))
+        created = request_json(leecher_base_url, "POST", "/api/v1/downloads", API_KEY,
+                               {"source": {"type": "ed2k-link", "link": ed2k_link_with_source(
+                                   detail["ed2kLink"], p2p_ip, source["port"])}, "intent": "stopped"},
+                               expected_statuses=(201,))
+        job_id = require_download_id(created, expected_hash=file_hash)
+        jobs[job_id] = (file_hash, payload)
+    if len(jobs) != PARALLEL_DOWNLOAD_COUNT or len(hashes) != PARALLEL_DOWNLOAD_COUNT:
+        raise RuntimeError("Parallel admission did not produce distinct jobs and hashes")
+    samplers = {f"seeder-{index:02d}": ProcessSampler(source["process"], 0.5)
+                for index, source in enumerate(sources)}
+    samplers["leecher"] = ProcessSampler(leecher_process, 0.5)
+    for sampler in samplers.values():
+        sampler.maybe_sample(force=True)
+    peaks: dict[str, int] = {}
+    samples = 0
+    read_attempts: list[dict] = []
+
+    def observe_resources() -> None:
+        nonlocal samples
+        for sampler in samplers.values():
+            sampler.maybe_sample()
+        status = _parallel_read(
+            lambda: request_json(leecher_base_url, "GET", "/api/v1/status", API_KEY),
+            read_attempts, path="/status",
+        )
+        _record_download_resources(status["stats"]["downloadResources"], peaks)
+        samples += 1
+
+    # WHY: mutation admission shares bounded capacity with active payload work.
+    # Keep each caller retry explicit in evidence; execution/storage failures
+    # never pass through this admission-only retry path.
+    control_attempts: list[dict] = []
+    try:
+        observe_resources()
+        for job_id in jobs:
+            _start_parallel_job(leecher_base_url, job_id, control_attempts, api_key=API_KEY)
+            observe_resources()
+    except Exception as error:
+        error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")
+        error.add_note(f"Parallel read attempts: {json.dumps(read_attempts)}")
+        raise
+    admission_samples = samples
+    completion_started = time.monotonic()
+    progress_history = deque(maxlen=8)
+    latest_progress: dict = {}
+
+    def completed() -> bool | None:
+        nonlocal latest_progress
+        observe_resources()
+        rows = {row["id"]: row for row in _parallel_read(
+            lambda: _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100"),
+            read_attempts, path="/downloads?view=all&limit=100",
+        )}
+        latest_progress = {
+            "seconds": round(time.monotonic() - completion_started, 3),
+            "jobs": [{key: rows.get(job_id, {}).get(key) for key in
+                      ("id", "state", "progress", "waitingReason")} for job_id in jobs],
+        }
+        if not progress_history or latest_progress["seconds"] - progress_history[-1]["seconds"] >= 15:
+            progress_history.append(latest_progress)
+            print("parallelTransfer: " + json.dumps(latest_progress, sort_keys=True), file=sys.stderr, flush=True)
+        if any(rows.get(job_id, {}).get("state") == "failed" for job_id in jobs):
+            raise RuntimeError("A parallel download entered failed state")
+        return True if all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs) else None
+
+    # WHY: admission can reduce overlap. Budget the fixture's paced payloads
+    # even serially; this is a hang guard, not a product response-time promise.
+    completion_timeout = 120.0 + sum(int(payload["sizeBytes"]) for _, payload in jobs.values()) / PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND
+    try:
+        wait_for(completed, timeout_seconds=completion_timeout, interval_seconds=0.5,
+                 description="parallel package transfers", retry_exceptions=())
+    except Exception as error:
+        error.add_note("Parallel completion evidence: " + json.dumps({
+            "sampledPeaks": peaks, "resourceSamples": samples,
+            "history": list(progress_history), "latest": latest_progress,
+            "controlAttempts": control_attempts,
+            "readAttempts": read_attempts,
+        }, sort_keys=True))
+        raise
+    if peaks.get("chargedActive", 0) < 2:
+        raise RuntimeError(f"Parallel proof did not observe concurrent charged download owners: samples={samples}, peaks={peaks}")
+    deliveries = [_wait_for_download_delivery(leecher_base_url, job_id, file_hash,
+                    incoming=incoming, expected_size=int(payload["sizeBytes"]), expected_sha256=str(payload["sha256"]))
+                  for job_id, (file_hash, payload) in jobs.items()]
+    counts = _parallel_read(
+        lambda: request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY),
+        read_attempts, path="/snapshot",
+    )["downloads"]
+    if counts != {"unfinished": 0, "completed": baseline["completed"] + PARALLEL_DOWNLOAD_COUNT}:
+        raise RuntimeError("Parallel jobs did not remain in completed history")
+    return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
+            "controlRequests": len(control_attempts), "controlBatchSize": 1,
+            "controlRetries": len(control_attempts) - len(jobs), "controlAttempts": control_attempts,
+            "readRequests": len(read_attempts), "readAttempts": read_attempts,
+            "readRetries": sum("retryDelaySeconds" in attempt for attempt in read_attempts),
+            "completionTimeoutSeconds": completion_timeout,
+            "deliveries": deliveries, "resourceSamples": samples,
+            "admissionResourceSamples": admission_samples, "sampledPeaks": peaks,
+            "processes": {name: sampler.summary() for name, sampler in samplers.items()},
+            "snapshotCounts": counts, "qualificationScope": {"realPayload": True,
+                "maximumGeometry": False, "containerMemoryLimitQualified": False}}
 
 
 def _smoke_binary(
@@ -483,7 +830,7 @@ def _smoke_binary(
     help_result = subprocess.run(
         [str(binary), "--help"], capture_output=True, text=True, timeout=20, check=True
     )
-    required_options = ("--profile", "--p2p-bind-interface")
+    required_options = ("--profile",)
     if any(option not in help_result.stdout for option in required_options):
         raise RuntimeError("packaged daemon CLI is missing beta options")
     if expected_identity is not None:
@@ -571,6 +918,7 @@ def _smoke_binary(
                 max_main_thread_busy_ratio=0.25,
                 navigation_only=True,
                 verify_stale_key_recovery=True,
+                verify_settings_edits=True,
                 expected_app_identity=expected_identity,
                 public_capture_path=public_capture_path,
             )
@@ -599,21 +947,28 @@ def _smoke_binary(
             p2p_ip,
             seeder_ed2k_port,
         )
-        previous_limit = request_json(leecher_base_url, "GET", "/api/v1/app/settings", API_KEY)["core"]["downloadLimitKiBps"]
-        if type(previous_limit) is not int or not 1 <= previous_limit <= 4294967294:
-            raise RuntimeError("Packaged REST returned an invalid download limit")
-        request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY,
-                     {"core": {"downloadLimitKiBps": PARTIAL_DOWNLOAD_LIMIT_KIBPS}})
-        transfer_create = request_json(
+        settings = request_document(leecher_base_url, "GET", "/api/v1/settings", API_KEY)
+        previous_limit = settings["data"]["saved"]["transfers"]["downloadLimitBytesPerSecond"]
+        request_document(leecher_base_url, "PATCH", "/api/v1/settings", API_KEY,
+                         settings_patch(settings, set_values={"transfers": {
+                             "downloadLimitBytesPerSecond": PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND}}))
+        created = request_json(
             leecher_base_url,
             "POST",
-            "/api/v1/transfers",
+            "/api/v1/downloads",
             API_KEY,
-            {"link": direct_link, "paused": False},
+            {"source": {"type": "ed2k-link", "link": direct_link}, "intent": "started"},
+            expected_statuses=(201,),
         )
-        _wait_for_verified_partial(leecher_base_url, transfer_hash, int(payload["sizeBytes"]))
-        request_json(leecher_base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/pause", API_KEY)
-        before = _wait_for_verified_partial(leecher_base_url, transfer_hash, int(payload["sizeBytes"]), paused=True)
+        download_id = created.get("id")
+        if (not isinstance(download_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", download_id)
+                or int(download_id) > 9223372036854775807 or created.get("hash") != transfer_hash):
+            raise RuntimeError(f"Packaged download admission returned invalid job identity: {created}")
+        _wait_for_verified_partial(leecher_base_url, download_id, transfer_hash, int(payload["sizeBytes"]))
+        if _download_action(leecher_base_url, "stop", download_id) != "accepted":
+            raise RuntimeError("Packaged download did not accept stop")
+        before = _wait_for_verified_partial(leecher_base_url, download_id, transfer_hash,
+                                            int(payload["sizeBytes"]), stopped=True)
         _graceful_shutdown(leecher_base_url, leecher_process)
         leecher_process = None
         leecher_log.close()
@@ -621,40 +976,63 @@ def _smoke_binary(
         log_handles.append(leecher_log)
         if _app_metadata(_wait_for_rest(leecher_base_url, leecher_process, leecher_log_path), expected_identity) != app:
             raise RuntimeError("Restarted packaged daemon has a different release identity")
-        # Read durable progress before reconnecting or resuming; a new transfer
-        # or newly downloaded parts must not conceal missing persisted state.
-        after = _partial_snapshot(request_json(leecher_base_url, "GET", f"/api/v1/transfers/{transfer_hash}/details", API_KEY),
-                                  transfer_hash=transfer_hash, expected_size=int(payload["sizeBytes"]))
-        if (after is None or after["state"] != "paused"
+        # Read durable progress before reconnecting or restarting the job; new
+        # downloaded parts must not conceal a missing persisted checkpoint.
+        after = _read_partial_snapshot(leecher_base_url, download_id, transfer_hash, int(payload["sizeBytes"]))
+        if (after is None or after["intent"] != "stopped" or after["state"] != "stopped"
                 or after["partsTotal"] != before["partsTotal"]
                 or not set(before["verifiedPartIndices"]).issubset(after["verifiedPartIndices"])
                 or after["verifiedBytes"] < before["verifiedBytes"]):
             raise RuntimeError("Verified partial data did not survive the same-profile packaged restart")
-        settings = request_json(leecher_base_url, "GET", "/api/v1/app/settings", API_KEY)
-        if settings["core"]["downloadLimitKiBps"] != PARTIAL_DOWNLOAD_LIMIT_KIBPS:
+        settings = request_document(leecher_base_url, "GET", "/api/v1/settings", API_KEY)
+        saved_limit = settings["data"]["saved"]["transfers"]["downloadLimitBytesPerSecond"]
+        effective_limit = settings["data"]["effective"]["transfers"]["downloadLimitBytesPerSecond"]
+        expected_limit = {"mode": "custom", "value": PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND}
+        if saved_limit != expected_limit or effective_limit != PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND:
             raise RuntimeError("Packaged restart did not preserve the download setting")
         request_json(leecher_base_url, "POST", "/api/v1/servers/operations/connect", API_KEY)
-        request_json(leecher_base_url, "PATCH", "/api/v1/app/settings", API_KEY, {"core": {"downloadLimitKiBps": previous_limit}})
-        request_json(leecher_base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/resume", API_KEY)
-        transfer_delivery = _wait_for_transfer_delivery(
+        if previous_limit["mode"] == "default":
+            restore = settings_patch(settings, reset=("transfers.downloadLimitBytesPerSecond",))
+        else:
+            restore = settings_patch(settings, set_values={"transfers": {
+                "downloadLimitBytesPerSecond": previous_limit["value"]}})
+        request_document(leecher_base_url, "PATCH", "/api/v1/settings", API_KEY, restore)
+        if _download_action(leecher_base_url, "start", download_id) != "accepted":
+            raise RuntimeError("Packaged download did not accept restart")
+        download_delivery = _wait_for_download_delivery(
             leecher_base_url,
+            download_id,
             transfer_hash,
             incoming=leecher_incoming,
             expected_size=int(payload["sizeBytes"]),
             expected_sha256=str(payload["sha256"]),
         )
+        completed_page = _download_page(leecher_base_url, "/api/v1/downloads?view=completed&limit=2")
+        if [row.get("id") for row in completed_page] != [download_id]:
+            raise RuntimeError("Completed download job was not retained in history")
+        counts = request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY)["downloads"]
+        if counts != {"unfinished": 0, "completed": 1}:
+            raise RuntimeError(f"Packaged download snapshot counts differ: {counts}")
 
+        parallel_downloads = _parallel_download_proof(
+            temp_root, seeder_base_url=seeder_base_url, leecher_base_url=leecher_base_url,
+            p2p_ip=p2p_ip, seeder_ed2k_port=seeder_ed2k_port, incoming=leecher_incoming,
+            seeder_process=seeder_process, leecher_process=leecher_process,
+            binary=binary, rust_repo=rust_repo, reserved_ports=reserved_ports)
         _graceful_shutdown(leecher_base_url, leecher_process)
         _graceful_shutdown(seeder_base_url, seeder_process)
         ownership = {}
         if contenders is not None:
-            from emule_test_harness.profile_import_audit import run_json
-
-            run_json([str(binary), "--profile", str(leecher_profile), "reconcile-shared-files"], 20)
+            offline = subprocess.run(
+                [str(binary), "--profile", str(leecher_profile), "settings", "get", "network.nickname"],
+                capture_output=True, text=True, encoding="utf-8", timeout=20, check=False,
+            )
+            if offline.returncode != 0 or not offline.stdout.strip():
+                raise RuntimeError("Offline settings did not acquire the stopped profile")
             ownership["profileOwnership"] = {
                 "contenders": contenders,
                 "bootstrapSettingsAndRootsUnchanged": True,
-                "reconcileAfterShutdown": True,
+                "offlineSettingsAfterShutdown": True,
             }
         return {
             "status": "passed",
@@ -664,12 +1042,14 @@ def _smoke_binary(
             "restStatus": True,
             "webuiPanelBackends": panel_routes,
             "gracefulShutdown": True,
-            "sharedRoots": 1,
+            "sharedRoots": PARALLEL_DOWNLOAD_COUNT + 1,
+            "parallelDownloads": parallel_downloads,
             "profile": "fresh-local-only",
             "renderedWebui": bool(rendered_webui),
+            **({"webuiSettings": rendered_webui["checks"]["settingsForm"]} if rendered_webui else {}),
             **({"publicWebuiCapture": rendered_webui["checks"]["publicCapture"]}
                if public_capture_path is not None else {}),
-            "localTransfer": {
+            "localDownload": {
                 "payload": {
                     "name": payload["name"],
                     "sizeBytes": payload["sizeBytes"],
@@ -677,15 +1057,17 @@ def _smoke_binary(
                 },
                 "sharedFile": {
                     "hash": transfer_hash,
-                    "name": matched.get("name"),
+                    "displayName": matched.get("displayName"),
                     "sizeBytes": matched.get("sizeBytes"),
                 },
-                "transferAccepted": bool(transfer_create),
-                "delivery": transfer_delivery,
+                "jobId": download_id,
+                "delivery": download_delivery,
+                "retainedCompletedJob": True,
+                "snapshotCounts": counts,
                 "sourceDiscovery": "ed2k-link-direct-source",
                 "publicDiscoveryDisabled": True,
                 "partialRestart": {"before": before, "after": after, "sameProfile": True, "sameBinary": True,
-                                   "resumeRequested": True, "downloadLimitRestored": True},
+                                   "startRequested": True, "downloadLimitRestored": True},
                 "gracefulShutdowns": 3,
             },
         }
@@ -709,15 +1091,19 @@ def _smoke_binary(
             time.sleep(1)
 
 
-def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_path: Path) -> None:
+def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_path: Path,
+                                *, api_key: str = API_KEY) -> None:
     """Retain bounded daemon diagnostics without masking the original failure."""
     try:
-        logs = request_json(base_url, "GET", "/api/v1/logs?limit=20", API_KEY)
+        logs = request_json(base_url, "GET", "/api/v1/logs?limit=20", api_key)
         error.add_note(f"{name} REST logs: {json.dumps(logs, ensure_ascii=True)[-12000:]}")
     except Exception as diagnostic_error:
         error.add_note(f"{name} REST diagnostics unavailable: {diagnostic_error}")
     try:
-        error.add_note(f"{name} process log: {log_path.read_text(encoding='utf-8', errors='replace')[-12000:]}")
+        process_log = log_path.read_text(encoding="utf-8", errors="replace")
+        if len(process_log) > 12000:
+            process_log = process_log[:6000] + "\n... middle omitted ...\n" + process_log[-6000:]
+        error.add_note(f"{name} process log: {process_log}")
     except OSError as diagnostic_error:
         error.add_note(f"{name} process diagnostics unavailable: {diagnostic_error}")
 

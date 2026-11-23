@@ -14,6 +14,12 @@ SERIAL = "synthetic-phone._adb-tls-connect._tcp"
 KEY = "synthetic-private-key-not-for-receipts"
 
 
+def storage_settings(incoming):
+    return {"saved": {"storage": {"incomingDirectory": {"mode": "custom", "value": incoming}}},
+            "effective": {"storage": {"incomingDirectory": incoming}},
+            "application": {"pendingRestart": [], "failed": []}}
+
+
 def selected_adb(monkeypatch):
     device = subject.AdbDevice.__new__(subject.AdbDevice)
     device.adb, device.serial, device.server_port, device.version = Path("synthetic-adb"), SERIAL, 5037, 41
@@ -101,12 +107,15 @@ def test_reset_candidate_must_still_match_admitted_hash(tmp_path):
 
 def test_fresh_defaults_require_actual_incoming_and_only_canonical_shared_root():
     from emule_test_harness.android_apk_profile import INCOMING, SHARED
-    subject._verify_fresh_storage({'daemon': {'incomingDir': INCOMING}}, {'roots': [{'path': SHARED}]})
-    for settings, roots in [({'daemon': {'incomingDir': '/other'}}, {'roots': [{'path': SHARED}]}),
-                            ({'daemon': {'incomingDir': INCOMING}}, {'roots': []}),
-                            ({'daemon': {'incomingDir': INCOMING}}, {'roots': [{'path': SHARED}, {'path': '/other'}]})]:
+    roots = [{"path": SHARED, "managed": False, "watchEnabled": False},
+             {"path": INCOMING, "managed": True, "watchEnabled": False}]
+    subject._verify_fresh_storage(storage_settings(INCOMING), roots)
+    for settings, invalid in [(storage_settings('/other'), roots),
+                              (storage_settings(INCOMING), []),
+                              (storage_settings(INCOMING), roots + [{"path": "/other", "managed": False}]),
+                              (storage_settings(INCOMING), [dict(root, watchEnabled=True) for root in roots])]:
         with pytest.raises(RuntimeError):
-            subject._verify_fresh_storage(settings, roots)
+            subject._verify_fresh_storage(settings, invalid)
 
 
 @pytest.mark.parametrize('baseline,fail', [('unknown', False), ('auto', True), ('no', False)])
@@ -775,7 +784,7 @@ class Phone:
         if route == "/api/v1/diagnostics":
             assert key == KEY
             return 200, json.dumps({"data": {"processResources": {
-                "sampledAtMs": 1700000000000, "residentMemoryBytes": 67108864,
+                "sampledAt": 1700000000, "residentMemoryBytes": 67108864,
                 "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500}, "privateOtherData": KEY}}).encode()
         if key is None:
             return self.unauthenticated, b"{}"
@@ -874,7 +883,9 @@ def test_reset_journals_one_uninstall_and_bound_new_install(tmp_path, monkeypatc
     if fault == 'wrong-old-hash':
         phone.checksum = '0' * 64
     monkeypatch.setattr(rust_local_ed2k, 'request_json', lambda base, method, route, key:
-        {'daemon': {'incomingDir': INCOMING}} if route == '/api/v1/app/settings' else {'roots': [{'path': SHARED}]})
+        storage_settings(INCOMING) if route == '/api/v1/settings' else {'data': [{'id': '1', 'path': SHARED, 'managed': False, 'watchEnabled': False},
+                      {'id': '2', 'path': INCOMING, 'managed': True, 'watchEnabled': False}],
+             'meta': {'hasMore': False, 'nextCursor': None}})
     if fault == 'theme-fails':
         def theme_failure(*args):
             raise RuntimeError('synthetic theme failure')
@@ -1228,18 +1239,19 @@ def test_permission_controller_resource_namespace_can_differ_from_package(tmp_pa
     assert json.loads(report.read_text())["status"] == "passed" and phone.notifications is True
 
 
-@pytest.mark.parametrize("changes", [{"residentMemoryBytes": 0}, {"sampledAtMs": None},
+@pytest.mark.parametrize("changes", [{"residentMemoryBytes": 0}, {"sampledAt": None},
     {"cpuUsagePercent": float("nan")}, {"cpuUsagePercent": float("inf")}, {"cpuUsagePercent": -1},
     {"cpuUsagePercent": True}, {"cpuSampleIntervalMs": -1}])
 def test_physical_resource_counters_reject_missing_or_nonfinite_samples(monkeypatch, changes):
-    record = {"sampledAtMs": 1700000000000, "residentMemoryBytes": 67108864,
+    record = {"sampledAt": 1700000000, "residentMemoryBytes": 67108864,
               "cpuUsagePercent": 125.5, "cpuSampleIntervalMs": 500, **changes}
     monkeypatch.setattr(subject, "_request", lambda *args: (200, json.dumps({"data": {"processResources": record}}).encode()))
     with pytest.raises(RuntimeError, match="sample"):
         subject._physical_process_resources(54321, KEY)
 
 
-def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypatch):
+@pytest.mark.parametrize("sampled_at", [0, 1700000000])
+def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypatch, sampled_at):
     attempts = [0]
     clock = [0.0]
     monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
@@ -1247,12 +1259,13 @@ def test_physical_resource_counters_allow_warmup_and_multiple_cpu_cores(monkeypa
 
     def request(*args):
         attempts[0] += 1
-        return 200, json.dumps({"data": {"processResources": {"sampledAtMs": 1700000000000,
+        return 200, json.dumps({"data": {"processResources": {"sampledAt": sampled_at,
             "residentMemoryBytes": 67108864, "cpuUsagePercent": None if attempts[0] == 1 else 250.0,
             "cpuSampleIntervalMs": None if attempts[0] == 1 else 500}, "operatorData": KEY}}).encode()
 
     monkeypatch.setattr(subject, "_request", request)
     result = subject._physical_process_resources(54321, KEY)
+    assert result["sampledAt"] == sampled_at
     assert attempts[0] == 2 and result["cpuUsagePercent"] == 250.0 and KEY not in json.dumps(result)
 
 
@@ -1333,9 +1346,10 @@ def test_owned_compatible_update_requires_bound_receipts_and_preserves_phone_sta
     phone.calls.clear()
     if fault == "execute":
         from emule_test_harness import rust_local_ed2k
-        monkeypatch.setattr(rust_local_ed2k, "request_json", lambda base, method, route, key: {
-            "daemon": {"incomingDir": android_apk_profile.INCOMING}} if route == "/api/v1/app/settings" else {
-            "roots": [{"path": android_apk_profile.SHARED}]})
+        monkeypatch.setattr(rust_local_ed2k, "request_json", lambda base, method, route, key:
+            storage_settings(android_apk_profile.INCOMING) if route == "/api/v1/settings" else {
+            "data": [{"id": "1", "path": android_apk_profile.SHARED, "managed": False}],
+            "meta": {"hasMore": False, "nextCursor": None}})
     kwargs = dict(serial=SERIAL, output_root=tmp_path, report_dir=tmp_path / "updated", expected_cert_sha256="b" * 64,
         execute=fault == "execute", dwell_seconds=15,
         installation_receipt=installation, installation_receipt_sha256=hashlib.sha256(installation.read_bytes()).hexdigest(),

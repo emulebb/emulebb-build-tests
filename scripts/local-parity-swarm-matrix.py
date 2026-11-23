@@ -232,13 +232,17 @@ def launch_rust(client: SwarmClient, *, rust_exe: Path, rust_repo: Path, artifac
         rest_addr=client.ip,
         rest_port=client.rest_port,
         api_key=client.api_key,
-        p2p_bind_ip=client.ip,
-        ed2k_port=client.tcp_port,
-        kad_port=kad_port,
-        server_endpoint=f"{server_ip}:{ed2k_port}",
-        obfuscation_enabled=crypt,
-        base_upload_slots=base_upload_slots,
-        upload_slot_elastic_percent=0 if base_upload_slots is not None else None,
+        server_endpoint=f'{server_ip}:{ed2k_port}',
+        settings={
+            'network.p2p.bindIp': client.ip,
+            'network.p2p.tcpPort': client.tcp_port,
+            'network.p2p.udpPort': kad_port,
+            'security.obfuscationEnabled': crypt,
+            **({'transfers.upload.baseSlots': base_upload_slots, 'transfers.upload.elasticPercent': 0}
+               if base_upload_slots is not None else {}),
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     os.environ["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
     client.process = rust_client.start_rust_client_executable(rust_exe, profile_dir, artifacts / f"{client.name}.out")

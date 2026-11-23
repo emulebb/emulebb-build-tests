@@ -259,10 +259,10 @@ def test_campaign_failure_carries_only_closed_typed_details():
 def test_campaign_completion_failure_projects_only_validated_fields_for_await_phase():
     from emule_test_harness.android_apk_peer import CampaignFailure
     completion = {"reason": "deadline-exhausted", "samples": [
-        {"sharedLookup": "missing", "transferPresence": "present", "state": "completing", "progress": 1.0,
-         "completedBytes": 262144, "sizeBytes": 262144, "partsObtained": 1, "partsTotal": 1,
-         "deliveryPathPresent": False, "deliveryErrorCategory": "atomic-no-replace-unsupported", "path": "private"},
-        {"sharedLookup": "unavailable", "transferPresence": "ambiguous", "state": "completing", "path": "private"}],
+        {"sharedLookup": "missing", "transferPresence": "present", "state": "delivering", "progress": 1.0,
+         "sizeBytes": 262144, "payloadVerified": True, "deliveryState": "pending",
+         "deliveryOwnership": "none", "deliveryPathPresent": False, "path": "private"},
+        {"sharedLookup": "unavailable", "transferPresence": "ambiguous", "state": "delivering", "path": "private"}],
         "raw": "private"}
     failure = {"phase": "await-completed-delivery", "code": "await-completed-delivery-failed", "completion": completion}
     result = subject._lifecycle_failure(CampaignFailure(failure), "local-transfer", {})
@@ -690,14 +690,16 @@ def test_permission_changes_that_close_activity_require_real_launcher_reopen(tmp
     assert result["status"] == "passed" and len(closures) >= (8 if api >= 33 else 5)
 
 
-@pytest.mark.parametrize("failure", [None, "autostart", "invalid", "browser", "android-resolver", "modern-resolver", "enqueue", "browser-proof"])
-def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmation(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("failure", [None, "autostart", "invalid", "browser", "android-resolver", "modern-resolver", "enqueue", "browser-proof", "history-tail"])
+@pytest.mark.parametrize("paged_history", [False, True])
+def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmation(tmp_path, monkeypatch, failure, paged_history):
     from emule_test_harness import rust_local_ed2k, rust_webui_live_proof
     peer, admitted = guest(tmp_path, monkeypatch)
     peer.intent_autostart = failure == "autostart"
     peer.accept_invalid = failure == "invalid"
     peer.browser = failure != "browser"
-    baseline = [{"hash": "b" * 32, "sizeBytes": 262144}]
+    baseline = [{"id": str(value), "hash": "b" * 32, "sizeBytes": 262144}
+                for value in range(401 if paged_history else 1, 0, -1)]
     browser_calls = []
     resolver = {"android-resolver": "android/com.android.internal.app.ResolverActivity",
                 "modern-resolver": "com.android.intentresolver/.ResolverActivity"}.get(failure)
@@ -713,9 +715,20 @@ def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmat
         return value
 
     def request(base, method, route, key, body=None):
-        assert key == peer.key and method == "GET" and route == "/api/v1/transfers?limit=100"
-        return {"items": baseline + ([{"hash": "c" * 32, "sizeBytes": 1}]
-                                    if failure == "enqueue" and peer.pending_link else [])}
+        from urllib.parse import parse_qs, urlsplit
+        query = parse_qs(urlsplit(route).query)
+        assert key == peer.key and method == "GET" and urlsplit(route).path == "/api/v1/downloads"
+        assert query["view"] == ["all"] and query["limit"] == ["200"]
+        rows = baseline + ([{"id": "402", "hash": "c" * 32, "sizeBytes": 1}]
+                           if failure == "enqueue" and peer.pending_link else [])
+        if failure == "history-tail" and peer.pending_link:
+            rows = rows[:-1]
+        rows = sorted(rows, key=lambda row: int(row["id"]), reverse=True)
+        offset = int(query.get("cursor", ["0"])[0])
+        more = offset + 200 < len(rows)
+        return {"data": rows[offset:offset + 200],
+                "meta": {"hasMore": more, "nextCursor": str(offset + 200) if more else None}}
+
 
     def browser(**kwargs):
         assert kwargs["api_key"] == peer.key and kwargs["file_hash"] == "00112233445566778899aabbccddeeff"
@@ -727,7 +740,7 @@ def test_real_intent_dispatch_requires_user_start_and_explicit_browser_confirmat
     monkeypatch.setattr(rust_webui_live_proof, "run_file_link_browser_proof", browser)
     if failure:
         messages = {"autostart": "expected service state", "invalid": "malformed or unsupported",
-                    "browser": "installed guest default browser", "enqueue": "silently changed",
+                    "browser": "installed guest default browser", "enqueue": "silently changed", "history-tail": "silently changed",
                     "browser-proof": "did not finish cleanly", "android-resolver": "installed guest default browser",
                     "modern-resolver": "installed guest default browser"}
         with pytest.raises(RuntimeError, match=messages[failure]):
@@ -758,7 +771,7 @@ def test_full_official_path_matches_source_owned_case_contract(tmp_path, monkeyp
     monkeypatch.setattr(android_apk_peer, "transfer_proof", lambda *args, **kwargs: {
         "status": "passed", "sha256": digest, "completedDeliverySurvivesRestart": True})
     monkeypatch.setattr(android_apk_peer, "guest_sha256", lambda *args: digest)
-    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *args, **kwargs: {"items": []})
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *args, **kwargs: {"data": [], "meta": {"hasMore": False, "nextCursor": None}})
     monkeypatch.setattr(rust_webui_live_proof, "run_file_link_browser_proof", lambda **kwargs: {"status": "passed"})
     result = subject.exercise(peer.command, admitted, report_dir=tmp_path, peer_payload={},
                               rust_source=tmp_path, adb="adb", child={}, qualify_file_links=True)
@@ -1194,15 +1207,15 @@ def test_post_failure_ui_projects_only_exact_known_errors_from_own_text_labels(m
     ("failed to bind REST/WebUI TCP listener at synthetic-private-address: Address in use (os error 98)", "rest-listen-failed"),
     ("failed to install the process logging subscriber: synthetic-private-cause", "logging-init-failed"),
     ("embedded host readiness receiver closed during startup", "native-host-invalid"),
-    ("p2pBindIp or p2pBindInterface is required because no default-route IPv4 interface was detected; start with --p2p-bind-interface <NAME>, then save the P2P bind interface in WebUI Settings > Network", "network-default-route-missing"),
-    ("p2pBindIp or p2pBindInterface is required because multiple default-route IPv4 interfaces were detected; start with --p2p-bind-interface <NAME>, then save the P2P bind interface in WebUI Settings > Network", "network-default-route-ambiguous"),
-    ("p2pBindIp or p2pBindInterface is required when VPN Guard blocks public P2P", "network-binding-invalid"),
-    ("p2pBindInterface synthetic-private-interface did not resolve to an IPv4 address", "network-binding-invalid"),
-    ("p2pBindInterface synthetic-private-interface is ambiguous", "network-binding-invalid"),
-    ("p2pBindInterface synthetic-private-interface resolved to non-IPv4 address synthetic-private-address", "network-binding-invalid"),
+    ("network.p2p.bindIp or network.p2p.bindInterface is required because no default-route IPv4 interface was detected; while stopped, use --profile PATH settings set network.p2p.bindInterface NAME", "network-default-route-missing"),
+    ("network.p2p.bindIp or network.p2p.bindInterface is required because multiple default-route IPv4 interfaces were detected; while the daemon is stopped, run emulebb-rust --profile <PATH> settings set network.p2p.bindInterface <NAME>", "network-default-route-ambiguous"),
+    ("network.p2p.bindIp or network.p2p.bindInterface is required when VPN Guard blocks public P2P", "network-binding-invalid"),
+    ('network.p2p.bindInterface "synthetic-private-interface" did not resolve to an IPv4 address', "network-binding-invalid"),
+    ('network.p2p.bindInterface "synthetic-private-interface" is ambiguous', "network-binding-invalid"),
+    ('network.p2p.bindInterface "synthetic-private-interface" resolved to non-IPv4 address synthetic-private-address', "network-binding-invalid"),
     ("failed to enumerate local interfaces: synthetic-private-cause", "network-interface-inventory-failed"),
-    ("kad.listenPort is required when ED2K servers are configured", "network-config-invalid"),
-    ("ed2k.listenPort is required when ED2K servers are configured", "network-config-invalid"),
+    ("network.p2p.udpPort is required when P2P is enabled", "network-config-invalid"),
+    ("network.p2p.tcpPort is required when P2P is enabled", "network-config-invalid"),
 ])
 def test_post_failure_source_stage_wins_over_dynamic_path_and_lower_level_errno(message, category):
     result = subject._post_failure_error_category(message)

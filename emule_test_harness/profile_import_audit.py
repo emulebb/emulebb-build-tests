@@ -1,4 +1,4 @@
-"""Offline stock hash import and target-filesystem reconciliation evidence."""
+"""Offline stock hash import and native file-binding evidence."""
 
 from __future__ import annotations
 
@@ -47,7 +47,8 @@ def profile_counts(profile: Path) -> dict[str, int]:
             for table in (
                 "known_files", "verified_local_content",
                 "verified_local_md4_hashes", "verified_local_aich_hashes", "local_file_instances",
-                "transfers", "shared_directory_roots", "aich_recovery_sets", "aich_recovery_parts",
+                "download_jobs", "download_history", "shared_directory_roots",
+                "aich_recovery_sets", "aich_recovery_parts",
             )
         }
 
@@ -91,7 +92,7 @@ def capture_import_baseline(profile: Path, exchange: Path, destination: Path) ->
             for content_id, file_hash in target.execute("SELECT known_file_id,ed2k_hash FROM verified_local_content JOIN known_files ON known_files.id=known_file_id"):
                 baseline.execute("INSERT INTO content VALUES (?,?)", (file_hash, _content_digest(target, content_id)))
                 result["contentRecords"] += 1
-            for row in target.execute("SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,f.ed2k_hash FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id JOIN known_files f ON f.id=i.known_file_id"):
+            for row in target.execute("SELECT p.platform,p.native_path,i.size_bytes,i.verified_fingerprint,f.ed2k_hash FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id JOIN known_files f ON f.id=i.known_file_id"):
                 baseline.execute("INSERT INTO bindings VALUES (?,?,?)", (row[0], row[1], _rows_digest([row])))
                 result["pathBindings"] += 1
             for root, size in target.execute("SELECT r.root,r.size_bytes FROM aich_recovery_sets r JOIN exchange.recovery_sets e ON e.root=r.root AND e.size_bytes=r.size_bytes"):
@@ -199,7 +200,7 @@ def validate_imported_hashes(profile: Path, exchange: Path, *, rejected_recovery
                 continue
             result["verifiedRecoveryParts"] += target_count
             result["verifiedRecoverySets"]+=1
-        # WHY: optional-cache rejection must not abort valid MD4 reconciliation,
+        # WHY: optional-cache rejection must not abort valid MD4 import,
         # but a rejection count must never excuse partial or altered accepted sets.
         if result["unavailableRecoverySets"] + result["retainedExistingRecoverySets"] != rejected_recovery_sets:
             raise RuntimeError("missing AICH recovery sets do not match reported rejections")
@@ -276,7 +277,7 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob,
     with ExitStack() as resources, closing(open_profile_snapshot(profile)) as target, closing(sqlite3.connect(exchange.as_uri()+"?mode=ro&immutable=1",uri=True)) as source:
         previous = resources.enter_context(closing(sqlite3.connect(baseline.as_uri()+"?mode=ro&immutable=1",uri=True))) if baseline else None
         rows = target.execute(
-            "SELECT p.platform,p.native_path,i.file_size,i.verified_fingerprint,"
+            "SELECT p.platform,p.native_path,i.size_bytes,i.verified_fingerprint,"
             "k.id,k.ed2k_hash,k.size_bytes,k.aich_root,c.aich_root "
             "FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id "
             "JOIN known_files k ON k.id=i.known_file_id "
@@ -362,14 +363,6 @@ def validate_native_bindings(profile: Path, job: emule_profile_export.ExportJob,
     return result
 
 
-def validate_reconciliation(report: dict, *, require_complete_reuse: bool = False) -> None:
-    """Fail if an offline pass reports hashing, payload reads, or active work."""
-    if any(report[key] for key in ("hashedCount", "completedReadBytes", "activeHashCount", "running")):
-        raise RuntimeError("offline reconciliation performed unexpected payload work")
-    if require_complete_reuse and report.get("plannedHashCount",0):
-        raise RuntimeError("complete reuse audit found files queued for hashing")
-
-
 def prepare_windows_mounts(wsl: list[str], job: emule_profile_export.ExportJob,
                           mounts: list[tuple[str, str]], cleanup: ExitStack) -> None:
     """Temporarily mount missing Windows volumes read-only for the Docker audit."""
@@ -400,7 +393,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="Temporarily mount missing mapped Windows volumes read-only")
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--timeout", type=int, default=7200)
-    parser.add_argument("--require-complete-reuse", action="store_true", help="Fail if reconciliation plans any payload hashing")
     args = parser.parse_args(argv)
     if args.create_fixture:
         print(json.dumps(create_import_fixture(args.create_fixture),indent=2))
@@ -480,22 +472,16 @@ def main(argv: list[str] | None = None) -> int:
             if not args.image:
                 raise ValueError("--prepare-windows-mounts requires --image")
             prepare_windows_mounts(wsl, job, args.mount, cleanup)
-        report["import"] = run_json(prefix + ["import-emule-profile", import_path], args.timeout)
+        report["import"] = run_json(prefix + ["import", "profile", import_path], args.timeout)
         report["hashValidation"] = validate_imported_hashes(profile, manifest_path)
         report["stockValidation"] = validate_stock_records(
             profile, emule_profile_export.resolve_emule_config_dir(job.source_profile), manifest_path,
         )
-        report["firstPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
-        validate_reconciliation(report["firstPass"],require_complete_reuse=args.require_complete_reuse)
         report["firstCounts"] = profile_counts(profile)
         report["firstBindingValidation"] = validate_native_bindings(profile, job, exchange=manifest_path)
-        if report["firstBindingValidation"]["verifiedPathBindings"] != report["firstPass"]["reusedCount"]:
-            raise RuntimeError("accepted native bindings differ from the reported reused files")
         report["hashOnlyReimport"] = run_json(
-            prefix + ["import-emule-profile", "--hashes-only", hashes_path], args.timeout,
+            prefix + ["import", "profile", "--hashes-only", hashes_path], args.timeout,
         )
-        report["secondPass"] = run_json(prefix + ["reconcile-shared-files"], args.timeout)
-        validate_reconciliation(report["secondPass"],require_complete_reuse=args.require_complete_reuse)
         report["secondCounts"] = profile_counts(profile)
         report["secondHashValidation"] = validate_imported_hashes(profile, manifest_path)
         report["secondBindingValidation"] = validate_native_bindings(profile, job, exchange=manifest_path)
@@ -505,10 +491,8 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("native bindings changed across the hash-only reimport")
         if report["firstCounts"] != report["secondCounts"]:
             raise RuntimeError("durable hash counts changed on the repeated offline pass")
-        if report["firstPass"]["reusedCount"] == 0:
-            raise RuntimeError("no target files reused imported hashes")
-        if report["firstPass"]["reusedCount"] != report["secondPass"]["reusedCount"]:
-            raise RuntimeError("hash reuse changed across process/container recreation")
+        if report["firstBindingValidation"]["verifiedPathBindings"] == 0:
+            raise RuntimeError("no imported hashes were bound to target files")
         report["passed"] = True
     except Exception as error:
         report["passed"] = False

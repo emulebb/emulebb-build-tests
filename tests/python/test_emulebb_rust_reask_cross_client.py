@@ -710,24 +710,22 @@ def test_mfc_queue_identity_requires_exact_onqueue_highid_source() -> None:
 def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
     module = _load_module()
     rows = {
-        "data": {
-            "items": [
+        "data": [
                 {
-                    "clientId": "wrong-port",
+                    "id": "wrong-port",
                     "address": "127.0.0.20",
                     "port": 4663,
                     "requestedFileHash": FILE_HASH,
                     "waitingQueue": True,
                 },
                 {
-                    "clientId": "exact-waiter",
+                    "id": "exact-waiter",
                     "address": "127.0.0.20",
                     "port": 4662,
                     "requestedFileHash": FILE_HASH.upper(),
                     "waitingQueue": True,
                 },
-            ]
-        }
+        ]
     }
 
     assert module.find_upload_waiter(
@@ -735,7 +733,7 @@ def test_upload_waiter_identity_requires_exact_requester_and_file() -> None:
         file_hash=FILE_HASH,
         requester_tcp_endpoint="127.0.0.20:4662",
     ) == {
-        "clientId": "exact-waiter",
+        "id": "exact-waiter",
         "address": "127.0.0.20",
         "requestedFileHash": FILE_HASH,
         "waitingQueue": True,
@@ -760,7 +758,7 @@ def test_upload_waiter_removal_requires_confirmed_absence(monkeypatch) -> None:
         lambda *_args, **_kwargs: {"data": {"items": []}},
     )
     waiter = {
-        "clientId": "127.0.0.20:4662",
+        "id": "12345678-1234-4234-8234-123456789abc",
         "address": "127.0.0.20",
         "requestedFileHash": FILE_HASH,
         "waitingQueue": True,
@@ -781,7 +779,7 @@ def test_upload_waiter_removal_requires_confirmed_absence(monkeypatch) -> None:
         },
         "verifiedAbsent": True,
     }
-    assert calls == ["/api/v1/upload-queue/127.0.0.20%3A4662/operations/remove"]
+    assert calls == ["/api/v1/upload-queue/12345678-1234-4234-8234-123456789abc/operations/remove"]
 
 
 def test_queue_pressure_receipt_uses_exact_requester_udp_endpoint(monkeypatch) -> None:
@@ -888,18 +886,11 @@ def test_shared_catalog_identity_and_fixture_withdrawal(
     assert not withdrawn.exists()
 
 
-@pytest.mark.parametrize(
-    "shared_files_path",
-    [
-        "/api/v1/shared-files?offset=0&limit=100",
-        "/api/v1/shared-files",
-    ],
-)
-def test_shared_catalog_presence_uses_selected_client_route(
+def test_mfc_shared_catalog_presence_uses_mfc_route(
     monkeypatch,
-    shared_files_path: str,
 ) -> None:
     module = _load_module()
+    shared_files_path = module.MFC_SHARED_FILES_PATH
     calls: list[str] = []
 
     def request_json(_base_url, _method, path, _api_key):
@@ -927,22 +918,17 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
     fixture = tmp_path / "fixture" / "client-udp-file-not-found.bin"
     fixture.parent.mkdir()
     fixture.write_bytes(b"fixture")
-    observed_states: list[tuple[bool, str]] = []
+    observed_states: list[bool] = []
 
     monkeypatch.setattr(
         module,
-        "wait_for_shared_file_presence",
-        lambda *_args, present, shared_files_path, **_kwargs: observed_states.append(
-            (present, shared_files_path)
-        ),
+        "wait_for_rust_library_presence",
+        lambda *_args, present, **_kwargs: observed_states.append(present),
     )
     monkeypatch.setattr(
-        module,
-        "clear_shared_roots",
-        lambda *_args, **_kwargs: {
-            "request": {"roots": [], "confirmReplaceRoots": True},
-            "response": {"status": 200, "json": {"roots": []}},
-        },
+        module.cc.rust_local_ed2k,
+        "clear_explicit_library_roots",
+        lambda *_args, **_kwargs: {"removed": ["1"]},
     )
     monkeypatch.setattr(
         module,
@@ -960,45 +946,31 @@ def test_rust_shared_root_withdrawal_uses_production_configuration(
         "fileHash": FILE_HASH,
         "method": "shared-roots-cleared",
         "fixturePath": str(fixture.resolve()),
-        "sharedDirectories": {
-            "request": {"roots": [], "confirmReplaceRoots": True},
-            "response": {"status": 200, "json": {"roots": []}},
-        },
+        "libraryRoots": {"removed": ["1"]},
         "presentBefore": True,
         "reloadResponse": {"status": 200, "json": {"ok": True}},
         "absentAfter": True,
     }
     assert fixture.read_bytes() == b"fixture"
-    assert observed_states == [
-        (True, module.RUST_SHARED_FILES_PATH),
-        (False, module.RUST_SHARED_FILES_PATH),
-    ]
+    assert observed_states == [True, False]
 
 
-def test_clear_shared_roots_uses_exact_production_patch(monkeypatch) -> None:
+@pytest.mark.parametrize("detail,present", [
+    ({"hash": FILE_HASH, "present": True, "sharingEnabled": True}, True),
+    ({"hash": FILE_HASH, "present": False, "sharingEnabled": True}, False),
+    ({"hash": FILE_HASH, "present": True, "sharingEnabled": False}, False),
+    (None, False),
+])
+def test_rust_presence_checks_hash_detail_without_scanning_catalog(monkeypatch, detail, present):
     module = _load_module()
-    calls: list[tuple[str, str, object]] = []
-
-    def retry_rest_request(_base_url, path, *, method, json_body, **_kwargs):
-        calls.append((method, path, json_body))
-        return {
-            "status": 200,
-            "raw_json": {"data": {"roots": []}},
-        }
-
-    monkeypatch.setattr(module.dtt, "retry_rest_request", retry_rest_request)
-
-    assert module.clear_shared_roots("http://responder.test", "secret") == {
-        "request": {"roots": [], "confirmReplaceRoots": True},
-        "response": {"status": 200, "json": {"roots": []}},
-    }
-    assert calls == [
-        (
-            "PATCH",
-            module.SHARED_DIRECTORIES_PATH,
-            {"roots": [], "confirmReplaceRoots": True},
-        )
-    ]
+    calls = []
+    monkeypatch.setattr(module.cc.rust_upload_soak, "find_library_file",
+                        lambda *args: calls.append(args) or detail)
+    result = module.wait_for_rust_library_presence(
+        "http://responder.test", "secret", file_hash=FILE_HASH, present=present, timeout=0.1
+    )
+    assert result == (detail if present else None)
+    assert calls == [("http://responder.test", "secret", FILE_HASH)]
 
 
 def test_file_not_found_completion_requires_ordered_dead_list_and_drop() -> None:
@@ -1175,3 +1147,50 @@ def test_runner_loads_the_accepted_stock_client_udp_record() -> None:
     assert record["payloadDigest"] == (
         "sha256:89468db8e028268f21598216f5949ae11c2b1c3e1370b151d3d7136e8fda812b"
     )
+
+
+def test_rust_download_creation_captures_native_job_id(monkeypatch):
+    module = _load_module()
+    calls = []
+    def request(*args):
+        calls.append(args)
+        return {"data": {"id": "7", "hash": FILE_HASH}}
+    monkeypatch.setattr(module.cc, "request_json", request)
+    assert module.create_rust_download("http://requester.test", "secret", "fixture-link", FILE_HASH) == "7"
+    assert calls[0][2] == "/api/v1/downloads"
+    assert calls[0][4] == {"source": {"type": "ed2k-link", "link": "fixture-link"}, "intent": "started"}
+
+
+def test_rust_source_absence_requires_all_pages(monkeypatch):
+    module = _load_module()
+    calls = []
+    details = []
+    monkeypatch.setattr(module, "download_detail", lambda *args, **kwargs: details.append((args, kwargs)))
+    exact = {"address": "127.0.0.10", "port": 4662, "userHash": SOURCE_USER_HASH}
+    pages = iter([
+        {"data": [{"address": "127.0.0.11"}], "meta": {"hasMore": True, "nextCursor": "page2"}},
+        {"data": [exact], "meta": {"hasMore": False, "nextCursor": None}},
+        {"data": [], "meta": {"hasMore": False, "nextCursor": None}},
+    ])
+    def request(*args):
+        calls.append(args[2])
+        return next(pages)
+    monkeypatch.setattr(module.cc, "request_json", request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    result = module.wait_for_rust_source_absent("http://requester.test", "secret", download_id="7",
+        file_hash=FILE_HASH, source_tcp_endpoint=SOURCE_TCP_ENDPOINT, source_user_hash=SOURCE_USER_HASH, timeout=1)
+    assert result["verifiedAbsent"] is True and result["downloadId"] == "7"
+    assert calls == ["/api/v1/downloads/7/sources?limit=200",
+                     "/api/v1/downloads/7/sources?limit=200&cursor=page2",
+                     "/api/v1/downloads/7/sources?limit=200"]
+    assert len(details) == 2
+
+
+def test_rust_source_absence_refuses_nonadvancing_cursor(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "download_detail", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(module.cc, "request_json", lambda *_args: {
+        "data": [{"address": "127.0.0.11"}], "meta": {"hasMore": True, "nextCursor": "same"}})
+    with pytest.raises(RuntimeError, match="did not advance"):
+        module.wait_for_rust_source_absent("http://requester.test", "secret", download_id="7",
+            file_hash=FILE_HASH, source_tcp_endpoint=SOURCE_TCP_ENDPOINT, source_user_hash=SOURCE_USER_HASH, timeout=1)

@@ -167,11 +167,7 @@ def build_search_payload(term: str) -> dict[str, Any]:
 
 
 def build_shared_directory_patch_payload(seed_dir: Path) -> dict[str, Any]:
-    """Builds the shared ``PATCH /api/v1/shared-directories`` body for one seed.
-
-    The same payload shape is accepted by the rust ``/api/v1`` and the eMuleBB
-    ``/api/v1`` REST surfaces, so both clients share the identical seed file.
-    """
+    """Build the current MFC shared-directory replacement for one seed."""
 
     root = str(seed_dir)
     if not root.endswith(("\\", "/")):

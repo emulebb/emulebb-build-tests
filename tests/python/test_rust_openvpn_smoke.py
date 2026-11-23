@@ -57,7 +57,7 @@ def test_run_search_reads_canonical_items_and_total(monkeypatch) -> None:
     assert [row[1] for row in requests] == ["POST", "GET", "DELETE"]
 
 
-def test_openvpn_compose_allows_an_explicit_empty_interface_binding() -> None:
+def test_openvpn_compose_keeps_control_port_image_and_log_selection() -> None:
     compose = (
         Path(__file__).resolve().parents[2]
         / "scripts"
@@ -65,7 +65,6 @@ def test_openvpn_compose_allows_an_explicit_empty_interface_binding() -> None:
         / "compose.yaml"
     ).read_text(encoding="utf-8")
 
-    assert "${EMULEBB_TEST_P2P_INTERFACE-tun0}" in compose
     assert '"127.0.0.1:14712:20017/tcp"' in compose
     assert "${EMULEBB_TEST_RUST_LOG-info}" in compose
     assert "${EMULEBB_TEST_RUST_IMAGE-ghcr.io/emulebb/emulebb-rust:0.1.0-beta.1}" in compose

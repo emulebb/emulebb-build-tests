@@ -4,11 +4,368 @@ import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
+import jsonschema
 import pytest
 
 from emule_test_harness import rust_shared_library_io as subject
+from emule_test_harness import rust_cgroup_budget as cgroup_budget
 from emule_test_harness import rust_shared_library_storage as storage
+from emule_test_harness import workspace_layout
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fault", [None, "missing", "duplicate", "reversed", "filter", "cursor", "counter"])
+def test_library_read_qualification_checks_late_pages_and_literal_filters(fault):
+    spec = subject.FixtureSpec(
+        top_directories=1, leaf_directories_per_top=1, files_per_leaf=3,
+        small_count=1, small_size=16, medium_count=1, medium_size=32,
+        large_count=1, large_size=64,
+    )
+    rows = [
+        {"hash": f"{index + 1:032x}", "displayName": f"file-{index:06d}.bin",
+         "present": True, "sharingEnabled": True,
+         **{sort: (None if sort.startswith("last") and index < 2 else index)
+            for sort in subject.LIBRARY_FILE_SORTS if sort != "displayName"}}
+        for index in range(3)
+    ]
+    calls = []
+    samples = []
+
+    def fetch(path):
+        query = parse_qs(urlsplit(path).query)
+        calls.append(query)
+        selected = rows if query["order"] == ["asc"] else rows[::-1]
+        search = query.get("q", [None])[0]
+        if search:
+            assert len(search.strip()) >= 3, "query must meet the public substring minimum"
+            selected = [row for row in selected if search.lower() in row["displayName"].lower()]
+        if fault == "missing":
+            selected = selected[:-1]
+        elif fault == "duplicate" and selected:
+            selected = [selected[0], selected[0], *selected[1:]]
+        elif fault == "reversed":
+            selected = selected[::-1]
+        elif fault == "filter" and search and not selected:
+            selected = rows
+        offset = int(query.get("cursor", ["0"])[0])
+        page = [dict(row) for row in selected[offset:offset + 1]]
+        if fault == "counter" and page:
+            page[0]["sessionUploadRequests"] = True
+        more = offset + len(page) < len(selected)
+        return {"data": page, "meta": {
+            "hasMore": more, "nextCursor": (str(offset if fault == "cursor" else offset + 1) if more else None),
+        }}
+
+    if fault:
+        with pytest.raises(RuntimeError):
+            subject.prove_library_reads(fetch, spec=spec, sample=lambda: samples.append(1))
+        return
+    report = subject.prove_library_reads(fetch, spec=spec, sample=lambda: samples.append(1))
+    assert report["ok"] is True
+    assert len(report["traversals"]) == 25
+    for traversal in report["traversals"][:20]:
+        assert traversal["rows"] == 3 and traversal["pages"] == 3
+        ascending = traversal["order"] == "asc"
+        assert traversal["firstPage"]["firstHash"] == f"{1 if ascending else 3:032x}"
+        assert traversal["lastPage"]["lastHash"] == f"{3 if ascending else 1:032x}"
+    assert [item["rows"] for item in report["traversals"][20:]] == [3, 0, 0, 0, 0]
+    assert len(samples) == len(calls)
+    assert all(query["limit"] == ["200"] and query["view"] == ["shared"] for query in calls)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fault", [None, "activation", "no-hashing", "no-byte-growth", "budget", "scan", "delivery", "cleanup", "library-presence", "library-shape", "baseline", "shutdown"])
+def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_cohort(monkeypatch, tmp_path, fault):
+    native_owner = subject._native_transfer_harness()
+    state = {"parts": 0, "removed": False}
+    file_hash, job_id = "31" * 16, "100001"
+    profile = tmp_path / "receiver"
+    incoming = profile / "incoming" / "Foundation.Coupled.Payload.bin"
+    started, stopped, scans, source_settings, mutations = [], [], [], [], []
+    source_process = object()
+    sample = SimpleNamespace(maybe_sample=lambda **kwargs: None, summary=lambda: {"sampleCount": 4})
+    source_client = SimpleNamespace(base_url="http://source/api/v1")
+    (tmp_path / "receiver.log").write_text(
+        "initial shared-directory reload disabled by daemon settings\n", encoding="utf-8")
+    receiver = SimpleNamespace(base_url="http://receiver/api/v1",
+                               request=lambda method, path, body: scans.append((method, path, body)))
+    monkeypatch.setattr(subject.rust_client, "write_rust_profile", lambda *args, **kwargs: source_settings.append(kwargs))
+    monkeypatch.setattr(subject, "start_configured_daemon", lambda *args, **kwargs: (source_process, source_client, sample))
+    monkeypatch.setattr(subject, "stop_daemon", lambda process, client: stopped.append(process) or {
+        "exitCode": 9 if fault == "shutdown" else 0})
+    monkeypatch.setattr(subject, "retained_download_observation", lambda client: {"ok": fault != "baseline"})
+    monkeypatch.setattr(subject, "choose_loopback_port", lambda: 53002)
+    ports = iter((53000, 53001, 53003))
+    activated = set()
+    resources = {"active": 1, "preparing": 0, "waiting": 100,
+                 "concurrency": {"mode": "automatic", "configuredLimit": None, "target": 16, "burstActive": 0},
+                 "residentMemory": {"usedBytes": 128 * 1024 * 1024 + 1 if fault == "budget" else 4096,
+                                    "softTargetBytes": 64 * 1024 * 1024, "limitBytes": 128 * 1024 * 1024}}
+
+    def request(url, method, path, key, body=None, **kwargs):
+        assert key == subject.API_KEY
+        if method == "POST":
+            if path == "/api/v1/servers":
+                assert body == {"address": "127.0.0.1", "port": 53003}
+                return {"id": "1"}
+            if path == "/api/v1/servers/operations/connect":
+                activated.add(url)
+                return {"operationQueued": fault != "activation", "connected": False,
+                        "connecting": True, "currentServer": None, "ed2kIdState": "unknown",
+                        "serverCount": 1}
+            assert path == "/api/v1/downloads" and body["intent"] == "stopped"
+            assert url in activated
+            return {"id": job_id, "hash": file_hash}
+        if path == f"/api/v1/downloads/{job_id}":
+            if state["removed"]:
+                raise subject.rust_local_ed2k.RustRestFailure("removed", status=404,
+                    detail=json.dumps({"error": {"code": "NOT_FOUND"}}))
+            return {"id": job_id, "hash": file_hash, "state": "completed" if state["parts"] >= 3 else "downloading"}
+        if path == "/api/v1/library/scan":
+            return {"reloadProgress": {"running": False, "pending": False}, "hashingCount": 0}
+        if path == "/api/v1/stats":
+            return {"downloadResources": resources}
+        assert path == f"/api/v1/library/files/{file_hash}"
+        return {"present": None if fault == "library-shape" else fault == "library-presence"}
+
+    def remove(url, method, path, key, body=None, **kwargs):
+        assert method == "POST" and path == "/api/v1/downloads/remove"
+        assert key == subject.API_KEY and body == {"ids": [job_id], "deleteData": True}
+        state["removed"] = True
+        if fault != "cleanup":
+            incoming.unlink()
+        return {"data": [{"id": job_id, "status": "accepted", "httpStatus": 202}]}
+
+    def start(url, identity, attempts, *, api_key):
+        assert identity == job_id and api_key == subject.API_KEY
+        started.append(identity)
+        attempts.append({"id": identity, "status": "accepted", "httpStatus": 202})
+
+    native = SimpleNamespace(
+        _write_transfer_payload=lambda *args, **kwargs: {"sizeBytes": 10, "sha256": "a" * 64},
+        _available_unique_port=lambda *args, **kwargs: next(ports),
+        _parallel_read=native_owner._parallel_read, _start_parallel_job=start,
+        _attach_failure_diagnostics=lambda error, name, url, log, **kwargs: error.add_note(name),
+        request_json=request, request_document=remove,
+    )
+    monkeypatch.setattr(subject, "_native_transfer_harness", lambda: native)
+    def publish(url, *args, **kwargs):
+        assert url in activated
+        return {"sharedFiles": {"matched": {"hash": file_hash, "ed2kLink": f"ed2k://|file|x.bin|10|{file_hash}|/"}}}
+    monkeypatch.setattr(subject.rust_local_ed2k, "publish_shared_tree", publish)
+
+    def parts(*args):
+        state["parts"] += 1
+        count = state["parts"]
+        present = 1 if fault == "no-byte-growth" and count < 4 else (1, 3, 6, 10)[min(count - 1, 3)]
+        return {"partCount": 1, "presentBytes": present, "verifiedBytes": 10 if present == 10 else 0}
+
+    monkeypatch.setattr(subject.rust_local_ed2k, "download_part_totals", parts)
+    def wait(probe, **kwargs):
+        assert kwargs["retry_exceptions"] == ()
+        value = probe()
+        if value is None:
+            raise RuntimeError("synthetic fixture did not settle")
+        return value
+    monkeypatch.setattr(subject.rust_local_ed2k, "wait_for", wait)
+
+    def reload(**kwargs):
+        assert mutations == ["after-payload-progress"]
+        if fault == "scan":
+            raise RuntimeError("scan failure")
+        for _ in range(2):
+            kwargs["observe"]({"activeHashCount": 0 if fault == "no-hashing" else 1})
+        return {"label": "onePercentMutation", "maxActiveHashCount": 1}
+    monkeypatch.setattr(subject, "wait_for_reload", reload)
+
+    def deliver(*args, **kwargs):
+        if fault == "delivery":
+            raise RuntimeError("delivery failure")
+        assert kwargs["expected_hash"] == file_hash and kwargs["expected_sha256"] == "a" * 64
+        assert kwargs["expected_delivery_path"] == incoming
+        incoming.parent.mkdir(parents=True)
+        incoming.write_bytes(b"delivered")
+        return {"state": "completed", "deliveryOwnership": "owned"}
+    monkeypatch.setattr(subject.rust_local_ed2k, "wait_for_download_completed", deliver)
+    evidence = {}
+    def mutate():
+        assert state["parts"] > 0 and started == [job_id]
+        mutations.append("after-payload-progress")
+
+    def run():
+        return subject.run_coupled_reload(
+            paths=SimpleNamespace(rust_repo=tmp_path), run_root=tmp_path, profile_dir=profile,
+            client=receiver, process=object(), sampler=sample, evidence=evidence,
+            receiver_log_path=tmp_path / "receiver.log",
+            before_scan=mutate,
+            reload_args={"label": "onePercentMutation", "timeout_seconds": 60.0},
+        )
+    if fault:
+        expected_error = (jsonschema.ValidationError if fault == "activation" else
+                          subject._MissingHashingOverlap if fault in {"no-hashing", "no-byte-growth"} else RuntimeError)
+        with pytest.raises(expected_error):
+            run()
+        assert evidence["status"] == "failed"
+        if fault in {"cleanup", "library-presence"}:
+            assert evidence["retirement"] == {"jobAbsent": True, "libraryPresent": fault == "library-presence",
+                                               "outputExists": fault == "cleanup"}
+        if fault in {"no-hashing", "no-byte-growth"}:
+            assert evidence["baselineRestored"]["ok"] and evidence["sourceShutdown"]["exitCode"] == 0
+            assert evidence["delivery"]["ownership"] == "owned"
+    else:
+        assert run()["label"] == "onePercentMutation"
+        assert evidence["status"] == "passed" and evidence["ok"]
+        assert evidence["overlapObservations"] == 1
+        assert evidence["delivery"]["verifiedSha256"] == "a" * 64
+        assert evidence["retirement"] == {"jobAbsent": True, "libraryPresent": False, "outputExists": False}
+        assert state["removed"] and not incoming.exists()
+        assert scans == [("POST", "/library/scan", {})]
+        assert started == [job_id]
+    assert stopped == [source_process]
+    assert evidence["sourceProcess"]["sampleCount"] > 0
+    assert source_settings[0]["settings"]["network.kadEnabled"] is False
+    assert source_settings[0]["settings"]["network.p2p.bindIp"] == "127.0.0.1"
+
+
+@pytest.mark.parametrize("fault", [None, "activation", "delivery", "baseline", "source-shutdown", "unexpected-overlap", "receiver-shutdown"])
+def test_coupled_preflight_accepts_only_completed_lifecycle_with_missing_overlap(tmp_path, monkeypatch, fault):
+    process, client = object(), object()
+    sampler = SimpleNamespace(summary=lambda: {"sampleCount": 2})
+    starts, stops = [], []
+
+    def start(*args, **kwargs):
+        starts.append(kwargs)
+        return process, client, sampler
+
+    def coupled(**kwargs):
+        assert kwargs["reload_args"]["expected_scanned"] == 0
+        assert kwargs["run_root"] == tmp_path / "preflight"
+        if fault in {"activation", "delivery", "baseline", "source-shutdown"}:
+            raise RuntimeError(fault)
+        if fault == "unexpected-overlap":
+            return {}
+        raise subject._MissingHashingOverlap("expected negative control")
+
+    monkeypatch.setattr(subject, "start_daemon", start)
+    monkeypatch.setattr(subject, "choose_loopback_port", lambda: 53000)
+    monkeypatch.setattr(subject, "run_coupled_reload", coupled)
+    monkeypatch.setattr(subject, "stop_daemon", lambda *args: stops.append(args) or {
+        "exitCode": 9 if fault == "receiver-shutdown" else 0})
+    evidence = {}
+    if fault:
+        with pytest.raises(RuntimeError):
+            subject.run_coupled_preflight(object(), tmp_path / "preflight", evidence)
+        assert evidence["status"] == "failed"
+    else:
+        subject.run_coupled_preflight(object(), tmp_path / "preflight", evidence)
+        assert evidence["status"] == "passed" and evidence["expectedOverlapRejection"] is True
+    assert starts == [{"retained_downloads": 100_000, "p2p_bind_ip": "127.0.0.1"}]
+    assert stops == [(process, client)]
+    assert evidence["receiverProcess"]["sampleCount"] == 2
+
+
+def cgroup_files(tmp_path):
+    import os
+
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    files = {"cgroup.procs": str(os.getpid()), "cpu.max": "100000 100000",
+             "memory.max": str(512 * 1024 * 1024), "memory.swap.max": "0",
+             "memory.peak": "450000000", "memory.events": "oom 0\noom_kill 0\noom_group_kill 0\n"}
+    for name, value in files.items():
+        (root / name).write_text(value, encoding="ascii")
+    membership = tmp_path / "membership"
+    membership.write_text("0::/\n", encoding="ascii")
+    return root, membership
+
+
+def test_cgroup_budget_requires_kernel_membership_and_reads_the_actual_limits(tmp_path):
+    root, membership = cgroup_files(tmp_path)
+    value = cgroup_budget.sample_budget(root=root, membership=membership)
+    assert cgroup_budget.matches_target(value, 512 * 1024 * 1024)
+    assert value["scope"] == "campaign-process-tree"
+    assert value["memoryPeakBytes"] == 450000000
+    (root / "cgroup.procs").write_text("", encoding="ascii")
+    with pytest.raises(RuntimeError, match="does not cover"):
+        cgroup_budget.sample_budget(root=root, membership=membership)
+
+
+def test_cgroup_budget_does_not_claim_an_unobserved_namespace(tmp_path):
+    root, membership = cgroup_files(tmp_path)
+    membership.write_text("0::/other\n", encoding="ascii")
+    assert cgroup_budget.sample_budget(root=root, membership=membership) is None
+    assert cgroup_budget.sample_budget(root=root, membership=tmp_path / "absent") is None
+
+
+@pytest.mark.parametrize("name,value", [("memory.max", "max"), ("memory.max", "1073741824"),
+                                        ("memory.swap.max", "max"), ("memory.swap.max", "1"),
+                                        ("cpu.max", "max 100000"), ("cpu.max", "200000 100000")])
+def test_cgroup_budget_does_not_qualify_a_different_budget(tmp_path, name, value):
+    root, membership = cgroup_files(tmp_path)
+    (root / name).write_text(value, encoding="ascii")
+    assert not cgroup_budget.matches_target(cgroup_budget.sample_budget(root=root, membership=membership), 512 * 1024 * 1024)
+
+
+@pytest.mark.parametrize("name,value", [("memory.max", "-1"), ("cpu.max", "100000 0"),
+                                        ("memory.events", "oom -1\noom_kill 0\noom_group_kill 0")])
+def test_cgroup_budget_rejects_invalid_kernel_numbers(tmp_path, name, value):
+    root, membership = cgroup_files(tmp_path)
+    (root / name).write_text(value, encoding="ascii")
+    with pytest.raises(ValueError):
+        cgroup_budget.sample_budget(root=root, membership=membership)
+
+
+@pytest.mark.parametrize("changed", [None, "scopeIdentity", "memoryMaxBytes", "oom", "oomKill", "oomGroupKill", "missing"])
+def test_cgroup_budget_checks_gate_success_and_keep_failed_campaigns_failed(tmp_path, monkeypatch, changed):
+    root, membership = cgroup_files(tmp_path)
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    after = dict(before)
+    if changed == "scopeIdentity":
+        after[changed] = [0, 0]
+    elif changed == "missing":
+        after = None
+    elif changed:
+        after[changed] += 1
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: after)
+    report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
+              "acceptance": {"ok": True}}
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
+    assert report["kernelResourceBudget"]["ok"] is (changed is None)
+    assert report["acceptance"]["ok"] is (changed is None)
+    assert report["status"] == ("passed" if changed is None else "failed")
+    report["status"] = "failed"
+    report["acceptance"]["ok"] = False
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
+    assert report["status"] == "failed" and report["acceptance"]["ok"] is False
+
+
+def test_cgroup_budget_measurement_failure_retains_a_failed_report(tmp_path, monkeypatch):
+    root, membership = cgroup_files(tmp_path)
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    def fail():
+        raise OSError("kernel read failed")
+    monkeypatch.setattr(cgroup_budget, "sample_budget", fail)
+    report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
+              "acceptance": {"ok": True}}
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
+    assert report["status"] == "failed"
+    assert report["kernelResourceBudget"]["error"] == "OSError"
+    assert report["qualificationScope"]["containerLimitsEnforced"] is False
+
+
+def test_functional_success_does_not_qualify_an_unbounded_cgroup(tmp_path, monkeypatch):
+    root, membership = cgroup_files(tmp_path)
+    (root / "memory.max").write_text("max", encoding="ascii")
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: dict(before))
+    report = {"status": "passed", "qualificationScope": {"containerLimitsEnforced": False},
+              "acceptance": {"ok": True}}
+    cgroup_budget.finish_report(report, before, memory_bytes=512 * 1024 * 1024)
+    assert report["status"] == "passed"
+    assert report["kernelResourceBudget"]["ok"] is True
+    assert report["qualificationScope"]["containerLimitsEnforced"] is False
 
 
 def tiny_spec() -> subject.FixtureSpec:
@@ -23,6 +380,251 @@ def tiny_spec() -> subject.FixtureSpec:
         large_count=2,
         large_size=32,
     )
+
+
+@pytest.mark.parametrize("trace_metadata", [False, True])
+def test_initial_profile_seeds_retained_jobs_before_the_daemon_launches(tmp_path, monkeypatch, trace_metadata):
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    profile = tmp_path / "profile"
+    inherited = dict(subject.os.environ)
+    def prepare(path, **kwargs):
+        subject.rust_metadata.create_metadata_db(rust_repo, path / subject.rust_metadata.RUST_PROFILE_METADATA_FILE)
+    def launch(paths, path, log, **kwargs):
+        rows = subject.profile_storage_snapshot(path)["rowCounts"]
+        assert rows["downloadJobs"] == 1000
+        assert rows["unfinishedDownloads"] == 10
+        assert rows["completedDownloads"] == 990
+        if trace_metadata:
+            env = kwargs["process_env"]
+            assert "emulebb_metadata=debug" in env["RUST_LOG"]
+            assert {key: value for key, value in env.items() if key != "RUST_LOG"} == {
+                key: value for key, value in inherited.items() if key != "RUST_LOG"
+            }
+        else:
+            assert kwargs["process_env"] is None
+        return "launched"
+    monkeypatch.setattr(subject.rust_client, "write_rust_profile", prepare)
+    monkeypatch.setattr(subject, "start_configured_daemon", launch)
+    assert subject.start_daemon(SimpleNamespace(rust_repo=rust_repo), profile, tmp_path / "log", 20017,
+                                retained_downloads=1000, trace_metadata=trace_metadata) == "launched"
+    assert dict(subject.os.environ) == inherited
+
+
+@pytest.fixture
+def replay_baseline(tmp_path, monkeypatch):
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    paths = SimpleNamespace(runs_root=tmp_path / "runs", reports_root=tmp_path / "reports",
+                            fixture_root=tmp_path / "fixture", rust_repo=rust_repo)
+    profile = paths.runs_root / "verified-run" / "profile"
+    profile.mkdir(parents=True)
+    paths.reports_root.mkdir()
+    database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
+    subject.rust_metadata.create_metadata_db(rust_repo, database)
+    subject.rust_metadata.seed_retained_download_scale(database, count=1000)
+    monkeypatch.setattr(subject, "RETAINED_DOWNLOAD_EXPECTED", {
+        "downloadJobs": 1000, "unfinishedDownloads": 10, "completedDownloads": 990,
+        "startedDownloads": 1, "stoppedDownloads": 9,
+    })
+    report = {"schema": subject.REPORT_SCHEMA, "runId": "verified-run",
+              "paths": {"fixtureFingerprint": subject.path_fingerprint(paths.fixture_root)},
+              "phases": [{"acceptance": {"checks": {key: True for key in (
+                  "databaseActiveBytes", "databaseActiveShares", "databaseHashIntegrity",
+                  "databaseKnownFiles", "databaseLongPathShares", "databaseScanFailures",
+              )}}}]}
+    receipt = paths.reports_root / "rust-shared-library-io-verified-run.json"
+    receipt.write_text(json.dumps(report), encoding="utf-8")
+    return paths, database, receipt
+
+
+def test_replay_copies_current_sqlite_snapshot_and_preserves_its_source(replay_baseline, tmp_path):
+    paths, database, receipt = replay_baseline
+    original = database.read_bytes()
+    target = tmp_path / "replay"
+    result = subject.copy_replay_database(paths, "verified-run", target)
+    assert database.read_bytes() == original
+    assert result["sourceRunId"] == "verified-run"
+    assert result["sourceReportSha256"] == subject.hashlib.sha256(receipt.read_bytes()).hexdigest()
+    assert subject.profile_storage_snapshot(target)["rowCounts"]["downloadJobs"] == 1000
+    with pytest.raises(RuntimeError, match="already exists"):
+        subject.copy_replay_database(paths, "verified-run", target)
+
+
+def test_replay_refuses_an_unverified_baseline_before_copying(replay_baseline, tmp_path):
+    paths, _, receipt = replay_baseline
+    report = json.loads(receipt.read_text())
+    report["phases"][0]["acceptance"]["checks"]["databaseHashIntegrity"] = False
+    receipt.write_text(json.dumps(report), encoding="utf-8")
+    target = tmp_path / "replay"
+    with pytest.raises(RuntimeError, match="no verified complete library baseline"):
+        subject.copy_replay_database(paths, "verified-run", target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("run_id", ["..", "../outside", "", "one/two"])
+def test_replay_refuses_paths_outside_owned_runs(tmp_path, run_id):
+    with pytest.raises(RuntimeError, match="one path segment"):
+        subject.copy_replay_database(SimpleNamespace(), run_id, tmp_path)
+
+
+def test_retained_download_observation_requires_the_realistic_counts():
+    class Client:
+        def request(self, method, path):
+            assert method == "GET"
+            return {
+                "/snapshot": {"downloads": {"unfinished": 1000, "completed": 99000}},
+                "/stats": {"downloadCount": 100000, "downloadResources": {"active": 0, "preparing": 0, "waiting": 100}},
+            }[path]
+    assert subject.retained_download_observation(Client())["ok"] is True
+    class IncompleteClient(Client):
+        def request(self, method, path):
+            value = super().request(method, path)
+            if path == "/stats":
+                value["downloadCount"] = 0
+            return value
+    assert subject.retained_download_observation(IncompleteClient())["ok"] is False
+
+
+def test_process_summary_distinguishes_sampled_memory_from_lifetime_peak():
+    sampler = object.__new__(subject.ProcessSampler)
+    sampler.metric_errors = {}
+    sampler.samples = [{"workingSetBytes": 100, "privateBytes": 90,
+                        "lifetimePeakWorkingSetBytes": 500, "handleCount": 1,
+                        "cpuSeconds": 1, "readBytes": 0, "writeBytes": 0,
+                        "readCount": 0, "writeCount": 0}]
+    value = sampler.summary()
+    assert value["peakWorkingSetBytes"] == 100
+    assert value["lifetimePeakWorkingSetBytes"] == 500
+    assert value["lifetimeCpuSeconds"] == 1
+
+
+@pytest.mark.parametrize("bad", [None, {"method": "forcedFallback", "exitCode": 0},
+                                  {"method": "rest", "exitCode": 1},
+                                  {"method": "rest", "exitCode": False}])
+def test_every_process_lifetime_requires_graceful_zero_exit(bad):
+    phases = ("initialShutdown", "preMutationShutdown", "mutationShutdown", "finalShutdown")
+    report = {phase: {"method": "rest", "exitCode": 0} for phase in phases}
+    assert subject.graceful_shutdowns(report, phases)
+    for phase in phases:
+        assert not subject.graceful_shutdowns(report | {phase: bad}, phases)
+
+
+def completion_event(**overrides):
+    fields = {field: 0 for field in subject.PROGRESS_FIELDS if field not in {
+        "phase", "running", "pending", "readRateBytesPerSec",
+    }}
+    fields.update(scannedCount=100000, hashedCount=100000, startedAt=1, updatedAt=2)
+    fields.update(overrides)
+    return {"target": "emulebb_core::shared_directories",
+            "fields": fields | {"message": "shared-directory reload completed"}}
+
+
+@pytest.mark.parametrize("started,updated", [(1, 1), (5, 1), (0, 0)])
+def test_completion_log_calendar_values_do_not_order_the_pass(tmp_path, started, updated):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "emulebb-rust.test.jsonl").write_text(
+        json.dumps(completion_event(startedAt=started, updatedAt=updated)) + "\n", encoding="utf-8"
+    )
+    result = subject.completed_reload_from_logs(tmp_path, {}, 100000)
+    assert result["hashedCount"] == 100000
+    assert (result["startedAt"], result["updatedAt"]) == (started, updated)
+
+
+def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settles(monkeypatch, tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / "emulebb-rust.test.jsonl"
+    path.write_text(json.dumps(completion_event(hashedCount=5)) + "\n", encoding="utf-8")
+    offsets = subject.reload_log_offsets(tmp_path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(completion_event()) + "\n")
+        handle.write(json.dumps(completion_event(hashedCount=0, reusedCount=100000)) + "\n")
+    def response(*, phase, running, pending, hashed, reused):
+        return {"hashingCount": 0, "reloadProgress": {
+            "phase": phase, "running": running, "pending": pending,
+            "scannedCount": 100000, "activeHashCount": 0,
+            "hashedCount": hashed, "reusedCount": reused, "disks": [],
+        }}
+    responses = [
+        response(phase="hashing", running=True, pending=False, hashed=0, reused=100000),
+        response(phase="idle", running=False, pending=False, hashed=0, reused=100000),
+    ]
+    def request(method, path, **kwargs):
+        assert method == "GET"
+        if path == "/library/scan":
+            return responses.pop(0)
+        assert path == subject.LIBRARY_FILES_PROBE_PATH
+        assert not responses, "catalog checked before the queued worker settled"
+        return {"data": [], "meta": {"total": 100000}}
+    monkeypatch.setattr(subject, "disk_io_snapshot", lambda _: {})
+    monkeypatch.setattr(subject.time, "sleep", lambda _: None)
+    observed = []
+    result = subject.wait_for_reload(
+        label="initial", client=SimpleNamespace(request=request),
+        process=SimpleNamespace(poll=lambda: None),
+        sampler=SimpleNamespace(samples=[], maybe_sample=lambda **kwargs: None,
+                                summary=lambda _: {}),
+        disk_counter_key=None, expected_scanned=100000, timeout_seconds=1,
+        poll_seconds=0,
+        completion_logs=(tmp_path, offsets),
+        observe=observed.append,
+    )
+    assert result["progress"]["hashedCount"] == 100000
+    assert result["progress"]["reusedCount"] == 0
+    assert result["settledProgress"]["hashedCount"] == 0
+    assert result["settledProgress"]["reusedCount"] == 100000
+    assert result["settledProgress"]["running"] is False
+    assert result["completionSource"] == "structuredLog"
+    assert [row["running"] for row in observed] == [True, False]
+
+
+@pytest.mark.parametrize("value", [True, -1, "100000", None])
+def test_reload_completion_refuses_invalid_counters(tmp_path, value):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "emulebb-rust.test.jsonl").write_text(
+        json.dumps(completion_event(hashedCount=value)) + "\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid counters"):
+        subject.completed_reload_from_logs(tmp_path, {}, 100000)
+
+
+def test_reload_completion_waits_for_terminated_record_and_matches_its_target(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / "emulebb-rust.new.jsonl"
+    wrong_target = completion_event()
+    wrong_target["target"] = "unrelated"
+    path.write_text(json.dumps(wrong_target) + "\n" + json.dumps(completion_event()), encoding="utf-8")
+    assert subject.completed_reload_from_logs(tmp_path, {}, 100000) is None
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\n")
+    assert subject.completed_reload_from_logs(tmp_path, {}, 100000)["hashedCount"] == 100000
+
+
+def test_reload_completion_skips_a_record_in_flight_before_the_phase(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / "emulebb-rust.test.jsonl"
+    old = json.dumps(completion_event(hashedCount=5)) + "\n"
+    path.write_text(old[:40], encoding="utf-8")
+    offsets = subject.reload_log_offsets(tmp_path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(old[40:] + json.dumps(completion_event()) + "\n")
+    assert subject.completed_reload_from_logs(tmp_path, offsets, 100000)["hashedCount"] == 100000
+
+
+def test_startup_failure_cleans_up_the_child_before_ownership_transfers(tmp_path, monkeypatch):
+    process = object()
+    stopped = []
+    monkeypatch.setattr(subject.rust_client, "start_rust_client_executable", lambda *args: process)
+    def failed(*args):
+        raise RuntimeError("readiness fixture failed")
+    monkeypatch.setattr(subject, "wait_for_rest", failed)
+    monkeypatch.setattr(subject, "stop_daemon", lambda child, client: stopped.append(child))
+    with pytest.raises(RuntimeError, match="readiness fixture failed"):
+        subject.start_configured_daemon(SimpleNamespace(staged_executable=tmp_path / "daemon"),
+            tmp_path / "profile", tmp_path / "log", rest_address="127.0.0.1", rest_port=20017)
+    assert stopped == [process]
 
 
 def harness_paths(tmp_path: Path) -> subject.HarnessPaths:
@@ -41,10 +643,139 @@ def harness_paths(tmp_path: Path) -> subject.HarnessPaths:
     )
 
 
+@pytest.mark.parametrize("runtime", [False, True])
+def test_registered_paths_isolate_profiles_and_require_owned_runtime(tmp_path, monkeypatch, runtime):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    rust = root / "workspaces/agents/review/emulebb-rust"
+    rust.mkdir(parents=True)
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", lambda *args: rust)
+    admitted = []
+    executable = output / "tools/workstreams/review/emulebb-rust/host/bin/emulebb-rust.exe"
+
+    def verify(source, destination):
+        admitted.append((source, destination))
+        return {"executable": str(executable)}
+
+    monkeypatch.setattr(subject.rust_client, "verified_runtime_stage", verify)
+    paths = subject.resolve_paths(rust_repo=rust, registered_stage=True, require_runtime=runtime)
+    assert paths.rust_repo == rust
+    assert paths.scenario_root == output / "profiles/workstreams/review/emulebb-rust-shared-library-io"
+    assert paths.fixture_root == paths.scenario_root / "fixture/library"
+    assert paths.runs_root == paths.scenario_root / "runs"
+    assert paths.reports_root == output / "reports/workstreams/review/shared-library-io"
+    assert paths.staged_executable == (executable if runtime else None)
+    assert admitted == ([(rust, output)] if runtime else [])
+    assert not output.exists()
+
+
+def test_registered_runtime_failure_never_uses_operator_stage(tmp_path, monkeypatch):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    rust = root / "workspaces/agents/review/emulebb-rust"
+    rust.mkdir(parents=True)
+    operator = subject.rust_client.staged_executable(output)
+    operator.parent.mkdir(parents=True)
+    operator.write_bytes(b"operator runtime")
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo", lambda *args: rust)
+
+    def reject(*args):
+        raise RuntimeError("Registered runtime identity mismatch")
+
+    monkeypatch.setattr(subject.rust_client, "verified_runtime_stage", reject)
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        subject.resolve_paths(rust_repo=rust, registered_stage=True, require_runtime=True)
+    with pytest.raises(RuntimeError, match="--registered-stage"):
+        subject.resolve_paths(rust_repo=rust, require_runtime=True)
+
+
+def test_registered_paths_reject_another_workstreams_source(tmp_path, monkeypatch):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    rust = root / "workspaces/agents/other/emulebb-rust"
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(workspace_layout, "resolve_selected_workspace_repo",
+                        lambda *args: root / "workspaces/agents/selected/emulebb-rust")
+    with pytest.raises(RuntimeError, match="registered companion"):
+        subject.resolve_paths(rust_repo=rust, registered_stage=True)
+
+
+def test_unselected_paths_preserve_operator_command_defaults(tmp_path, monkeypatch):
+    root, output = tmp_path / "workspace", tmp_path / "output"
+    (root / "repos/emulebb-rust").mkdir(parents=True)
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: root)
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    paths = subject.resolve_paths()
+    assert paths.scenario_root == output / "profiles/emulebb-rust-shared-library-io"
+    assert paths.staged_executable == subject.rust_client.staged_executable(output)
+
+
+def test_lan_startup_profile_seeds_only_local_sqlite_endpoints(tmp_path):
+    from dataclasses import replace
+
+    paths = replace(harness_paths(tmp_path), rust_repo=workspace_layout.resolve_selected_workspace_repo(
+        Path(__file__).parents[2], "emulebb-rust"))
+    own = SimpleNamespace(rest_port=24660, tcp_port=24662, udp_port=24672)
+    peer = SimpleNamespace(tcp_port=24663, udp_port=24673)
+    profile = tmp_path / "lan-profile"
+    report = subject._configure_lan_startup_profile(
+        paths=paths, profile_dir=profile, spec=own, peer_spec=peer, lan_bind_addr="127.0.0.1",
+        server_endpoint="127.0.0.1:24661", initial_reload=False, shared_root=None,
+    )
+    assert report["discovery"]["kad"] == {"status": "initialized", "revision": 0,
+                                           "contactCount": 0, "bootstrapEndpointCount": 1}
+    with sqlite3.connect(profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE) as connection:
+        assert connection.execute("SELECT endpoint FROM kad_bootstrap_endpoints").fetchall() == [("127.0.0.1:24673",)]
+    _, settings = subject.rust_metadata.read_app_settings(profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE)
+    assert settings["network"]["kadEnabled"]["value"] is True
+    assert not (profile / "nodes.dat").exists()
+
+
+def test_prepare_low_space_fails_before_creating_any_fixture_state(tmp_path, monkeypatch):
+    paths = harness_paths(tmp_path)
+    monkeypatch.setattr(subject, "physical_disk_inventory", lambda: [])
+    monkeypatch.setattr(subject, "target_disk", lambda *args: {"mediaType": "SSD", "mountPath": str(tmp_path)})
+    monkeypatch.setattr(subject.shutil, "disk_usage", lambda *args: SimpleNamespace(free=0))
+    with pytest.raises(RuntimeError, match="Insufficient fixture space"):
+        subject.prepare_fixture(paths, spec=tiny_spec())
+    assert not paths.scenario_root.exists()
+
+
+def test_fixture_space_preflight_only_reserves_remaining_payloads(tmp_path, monkeypatch):
+    paths, spec = harness_paths(tmp_path), tiny_spec()
+    index, first, size = next(iter(subject.iter_fixture_files(paths.fixture_root, spec)))
+    first.parent.mkdir(parents=True)
+    first.write_bytes(subject.deterministic_payload(index, size))
+    target = {"mountPath": str(tmp_path)}
+    required = spec.total_bytes - size + spec.large_size
+    monkeypatch.setattr(subject.shutil, "disk_usage", lambda *args: SimpleNamespace(free=required))
+    result = subject.fixture_space_preflight(paths, spec, target)
+    assert result["remainingPayloadBytes"] == spec.total_bytes - size
+    assert result["requiredFreeBytes"] == required
+
+
+def test_prepare_refuses_unowned_or_invalid_owner_before_writing(tmp_path, monkeypatch):
+    paths = harness_paths(tmp_path)
+    paths.scenario_root.mkdir(parents=True)
+    sentinel = paths.scenario_root / "operator-file"
+    sentinel.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(subject, "physical_disk_inventory", lambda: [])
+    monkeypatch.setattr(subject, "target_disk", lambda *args: {"mediaType": "SSD"})
+    with pytest.raises(RuntimeError, match="unowned"):
+        subject.prepare_fixture(paths, spec=tiny_spec())
+    paths.owner_path.write_text('{"schema":"invalid"}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="ownership marker"):
+        subject.prepare_fixture(paths, spec=tiny_spec())
+    assert sentinel.read_text() == "preserve"
+    assert not paths.manifest_path.exists()
+
+
 @pytest.mark.unit
 def test_production_fixture_is_exactly_100k_and_ten_gib_decimal() -> None:
     assert len(subject.API_KEY.encode("utf-8")) >= 32
-    assert subject.SHARED_FILES_PROBE_PATH == "/shared-files?limit=1"
+    assert subject.LIBRARY_FILES_PROBE_PATH == "/library/files?view=shared&limit=1&countTotal=true"
     assert subject.PRODUCTION_SPEC.file_count == 100_000
     assert subject.PRODUCTION_SPEC.total_bytes == 10_485_760_000
     assert len(subject.mutation_indices()) == 1_000
@@ -61,7 +792,7 @@ def test_restart_accepts_validated_cohort_then_requires_full_hydration(
     assert not subject.startup_catalog_cohort_accepted(100_001, 100_000)
 
     totals = iter((200, 2_248, 100_000))
-    client = SimpleNamespace(request=lambda *_args, **_kwargs: {"total": next(totals)})
+    client = SimpleNamespace(request=lambda *_args, **_kwargs: {"data": [], "meta": {"total": next(totals)}})
     process = SimpleNamespace(poll=lambda: None)
     monkeypatch.setattr(subject.time, "sleep", lambda _seconds: None)
     hydrated = subject.wait_for_shared_catalog_hydration(
@@ -656,6 +1387,77 @@ def test_linux_lsblk_parser_maps_children_to_one_physical_disk() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("mode", ["direct", "loss", "new-loss", "persistent-loss", "continuous-loss", "scan-failure"])
+def test_watcher_recovery_requires_new_loss_before_another_acknowledgment(monkeypatch, tmp_path, mode):
+    import itertools
+
+    clock = itertools.count(step=0.01)
+    monkeypatch.setattr(subject.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(subject.time, "sleep", lambda _: None)
+    monkeypatch.setattr(subject, "disk_io_snapshot", lambda _: {})
+    monkeypatch.setattr(subject, "profile_storage_snapshot", lambda _: {})
+    monkeypatch.setattr(subject, "storage_acceptance", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(subject, "_watcher_database_rows", lambda _: {})
+    state = {"mutated": False, "scans": 0}
+    monkeypatch.setattr(subject, "_watcher_loss_revision", lambda *_args:
+                        100 + (state["scans"] if mode in ("new-loss", "continuous-loss") else 0))
+
+    def request(method, path, payload=None, **_kwargs):
+        if method == "POST":
+            assert path == "/library/scan" and payload == {}
+            state["scans"] += 1
+            if mode == "scan-failure":
+                raise RuntimeError("synthetic scan failure")
+            return {}
+        if path == "/library/roots/1":
+            lost = state["mutated"] and mode != "direct"
+            if state["scans"] and mode not in ("persistent-loss", "continuous-loss"):
+                lost = mode == "new-loss" and state["scans"] == 1
+            return {"watchEnabled": True, "scanRequired": lost}
+        assert path == subject.LIBRARY_FILES_PROBE_PATH
+        return {"data": [], "meta": {"total": 0}}
+
+    def recover(**kwargs):
+        kwargs["action"]()
+        return {"progress": {"running": False, "pending": False}}
+
+    monkeypatch.setattr(subject, "run_dynamic_reload_phase", recover)
+    def mutate():
+        state["mutated"] = True
+        return {"fileCount": 0, "totalBytes": 0}
+
+    def run():
+        return subject.run_watcher_phase(
+            label="watcherProbe", watch_root_id="1", action=mutate,
+            expected_paths={}, expected_catalog_total=0,
+            client=SimpleNamespace(request=request), process=SimpleNamespace(poll=lambda: None),
+            sampler=SimpleNamespace(samples=[], maybe_sample=lambda **_kwargs: None, summary=lambda _: {}),
+            profile_dir=tmp_path, disk_counter_key=None, timeout_seconds=0.3, poll_seconds=0,
+        )
+
+    if mode == "scan-failure":
+        with pytest.raises(RuntimeError, match="synthetic scan failure"):
+            run()
+    elif mode in ("persistent-loss", "continuous-loss"):
+        with pytest.raises(subject.WatcherConvergenceError) as failure:
+            run()
+        assert failure.value.phase_report["acceptance"]["checks"]["rootScanAcknowledged"] is False
+        assert failure.value.phase_report["watchRecovery"]["failure"] == (
+            "scanDidNotAcknowledgeObservedLoss" if mode == "persistent-loss"
+            else "newLossAfterAcknowledgmentBudget"
+        )
+    else:
+        report, hashes = run()
+        assert report["acceptance"]["ok"] is True and hashes == {}
+        assert report["watchRecovery"]["scanRequiredObserved"] is (mode != "direct")
+        assert report["watchRecovery"]["scanRequiredAfter"] is False
+        assert [row["observedLossRevision"] for row in report["watchRecovery"]["scans"]] == (
+            [] if mode == "direct" else [100, 101] if mode == "new-loss" else [100]
+        )
+    assert state["scans"] == (2 if mode in ("new-loss", "continuous-loss") else int(mode != "direct"))
+
+
+@pytest.mark.unit
 def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) -> None:
     normal = subject._normalized_path_key(tmp_path / "watch-probe-0000.bin")
     long = subject._normalized_path_key(tmp_path / "watch-probe-0500.bin")
@@ -691,7 +1493,7 @@ def test_watcher_evidence_is_exact_and_does_not_publish_paths(tmp_path: Path) ->
 
 
 @pytest.mark.unit
-def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
+def test_watcher_rest_sample_reads_separate_cached_locations(tmp_path: Path) -> None:
     path = tmp_path / "watch-probe-0000.bin"
     key = subject._normalized_path_key(path)
     rows = {key: {"hash": "a" * 32, "sizeBytes": 16}}
@@ -702,8 +1504,13 @@ def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
             self, method: str, route: str, **_kwargs: object
         ) -> dict[str, object]:
             assert method == "GET"
-            assert route == f"/shared-files/{'a' * 32}"
-            return {"hash": "a" * 32, "sizeBytes": 16, "path": str(path)}
+            if route == f"/library/files/{'a' * 32}":
+                return {"hash": "a" * 32, "sizeBytes": 16}
+            assert route == f"/library/files/{'a' * 32}/locations?limit=200"
+            return {
+                "data": [{"path": str(path), "present": True}],
+                "meta": {"hasMore": False, "nextCursor": None},
+            }
 
     sample = subject._sample_watcher_rest(FakeClient(), rows, expected)
     assert sample["sampleCount"] == 1
@@ -711,131 +1518,96 @@ def test_watcher_rest_sample_uses_canonical_path_field(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_watcher_database_query_returns_only_active_probe_rows(tmp_path: Path) -> None:
+def test_watcher_database_query_returns_only_active_probe_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     profile = tmp_path / "profile"
-    profile.mkdir()
     database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    subject.rust_metadata.create_metadata_db(rust_repo, database)
+    for hash_value, name in (("11", "watch-probe-0000.bin"), ("33", "watch-probe-0001.bin")):
+        subject.rust_metadata.seed_indexed_file(database, ed2k_hash=hash_value * 16,
+            name=name, size_bytes=16, origin="local_share")
     with sqlite3.connect(database) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY, ed2k_hash BLOB, size_bytes INTEGER
-            );
-            CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE verified_local_content (
-                known_file_id INTEGER, display_name TEXT,
-                part_count INTEGER, aich_root BLOB
-            );
-            CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
-            CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
-            CREATE TABLE local_file_instances (
-                path_id INTEGER, known_file_id INTEGER,
-                file_size INTEGER, verified_fingerprint BLOB
-            );
-            CREATE TABLE shared_directory_roots (
-                id INTEGER, enabled INTEGER, deleted_at_ms INTEGER,
-                accessible INTEGER, shareable INTEGER
-            );
-            CREATE TABLE shared_file_memberships (
-                root_id INTEGER, path_id INTEGER, removed_at_ms INTEGER
-            );
-            """
-        )
-        connection.execute(
-            "INSERT INTO known_files VALUES (1, ?, 16)",
+        connection.execute("PRAGMA foreign_keys=ON")
+        root_path = subject.rust_metadata._upsert_local_path(connection, str(tmp_path), 0)
+        root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_s) VALUES(?,0)", (root_path,)).lastrowid
+        connection.execute("INSERT INTO shared_directory_root_origins VALUES(?,'explicit',0,1,1)", (root,))
+        for hash_value, name, removed in (("11", "watch-probe-0000.bin", None), ("33", "watch-probe-0001.bin", 123)):
+            known = connection.execute("SELECT id FROM known_files WHERE ed2k_hash=?", (bytes.fromhex(hash_value * 16),)).fetchone()[0]
+            path_id = subject.rust_metadata._upsert_local_path(connection, str(tmp_path / name), 0)
+            connection.execute("INSERT INTO verified_local_content(known_file_id,display_name,part_size_bytes,part_count,aich_root) VALUES(?,?,16,1,?)", (known, name, bytes.fromhex("22" * 20)))
+            connection.execute("INSERT INTO verified_local_md4_hashes VALUES(?,0,?)", (known, bytes(16)))
+            connection.execute("INSERT INTO verified_local_aich_hashes VALUES(?,0,?)", (known, bytes(20)))
+            connection.execute("INSERT INTO local_file_instances(path_id,known_file_id,size_bytes,native_identity,verified_fingerprint,verified_at_s) VALUES(?,?,16,?,?,0)", (path_id, known, b"identity" + bytes([known]), bytes(47)))
+            connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_s,last_seen_at_s,removed_at_s) VALUES(?,?,?,?,0,0,?)", (root, path_id, known, name, removed))
+        parent_path = subject.rust_metadata._upsert_local_path(connection, str(tmp_path.parent), 0)
+        parent_root = connection.execute("INSERT INTO shared_directory_roots(path_id,created_at_s) VALUES(?,0)", (parent_path,)).lastrowid
+        connection.execute("INSERT INTO shared_directory_root_origins VALUES(?,'explicit',0,1,1)", (parent_root,))
+        path_id, known = connection.execute(
+            "SELECT path_id,known_file_id FROM local_file_instances JOIN known_files ON known_files.id=known_file_id WHERE ed2k_hash=?",
             (bytes.fromhex("11" * 16),),
-        )
-        connection.execute(
-            "INSERT INTO known_files VALUES (2, ?, 16)",
-            (bytes.fromhex("33" * 16),),
-        )
-        connection.execute("INSERT INTO local_paths VALUES (1, ?)", (str(tmp_path / "watch-probe-0000.bin"),))
-        connection.execute("INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "watch-probe-0001.bin"),))
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 'watch-probe-0000.bin', 0, ?)", (bytes.fromhex("22" * 20),))
-        connection.execute("INSERT INTO verified_local_content VALUES (2, 'watch-probe-0001.bin', 0, ?)", (bytes.fromhex("44" * 20),))
-        connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
-        connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 16, zeroblob(47))")
-        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 1, NULL)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 2, 123)")
+        ).fetchone()
+        connection.execute("INSERT INTO shared_file_memberships(root_id,path_id,known_file_id,relative_path,first_seen_at_s,last_seen_at_s) VALUES(?,?,?,?,0,0)",
+                           (parent_root, path_id, known, f"{tmp_path.name}/watch-probe-0000.bin"))
+        plan = connection.execute("EXPLAIN QUERY PLAN " + subject.ACTIVE_LOCAL_SOURCES_SQL).fetchall()
+        assert not any("TEMP B-TREE" in str(row[3]) for row in plan)
+        connection.execute("UPDATE shared_directory_roots SET watch_loss_revision=9 WHERE id=?", (root,))
+    connection.close()
+    connect = sqlite3.connect
+    readers = []
+
+    def track_reader(*args, **kwargs):
+        reader = connect(*args, **kwargs)
+        readers.append(reader)
+        return reader
+
+    monkeypatch.setattr(subject.sqlite3, "connect", track_reader)
+    assert subject._watcher_loss_revision(profile, str(root)) == 9
+    with pytest.raises(RuntimeError, match="no longer exists"):
+        subject._watcher_loss_revision(profile, str(parent_root + 1))
     rows = subject._watcher_database_rows(profile)
     assert len(rows) == 1
     assert next(iter(rows.values()))["hash"] == "11" * 16
+    assert next(iter(rows.values()))["md4Acquired"] == 1
+    assert next(iter(rows.values()))["aichAcquired"] == 1
+    snapshot = subject.profile_storage_snapshot(profile)
+    assert snapshot["rowCounts"]["activeShareSources"] == 1
+    assert snapshot["rowCounts"]["activeShareBytes"] == 16
+    assert snapshot["rowCounts"]["invalidActiveShareIntegrity"] == 0
+    monkeypatch.setattr(subject, "ACTIVE_LOCAL_SOURCES_SQL", "SELECT * FROM missing_source")
+    for read in (subject._watcher_database_rows, subject.profile_storage_snapshot):
+        with pytest.raises(sqlite3.OperationalError):
+            read(profile)
+    assert len(readers) == 6
+    for reader in readers:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            reader.execute("SELECT 1")
 
 
 @pytest.mark.unit
-def test_storage_snapshot_counts_active_shared_sources_not_transfers(
-    tmp_path: Path,
-) -> None:
+def test_storage_snapshot_distinguishes_verified_shares_and_download_jobs(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
-    profile.mkdir()
     database = profile / subject.rust_metadata.RUST_PROFILE_METADATA_FILE
-    long_path = str(tmp_path / ("long-segment-" * 30) / "active.bin")
-    with sqlite3.connect(database) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE known_files (
-                id INTEGER PRIMARY KEY, size_bytes INTEGER
-            );
-            CREATE TABLE local_paths (id INTEGER PRIMARY KEY, display_path TEXT);
-            CREATE TABLE verified_local_content (
-                known_file_id INTEGER, part_size INTEGER,
-                part_count INTEGER, aich_root BLOB
-            );
-            CREATE TABLE verified_local_md4_hashes (known_file_id INTEGER);
-            CREATE TABLE verified_local_aich_hashes (known_file_id INTEGER);
-            CREATE TABLE local_file_instances (
-                path_id INTEGER, known_file_id INTEGER,
-                file_size INTEGER, verified_fingerprint BLOB
-            );
-            CREATE TABLE shared_directory_roots (
-                id INTEGER, enabled INTEGER, deleted_at_ms INTEGER,
-                accessible INTEGER, shareable INTEGER
-            );
-            CREATE TABLE transfers (removed_at_ms INTEGER);
-            CREATE TABLE shared_file_memberships (
-                root_id INTEGER, path_id INTEGER, removed_at_ms INTEGER
-            );
-            CREATE TABLE shared_file_scan_failures (id INTEGER);
-            """
-        )
-        connection.execute("INSERT INTO known_files VALUES (1, 16)")
-        connection.execute("INSERT INTO known_files VALUES (2, 32)")
-        connection.execute("INSERT INTO local_paths VALUES (1, ?)", (long_path,))
-        connection.execute(
-            "INSERT INTO local_paths VALUES (2, ?)", (str(tmp_path / "hidden.bin"),)
-        )
-        connection.execute("INSERT INTO verified_local_content VALUES (1, 16, 0, ?)", (bytes.fromhex("11" * 20),))
-        connection.execute("INSERT INTO verified_local_content VALUES (2, 16, 0, ?)", (bytes.fromhex("22" * 20),))
-        connection.execute("INSERT INTO local_file_instances VALUES (1, 1, 16, zeroblob(47))")
-        connection.execute("INSERT INTO local_file_instances VALUES (2, 2, 32, zeroblob(47))")
-        connection.execute("INSERT INTO shared_directory_roots VALUES (1, 1, NULL, 1, 1)")
-        connection.execute("INSERT INTO shared_directory_roots VALUES (2, 1, NULL, 1, 1)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 1, NULL)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (2, 1, NULL)")
-        connection.execute("INSERT INTO shared_file_memberships VALUES (1, 2, 123)")
-        connection.execute("INSERT INTO transfers VALUES (NULL)")
-
+    rust_repo = workspace_layout.resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    subject.rust_metadata.create_metadata_db(rust_repo, database)
+    subject.rust_metadata.seed_retained_download_scale(database, count=1000)
+    subject.rust_metadata.seed_indexed_file(database, ed2k_hash="ff" * 16,
+        name="unverified.bin", size_bytes=16, origin="local_share")
     snapshot = subject.profile_storage_snapshot(profile)
     counts = snapshot["rowCounts"]
-    assert counts["localInstanceRows"] == 2
-    assert counts["verifiedContentRows"] == 2
-    assert counts["activeShareSources"] == 1
-    assert counts["activeShareBytes"] == 16
-    assert counts["activeLongPathSources"] == 1
-    assert counts["invalidActiveShareIntegrity"] == 0
-    assert subject.storage_acceptance(
-        snapshot,
-        expected_active=1,
-        expected_bytes=16,
-        expected_minimum_long=1,
-    ) == {
-        "databaseActiveShares": True,
-        "databaseActiveBytes": True,
-        "databaseHashIntegrity": True,
-        "databaseLongPathShares": True,
-        "databaseScanFailures": True,
+    assert counts["knownFiles"] == 1001
+    assert counts["verifiedContentRows"] == 0
+    assert counts["activeShareSources"] == 0
+    assert counts["activeShareBytes"] == 0
+    assert {key: counts[key] for key in subject.RETAINED_DOWNLOAD_EXPECTED} == {
+        "downloadJobs": 1000, "unfinishedDownloads": 10, "completedDownloads": 990,
+        "startedDownloads": 1, "stoppedDownloads": 9,
     }
+    assert all(subject.storage_acceptance(snapshot, expected_active=0, expected_bytes=0,
+        expected_minimum_long=0, expected_known=1001).values())
+    assert not subject.storage_acceptance(snapshot, expected_active=0, expected_bytes=0,
+        expected_minimum_long=0, expected_known=1000)["databaseKnownFiles"]
 
 
 @pytest.mark.unit
@@ -848,6 +1620,32 @@ def test_watcher_log_summary_reports_empty_logs_without_faking_registration(
     assert summary["logByteCount"] == 0
     assert summary["nonEmptyLogCount"] == 0
     assert summary["watcherRegistrations"] == 0
+    assert summary["reloadFinalization"]["lastEvent"] is None
+
+
+@pytest.mark.unit
+def test_log_summary_keeps_finalization_stage_without_exposing_log_text(tmp_path: Path) -> None:
+    log = tmp_path / "initial.log"
+    log.write_text("\n".join((
+        "INFO watching shared directory for auto-pickup path=private-path",
+        "INFO shared-directory reload committing root memberships",
+        "INFO shared-directory reload committed root memberships",
+        "INFO shared-directory reload rebuilding complete catalog",
+        "unrelated private-path event",
+    )), encoding="utf-8")
+    summary = subject.watcher_log_summary([tmp_path / "absent.log", log])
+    assert summary["watcherRegistrations"] == 1
+    assert summary["reloadFinalization"] == {
+        "rootCommitStarted": 1, "rootCommitFinished": 1,
+        "catalogRebuildStarted": 1, "reloadFinished": 0,
+        "lastEvent": "catalogRebuildStarted",
+    }
+    assert "private-path" not in json.dumps(summary)
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("\nINFO shared-directory reload completed\n")
+    completed = subject.watcher_log_summary([log])["reloadFinalization"]
+    assert completed["reloadFinished"] == 1
+    assert completed["lastEvent"] == "reloadFinished"
 
 
 @pytest.mark.unit
@@ -967,12 +1765,15 @@ def test_media_initial_acceptance_requires_cross_disk_serial_hashing() -> None:
                 "activeShareSources": 100,
                 "invalidActiveShareIntegrity": 0,
                 "scanFailures": 0,
-                "activeTransferRows": 0,
+                "downloadJobs": 0,
             }
         },
     }
 
     assert subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
+    del phase["storage"]["rowCounts"]["downloadJobs"]
+    assert not subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
+    phase["storage"]["rowCounts"]["downloadJobs"] = 0
     phase["maxPerDiskActiveCount"] = 2
     assert not subject.media_initial_acceptance(phase, expected_disk_count=3)["ok"]
 
@@ -1045,7 +1846,7 @@ def test_partial_media_inspector_accepts_duplicate_source_paths(
                 "activeShareSources": 3,
                 "invalidActiveShareIntegrity": 0,
                 "scanFailures": 0,
-                "activeTransferRows": 0,
+                "downloadJobs": 0,
             }
         },
     )
@@ -1078,8 +1879,10 @@ def test_partial_media_inspector_accepts_duplicate_source_paths(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("observe_activity", [True, False])
 def test_dynamic_reload_checkpoints_running_progress(
     monkeypatch: pytest.MonkeyPatch,
+    observe_activity: bool,
 ) -> None:
     def response(*, running: bool, started: int, scanned: int) -> dict[str, object]:
         return {
@@ -1088,7 +1891,7 @@ def test_dynamic_reload_checkpoints_running_progress(
                 "running": running,
                 "pending": False,
                 "scannedCount": scanned,
-                "startedAtMs": started,
+                "startedAt": started,
                 "activeHashCount": int(running),
                 "disks": [{"activeCount": int(running)}],
             },
@@ -1096,16 +1899,15 @@ def test_dynamic_reload_checkpoints_running_progress(
 
     class FakeClient:
         def __init__(self) -> None:
-            self.directories = [
-                response(running=False, started=1, scanned=0),
-                response(running=True, started=2, scanned=4),
-                response(running=False, started=2, scanned=8),
-            ]
+            # Completion can occur before the first poll, or within the same
+            # calendar second as the active observation.
+            self.directories = ([response(running=True, started=1, scanned=4)] if observe_activity else [])
+            self.directories.append(response(running=False, started=1, scanned=8))
 
         def request(self, _method: str, route: str, **_kwargs: object):
-            if route == "/shared-directories":
+            if route == "/library/scan":
                 return self.directories.pop(0)
-            return {"total": 8}
+            return {"data": [], "meta": {"total": 8}}
 
     class FakeProcess:
         returncode = None
@@ -1150,5 +1952,225 @@ def test_dynamic_reload_checkpoints_running_progress(
 
     assert phase["progress"]["scannedCount"] == 8
     assert checkpoints[0]["status"] == "running"
-    assert checkpoints[0]["progress"]["scannedCount"] == 4
+    assert checkpoints[0]["progress"]["scannedCount"] == (4 if observe_activity else 8)
     assert checkpoints[0]["physicalDiskIoDeltas"]["physicaldrive1"] == {"read_count": 1}
+
+
+@pytest.mark.parametrize("library_files", [50_000, 100_000])
+@pytest.mark.parametrize("fault", ["none", "missing-budget", "wrong-budget", "preflight", "preparation-oom", "campaign-failure"])
+def test_container_campaign_measures_preparation_and_requires_campaign_acceptance(tmp_path, monkeypatch, fault, library_files):
+    from emule_test_harness import build_provenance
+
+    output = tmp_path / "output"
+    native = output / "native"
+    (native / "tmp").mkdir(parents=True)
+    archive = output / "candidate.tar.zst"
+    archive.write_bytes(b"synthetic archive")
+    source = tmp_path / "source"
+    source.mkdir()
+    args = SimpleNamespace(native_root=native, report_root=output / "reports", archive=archive,
+                           rust_repo=source, source_sha="a" * 40, version="0.1.0-beta.2", library_files=library_files)
+    monkeypatch.setattr(subject.sys, "platform", "linux")
+    monkeypatch.setattr(subject, "get_workspace_output_root", lambda: output)
+    monkeypatch.setattr(subject, "get_required_emule_workspace_root", lambda: tmp_path / "workspace")
+    monkeypatch.setattr(build_provenance, "require_clean_git_source", lambda *a, **k: SimpleNamespace(revision="a" * 40))
+    root, membership = cgroup_files(tmp_path)
+    expected_spec, expected_memory = subject.fixture.capacity_tier(library_files)
+    (root / "memory.max").write_text(str(expected_memory * (2 if fault == "wrong-budget" else 1)), encoding="ascii")
+    sample = cgroup_budget.sample_budget
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: None if fault == "missing-budget" else sample(root=root, membership=membership))
+    stages = []
+    def verify(*arguments):
+        stages.append("verify")
+        assert arguments[1:] == ("a" * 40, "0.1.0-beta.2", "x86_64-unknown-linux-gnu")
+        return {"sha256": "b" * 64}
+    def extract(_stream, destination):
+        stages.append("extract")
+        executable = destination / "emulebb-rust/emulebb-rust"
+        executable.parent.mkdir()
+        executable.write_bytes(b"ELF fixture")
+    package = SimpleNamespace(_verify_package_manifest=verify, _extract_portable_stream=extract)
+    monkeypatch.setattr(subject, "load_script_module", lambda *a: package)
+    class Process:
+        stdout = None
+        returncode = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def communicate(self): return b"", b""
+    monkeypatch.setattr(subject.subprocess, "Popen", lambda *a, **k: Process())
+    def prepare(paths, *, allow_non_ssd, spec):
+        assert spec == expected_spec
+        stages.append("prepare")
+        assert allow_non_ssd and paths.staged_executable.is_file()
+        assert paths.scenario_root.is_relative_to(native)
+        if fault == "preparation-oom":
+            (root / "memory.events").write_text("oom 1\noom_kill 1\noom_group_kill 0\n")
+        return {"status": "prepared"}
+    def campaign(paths, options, *, spec, memory_bytes):
+        assert spec == expected_spec and memory_bytes == expected_memory
+        stages.append("campaign")
+        assert options.command == "run" and options.allow_non_ssd and options.watcher_replay_from is None
+        ok = fault != "campaign-failure"
+        return paths.reports_root / "full.json", {"status": "passed" if ok else "failed", "acceptance": {"ok": ok}}
+    controller = SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=35_000_000))
+    monkeypatch.setattr(subject, "_load_psutil", lambda: SimpleNamespace(Process=lambda _pid: controller))
+    def preflight(paths, run_root, evidence):
+        stages.append("preflight")
+        assert run_root == native / "preflight" and not run_root.is_relative_to(paths.scenario_root)
+        evidence["status"] = "failed" if fault == "preflight" else "passed"
+        if fault == "preflight":
+            raise RuntimeError("preflight failure")
+    monkeypatch.setattr(subject, "run_coupled_preflight", preflight)
+    monkeypatch.setattr(subject, "prepare_fixture", prepare)
+    monkeypatch.setattr(subject, "run_campaign", campaign)
+    if fault in {"missing-budget", "wrong-budget"}:
+        with pytest.raises(RuntimeError, match="kernel limits"):
+            subject.run_container_campaign(args)
+        assert stages == []
+    elif fault == "preflight":
+        with pytest.raises(RuntimeError, match="preflight failure"):
+            subject.run_container_campaign(args)
+        assert stages == ["verify", "extract", "preflight"]
+    else:
+        result = subject.run_container_campaign(args)
+        assert result["status"] == ("passed" if fault == "none" else "failed")
+        assert stages == ["verify", "extract", "preflight", "prepare", "campaign"]
+    retained = json.loads((args.report_root / "container-result.json").read_text())
+    assert retained["status"] == ("passed" if fault == "none" else "failed")
+    assert retained["acceptance"]["ok"] is (fault == "none")
+    assert retained["capacityTarget"] == {"libraryFiles": library_files, "memoryBytes": expected_memory, "retainedJobs": 100_000}
+
+
+@pytest.mark.parametrize("io_available", [True, False])
+def test_process_sampler_preserves_rss_when_optional_metrics_are_unavailable(monkeypatch, io_available):
+    class Process:
+        def memory_info(self):
+            return SimpleNamespace(rss=256_000_000, vms=900_000_000, peak_wset=None, private=None)
+        def cpu_times(self): return SimpleNamespace(user=3.0, system=1.5)
+        def io_counters(self):
+            if not io_available: raise PermissionError("restricted process I/O")
+            return SimpleNamespace(read_count=1, write_count=2, read_bytes=3, write_bytes=4)
+        def num_handles(self): return 7
+    controller = SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=65_000_000))
+    monkeypatch.setattr(subject, "_load_psutil", lambda: SimpleNamespace(
+        Process=lambda pid: controller if pid == subject.os.getpid() else Process()))
+    sampler = subject.ProcessSampler(SimpleNamespace(pid=subject.os.getpid() + 1), 1)
+    sampler.maybe_sample(force=True)
+    result = sampler.summary()
+    assert result["sampleCount"] == 1
+    assert result["peakWorkingSetBytes"] == 256_000_000
+    assert result["peakControllerWorkingSetBytes"] == 65_000_000
+    assert result["lifetimeCpuSeconds"] == 4.5
+    assert result["lifetimePeakWorkingSetBytes"] is None
+    assert result["peakPrivateBytes"] is None  # vms must never be labelled private.
+    assert result["readBytesDelta"] == (0 if io_available else None)
+    assert result["metricErrors"] == ({} if io_available else {"io": "PermissionError"})
+
+
+@pytest.mark.parametrize("fault", ["missing", "unexpected", "misplaced", "wrong-size", "noncanonical-index", "duplicate-walk"])
+def test_fixture_validation_keeps_exact_path_and_size_verdicts(tmp_path, monkeypatch, fault):
+    fixture = subject.fixture
+    spec = tiny_spec()
+    root = tmp_path / "library"
+    for index in range(spec.file_count):
+        fixture.write_payload(root / fixture.relative_file_for_index(index, spec),
+                              b"x" * fixture.file_size_for_index(index, spec))
+    original = root / fixture.relative_file_for_index(0, spec)
+    if fault == "missing": original.unlink()
+    elif fault == "unexpected": fixture.write_payload(root / "unexpected.bin", b"x")
+    elif fault == "misplaced":
+        original.rename(original.with_name("file-000007.bin"))
+    elif fault == "wrong-size": fixture.write_payload(original, b"wrong-size")
+    elif fault == "noncanonical-index": original.rename(original.with_name("file-0.bin"))
+    else:
+        walk = storage.walk
+        def duplicated(path):
+            rows = iter(walk(path))
+            for row in rows:
+                yield row
+                if row[2]:
+                    yield row
+        monkeypatch.setattr(storage, "walk", duplicated)
+    result = fixture.validate_fixture(root, spec)
+    assert result["ok"] is False
+    expected_missing = 1 if fault in {"missing", "misplaced", "noncanonical-index"} else 0
+    expected_unexpected = 1 if fault in {"unexpected", "misplaced", "noncanonical-index"} else 0
+    assert result["missingCount"] == expected_missing
+    assert result["unexpectedPathCount"] == expected_unexpected
+    assert result["fileCount"] == spec.file_count - expected_missing + expected_unexpected
+    assert result["unexpectedSizeCount"] == (0 if fault in {"missing", "duplicate-walk"} else 1)
+
+
+@pytest.mark.parametrize("spec", [subject.fixture.LOW_MEMORY_SPEC, subject.fixture.PRODUCTION_SPEC])
+def test_full_fixture_inventory_keeps_transient_allocations_below_sixteen_mebibytes(tmp_path, monkeypatch, spec):
+    import itertools
+    import tracemalloc
+
+    fixture = subject.fixture
+    root = tmp_path / "library"
+    current_sizes = {}
+    def walk(_root):
+        entries = ((fixture.relative_file_for_index(index, spec), fixture.file_size_for_index(index, spec))
+                   for index in range(spec.file_count))
+        for parent, grouped in itertools.groupby(entries, key=lambda row: row[0].parent):
+            rows = list(grouped)
+            current_sizes.clear()
+            current_sizes.update((root / relative, size) for relative, size in rows)
+            yield root / parent, [], [relative.name for relative, _size in rows]
+    monkeypatch.setattr(storage, "walk", walk)
+    monkeypatch.setattr(storage, "stat", lambda path: SimpleNamespace(st_size=current_sizes[path]))
+    monkeypatch.setattr(storage, "detect_name_capabilities", lambda _root: {})
+    already_tracing = tracemalloc.is_tracing()
+    if not already_tracing: tracemalloc.start()
+    baseline = tracemalloc.get_traced_memory()[0]
+    tracemalloc.reset_peak()
+    try:
+        result = fixture.validate_fixture(root, spec)
+        transient_peak = tracemalloc.get_traced_memory()[1] - baseline
+    finally:
+        if not already_tracing: tracemalloc.stop()
+    assert result["ok"] and result["fileCount"] == spec.file_count
+    assert result["totalBytes"] == spec.total_bytes
+    assert result["longPathFileCount"] == 1000 and result["unicodePathFileCount"] == 16
+    assert transient_peak < 16 * 1024 * 1024, f"fixture inventory retained {transient_peak:,} traced bytes"
+
+
+def test_low_memory_fixture_preserves_size_mix_and_path_coverage():
+    fixture = subject.fixture
+    spec = fixture.LOW_MEMORY_SPEC
+    spec.validate()
+    assert spec.file_count == 50_000
+    assert spec.total_bytes == fixture.PRODUCTION_SPEC.total_bytes // 2
+    assert len(fixture.mutation_indices(spec)) == 500
+    assert fixture.expected_mutation_bytes(spec) == fixture.expected_mutation_bytes() // 2
+    paths = [fixture.relative_file_for_index(index, spec) for index in range(spec.file_count)]
+    assert len(set(paths)) == spec.file_count
+    assert sum(len(str(path)) >= fixture.LONG_PATH_MIN_RELATIVE_CHARS for path in paths) == 1000
+    unicode_paths = [path for path in paths if "unicode-cohort" in path.parts]
+    assert len(unicode_paths) == 16
+    assert {path.name for path in unicode_paths} == set(fixture.UNICODE_FILE_NAMES)
+    assert sum(len(path.parts) == 6 for path in unicode_paths) == 4
+
+
+def test_capacity_tier_preflight_rejects_mismatched_inputs_before_fixture_mutation(monkeypatch):
+    with pytest.raises(RuntimeError, match="not an approved capacity tier"):
+        subject.run_campaign(None, None, spec=subject.fixture.LOW_MEMORY_SPEC, memory_bytes=1024 * 1024 * 1024)
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: None)
+    monkeypatch.setattr(subject, "load_prepared_manifest", lambda _paths:
+                        {"fileCount": 100_000, "totalBytes": subject.PRODUCTION_SPEC.total_bytes})
+    with pytest.raises(RuntimeError, match="Prepared fixture differs"):
+        subject.run_campaign(None, None, spec=subject.fixture.LOW_MEMORY_SPEC)
+
+
+@pytest.mark.parametrize("memory_bytes", [512 * 1024 * 1024, 1024 * 1024 * 1024])
+def test_cgroup_diagnostics_need_an_explicit_target_to_claim_enforced_limits(tmp_path, monkeypatch, memory_bytes):
+    root, membership = cgroup_files(tmp_path)
+    (root / "memory.max").write_text(str(memory_bytes), encoding="ascii")
+    before = cgroup_budget.sample_budget(root=root, membership=membership)
+    monkeypatch.setattr(cgroup_budget, "sample_budget", lambda: dict(before))
+    report = {"status": "diagnosticComplete", "qualificationScope": {"containerLimitsEnforced": False}}
+    cgroup_budget.finish_report(report, before)
+    assert report["kernelResourceBudget"]["ok"] is True
+    assert report["qualificationScope"]["containerLimitsEnforced"] is False
+    cgroup_budget.finish_report(report, before, memory_bytes=memory_bytes)
+    assert report["qualificationScope"]["containerLimitsEnforced"] is True

@@ -2,22 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 import yaml
 
-from emule_test_harness.paths import get_emule_workspace_root
+from emule_test_harness.workspace_layout import resolve_rust_openapi_contract
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OPENAPI_CONTRACT_PATH = Path(
-    os.environ.get(
-        "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
-        str(get_emule_workspace_root(REPO_ROOT) / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
-    )
-)
+OPENAPI_CONTRACT_PATH = resolve_rust_openapi_contract()
 JSON_MEDIA_TYPE = "application/json"
 
 
@@ -74,6 +67,10 @@ def validate_openapi_operation_response_payload(
 
     document = load_openapi_document(openapi_path)
     response = openapi_operation_response(document, method, path, status)
+    if str(status) == "204":
+        if response.get("content") or payload is not None:
+            raise RuntimeError("HTTP 204 must document and return no body")
+        return
     schema = response_json_schema(response, f"{method.upper()} {path} {status}")
     validate_openapi_schema(document, schema, payload)
 
@@ -152,3 +149,17 @@ def response_json_schema(response: dict[str, Any], label: str) -> dict[str, Any]
 def validate_openapi_schema(document: dict[str, Any], schema: dict[str, Any], payload: object) -> None:
     validator = jsonschema.Draft202012Validator(document).evolve(schema=schema)
     validator.validate(payload)
+    if schema.get("$ref") == "#/components/schemas/SettingsSurfaceEnvelope":
+        validate_settings_surface_schemas(document, payload)
+
+
+def validate_settings_surface_schemas(document: dict[str, Any], payload: object) -> None:
+    """Require live declaration-generated schemas to match the published components."""
+    generated = payload["data"]["schemas"]
+    documented = document["components"]["schemas"]
+    expected = set(documented["SettingsSurface"]["properties"]["schemas"]["required"])
+    if set(generated) != expected:
+        raise jsonschema.ValidationError("Settings surface schema component inventory differs from OpenAPI")
+    for name, schema in generated.items():
+        if documented.get(name) != schema:
+            raise jsonschema.ValidationError(f"Settings surface schema differs from OpenAPI: {name}")

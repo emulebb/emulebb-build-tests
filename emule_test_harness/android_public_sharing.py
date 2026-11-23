@@ -24,7 +24,6 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from urllib.parse import urlencode
 from uuid import uuid4
 
 from . import windows_processes
@@ -36,9 +35,12 @@ from .android_adb_failure import AdbOperationFailure
 from .paths import get_workspace_output_root
 from .kad_nodes import DEFAULT_NODES_DAT_URL
 from .rust_local_ed2k import RustRestFailure, request_json
+from .rust_rest_contract import settings_patch
+from .vm_guest_profiles import http_json
 from .rust_shared_library_io import compact_progress, path_fingerprint, utc_now, write_json
 from .soak_launch import DEFAULT_SERVER_MET_URL
 from .upload_parity_monitor import rust_summary
+from .rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots
 
 SCHEMA = "emulebb.android.public-sharing/1"
 MAX_RECEIPT_BYTES = 4 * 1024**2
@@ -49,7 +51,7 @@ OBSERVER_PHASES = frozenset({"installation-admission", "campaign-ownership", "se
     "guest-scope", "direct-wifi-route", "service-state-admission", "battery-condition", "rest-forward",
     "service-start", "app-identity", "settings-bound", "public-discovery", "background-transition",
     "stop-request-admission", "explicit-stop", "space-reserve", "sample", "sample-app-identity",
-    "sample-direct-route", "sample-guest-scope", "sample-settings", "sample-transfer-queue",
+    "sample-direct-route", "sample-guest-scope", "sample-settings", "sample-download-queue",
     "sample-catalog", "sample-runtime-summary", "sample-nat", "sample-hashing", "sample-uploads",
     "history-write", "session-write", "failure-stop", "control-cleanup"})
 SAFE_FAILURE_REASONS = {
@@ -75,6 +77,8 @@ SAFE_FAILURE_REASONS = {
     "Campaign requires the direct Wi-Fi default route": "direct-wifi-route-required",
     "Upload-only campaign observed a download queue": "download-queue-not-empty",
     "Runtime upload cap differs from the admitted bound": "upload-cap-mismatch",
+    "Campaign settings require effective values before admission": "settings-not-effective",
+    "Campaign upload cap or network preferences differ": "campaign-settings-mismatch",
     "Shared catalog contains an unapproved file": "unapproved-catalog-entry",
     "Observation exceeds its evidence storage bound": "observation-storage-bound",
 }
@@ -82,18 +86,19 @@ REST_OPERATIONS = {
     ("POST", "/servers/operations/import-met-url"): ("server-metadata-import", 60.0),
     ("POST", "/kad/operations/import-nodes-url"): ("kad-node-import", 60.0),
     ("POST", "/servers/operations/connect"): ("server-connect", 60.0),
-    ("PATCH", "/app/settings"): ("settings-update", 60.0),
+    ("PATCH", "/settings"): ("settings-update", 60.0),
     ("POST", "/kad/operations/start"): ("kad-start", 10.0),
     ("GET", "/app"): ("app-identity-read", 10.0),
-    ("GET", "/app/settings"): ("settings-read", 10.0),
+    ("GET", "/settings"): ("settings-read", 10.0),
     ("GET", "/stats"): ("stats-read", 10.0),
     ("GET", "/status"): ("status-read", 10.0),
     ("GET", "/nat"): ("nat-status-read", 10.0),
     ("GET", "/servers"): ("server-list-read", 10.0),
     ("GET", "/kad"): ("kad-status-read", 10.0),
-    ("GET", "/shared-directories"): ("sharing-settings-read", 10.0),
-    ("GET", "/shared-files"): ("shared-catalog-read", 10.0),
-    ("GET", "/transfers"): ("transfer-queue-read", 10.0),
+    ("GET", "/library/roots"): ("sharing-settings-read", 10.0),
+    ("GET", "/library/scan"): ("sharing-status-read", 10.0),
+    ("GET", "/library/files"): ("library-catalog-read", 10.0),
+    ("GET", "/downloads"): ("download-queue-read", 10.0),
     ("GET", "/uploads"): ("uploads-read", 10.0),
 }
 REST_OPERATION_NAMES = frozenset(item[0] for item in REST_OPERATIONS.values()) | {"unclassified-rest-operation"}
@@ -355,13 +360,16 @@ class Phone:
     def base(self):
         return "http://127.0.0.1:" + str(self.port)
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, *, include_meta=False):
         # WHY: discovery imports may fetch for 30s and NAT reconciliation may
         # take another 20s under the runtime lock. Ordinary reads stay bounded
         # at 10s; only these named operations receive the explicit 60s budget.
         operation, timeout = REST_OPERATIONS.get((method, path.partition("?")[0]), ("unclassified-rest-operation", 10.0))
         self.failed_rest_operation = None
         try:
+            if include_meta:
+                return http_json(self.base, "/api/v1" + path, api_key=self.key, method=method,
+                                 body=body, timeout_seconds=timeout)
             return request_json(self.base, method, "/api/v1" + path, self.key, body, timeout_seconds=timeout)
         except Exception:
             self.failed_rest_operation = operation
@@ -628,11 +636,13 @@ def prepare(phone: Phone, *, campaign: Path, output_root: Path, source: Path,
             phone.ui.click("start_service")
             phone.ui.wait_state("Running")
             phone.identity()
-            transfers = phone.request("GET", "/transfers?limit=1")
-            if transfers.get("total") != 0 or transfers.get("items") != []:
+            downloads = phone.request("GET", "/downloads?view=unfinished&limit=1")
+            if (downloads["data"] != [] or downloads["meta"]["hasMore"] is not False
+                    or downloads["meta"]["nextCursor"] is not None):
                 raise RuntimeError("Prepare requires an empty download queue")
-            _settings(phone, limits, configure=True)
-            receipt["discoveryPreparation"] = configure_public_discovery(phone)
+            configured = _settings(phone, limits, configure=True)
+            receipt["discoveryPreparation"] = configure_public_discovery(
+                phone, start_networks=not bool(configured["application"]["pendingRestart"]))
             phone.stop()
             attempted_start = False
             receipt["stage"] = "staging-copy"
@@ -853,48 +863,49 @@ def resume_failed_preparation(phone: Phone, receipt: dict, *, campaign: Path, ou
 
 
 def shared_catalog(phone: Phone, receipt: dict):
-    """Join content-level catalog representatives to approved SHA-256/size groups.
-
-    REST returns distinct known contents, choosing one eligible path per hash.
-    Duplicate approved instances can therefore collapse to one row. Coverage of
-    every content group does not prove that every duplicate path was indexed.
-    """
+    """Join canonical hash rows and cached copies to the approved content groups."""
     expected = {receipt["destination"] + "/" + row["path"]: (row["sha256"], row["sizeBytes"])
                 for row in receipt["inventory"]["files"]}
     groups = set(expected.values())
-    rows, cursors, cursor, total, stable = [], set(), None, None, True
-    while True:
-        query = {"limit": 200}
-        if cursor is not None:
-            query["cursor"] = cursor
-        page = phone.request("GET", "/shared-files?" + urlencode(query))
-        if (not isinstance(page.get("items"), list) or type(page.get("total")) is not int
-                or not 0 <= page["total"] <= receipt["fileCount"]):
+    total, stable = None, True
+
+    def fetch_files(path):
+        nonlocal total, stable
+        page = phone.request("GET", path)
+        page_total = page.get("meta", {}).get("total")
+        if type(page_total) is not int or not 0 <= page_total <= receipt["fileCount"]:
             raise RuntimeError("Shared catalog collection exceeds its approved scope")
-        stable &= total is None or page["total"] == total
-        total = page["total"]
-        rows.extend(page["items"])
-        cursor = page.get("nextCursor")
-        if cursor is None:
-            break
-        if not isinstance(cursor, str) or not cursor or cursor in cursors or len(rows) > receipt["fileCount"]:
-            raise RuntimeError("Shared catalog pagination is incomplete")
-        cursors.add(cursor)
-    stable &= len(rows) == total and len({row.get("path") for row in rows}) == len(rows)
-    group_hashes, hash_groups = {}, {}
-    for row in rows:
-        if (row.get("path") not in expected or row.get("sizeBytes") != expected[row["path"]][1]
-                or row.get("complete") is not True or row.get("partFile") is not False
-                or re.fullmatch(r"[0-9a-fA-F]{32}", row.get("hash", "")) is None):
-            raise RuntimeError("Shared catalog contains an unapproved file")
-        group, file_hash = expected[row["path"]], row["hash"].lower()
+        stable &= total is None or page_total == total
+        total = page_total
+        return page
+
+    rows, seen_paths, group_hashes, hash_groups = [], set(), {}, {}
+    for row in iter_library_files(fetch_files, view="shared", count_total=True):
+        if len(rows) >= receipt["fileCount"]:
+            raise RuntimeError("Shared catalog collection exceeds its approved scope")
+        rows.append(row)
+        file_hash = row["hash"]
+        content_groups = set()
+        for location in iter_library_locations(lambda path: phone.request("GET", path), file_hash):
+            if not location["present"]:
+                continue
+            path = location["path"]
+            if path not in expected or row.get("sizeBytes") != expected[path][1]:
+                raise RuntimeError("Shared catalog contains an unapproved file")
+            stable &= path not in seen_paths
+            seen_paths.add(path)
+            content_groups.add(expected[path])
+        if len(content_groups) != 1:
+            raise RuntimeError("Shared library hash has no unambiguous approved locations")
+        group = content_groups.pop()
         stable &= group not in group_hashes and file_hash not in hash_groups
         group_hashes[group] = file_hash
         hash_groups[file_hash] = group
-    return {"catalogRepresentativePaths": len({row["path"] for row in rows}),
+    stable &= len(rows) == total
+    return {"catalogFileLocations": len(seen_paths),
             "approvedFileInstances": len(expected), "duplicateFileInstances": len(expected) - len(groups),
             "matchedDistinctContents": len(group_hashes), "expectedDistinctContents": len(groups),
-            "allFileInstancesIndexed": "evidence-incomplete",
+            "allFileInstancesIndexed": "observed" if stable and seen_paths == set(expected) else "not-observed",
             "comparisonScope": "approved-raw-content-groups",
             "eligibilityAccounting": "evidence-incomplete",
             "status": ("evidence-incomplete" if not stable else
@@ -902,28 +913,43 @@ def shared_catalog(phone: Phone, receipt: dict):
 
 
 def _settings(phone: Phone, limits: Limits, *, configure=False):
-    settings = phone.request("GET", "/app/settings")
-    daemon = settings.get("daemon", {})
-    if (daemon.get("incomingDir") != INCOMING or daemon.get("p2pBindInterface") not in {None, ""}
-            or daemon.get("p2pBindIp") not in {None, "", "0.0.0.0", "::"}
-            or settings.get("vpnGuard", {}).get("mode") != "off"):
+    document = phone.request("GET", "/settings", include_meta=True)
+    settings = document["data"]
+    effective = settings["effective"]
+    p2p = effective["network"]["p2p"]
+    if (effective["storage"]["incomingDirectory"] != INCOMING or p2p["bindInterface"] is not None
+            or p2p["bindIp"] not in {None, "0.0.0.0"}
+            or effective["security"]["vpnGuard"]["mode"] != "off"):
         raise RuntimeError("Campaign requires canonical storage and explicit direct route settings")
-    roots = phone.request("GET", "/shared-directories").get("roots")
-    if not isinstance(roots, list) or {root.get("path") for root in roots} != {SHARED}:
+    if settings["application"]["pendingRestart"] or settings["application"]["failed"]:
+        raise RuntimeError("Campaign settings require effective values before admission")
+    roots = list(iter_library_roots(lambda path: phone.request("GET", path)))
+    if ({root["path"] for root in roots if not root["managed"]} != {SHARED}
+            or any(root["path"] not in {SHARED, INCOMING} for root in roots)):
         raise RuntimeError("Campaign requires only the canonical approved Shared root")
     if configure:
-        phone.request("PATCH", "/app/settings", {"core": {"uploadLimitKiBps": limits.upload_limit_kibps,
-                      "autoConnect": True, "networkKademlia": True}, "nat": {"enabled": True}})
-        settings = phone.request("GET", "/app/settings")
-    if (settings.get("core", {}).get("uploadLimitKiBps") != limits.upload_limit_kibps
-            or settings.get("core", {}).get("autoConnect") is not True
-            or settings.get("core", {}).get("networkKademlia") is not True
-            or settings.get("nat", {}).get("enabled") is not True):
-        raise RuntimeError("Campaign upload cap or UPnP preference differs")
+        # The empty-service preparation stops before copying bytes. Its next
+        # normal start applies restart-bound choices before library publication.
+        document = phone.request("PATCH", "/settings", settings_patch(document, set_values={
+            "transfers": {"uploadLimitBytesPerSecond": limits.upload_limit_kibps * 1024},
+            "network": {"autoConnect": True, "ed2kEnabled": True, "kadEnabled": True,
+                        "nat": {"enabled": True}}}), include_meta=True)
+        settings = document["data"]
+        saved = settings["saved"]
+        rate = saved["transfers"]["uploadLimitBytesPerSecond"]["value"]
+        enabled = [saved["network"][key]["value"] for key in ("autoConnect", "ed2kEnabled", "kadEnabled")]
+        enabled.append(saved["network"]["nat"]["enabled"]["value"])
+    else:
+        rate = effective["transfers"]["uploadLimitBytesPerSecond"]
+        enabled = [effective["network"][key] for key in ("autoConnect", "ed2kEnabled", "kadEnabled")]
+        enabled.append(effective["network"]["nat"]["enabled"])
+    if (rate != limits.upload_limit_kibps * 1024 or any(value is not True for value in enabled)
+            or settings["application"]["failed"]):
+        raise RuntimeError("Campaign upload cap or network preferences differ")
     return settings
 
 
-def configure_public_discovery(phone: Phone):
+def configure_public_discovery(phone: Phone, *, start_networks=True):
     """Reuse approved public seed owners without changing another host's profile.
 
     Imports are discovery metadata only. No search or transfer is created. A
@@ -940,7 +966,7 @@ def configure_public_discovery(phone: Phone):
     if not isinstance(servers, list) or not any(row.get("enabled") is True for row in servers):
         raise RuntimeError("Public discovery requires an approved enabled server seed")
     stats = phone.request("GET", "/stats")
-    if stats.get("ed2kConnected") is not True:
+    if stats.get("ed2kConnected") is not True and start_networks:
         phone.request("POST", "/servers/operations/connect", {})
     kad = phone.request("GET", "/kad")
     imported_nodes = False
@@ -949,11 +975,13 @@ def configure_public_discovery(phone: Phone):
         if imported.get("imported") is not True:
             raise RuntimeError("Approved Kad discovery import was not confirmed")
         imported_nodes = True
-        phone.request("POST", "/kad/operations/start", {})
+        if start_networks:
+            phone.request("POST", "/kad/operations/start", {})
     return {"serverSourceOwner": "soak_launch.DEFAULT_SERVER_MET_URL", "serverUrlSha256": _digest(DEFAULT_SERVER_MET_URL),
             "kadSourceOwner": "kad_nodes.DEFAULT_NODES_DAT_URL", "nodesUrlSha256": _digest(DEFAULT_NODES_DAT_URL),
             "serverImportRequested": imported_servers, "kadImportConfirmed": imported_nodes,
             "enabledServerCount": sum(row.get("enabled") is True for row in servers),
+            "networkStartDeferred": not start_networks,
             "connectionAndPublication": "require-live-observation"}
 
 
@@ -985,9 +1013,10 @@ def sample(phone: Phone, receipt: dict, previous_uploads=None, *, phase=None):
     guest_scope(phone, receipt)
     phase("sample-settings")
     _settings(phone, limits)
-    phase("sample-transfer-queue")
-    transfers = phone.request("GET", "/transfers?limit=1")
-    if transfers.get("total") != 0 or transfers.get("items") != []:
+    phase("sample-download-queue")
+    downloads = phone.request("GET", "/downloads?view=unfinished&limit=1")
+    if (downloads["data"] != [] or downloads["meta"]["hasMore"] is not False
+            or downloads["meta"]["nextCursor"] is not None):
         raise RuntimeError("Upload-only campaign observed a download queue")
     phase("sample-catalog")
     catalog, rows = shared_catalog(phone, receipt)
@@ -998,7 +1027,7 @@ def sample(phone: Phone, receipt: dict, previous_uploads=None, *, phase=None):
     phase("sample-nat")
     nat = phone.request("GET", "/nat")
     phase("sample-hashing")
-    directories = phone.request("GET", "/shared-directories")
+    directories = phone.request("GET", "/library/scan")
     hashing = compact_progress(directories)
     phase("sample-uploads")
     upload_evidence, current_uploads = public_upload_evidence(
@@ -1058,9 +1087,9 @@ def public_upload_evidence(document: dict, catalog: list, previous: dict):
         if not public:
             continue
         count = row.get("uploadedBytes")
-        if type(count) is not int or count < 0 or not isinstance(row.get("clientId"), str):
+        if type(count) is not int or count < 0 or not isinstance(row.get("id"), str):
             raise RuntimeError("Public upload payload counters are unavailable")
-        key = _digest([row["clientId"], row["address"], file_hash.lower()])
+        key = _digest([row["id"], row["address"], file_hash.lower()])
         current[key] = count
         requested += 1
         if key in previous and count >= previous[key]:

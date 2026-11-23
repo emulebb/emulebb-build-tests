@@ -43,14 +43,18 @@ from emule_test_harness.diag_event_runs import select_latest_diag_run
 from emule_test_harness import hideme_split_tunnel
 from emule_test_harness import mfc_known_met, rust_native_fingerprint
 from emule_test_harness import soak_launch
+from emule_test_harness.rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots, settings_patch
+from emule_test_harness.vm_guest_profiles import http_json
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.rust_local_ed2k import (
+    canonical_download_id, download_part_totals, require_download_batch, require_download_id,
+)
 from emule_test_harness.rust_client import (
     RUST_PROFILE_METADATA_FILE,
     RUST_PROFILE_SETTINGS_FILE,
-    rust_network_settings_patch,
     spawn_rust_daemon,
 )
 from emule_test_harness.soak_launch import (
@@ -1741,13 +1745,13 @@ def public_search_candidate_safety_reason(
     min_complete_sources: int = 0,
     max_size_bytes: int,
 ) -> str | None:
-    """Returns None when a public search result is safe enough to trigger as a paused download."""
+    """Returns None when a public search result is safe enough to create a stopped download."""
 
     if not isinstance(result_row, dict):
         return "not-object"
-    file_name = str(result_row.get("name") or "").strip()
+    file_name = str(result_row.get("displayName") or "").strip()
     file_type = str(result_row.get("fileType") or "").strip().lower()
-    size_bytes = result_row.get("sizeBytes", result_row.get("size"))
+    size_bytes = result_row.get("sizeBytes")
     sources = result_row.get("sources")
     complete_sources = result_row.get("completeSources")
     if not file_name:
@@ -1781,9 +1785,9 @@ def sanitized_public_search_candidate(result_row: dict[str, object]) -> dict[str
 
     return {
         "hashFingerprint": text_fingerprint(result_row.get("hash")),
-        "nameFingerprint": text_fingerprint(result_row.get("name")),
-        "namePresent": bool(str(result_row.get("name") or "").strip()),
-        "sizeBytes": result_row.get("sizeBytes", result_row.get("size")),
+        "nameFingerprint": text_fingerprint(result_row.get("displayName")),
+        "namePresent": bool(str(result_row.get("displayName") or "").strip()),
+        "sizeBytes": result_row.get("sizeBytes"),
         "fileType": result_row.get("fileType"),
         "sources": result_row.get("sources"),
         "completeSources": result_row.get("completeSources"),
@@ -1796,7 +1800,7 @@ def public_search_candidate_sort_key(result_row: dict[str, object]) -> tuple[int
 
     complete_sources = safe_int(result_row.get("completeSources")) or 0
     sources = safe_int(result_row.get("sources")) or 0
-    size_bytes = safe_int(result_row.get("sizeBytes", result_row.get("size"))) or 0
+    size_bytes = safe_int(result_row.get("sizeBytes")) or 0
     return (-complete_sources, -sources, size_bytes)
 
 
@@ -1811,22 +1815,23 @@ def public_search_terms_from_inputs(inputs_path: Path, group: str) -> tuple[str,
     raise RuntimeError(f"unsupported public search term group: {group}")
 
 
-def sanitized_transfer_proof_row(transfer: dict[str, object]) -> dict[str, object]:
-    """Returns report-safe transfer state for public proof output."""
-
-    delivered_path = Path(str(transfer.get("deliveredPath"))) if transfer.get("deliveredPath") else None
+def sanitized_download_proof_row(download: dict[str, object]) -> dict[str, object]:
+    """Return scalar job evidence while keeping names and paths private."""
+    delivery = download.get("delivery") or {}
+    path = delivery.get("path")
     return {
-        "hashFingerprint": text_fingerprint(transfer.get("hash")),
-        "nameFingerprint": text_fingerprint(transfer.get("name")),
-        "state": transfer.get("state"),
-        "sizeBytes": transfer.get("sizeBytes"),
-        "completedBytes": transfer.get("completedBytes"),
-        "progress": transfer.get("progress"),
-        "sources": transfer.get("sources"),
-        "sourcesTransferring": transfer.get("sourcesTransferring"),
-        "deliveredPathPresent": delivered_path is not None,
-        "deliveredPathFingerprint": private_path_fingerprint(str(delivered_path)) if delivered_path is not None else None,
-        "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
+        "downloadId": download.get("id"),
+        "hashFingerprint": text_fingerprint(download.get("hash")),
+        "nameFingerprint": text_fingerprint(download.get("name")),
+        "state": download.get("state"),
+        "sizeBytes": download.get("sizeBytes"),
+        "presentBytes": download.get("presentBytes"),
+        "verifiedBytes": download.get("verifiedBytes"),
+        "payloadVerified": download.get("payloadVerified"),
+        "sourceCountLowerBound": download.get("sourceCountLowerBound"),
+        "deliveryState": delivery.get("state"),
+        "deliveredPathPresent": bool(path),
+        "deliveredPathFingerprint": private_path_fingerprint(str(path)) if path else None,
     }
 
 
@@ -1839,7 +1844,7 @@ def sanitized_transfer_source_row(source: dict[str, object]) -> dict[str, object
         "userNameFingerprint": text_fingerprint(source.get("userName")),
         "clientSoftware": source.get("clientSoftware"),
         "downloadState": source.get("downloadState"),
-        "downloadSpeedKiBps": source.get("downloadSpeedKiBps"),
+        "downloadRateBytesPerSecond": source.get("downloadRateBytesPerSecond"),
         "availableParts": source.get("availableParts"),
         "partCount": source.get("partCount"),
         "lowId": source.get("lowId"),
@@ -1851,58 +1856,39 @@ def sanitized_transfer_source_row(source: dict[str, object]) -> dict[str, object
     }
 
 
-def public_transfer_debug_summary(args: argparse.Namespace) -> dict[str, object]:
-    """Prints sanitized transfer/source state for a transfer hash fingerprint."""
-
-    offset = 0
-    matched: dict[str, object] | None = None
-    scanned = 0
-    while offset <= args.max_offset:
-        payload = request_json(
-            args.base_url,
-            f"/transfers?limit={args.page_limit}&offset={offset}",
-            api_key=args.api_key,
-            timeout_seconds=args.request_timeout_seconds,
-        )
-        items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        scanned += len(items)
-        for item in items:
-            if isinstance(item, dict) and text_fingerprint(item.get("hash")) == args.hash_fingerprint:
-                matched = item
-                break
-        if matched is not None or len(items) < args.page_limit:
-            break
-        offset += args.page_limit
-    if matched is None:
-        return {
-            "ok": False,
-            "reason": "transfer-not-found",
-            "hashFingerprint": args.hash_fingerprint,
-            "scannedTransfers": scanned,
-        }
-
-    transfer_hash = str(matched.get("hash"))
-    details = request_json(
-        args.base_url,
-        f"/transfers/{quote(transfer_hash, safe='')}/details",
-        api_key=args.api_key,
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    sources = details.get("sources") if isinstance(details.get("sources"), list) else []
-    source_rows = [
-        sanitized_transfer_source_row(source)
-        for source in sources
-        if isinstance(source, dict)
-    ]
-    state_counts = Counter(str(row.get("downloadState") or "") for row in source_rows)
+def public_download_debug_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Read one captured job and one bounded source window without scanning history."""
+    if not 1 <= args.source_sample_limit <= 200:
+        raise RuntimeError("--source-sample-limit must be 1..200")
+    canonical_download_id(args.download_id)
+    download = request_json(args.base_url, f"/downloads/{args.download_id}",
+                            api_key=args.api_key, timeout_seconds=args.request_timeout_seconds)
+    if require_download_id(download, expected_hash=str(download.get("hash") or "")) != args.download_id:
+        raise RuntimeError("download debug reader substituted another job")
+    page = request_json(args.base_url, f"/downloads/{args.download_id}/sources?limit={args.source_sample_limit}",
+                        api_key=args.api_key, timeout_seconds=args.request_timeout_seconds)
+    if (not isinstance(page.get("data"), list) or not isinstance(page.get("meta"), dict)
+            or type(page["meta"].get("hasMore")) is not bool):
+        raise RuntimeError("download debug requires a bounded source cursor page")
+    source_rows = [sanitized_transfer_source_row(source) for source in page["data"]]
+    delivery = download.get("delivery") or {}
     return {
         "ok": True,
-        "hashFingerprint": args.hash_fingerprint,
-        "transfer": sanitized_transfer_proof_row(matched),
-        "sourceCount": len(source_rows),
-        "sourceStateCounts": dict(sorted(state_counts.items())),
-        "sourceSamples": source_rows[: args.source_sample_limit],
-        "scannedTransfers": scanned,
+        "downloadId": args.download_id,
+        "download": {
+            "hashFingerprint": text_fingerprint(download.get("hash")),
+            "nameFingerprint": text_fingerprint(download.get("name")),
+            "state": download.get("state"),
+            "sizeBytes": download.get("sizeBytes"),
+            "payloadVerified": download.get("payloadVerified"),
+            "deliveryState": delivery.get("state"),
+            "deliveredPathPresent": bool(delivery.get("path")),
+            "deliveredPathFingerprint": private_path_fingerprint(str(delivery["path"])) if delivery.get("path") else None,
+        },
+        "sourceCountLowerBound": len(source_rows) + int(page["meta"]["hasMore"]),
+        "sourcesHaveMore": page["meta"]["hasMore"],
+        "sourceWindowStateCounts": dict(sorted(Counter(str(row.get("downloadState") or "") for row in source_rows).items())),
+        "sourceSamples": source_rows,
     }
 
 
@@ -1991,7 +1977,7 @@ def wait_for_public_search_candidate(
             )
             if selected is not None:
                 break
-            if payload.get("status") == "complete":
+            if payload.get("status") == "completed":
                 break
             time.sleep(args.poll_seconds)
     finally:
@@ -2012,226 +1998,111 @@ def wait_for_public_search_candidate(
     }
 
 
-def wait_for_transfer_progress(
-    args: argparse.Namespace,
-    transfer_hash: str,
-    *,
-    initial_completed_bytes: int,
-) -> dict[str, object]:
-    """Waits until a triggered transfer moves bytes, has sources, or completes."""
+def read_public_download(args: argparse.Namespace, download_id: str, expected_hash: str) -> dict[str, object]:
+    """Read the captured job with streamed parts and one bounded source window."""
+    download = request_json(args.base_url, f"/downloads/{download_id}", api_key=args.api_key,
+                            timeout_seconds=args.request_timeout_seconds)
+    if require_download_id(download, expected_hash=expected_hash) != download_id:
+        raise RuntimeError("public download reader substituted another job")
+    if download.get("state") == "failed":
+        raise RuntimeError("public download failed; explicit operator action is required")
+    totals = download_part_totals(args.base_url.rstrip("/").removesuffix("/api/v1"), args.api_key, download_id)
+    page = request_json(args.base_url, f"/downloads/{download_id}/sources?limit=200", api_key=args.api_key,
+                        timeout_seconds=args.request_timeout_seconds)
+    if (not isinstance(page.get("data"), list) or not isinstance(page.get("meta"), dict)
+            or type(page["meta"].get("hasMore")) is not bool):
+        raise RuntimeError("public download requires a bounded source cursor page")
+    return {**download, **totals,
+            "sourceCountLowerBound": len(page["data"]) + int(page["meta"]["hasMore"])}
 
-    observations: list[dict[str, object]] = []
+
+def download_delivered(download: dict[str, object]) -> bool:
+    """Whole-payload verification and durable delivery define completion."""
+    delivery = download.get("delivery")
+    return (download.get("state") == "completed" and download.get("payloadVerified") is True
+            and isinstance(delivery, dict) and delivery.get("state") == "delivered")
+
+
+def wait_for_download_progress(args: argparse.Namespace, download_id: str, expected_hash: str,
+                               *, initial_present_bytes: int) -> dict[str, object]:
+    """Require byte progress or verified delivery; source presence alone is insufficient."""
+    observations = []
     deadline = time.time() + args.progress_timeout_seconds
-    latest: dict[str, object] | None = None
+    latest = None
     while time.time() <= deadline:
-        transfer = request_json(
-            args.base_url,
-            f"/transfers/{quote(transfer_hash, safe='')}",
-            api_key=args.api_key,
-            timeout_seconds=args.request_timeout_seconds,
-        )
-        latest = transfer
-        completed_bytes = safe_int(transfer.get("completedBytes")) or 0
-        sources = safe_int(transfer.get("sources")) or 0
-        observations.append(
-            {
-                "observedAt": round(time.time(), 3),
-                "state": transfer.get("state"),
-                "completedBytes": completed_bytes,
-                "progress": transfer.get("progress"),
-                "sources": sources,
-                "sourcesTransferring": transfer.get("sourcesTransferring"),
-                "deliveredPathPresent": bool(transfer.get("deliveredPath")),
-            }
-        )
-        emit_public_download_probe_event(
-            args,
-            {
-                "phase": "transfer-progress-poll",
-                "transfer": sanitized_transfer_proof_row(transfer),
-            },
-        )
-        if transfer.get("state") == "completed" or completed_bytes > initial_completed_bytes:
+        latest = read_public_download(args, download_id, expected_hash)
+        observations.append(sanitized_download_proof_row(latest))
+        del observations[:-30]
+        emit_public_download_probe_event(args, {"phase": "download-progress-poll", "download": observations[-1]})
+        if download_delivered(latest) or int(latest["presentBytes"]) > initial_present_bytes:
             break
         time.sleep(args.poll_seconds)
     if latest is None:
-        raise RuntimeError("transfer progress probe did not run")
-    latest_completed_bytes = safe_int(latest.get("completedBytes")) or 0
-    byte_progress_observed = latest_completed_bytes > initial_completed_bytes
-    sources_observed = any((safe_int(row.get("sources")) or 0) > 0 for row in observations)
-    return {
-        "ok": latest.get("state") == "completed" or byte_progress_observed,
-        "byteProgressObserved": byte_progress_observed,
-        "sourcesObserved": sources_observed,
-        "observations": observations[-30:],
-        "latest": latest,
-    }
+        raise RuntimeError("download progress probe did not run")
+    byte_progress = int(latest["presentBytes"]) > initial_present_bytes
+    return {"ok": download_delivered(latest) or byte_progress,
+            "byteProgressObserved": byte_progress,
+            "sourcesObserved": any(int(row["sourceCountLowerBound"]) > 0 for row in observations),
+            "observations": observations, "latest": latest}
 
 
-def run_public_search_candidate_download(
-    args: argparse.Namespace,
-    selected: dict[str, object],
-    candidate: dict[str, object],
-) -> dict[str, object]:
-    """Triggers one safe public candidate and returns sanitized byte-progress proof."""
-
+def run_public_search_candidate_download(args: argparse.Namespace, selected: dict[str, object],
+                                         candidate: dict[str, object]) -> dict[str, object]:
+    """Create one stopped content job and prove its explicit start and progress."""
     search_id = str(selected["searchId"])
-    transfer_hash = str(candidate["hash"])
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "candidate-selected",
-            "searchIdFingerprint": text_fingerprint(search_id),
-            "termFingerprint": selected["termFingerprint"],
-            "candidate": sanitized_public_search_candidate(candidate),
-        },
-    )
-    download = request_json(
-        args.base_url,
-        f"/searches/{quote(search_id, safe='')}/results/{quote(transfer_hash, safe='')}/operations/download",
-        api_key=args.api_key,
-        method="POST",
-        body={"paused": True, "categoryId": 0},
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "download-triggered",
-            "hashFingerprint": text_fingerprint(download.get("hash", transfer_hash)),
-            "ok": download.get("ok", True),
-        },
-    )
-    paused = request_json(
-        args.base_url,
-        f"/transfers/{quote(transfer_hash, safe='')}",
-        api_key=args.api_key,
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "paused-transfer",
-            "transfer": sanitized_transfer_proof_row(paused),
-        },
-    )
-    resume = request_json(
-        args.base_url,
-        f"/transfers/{quote(transfer_hash, safe='')}/operations/resume",
-        api_key=args.api_key,
-        method="POST",
-        body={},
-        timeout_seconds=args.request_timeout_seconds,
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "resume-triggered",
-            "hashFingerprint": text_fingerprint(resume.get("hash", transfer_hash)),
-            "state": resume.get("state"),
-            "ok": resume.get("ok", True),
-        },
-    )
-    progress = wait_for_transfer_progress(
-        args,
-        transfer_hash,
-        initial_completed_bytes=safe_int(paused.get("completedBytes")) or 0,
-    )
-    completion = (
-        wait_for_transfer_completion(args, transfer_hash)
-        if args.require_completion
-        else {"ok": None, "skipped": True, "reason": "require-completion disabled"}
-    )
-    emit_public_download_probe_event(
-        args,
-        {
-            "phase": "completion-result",
-            "ok": completion.get("ok"),
-            "skipped": completion.get("skipped", False),
-            "reason": completion.get("reason"),
-        },
-    )
-    ok = bool(download.get("ok", True)) and bool(progress.get("ok")) and (
-        bool(completion.get("ok")) if args.require_completion else True
-    )
+    expected_hash = str(candidate["hash"])
+    emit_public_download_probe_event(args, {"phase": "candidate-selected",
+        "searchIdFingerprint": text_fingerprint(search_id), "termFingerprint": selected["termFingerprint"],
+        "candidate": sanitized_public_search_candidate(candidate)})
+    admission = request_json(args.base_url, "/downloads", api_key=args.api_key, method="POST",
+        body={"source": {"type": "content", "hash": expected_hash,
+                         "name": candidate["displayName"], "sizeBytes": candidate["sizeBytes"]},
+              "intent": "stopped"}, timeout_seconds=args.request_timeout_seconds)
+    download_id = require_download_id(admission, expected_hash=expected_hash)
+    emit_public_download_probe_event(args, {"phase": "download-created", "downloadId": download_id})
+    baseline = read_public_download(args, download_id, expected_hash)
+    emit_public_download_probe_event(args, {"phase": "download-baseline", "download": sanitized_download_proof_row(baseline)})
+    start = request_json(args.base_url, "/downloads/start", api_key=args.api_key, method="POST",
+                          body={"ids": [download_id]}, timeout_seconds=args.request_timeout_seconds)
+    receipt = require_download_batch(start, download_id)
+    emit_public_download_probe_event(args, {"phase": "start-triggered", "downloadId": download_id,
+                                          "status": receipt["status"]})
+    progress = wait_for_download_progress(args, download_id, expected_hash, initial_present_bytes=int(baseline["presentBytes"]))
+    completion = (wait_for_download_completion(args, download_id, expected_hash) if args.require_completion
+                  else {"ok": None, "skipped": True, "reason": "require-completion disabled"})
+    emit_public_download_probe_event(args, {"phase": "completion-result", "ok": completion.get("ok"),
+                                          "skipped": completion.get("skipped", False), "reason": completion.get("reason")})
     return {
-        "ok": ok,
-        "requireCompletion": args.require_completion,
-        "termGroup": args.term_group,
-        "selected": {
-            "searchIdFingerprint": text_fingerprint(search_id),
-            "termFingerprint": selected["termFingerprint"],
-            "candidate": sanitized_public_search_candidate(candidate),
-            "observations": selected["observations"],
-        },
-        "download": {
-            "ok": download.get("ok", True),
-            "hashFingerprint": text_fingerprint(download.get("hash", transfer_hash)),
-        },
-        "pausedTransfer": sanitized_transfer_proof_row(paused),
-        "resume": {
-            "hashFingerprint": text_fingerprint(resume.get("hash", transfer_hash)),
-            "state": resume.get("state"),
-            "ok": resume.get("ok", True),
-        },
-        "progress": {
-            "ok": progress.get("ok"),
-            "byteProgressObserved": progress.get("byteProgressObserved"),
-            "sourcesObserved": progress.get("sourcesObserved"),
-            "observations": progress.get("observations"),
-            "latest": sanitized_transfer_proof_row(progress.get("latest") if isinstance(progress.get("latest"), dict) else {}),
-        },
+        "ok": bool(progress["ok"]) and (bool(completion["ok"]) if args.require_completion else True),
+        "requireCompletion": args.require_completion, "termGroup": args.term_group,
+        "selected": {"searchIdFingerprint": text_fingerprint(search_id), "termFingerprint": selected["termFingerprint"],
+                     "candidate": sanitized_public_search_candidate(candidate), "observations": selected["observations"]},
+        "downloadId": download_id, "baseline": sanitized_download_proof_row(baseline),
+        "start": receipt,
+        "progress": {**progress, "latest": sanitized_download_proof_row(progress["latest"])},
         "completion": completion,
     }
 
 
-def wait_for_transfer_completion(args: argparse.Namespace, transfer_hash: str) -> dict[str, object]:
-    """Waits for a public proof transfer to complete and verifies delivered-file presence."""
-
-    observations: list[dict[str, object]] = []
+def wait_for_download_completion(args: argparse.Namespace, download_id: str, expected_hash: str) -> dict[str, object]:
+    """Verify retained completion and the recorded output file, without another-copy lookup."""
+    observations = []
     deadline = time.time() + args.completion_timeout_seconds
-    latest: dict[str, object] | None = None
+    latest = None
     while time.time() <= deadline:
-        transfer = request_json(
-            args.base_url,
-            f"/transfers/{quote(transfer_hash, safe='')}",
-            api_key=args.api_key,
-            timeout_seconds=args.request_timeout_seconds,
-        )
-        latest = transfer
-        delivered_path = Path(str(transfer.get("deliveredPath"))) if transfer.get("deliveredPath") else None
-        observations.append(
-            {
-                "observedAt": round(time.time(), 3),
-                "state": transfer.get("state"),
-                "completedBytes": safe_int(transfer.get("completedBytes")) or 0,
-                "progress": transfer.get("progress"),
-                "sources": transfer.get("sources"),
-                "sourcesTransferring": transfer.get("sourcesTransferring"),
-                "deliveredPathPresent": delivered_path is not None,
-                "deliveredFileExists": delivered_path.is_file() if delivered_path is not None else False,
-            }
-        )
-        emit_public_download_probe_event(
-            args,
-            {
-                "phase": "transfer-completion-poll",
-                "transfer": sanitized_transfer_proof_row(transfer),
-            },
-        )
-        if transfer.get("state") == "completed":
-            return {
-                "ok": delivered_path is not None and delivered_path.is_file(),
-                "observations": observations[-30:],
-                "final": sanitized_transfer_proof_row(transfer),
-            }
+        latest = read_public_download(args, download_id, expected_hash)
+        observations.append(sanitized_download_proof_row(latest))
+        del observations[:-30]
+        emit_public_download_probe_event(args, {"phase": "download-completion-poll", "download": observations[-1]})
+        if download_delivered(latest):
+            path = latest["delivery"].get("path")
+            output = Path(path) if isinstance(path, str) and path else None
+            size = latest.get("sizeBytes")
+            return {"ok": output is not None and type(size) is int and output.is_file() and output.stat().st_size == size,
+                    "observations": observations, "final": observations[-1]}
         time.sleep(args.poll_seconds)
-    return {
-        "ok": False,
-        "reason": "completion-timeout",
-        "observations": observations[-30:],
-        "final": sanitized_transfer_proof_row(latest or {}),
-    }
+    return {"ok": False, "reason": "completion-timeout", "observations": observations,
+            "final": sanitized_download_proof_row(latest or {})}
 
 
 def public_search_download_proof(args: argparse.Namespace) -> dict[str, object]:
@@ -2300,21 +2171,19 @@ def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
 
     steps: list[dict[str, object]] = []
     if args.ensure_preferences:
-        steps.append(
-            request_json_attempt(
-                args.base_url,
-                "/app/settings",
-                api_key=args.api_key,
-                method="PATCH",
-                body=rust_network_settings_patch(
-                    auto_connect=True,
-                    reconnect_enabled=True,
-                    network_ed2k=True,
-                    network_kademlia=True,
-                ),
-                timeout_seconds=args.timeout_seconds,
-            )
-        )
+        snapshot = http_json(args.base_url, "/settings", api_key=args.api_key,
+                             timeout_seconds=args.timeout_seconds)
+        saved = http_json(args.base_url, "/settings", api_key=args.api_key, method="PATCH",
+                          body=settings_patch(snapshot, set_values={"network": {
+                              "autoConnect": True, "ed2kEnabled": True, "kadEnabled": True,
+                              "servers": {"autoReconnect": True}}}),
+                          timeout_seconds=args.timeout_seconds)
+        application = saved["data"]["application"]
+        if application["failed"]:
+            raise RuntimeError("Saved P2P settings could not be applied; inspect settings application failures")
+        if application["pendingRestart"]:
+            raise RuntimeError("Saved P2P settings require a daemon restart before connecting")
+        steps.append({"ok": True, "path": "/settings", "method": "PATCH", "data": saved["data"]})
 
     deadline = time.time() + args.timeout_seconds
     final_sample: dict[str, object] | None = None
@@ -2600,7 +2469,7 @@ def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[st
     upload_requests = safe_int(metadata.get("knownUploadRequests")) or 0
     known_completed = safe_int(metadata.get("knownFilesCompleted")) or 0
     completed_downloads = safe_int(metadata.get("downloadHistoryTotal")) or 0
-    transfers_total = safe_int(metadata.get("transfersTotal")) or 0
+    download_jobs_total = safe_int(metadata.get("downloadJobsTotal")) or 0
     return {
         "ed2kConnected": sample_row.get("ed2kConnected") is True,
         "ed2kHighId": sample_row.get("ed2kHighId") is True,
@@ -2616,9 +2485,9 @@ def regular_log_status_evidence(sample_row: dict[str, object], metadata: dict[st
         "knownUploadRequests": upload_requests,
         "knownFilesCompleted": known_completed,
         "downloadHistoryTotal": completed_downloads,
-        "transfersTotal": transfers_total,
+        "downloadJobsTotal": download_jobs_total,
         "hasUploadHistory": known_uploaded > 0 or upload_accepts > 0 or upload_requests > 0,
-        "hasDownloadHistory": completed_downloads > 0 or transfers_total > 0,
+        "hasDownloadHistory": completed_downloads > 0 or download_jobs_total > 0,
     }
 
 
@@ -3061,26 +2930,32 @@ def summarize_shared_directories(
     include_fingerprints: bool = False,
     sample_limit: int = 20,
     timeout_seconds: float = 120.0,
-    shared_files_pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Returns sanitized shared-directory and shared-file totals for one client."""
 
-    directories = request_json(base_url, "/shared-directories", api_key=api_key, timeout_seconds=timeout_seconds)
+    if client == "rust":
+        root_rows = list(iter_library_roots(lambda path: request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds)))
+        item_rows = []
+        directories = request_json(base_url, "/library/scan", api_key=api_key, timeout_seconds=timeout_seconds)
+    else:
+        directories = request_json(base_url, "/shared-directories", api_key=api_key, timeout_seconds=timeout_seconds)
+        root_rows, item_rows = directories.get("roots"), directories.get("items")
     files = request_json(
         base_url,
-        shared_file_page_path(page_size=1, pagination=shared_files_pagination),
+        "/library/files?view=shared&limit=1&countTotal=true" if client == "rust" else mfc_shared_file_page_path(page_size=1),
         api_key=api_key,
         timeout_seconds=timeout_seconds,
     )
-    root_fingerprints = shared_directory_fingerprints(directories.get("roots"))
-    item_fingerprints = shared_directory_fingerprints(directories.get("items"))
+    root_fingerprints = shared_directory_fingerprints(root_rows)
+    item_fingerprints = shared_directory_fingerprints(item_rows)
     roots = summarize_shared_directory_rows(
-        directories.get("roots"),
+        root_rows,
         include_fingerprints=include_fingerprints,
         sample_limit=sample_limit,
     )
     items = summarize_shared_directory_rows(
-        directories.get("items"),
+        item_rows,
         include_fingerprints=include_fingerprints,
         sample_limit=sample_limit,
     )
@@ -3091,7 +2966,7 @@ def summarize_shared_directories(
         if isinstance(directories.get("reload"), dict)
         else {}
     )
-    total = files.get("total")
+    total = files["meta"]["total"] if client == "rust" else files.get("total")
     root_set = set(root_fingerprints)
     item_set = set(item_fingerprints)
     return {
@@ -3332,23 +3207,16 @@ def reload_shared_directories(args: argparse.Namespace) -> dict[str, object]:
 
     response = request_json(
         args.base_url,
-        "/shared-directories/operations/reload",
+        "/library/scan",
         api_key=args.api_key,
         method="POST",
         body={},
         timeout_seconds=args.request_timeout_seconds,
     )
-    if response.get("ok") is not True or response.get("started") is not True:
-        raise RuntimeError("shared-directory reload was not accepted")
-    queued = safe_int(response.get("queued"))
-    if queued is None or queued < 0:
-        raise RuntimeError("shared-directory reload response did not contain a valid queued count")
-    return {
-        "schema": "emulebb.rust-shared-directory-reload.v1",
-        "accepted": True,
-        "queued": queued,
-        "baseUrlFingerprint": text_fingerprint(args.base_url),
-    }
+    if not isinstance(response.get("reloadProgress"), dict) or safe_int(response.get("hashingCount")) is None:
+        raise RuntimeError("library scan returned invalid cached status")
+    return {"schema": "emulebb.rust-library-scan.v1", "accepted": True,
+            "baseUrlFingerprint": text_fingerprint(args.base_url)}
 
 
 def compact_shared_endpoint_summary(summary: dict[str, object], sample_limit: int) -> dict[str, object]:
@@ -3393,8 +3261,8 @@ def shared_file_hash_fingerprint(file_hash: str) -> str:
     return hashlib.sha256(file_hash.encode("ascii", errors="ignore")).hexdigest()[:16]
 
 
-def shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, object]], int | None]:
-    """Extracts one shared-files page from either envelope shape."""
+def mfc_shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, object]], int | None]:
+    """Extracts one MFC shared-files page."""
 
     items = payload.get("items")
     if not isinstance(items, list):
@@ -3403,74 +3271,57 @@ def shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, o
     return [item for item in items if isinstance(item, dict)], total
 
 
-def shared_file_page_path(*, page_size: int, pagination: str, offset: int = 0, cursor: str | None = None) -> str:
-    """Builds one client-specific shared-files page path."""
-
-    if pagination == "cursor":
-        cursor_query = "" if cursor is None else f"&cursor={quote(cursor, safe='')}"
-        return f"/shared-files?limit={page_size}{cursor_query}"
-    if pagination == "offset":
-        return f"/shared-files?offset={offset}&limit={page_size}"
-    raise ValueError(f"unsupported shared-files pagination mode: {pagination}")
+def mfc_shared_file_page_path(*, page_size: int, offset: int = 0) -> str:
+    """Build one page of the MFC native catalog."""
+    return f"/shared-files?offset={offset}&limit={page_size}"
 
 
-def iter_shared_file_pages(
-    base_url: str,
-    api_key: str,
-    *,
-    page_size: int,
-    timeout_seconds: float,
-    sleep_seconds: float,
-    pagination: str,
-):
-    """Yields complete shared-file pages using one explicit client contract."""
-
-    offset = 0
-    cursor: str | None = None
-    seen_cursors: set[str] = set()
-    observed_rows = 0
-    expected_total: int | None = None
+def iter_mfc_shared_file_pages(base_url, api_key, *, page_size, timeout_seconds, sleep_seconds):
+    """Traverse the MFC offset collection with exact total accounting."""
+    offset, expected_total = 0, None
     while True:
-        payload = request_json(
-            base_url,
-            shared_file_page_path(
-                page_size=page_size,
-                pagination=pagination,
-                offset=offset,
-                cursor=cursor,
-            ),
-            api_key=api_key,
-            timeout_seconds=timeout_seconds,
-        )
-        page, page_total = shared_file_page_items(payload)
-        if expected_total is None:
-            expected_total = page_total
-        elif page_total != expected_total:
-            raise RuntimeError("shared-files total changed during paging")
-        observed_rows += len(page)
+        payload = request_json(base_url, mfc_shared_file_page_path(page_size=page_size, offset=offset),
+                               api_key=api_key, timeout_seconds=timeout_seconds)
+        page, total = mfc_shared_file_page_items(payload)
+        if expected_total is not None and total != expected_total:
+            raise RuntimeError("MFC shared-files total changed during paging")
+        expected_total = total
+        offset += len(page)
         yield page, expected_total
-        if pagination == "cursor":
-            next_cursor = payload.get("nextCursor")
-            if next_cursor is None:
-                if expected_total is not None and observed_rows != expected_total:
-                    raise RuntimeError("shared-files cursor ended before the reported total")
-                break
-            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
-                raise RuntimeError("shared-files response contained an invalid nextCursor")
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-        else:
-            if not page:
-                if expected_total is not None and observed_rows != expected_total:
-                    raise RuntimeError("shared-files offset paging ended before the reported total")
-                break
-            offset += len(page)
-            if expected_total is not None and observed_rows >= expected_total:
-                if observed_rows != expected_total:
-                    raise RuntimeError("shared-files offset paging exceeded the reported total")
-                break
+        if not page or expected_total is not None and offset >= expected_total:
+            if expected_total is not None and offset != expected_total:
+                raise RuntimeError("MFC shared-files paging disagrees with its total")
+            return
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
+
+
+def iter_rust_library_files(base_url, api_key, *, page_size, timeout_seconds, sleep_seconds):
+    """Stream canonical hash rows through the existing bounded request owner."""
+    def fetch(path):
+        page = request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+        return page
+    yield from iter_library_files(fetch, view="shared", limit=page_size)
+
+
+def iter_shared_copy_facts(base_url, api_key, *, page_size, timeout_seconds, sleep_seconds, client):
+    """Yield comparison facts directly from each client's native resources."""
+    options = dict(page_size=page_size, timeout_seconds=timeout_seconds, sleep_seconds=sleep_seconds)
+    if client == "rust":
+        for file in iter_rust_library_files(base_url, api_key, **options):
+            locations = iter_library_locations(
+                lambda path: request_json(base_url, path, api_key=api_key, timeout_seconds=timeout_seconds),
+                file["hash"],
+            )
+            for location in locations:
+                if location["present"]:
+                    yield file["hash"], normalize_private_path(location["path"])
+    else:
+        for page, _total in iter_mfc_shared_file_pages(base_url, api_key, **options):
+            for row in page:
+                yield shared_file_row_hash(row), shared_file_row_path(row)
 
 
 def fetch_shared_file_hashes(
@@ -3480,23 +3331,19 @@ def fetch_shared_file_hashes(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Fetches all shared-file hashes without retaining names or paths."""
 
     hashes: list[str] = []
     total: int | None = None
-    for page, total in iter_shared_file_pages(
-        base_url,
-        api_key,
-        page_size=page_size,
-        timeout_seconds=timeout_seconds,
-        sleep_seconds=sleep_seconds,
-        pagination=pagination,
-    ):
-        page_hashes = [shared_file_row_hash(row) for row in page]
-        page_hashes = [file_hash for file_hash in page_hashes if file_hash]
-        hashes.extend(page_hashes)
+    options = dict(page_size=page_size, timeout_seconds=timeout_seconds, sleep_seconds=sleep_seconds)
+    if client == "rust":
+        hashes.extend(row["hash"] for row in iter_rust_library_files(base_url, api_key, **options))
+        total = len(hashes)
+    else:
+        for page, total in iter_mfc_shared_file_pages(base_url, api_key, **options):
+            hashes.extend(value for row in page if (value := shared_file_row_hash(row)))
     counts = Counter(hashes)
     duplicate_hashes = sorted(file_hash for file_hash, count in counts.items() if count > 1)
     return {
@@ -3529,34 +3376,26 @@ def fetch_shared_file_catalog(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Fetches all shared-file rows as path fingerprints and hashes only."""
 
     by_path: dict[str, str] = {}
     path_duplicates = 0
     row_count = 0
-    total: int | None = None
-    for page, total in iter_shared_file_pages(
-        base_url,
-        api_key,
-        page_size=page_size,
-        timeout_seconds=timeout_seconds,
-        sleep_seconds=sleep_seconds,
-        pagination=pagination,
+    for file_hash, path in iter_shared_copy_facts(
+        base_url, api_key, page_size=page_size, timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds, client=client,
     ):
-        for row in page:
-            file_hash = shared_file_row_hash(row)
-            path = shared_file_row_path(row)
-            if not file_hash or not path:
-                continue
-            path_fingerprint = private_path_fingerprint(path)
-            if path_fingerprint in by_path:
-                path_duplicates += 1
-            by_path[path_fingerprint] = file_hash
-        row_count += len(page)
+        row_count += 1
+        if not file_hash or not path:
+            continue
+        path_fingerprint = private_path_fingerprint(path)
+        if path_fingerprint in by_path:
+            path_duplicates += 1
+        by_path[path_fingerprint] = file_hash
     return {
-        "total": total,
+        "total": row_count,
         "rowCount": row_count,
         "pathCount": len(by_path),
         "duplicatePathCount": path_duplicates,
@@ -3564,14 +3403,8 @@ def fetch_shared_file_catalog(
     }
 
 
-def shared_root_paths(directories: dict[str, object]) -> list[str]:
-    """Returns normalized share roots used for path grouping."""
-
-    rows = directories.get("items")
-    if not isinstance(rows, list):
-        rows = directories.get("roots")
-    if not isinstance(rows, list):
-        return []
+def shared_root_paths(rows: list[dict[str, object]]) -> list[str]:
+    """Return normalized current root rows for catalog grouping."""
     roots = []
     for row in rows:
         if not isinstance(row, dict):
@@ -3649,49 +3482,45 @@ def fetch_shared_file_catalog_by_root(
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str = "cursor",
+    client: str = "rust",
 ) -> dict[str, object]:
     """Fetches shared-file catalog counts grouped by sanitized shared root."""
 
-    directories = request_json(base_url, "/shared-directories", api_key=api_key)
-    roots = shared_root_paths(directories)
+    if client == "rust":
+        rows = list(iter_library_roots(lambda path: request_json(base_url, path, api_key=api_key)))
+    else:
+        model = request_json(base_url, "/shared-directories", api_key=api_key)
+        rows = model.get("items") if isinstance(model.get("items"), list) else model.get("roots", [])
+    roots = shared_root_paths(rows)
     groups: dict[str, dict[str, object]] = {}
     unmatched_prefix_groups: dict[int, dict[str, dict[str, object]]] = {}
     row_count = 0
-    total: int | None = None
-    for page, total in iter_shared_file_pages(
-        base_url,
-        api_key,
-        page_size=page_size,
-        timeout_seconds=timeout_seconds,
-        sleep_seconds=sleep_seconds,
-        pagination=pagination,
+    for file_hash, path in iter_shared_copy_facts(
+        base_url, api_key, page_size=page_size, timeout_seconds=timeout_seconds,
+        sleep_seconds=sleep_seconds, client=client,
     ):
-        for row in page:
-            file_hash = shared_file_row_hash(row)
-            path = shared_file_row_path(row)
-            if not file_hash or not path:
-                continue
-            root = shared_root_for_path(path, roots)
-            if root == "unmatched":
-                add_unmatched_prefix_groups(unmatched_prefix_groups, path, file_hash)
-            group = groups.setdefault(
-                root,
-                {
-                    "rootFingerprint": root,
-                    "rowCount": 0,
-                    "pathFingerprints": set(),
-                    "hashes": set(),
-                },
-            )
-            group["rowCount"] = int(group["rowCount"]) + 1
-            path_fingerprints = group["pathFingerprints"]
-            hashes = group["hashes"]
-            assert isinstance(path_fingerprints, set)
-            assert isinstance(hashes, set)
-            path_fingerprints.add(private_path_fingerprint(path))
-            hashes.add(file_hash)
-        row_count += len(page)
+        row_count += 1
+        if not file_hash or not path:
+            continue
+        root = shared_root_for_path(path, roots)
+        if root == "unmatched":
+            add_unmatched_prefix_groups(unmatched_prefix_groups, path, file_hash)
+        group = groups.setdefault(
+            root,
+            {
+                "rootFingerprint": root,
+                "rowCount": 0,
+                "pathFingerprints": set(),
+                "hashes": set(),
+            },
+        )
+        group["rowCount"] = int(group["rowCount"]) + 1
+        path_fingerprints = group["pathFingerprints"]
+        hashes = group["hashes"]
+        assert isinstance(path_fingerprints, set)
+        assert isinstance(hashes, set)
+        path_fingerprints.add(private_path_fingerprint(path))
+        hashes.add(file_hash)
     compact_groups = []
     for group in groups.values():
         path_fingerprints = group["pathFingerprints"]
@@ -3708,7 +3537,7 @@ def fetch_shared_file_catalog_by_root(
         )
     compact_groups.sort(key=lambda group: (-int(group["rowCount"]), str(group["rootFingerprint"])))
     return {
-        "total": total,
+        "total": row_count,
         "rowCount": row_count,
         "rootCount": len(roots),
         "groupCount": len(compact_groups),
@@ -3717,25 +3546,23 @@ def fetch_shared_file_catalog_by_root(
     }
 
 
-def fetch_shared_file_rows(
+def fetch_mfc_shared_file_rows(
     base_url: str,
     api_key: str,
     *,
     page_size: int,
     timeout_seconds: float,
     sleep_seconds: float,
-    pagination: str,
 ) -> list[dict[str, object]]:
     """Fetches all shared-file rows from one REST endpoint."""
 
     rows: list[dict[str, object]] = []
-    for page, _total in iter_shared_file_pages(
+    for page, _total in iter_mfc_shared_file_pages(
         base_url,
         api_key,
         page_size=page_size,
         timeout_seconds=timeout_seconds,
         sleep_seconds=sleep_seconds,
-        pagination=pagination,
     ):
         rows.extend(row for row in page if isinstance(row, dict))
     return rows
@@ -3904,7 +3731,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
                 include_fingerprints=True,
                 sample_limit=args.fingerprint_sample_limit,
                 timeout_seconds=args.shared_file_timeout_seconds,
-                shared_files_pagination="offset",
+                client="mfc",
             )
         except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
             mfc = unavailable_shared_endpoint_summary("mfc", exc)
@@ -3931,7 +3758,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
-            pagination="offset",
+            client="mfc",
         )
         result["sharedFileHashes"] = {
             "rust": compact_shared_hash_summary(rust_hashes),
@@ -3956,7 +3783,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
-            pagination="offset",
+            client="mfc",
         )
         result["sharedFilePaths"] = {
             "rust": compact_shared_catalog_summary(rust_catalog),
@@ -3981,7 +3808,7 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             page_size=args.shared_file_page_size,
             timeout_seconds=args.shared_file_timeout_seconds,
             sleep_seconds=args.shared_file_sleep_seconds,
-            pagination="offset",
+            client="mfc",
         )
         result["sharedFileRootGroups"] = {
             "rust": rust_root_catalog
@@ -4001,6 +3828,26 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+def apply_rust_root_entries(args: argparse.Namespace, entries: list[object]) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Reconcile explicit resources by ID, preserving required roots and unchanged IDs."""
+    if any(not shared_root_is_recursive(entry) for entry in entries):
+        raise RuntimeError("Rust library roots are recursive; flat MFC roots require an explicit sharing decision")
+    desired = {normalize_private_path(shared_root_path(normalize_shared_root_entry(entry))): shared_root_path(normalize_shared_root_entry(entry)) for entry in entries}
+    current = list(iter_library_roots(lambda path: request_json(args.base_url, path, api_key=args.api_key, timeout_seconds=args.timeout_seconds)))
+    present = {normalize_private_path(row["path"]) for row in current}
+    # Add before retiring unrelated explicit roots. A creation conflict remains
+    # visible and never causes an automatic withdrawal of existing roots.
+    for key, path in desired.items():
+        if key not in present:
+            request_json(args.base_url, "/library/roots", api_key=args.api_key, method="POST",
+                         body={"path": path, "watchEnabled": False}, timeout_seconds=args.timeout_seconds)
+    for row in current:
+        if not row["managed"] and normalize_private_path(row["path"]) not in desired:
+            request_json(args.base_url, f"/library/roots/{row['id']}", api_key=args.api_key, method="DELETE", timeout_seconds=args.timeout_seconds)
+    rows = list(iter_library_roots(lambda path: request_json(args.base_url, path, api_key=args.api_key, timeout_seconds=args.timeout_seconds)))
+    return rows, request_json(args.base_url, "/library/scan", api_key=args.api_key, timeout_seconds=args.timeout_seconds)
+
+
 def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     """Applies MFC persisted shared-root intent to the Rust REST profile."""
 
@@ -4015,20 +3862,8 @@ def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
         extra_roots=[args.extra_root] if args.extra_root is not None else None,
     )
     existing_entries, skipped_inaccessible = existing_shared_roots(root_entries)
-    payload_roots = [
-        {"path": shared_root_path(normalize_shared_root_entry(root))}
-        for root in existing_entries
-    ]
-    response = request_json(
-        args.base_url,
-        "/shared-directories",
-        api_key=args.api_key,
-        method="PATCH",
-        body={"confirmReplaceRoots": True, "roots": payload_roots},
-        timeout_seconds=args.timeout_seconds,
-    )
-    roots = response.get("roots")
-    items = response.get("items")
+    roots, response = apply_rust_root_entries(args, existing_entries)
+    items = []
     recursive_count = sum(1 for root in existing_entries if shared_root_is_recursive(root))
     return {
         "applied": True,
@@ -4045,51 +3880,20 @@ def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
             "roots": summarize_shared_directory_rows(roots),
             "items": summarize_shared_directory_rows(items),
             "hashingCount": response.get("hashingCount"),
-            "reload": response.get("reload"),
+            "reload": response.get("reloadProgress"),
         },
     }
 
 
 def mutate_rust_shared_root(args: argparse.Namespace) -> dict[str, object]:
-    """Adds or removes one recursive Rust shared root through the live REST API."""
-
-    path = str(args.path)
+    """Create a recursive root or remove an explicit resource by immutable ID."""
     if args.operation == "add":
-        response = request_json(
-            args.base_url,
-            "/shared-directories/roots",
-            api_key=args.api_key,
-            method="POST",
-            body={"path": path},
-            timeout_seconds=args.timeout_seconds,
-        )
-    elif args.operation == "remove":
-        response = request_json(
-            args.base_url,
-            f"/shared-directories/roots?path={quote(path, safe='')}",
-            api_key=args.api_key,
-            method="DELETE",
-            timeout_seconds=args.timeout_seconds,
-        )
-    else:
-        raise RuntimeError(f"unsupported shared-root operation: {args.operation}")
-
-    roots = response.get("roots")
-    items = response.get("items")
-    root_fingerprint = private_path_fingerprint(path)
-    root_fingerprints = set(shared_directory_fingerprints(roots))
-    return {
-        "operation": args.operation,
-        "applied": True,
-        "requestedRootFingerprint": root_fingerprint,
-        "requestedRootPresent": root_fingerprint in root_fingerprints,
-        "rust": {
-            "roots": summarize_shared_directory_rows(roots),
-            "items": summarize_shared_directory_rows(items),
-            "hashingCount": response.get("hashingCount"),
-            "reload": response.get("reload"),
-        },
-    }
+        root = request_json(args.base_url, "/library/roots", api_key=args.api_key, method="POST",
+                            body={"path": str(args.path), "watchEnabled": False}, timeout_seconds=args.timeout_seconds)
+        return {"operation": "add", "applied": True, "resourceId": root["id"],
+                "requestedRootFingerprint": private_path_fingerprint(root["path"])}
+    request_json(args.base_url, f"/library/roots/{args.id}", api_key=args.api_key, method="DELETE", timeout_seconds=args.timeout_seconds)
+    return {"operation": "remove", "applied": True, "resourceId": args.id}
 
 
 def mfc_rest_shared_root_entries(
@@ -4315,20 +4119,8 @@ def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     )
     if not root_entries:
         raise RuntimeError("MFC REST returned no shared-directory entries")
-    payload_roots = [
-        {"path": shared_root_path(normalize_shared_root_entry(root))}
-        for root in root_entries
-    ]
-    response = request_json(
-        args.base_url,
-        "/shared-directories",
-        api_key=args.api_key,
-        method="PATCH",
-        body={"confirmReplaceRoots": True, "roots": payload_roots},
-        timeout_seconds=args.timeout_seconds,
-    )
-    roots = response.get("roots")
-    items = response.get("items")
+    roots, response = apply_rust_root_entries(args, root_entries)
+    items = []
     recursive_count = sum(1 for root in root_entries if shared_root_is_recursive(root))
     return {
         "applied": True,
@@ -4342,7 +4134,7 @@ def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
             "roots": summarize_shared_directory_rows(roots),
             "items": summarize_shared_directory_rows(items),
             "hashingCount": response.get("hashingCount"),
-            "reload": response.get("reload"),
+            "reload": response.get("reloadProgress"),
         },
     }
 
@@ -4361,13 +4153,12 @@ def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, ob
             known_met_source = "soak-output"
     if known_met is None or not known_met.is_file():
         raise RuntimeError("MFC known.met could not be resolved")
-    rows = fetch_shared_file_rows(
+    rows = fetch_mfc_shared_file_rows(
         args.mfc_base_url,
         args.mfc_api_key,
         page_size=args.shared_file_page_size,
         timeout_seconds=args.shared_file_timeout_seconds,
         sleep_seconds=args.shared_file_sleep_seconds,
-        pagination="offset",
     )
     root_entries = mfc_rest_shared_root_entries(
         args.mfc_base_url,
@@ -4423,13 +4214,12 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     ]
     connection = sqlite3.connect(args.metadata_db)
     try:
-        total_transfers = connection.execute("SELECT COUNT(*) FROM transfers").fetchone()[0]
-        completed_transfers = connection.execute(
-            "SELECT COUNT(*) FROM transfers WHERE completed_at_ms IS NOT NULL"
-        ).fetchone()[0]
+        unfinished_downloads, completed_downloads = connection.execute(
+            "SELECT unfinished, completed FROM download_job_counts WHERE id=1"
+        ).fetchone()
         rows = connection.execute(
             """
-            SELECT local_paths.display_path, local_file_instances.file_size, local_file_instances.verified_fingerprint
+            SELECT local_paths.display_path, local_file_instances.size_bytes, local_file_instances.verified_fingerprint
             FROM local_file_instances
             JOIN local_paths ON local_paths.id = local_file_instances.path_id
             """
@@ -4458,120 +4248,14 @@ def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
     duplicate_source_rows = sum(count for count in source_counts.values() if count > 1)
     return {
         "metadataDbExists": True,
-        "totalTransfers": total_transfers,
-        "completedTransfers": completed_transfers,
+        "downloadJobsTotal": unfinished_downloads + completed_downloads,
+        "downloadJobsUnfinished": unfinished_downloads,
+        "downloadJobsCompleted": completed_downloads,
         "localFileInstances": total_sources,
         "localFileInstancesWithMtime": with_source_mtime,
         "duplicateSourcePathCount": duplicate_source_paths,
         "duplicateSourcePathRows": duplicate_source_rows,
         "roots": roots,
-    }
-
-
-def set_shared_publish_priority_split(args: argparse.Namespace) -> dict[str, object]:
-    """Sets one source-root subset to high priority and suppresses the rest from publish."""
-
-    if not args.metadata_db.is_file():
-        raise RuntimeError("--metadata-db does not exist")
-    high_prefix = normalized_root_prefix(args.high_root)
-    connection = sqlite3.connect(args.metadata_db)
-    try:
-        # WHY: cached paths survive root withdrawal; only current eligible
-        # memberships may satisfy the guard or receive a publishing priority.
-        rows = connection.execute(
-            """
-            SELECT verified_local_content.known_file_id,
-                   verified_local_content.upload_priority,
-                   verified_local_content.auto_upload_priority,
-                   local_paths.display_path
-            FROM verified_local_content
-            JOIN local_file_instances
-              ON local_file_instances.known_file_id = verified_local_content.known_file_id
-            JOIN local_paths ON local_paths.id = local_file_instances.path_id
-            WHERE EXISTS (
-                SELECT 1 FROM shared_file_memberships AS membership
-                JOIN shared_directory_roots AS root ON root.id = membership.root_id
-                WHERE membership.path_id = local_file_instances.path_id
-                  AND membership.removed_at_ms IS NULL
-                  AND root.deleted_at_ms IS NULL
-                  AND root.enabled = 1 AND root.accessible = 1 AND root.shareable = 1
-            )
-            ORDER BY verified_local_content.known_file_id
-            """
-        ).fetchall()
-        target_by_id: dict[int, str] = {}
-        current_by_id: dict[int, tuple[str, int]] = {}
-        source_rows = 0
-        high_source_rows = 0
-        suppressed_source_rows = 0
-        for known_file_id, upload_priority, auto_upload_priority, source_path in rows:
-            known_file_id = int(known_file_id)
-            current_by_id[known_file_id] = (str(upload_priority), int(auto_upload_priority or 0))
-            target_by_id.setdefault(known_file_id, "not-published")
-            source_rows += 1
-            source_is_high = normalized_windows_path_key(source_path).startswith(high_prefix)
-            if source_is_high:
-                high_source_rows += 1
-                target_by_id[known_file_id] = "high"
-            else:
-                suppressed_source_rows += 1
-                target_by_id.setdefault(known_file_id, "not-published")
-
-        high_ids = [known_file_id for known_file_id, priority in target_by_id.items() if priority == "high"]
-        suppressed_ids = [
-            known_file_id for known_file_id, priority in target_by_id.items() if priority == "not-published"
-        ]
-        unchanged = sum(
-            1
-            for known_file_id, target_priority in target_by_id.items()
-            if current_by_id[known_file_id] == (target_priority, 0)
-        )
-
-        if not high_ids and not args.allow_empty_high_root:
-            raise RuntimeError("--high-root matched no shared source rows; refusing to suppress the whole catalog")
-
-        if not args.dry_run:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                for known_file_id in high_ids:
-                    connection.execute(
-                        """
-                        UPDATE verified_local_content
-                        SET upload_priority = 'high',
-                            auto_upload_priority = 0
-                        WHERE known_file_id = ?
-                        """,
-                        (known_file_id,),
-                    )
-                for known_file_id in suppressed_ids:
-                    connection.execute(
-                        """
-                        UPDATE verified_local_content
-                        SET upload_priority = 'not-published',
-                            auto_upload_priority = 0
-                        WHERE known_file_id = ?
-                        """,
-                        (known_file_id,),
-                    )
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-    finally:
-        connection.close()
-
-    return {
-        "schema": "emulebb-build-tests.rust-shared-publish-priority-split.v1",
-        "metadataDb": str(args.metadata_db),
-        "highRootFingerprint": private_path_fingerprint(high_prefix),
-        "matchedSharedSourceRows": source_rows,
-        "highPrioritySourceRows": high_source_rows,
-        "notPublishedSourceRows": suppressed_source_rows,
-        "matchedSharedFiles": len(target_by_id),
-        "highPriorityFiles": len(high_ids),
-        "notPublishedFiles": len(suppressed_ids),
-        "changedFiles": len(target_by_id) - unchanged,
-        "dryRun": args.dry_run,
     }
 
 
@@ -4581,8 +4265,8 @@ def source_stat_record(
     source_path: str,
     db_file_size: int,
     db_source_mtime_ms: int | None,
-    created_at_ms: int | None,
-    updated_at_ms: int | None,
+    created_at_s: int | None,
+    updated_at_s: int | None,
 ) -> dict[str, object]:
     """Compares one persisted shared-file source identity with current stat data."""
 
@@ -4591,8 +4275,8 @@ def source_stat_record(
         "pathFingerprint": private_path_fingerprint(source_path),
         "dbFileSize": db_file_size,
         "dbSourceMtimeMs": db_source_mtime_ms,
-        "createdAtMs": created_at_ms,
-        "updatedAtMs": updated_at_ms,
+        "createdAt": created_at_s,
+        "updatedAt": updated_at_s,
     }
     try:
         stat_result = os.stat(source_path)
@@ -4627,23 +4311,23 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
 
     if not args.metadata_db.is_file():
         raise RuntimeError("--metadata-db does not exist")
-    since_ms = None
+    since_s = None
     if args.since_utc:
         since_text = args.since_utc.strip().replace("Z", "+00:00")
-        since_ms = int(datetime.fromisoformat(since_text).timestamp() * 1000)
+        since_s = int(datetime.fromisoformat(since_text).timestamp())
     connection = sqlite3.connect(f"file:{args.metadata_db}?mode=ro", uri=True)
     try:
         rows = connection.execute(
             """
             SELECT local_file_instances.path_id,
                    local_paths.display_path,
-                   local_file_instances.file_size,
+                   local_file_instances.size_bytes,
                    local_file_instances.verified_fingerprint,
                    NULL,
-                   local_file_instances.verified_at_ms
+                   local_file_instances.verified_at_s
             FROM local_file_instances
             JOIN local_paths ON local_paths.id = local_file_instances.path_id
-            ORDER BY local_file_instances.verified_at_ms DESC, local_file_instances.path_id DESC
+            ORDER BY local_file_instances.verified_at_s DESC, local_file_instances.path_id DESC
             """
         ).fetchall()
     finally:
@@ -4655,7 +4339,7 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
     null_mtime_samples: list[dict[str, object]] = []
     path_counts: Counter[str] = Counter()
 
-    for row_id, source_path, db_file_size, fingerprint, created_at_ms, updated_at_ms in rows:
+    for row_id, source_path, db_file_size, fingerprint, created_at_s, updated_at_s in rows:
         db_source_mtime_ms = fingerprint_modified_ms(fingerprint)
         source_key = normalized_windows_path_key(source_path)
         path_counts[source_key] += 1
@@ -4664,18 +4348,18 @@ def metadata_source_stat_sample(args: argparse.Namespace) -> dict[str, object]:
             source_path=str(source_path),
             db_file_size=int(db_file_size),
             db_source_mtime_ms=None if db_source_mtime_ms is None else int(db_source_mtime_ms),
-            created_at_ms=None if created_at_ms is None else int(created_at_ms),
-            updated_at_ms=None if updated_at_ms is None else int(updated_at_ms),
+            created_at_s=None if created_at_s is None else int(created_at_s),
+            updated_at_s=None if updated_at_s is None else int(updated_at_s),
         )
         counters["rows"] += 1
         if record.get("exists") is True:
             counters["exists"] += 1
         else:
             counters["missing"] += 1
-        if since_ms is not None:
-            if created_at_ms is not None and int(created_at_ms) >= since_ms:
+        if since_s is not None:
+            if created_at_s is not None and int(created_at_s) >= since_s:
                 counters["createdSince"] += 1
-            if updated_at_ms is not None and int(updated_at_ms) >= since_ms:
+            if updated_at_s is not None and int(updated_at_s) >= since_s:
                 counters["updatedSince"] += 1
         if record.get("sizeMatches") is True:
             counters["sizeMatches"] += 1
@@ -4937,221 +4621,49 @@ def stop_profile_launch(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def sqlite_table_names(connection: sqlite3.Connection) -> set[str]:
-    """Returns table names in one SQLite database."""
-
-    rows = connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-    return {str(row[0]) for row in rows}
-
-
-def sqlite_columns(connection: sqlite3.Connection, table: str) -> set[str]:
-    """Returns columns for one SQLite table."""
-
-    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
-
-
-def sqlite_count_table(connection: sqlite3.Connection, tables: set[str], table: str) -> int | None:
-    """Counts one table if it exists."""
-
-    if table not in tables:
-        return None
-    return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-
-
-def first_present_int(*values: int | None) -> int | None:
-    """Returns the first non-None integer, preserving zero counts."""
-
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
-def sqlite_count_truthy(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    candidate_columns: tuple[str, ...],
-) -> int | None:
-    """Counts rows where the first available candidate column is truthy."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    for column in candidate_columns:
-        if column in columns:
-            return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} != 0").fetchone()[0])
-    return None
-
-
-def sqlite_count_all_truthy(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    candidate_columns: tuple[str, ...],
-) -> int | None:
-    """Counts rows where all listed columns are present and truthy."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    selected = [column for column in candidate_columns if column in columns]
-    if not selected:
-        return None
-    predicate = " AND ".join(f"{column} != 0" for column in selected)
-    return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {predicate}").fetchone()[0])
-
-
-def sqlite_count_truthy_with_null(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    truthy_columns: tuple[str, ...],
-    null_columns: tuple[str, ...],
-) -> int | None:
-    """Counts rows where present truthy columns are true and present null columns are NULL."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    predicates = [f"{column} != 0" for column in truthy_columns if column in columns]
-    predicates.extend(f"{column} IS NULL" for column in null_columns if column in columns)
-    if not predicates:
-        return None
-    return int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {' AND '.join(predicates)}").fetchone()[0])
-
-
-def sqlite_sum_column(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    candidate_columns: tuple[str, ...],
-) -> int | None:
-    """Sums the first available candidate column from one table."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    for column in candidate_columns:
-        if column in columns:
-            value = connection.execute(f"SELECT COALESCE(SUM({column}), 0) FROM {table}").fetchone()[0]
-            return int(value or 0)
-    return None
-
-
-def sqlite_sum_column_where_truthy(
-    connection: sqlite3.Connection,
-    tables: set[str],
-    table: str,
-    sum_columns: tuple[str, ...],
-    truthy_columns: tuple[str, ...],
-) -> int | None:
-    """Sums the first available sum column where the first truthy column is true."""
-
-    if table not in tables:
-        return None
-    columns = sqlite_columns(connection, table)
-    sum_column = next((column for column in sum_columns if column in columns), None)
-    if sum_column is None:
-        return None
-    truthy_column = next((column for column in truthy_columns if column in columns), None)
-    if truthy_column is None:
-        value = connection.execute(f"SELECT COALESCE(SUM({sum_column}), 0) FROM {table}").fetchone()[0]
-    else:
-        value = connection.execute(
-            f"SELECT COALESCE(SUM({sum_column}), 0) FROM {table} WHERE {truthy_column} != 0"
-        ).fetchone()[0]
-    return int(value or 0)
-
-
 def rust_metadata_counts(metadata_db: Path) -> dict[str, object]:
-    """Returns compact persisted Rust metadata counters."""
+    """Read current-schema counters from one read-only SQLite snapshot."""
 
     if not metadata_db.is_file():
         return {"metadataDb": str(metadata_db), "metadataDbExists": False}
-    connection = sqlite3.connect(metadata_db)
+    queries = {
+        "knownFilesTotal": "SELECT COUNT(*) FROM known_files",
+        "knownFilesCompleted": "SELECT COUNT(*) FROM verified_local_content",
+        "knownCompletedBytes": "SELECT coalesce(sum(k.size_bytes), 0) FROM known_files k JOIN verified_local_content v ON v.known_file_id=k.id",
+        "knownUploadedBytes": "SELECT coalesce(sum(all_time_uploaded_bytes), 0) FROM known_files",
+        "knownUploadRequests": "SELECT coalesce(sum(all_time_upload_requests), 0) FROM known_files",
+        "knownUploadAccepts": "SELECT coalesce(sum(all_time_upload_accepts), 0) FROM known_files",
+        "downloadJobsTotal": "SELECT unfinished+completed FROM download_job_counts WHERE id=1",
+        "downloadJobsUnfinished": "SELECT unfinished FROM download_job_counts WHERE id=1",
+        "downloadJobsCompleted": "SELECT completed FROM download_job_counts WHERE id=1",
+        "downloadHistoryTotal": "SELECT COUNT(*) FROM download_history",
+        "sharedRootsTotal": "SELECT COUNT(*) FROM shared_directory_roots",
+        "sharedRootsEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE enabled!=0",
+        "sharedRootsAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE enabled!=0 AND accessible!=0",
+        "sharedRootsActive": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_s IS NULL",
+        "sharedRootsActiveEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_s IS NULL AND enabled!=0",
+        "sharedRootsActiveAccessibleEnabled": "SELECT COUNT(*) FROM shared_directory_roots WHERE deleted_at_s IS NULL AND enabled!=0 AND accessible!=0",
+        "serversTotal": "SELECT COUNT(*) FROM servers",
+        "kadBootstrapEndpoints": "SELECT COUNT(*) FROM kad_bootstrap_endpoints",
+        "peersTotal": "SELECT COUNT(*) FROM peers",
+        "downloadSourcesTotal": "SELECT COUNT(*) FROM download_job_sources",
+        "ed2kPartHashRows": "SELECT COUNT(*) FROM download_job_md4_part_hashes",
+        "aichPartHashRows": "SELECT COUNT(*) FROM download_job_aich_part_hashes",
+        "kadKeywordPublishRows": "SELECT COUNT(*) FROM kad_keyword_publishes",
+        "kadSourcePublishRows": "SELECT COUNT(*) FROM kad_source_publishes",
+    }
+    connection = sqlite3.connect(metadata_db.resolve().as_uri() + "?mode=ro", uri=True)
     try:
-        tables = sqlite_table_names(connection)
-        return {
-            "metadataDb": str(metadata_db),
-            "metadataDbExists": True,
-            "knownFilesTotal": sqlite_count_table(connection, tables, "known_files"),
-            "knownFilesCompleted": sqlite_count_table(connection, tables, "verified_local_content"),
-            "knownCompletedBytes": (
-                connection.execute(
-                    "SELECT coalesce(sum(known_files.size_bytes), 0) FROM known_files "
-                    "JOIN verified_local_content ON verified_local_content.known_file_id = known_files.id"
-                ).fetchone()[0]
-                if {"known_files", "verified_local_content"} <= tables
-                else None
-            ),
-            "knownUploadedBytes": sqlite_sum_column(
-                connection,
-                tables,
-                "known_files",
-                ("uploaded_bytes", "all_time_uploaded_bytes"),
-            ),
-            "knownUploadRequests": sqlite_sum_column(
-                connection,
-                tables,
-                "known_files",
-                ("upload_requests", "all_time_upload_requests"),
-            ),
-            "knownUploadAccepts": sqlite_sum_column(
-                connection,
-                tables,
-                "known_files",
-                ("upload_accepts", "all_time_upload_accepts"),
-            ),
-            "transfersTotal": sqlite_count_table(connection, tables, "transfers"),
-            "downloadHistoryTotal": sqlite_count_table(connection, tables, "download_history"),
-            "sharedRootsTotal": first_present_int(
-                sqlite_count_table(connection, tables, "shared_directory_roots"),
-                sqlite_count_table(connection, tables, "shared_roots"),
-                sqlite_count_table(connection, tables, "shared_directories"),
-            ),
-            "sharedRootsEnabled": sqlite_count_all_truthy(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled",),
-            ),
-            "sharedRootsAccessibleEnabled": sqlite_count_all_truthy(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled", "accessible"),
-            ),
-            "sharedRootsActive": sqlite_count_truthy_with_null(
-                connection,
-                tables,
-                "shared_directory_roots",
-                tuple(),
-                ("deleted_at_ms",),
-            ),
-            "sharedRootsActiveEnabled": sqlite_count_truthy_with_null(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled",),
-                ("deleted_at_ms",),
-            ),
-            "sharedRootsActiveAccessibleEnabled": sqlite_count_truthy_with_null(
-                connection,
-                tables,
-                "shared_directory_roots",
-                ("enabled", "accessible"),
-                ("deleted_at_ms",),
-            ),
-            "serversTotal": sqlite_count_table(connection, tables, "servers"),
-            "kadBootstrapEndpoints": sqlite_count_table(connection, tables, "kad_bootstrap_endpoints"),
-            "peersTotal": sqlite_count_table(connection, tables, "peers"),
-            "transferSourcesTotal": sqlite_count_table(connection, tables, "transfer_sources"),
-            "ed2kPartHashRows": sqlite_count_table(connection, tables, "transfer_md4_part_hashes"),
-            "aichPartHashRows": sqlite_count_table(connection, tables, "transfer_aich_part_hashes"),
-            "kadKeywordPublishRows": sqlite_count_table(connection, tables, "kad_keyword_publishes"),
-            "kadSourcePublishRows": sqlite_count_table(connection, tables, "kad_source_publishes"),
-        }
+        # WHY: a live profile can commit between queries; one read transaction
+        # keeps job totals and supporting diagnostics in the same snapshot.
+        connection.execute("BEGIN")
+        result: dict[str, object] = {"metadataDb": str(metadata_db), "metadataDbExists": True}
+        for name, query in queries.items():
+            row = connection.execute(query).fetchone()
+            if row is None:
+                raise RuntimeError("current profile is missing its durable download counters")
+            result[name] = int(row[0])
+        return result
     finally:
         connection.close()
 
@@ -7141,21 +6653,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     public_download_parser.set_defaults(func=public_search_download_proof)
 
-    transfer_debug_parser = sub.add_parser(
-        "public-transfer-debug-summary",
-        help="Print sanitized transfer/source diagnostics for one transfer hash fingerprint.",
+    download_debug_parser = sub.add_parser(
+        "public-download-debug-summary",
+        help="Print sanitized download/source diagnostics for one job ID.",
     )
-    transfer_debug_parser.add_argument("--hash-fingerprint", required=True)
-    transfer_debug_parser.add_argument("--page-limit", type=int, default=1000)
-    transfer_debug_parser.add_argument("--max-offset", type=int, default=50000)
-    transfer_debug_parser.add_argument("--source-sample-limit", type=int, default=20)
-    transfer_debug_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
-    transfer_debug_parser.add_argument(
+    download_debug_parser.add_argument("--download-id", required=True)
+    download_debug_parser.add_argument("--source-sample-limit", type=int, default=20)
+    download_debug_parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
+    download_debug_parser.add_argument(
         "--json-output",
         type=Path,
-        help="Write the sanitized transfer/source diagnostics to this JSON path.",
+        help="Write the sanitized download/source diagnostics to this JSON path.",
     )
-    transfer_debug_parser.set_defaults(func=public_transfer_debug_summary)
+    download_debug_parser.set_defaults(func=public_download_debug_summary)
 
     shared_summary_parser = sub.add_parser(
         "shared-summary",
@@ -7193,7 +6703,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include every sanitized per-root group when comparing shared-file roots.",
     )
-    shared_summary_parser.add_argument("--shared-file-page-size", type=int, default=1000)
+    shared_summary_parser.add_argument("--shared-file-page-size", type=int, default=200)
     shared_summary_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
     shared_summary_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
     shared_summary_parser.set_defaults(func=shared_summary)
@@ -7255,7 +6765,7 @@ def build_parser() -> argparse.ArgumentParser:
         "remove-shared-root",
         help="Remove one shared root from the live Rust profile.",
     )
-    remove_root_parser.add_argument("--path", type=Path, required=True)
+    remove_root_parser.add_argument("--id", required=True)
     remove_root_parser.add_argument("--timeout-seconds", type=float, default=120.0)
     remove_root_parser.set_defaults(func=mutate_rust_shared_root, operation="remove")
 
@@ -7322,16 +6832,6 @@ def build_parser() -> argparse.ArgumentParser:
     metadata_summary_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
     metadata_summary_parser.add_argument("--root", action="append", type=Path, default=[])
     metadata_summary_parser.set_defaults(func=metadata_source_summary)
-
-    priority_split_parser = sub.add_parser(
-        "set-shared-publish-priority-split",
-        help="Set one source-root subset high and all other shared files not-published.",
-    )
-    priority_split_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
-    priority_split_parser.add_argument("--high-root", type=Path, required=True)
-    priority_split_parser.add_argument("--allow-empty-high-root", action="store_true")
-    priority_split_parser.add_argument("--dry-run", action="store_true")
-    priority_split_parser.set_defaults(func=set_shared_publish_priority_split)
 
     metadata_stat_parser = sub.add_parser(
         "metadata-source-stat-sample",

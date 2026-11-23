@@ -9,6 +9,8 @@ import re
 import shlex
 
 from .android_apk_lifecycle import admit_production_certificate
+from .rust_rest_contract import iter_library_roots, settings_patch
+from .vm_guest_profiles import http_json
 
 INCOMING = "/storage/emulated/0/Download/eMuleBB/Incoming"
 SHARED = "/storage/emulated/0/Download/eMuleBB/Shared"
@@ -43,8 +45,7 @@ def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, pa
         return command(*prefix, "shell", *args)
 
     def roots():
-        document = request_json(base_url, "GET", "/api/v1/shared-directories", api_key)
-        value = document.get("roots")
+        value = [root for root in iter_library_roots(lambda path: request_json(base_url, "GET", "/api/v1" + path, api_key)) if not root["managed"]]
         if not isinstance(value, list) or any(not isinstance(root, dict) or not isinstance(root.get("path"), str) for root in value):
             raise RuntimeError("Invalid shared-root configuration")
         return {root["path"] for root in value}
@@ -61,22 +62,26 @@ def configure_storage(command, *, prefix: tuple, base_url: str, api_key: str, pa
         for alias, expected in (("/sdcard/Download/eMuleBB/Incoming", INCOMING), ("/sdcard/Download/eMuleBB/Shared", SHARED)):
             if shell("readlink", "-f", alias) != expected:
                 raise RuntimeError("Approved phone storage path is redirected")
-        request_json(base_url, "PATCH", "/api/v1/app/settings", api_key, {"daemon": {"incomingDir": INCOMING}})
-        if request_json(base_url, "GET", "/api/v1/app/settings", api_key).get("daemon", {}).get("incomingDir") != INCOMING:
+        snapshot = http_json(base_url, "/api/v1/settings", api_key=api_key)
+        updated = http_json(base_url, "/api/v1/settings", api_key=api_key, method="PATCH",
+                            body=settings_patch(snapshot, set_values={"storage": {"incomingDirectory": INCOMING}}))["data"]
+        if (updated["saved"]["storage"]["incomingDirectory"]["value"] != INCOMING
+                or updated["application"]["failed"]):
             raise RuntimeError("Approved incoming setting was not persisted")
         receipt["incomingPersisted"] = True
-        # The live core incoming path is immutable. Its old implicit parent
-        # would otherwise cause add_shared_directory_root to ignore Shared.
+        # Storage applies on service restart, before admission of sharing roots.
         restart_service()
         restarted = request_json(base_url, "GET", "/api/v1/app", api_key)
         if any(restarted.get(name) != value for name, value in payload["buildIdentity"].items()):
             raise RuntimeError("Restarted configuration source identity differs")
         if SHARED not in before_roots:
-            request_json(base_url, "POST", "/api/v1/shared-directories/roots", api_key, {"path": SHARED})
-        settings = request_json(base_url, "GET", "/api/v1/app/settings", api_key)
+            request_json(base_url, "POST", "/api/v1/library/roots", api_key, {"path": SHARED})
+        settings = http_json(base_url, "/api/v1/settings", api_key=api_key)["data"]
         after_roots = roots()
         after_entries = set(shell("ls", "-A", "/sdcard/Download/eMuleBB").splitlines())
-        if (settings.get("daemon", {}).get("incomingDir") != INCOMING or SHARED not in after_roots
+        if (settings["effective"]["storage"]["incomingDirectory"] != INCOMING
+                or settings["saved"]["storage"]["incomingDirectory"]["value"] != INCOMING
+                or settings["application"]["pendingRestart"] or settings["application"]["failed"] or SHARED not in after_roots
                 or not before_roots <= after_roots or not before_entries <= after_entries):
             raise RuntimeError("Approved storage configuration was not preserved or persisted")
         receipt.update(status="passed", priorRootsPreserved=True, rootEntriesPreserved=True,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import struct
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -235,3 +236,74 @@ class Ed2kFileObserver:
             timeout_seconds,
             resolve,
         )
+
+
+class Ed2kFilePeerObserver:
+    """Observe sharing on one persistent peer connection using the wire client."""
+
+    def __init__(self, host: str, port: int, timeout_seconds: float = 5.0):
+        self.client = ed2k_wire.Ed2kWireClient(host, port, timeout_seconds, peer_protocol=True)
+
+    def __enter__(self):
+        from .buddy_callback_probe import encode_hello_request
+        try:
+            self.client.connect()
+            hello = ed2k_wire.decode_frame_bytes(encode_hello_request(
+                user_hash=OBSERVER_HASH, client_id=0x0100007F, tcp_port=OBSERVER_PORT))
+            self.client.send(hello.opcode, hello.payload)
+            answer = self.client.receive_until({0x4C})
+            if answer.marker != ed2k_wire.PROTO_EDONKEY or len(answer.payload) < 32:
+                raise ValueError("Invalid peer HELLOANSWER")
+            return self
+        except BaseException:
+            self.client.close()
+            raise
+
+    def __exit__(self, _kind, _value, _traceback):
+        self.client.close()
+
+    @property
+    def transcript(self):
+        return self.client.transcript
+
+    def _reply(self, file_hash: bytes, opcodes: set[int]):
+        reply = self.client.receive_until(opcodes)
+        if reply.marker != ed2k_wire.PROTO_EDONKEY or reply.payload[:16] != file_hash:
+            raise ValueError("Peer file response has a different protocol or hash")
+        return reply
+
+    def filename_available(self, file_hash: str) -> bool:
+        """Request a filename; false requires an explicit OP_FILEREQANSNOFIL."""
+        value = parse_file_hash(file_hash)
+        self.client.send(0x58, value)
+        reply = self._reply(value, {0x59, 0x48})
+        if reply.opcode == 0x59 and (len(reply.payload) < 18 or len(reply.payload) != 18 + struct.unpack_from("<H", reply.payload, 16)[0]):
+            raise ValueError("Peer returned an invalid filename answer")
+        return reply.opcode == 0x59
+
+    def start_upload(self, file_hash: str) -> bool:
+        """Require an upload grant or an explicit file refusal on this connection."""
+        value = parse_file_hash(file_hash)
+        self.client.send(0x54, value)
+        reply = self.client.receive_until({0x55, 0x48})
+        if reply.marker != ed2k_wire.PROTO_EDONKEY:
+            raise ValueError("Upload grant has a different protocol")
+        if reply.opcode == 0x48 and reply.payload != value:
+            raise ValueError("Upload refusal has a different hash")
+        return reply.opcode == 0x55
+
+    def request_range(self, file_hash: str, start: int, end: int) -> bytes | None:
+        """Request one small stock block; refusal requires an explicit no-file reply."""
+        if not 0 <= start < end <= 0xFFFFFFFF or end - start > 184_320:
+            raise ValueError("Peer observation requires one bounded 32-bit block")
+        value = parse_file_hash(file_hash)
+        self.client.send(0x47, value + struct.pack("<6I", start, 0, 0, end, 0, 0))
+        reply = self._reply(value, {0x46, 0x48})
+        if reply.opcode == 0x48:
+            return None
+        if len(reply.payload) < 24 or struct.unpack_from("<II", reply.payload, 16) != (start, end):
+            raise ValueError("Peer returned a different upload range")
+        data = reply.payload[24:]
+        if len(data) != end - start:
+            raise ValueError("Peer returned an incomplete upload range")
+        return data

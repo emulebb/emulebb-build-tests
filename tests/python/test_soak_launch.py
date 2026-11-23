@@ -408,7 +408,7 @@ def test_bring_up_rust_cleans_process_on_connection_timeout(tmp_path: Path, monk
     monkeypatch.setattr(soak_launch, "write_rust_profile", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "start_rust_client_executable_with_output", fake_start)
     monkeypatch.setattr(soak_launch, "wait_until", fake_wait_until)
-    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "patch_rust_upload_limit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "stop_process_tree", lambda process: stopped.append(process))
@@ -461,7 +461,7 @@ def test_bring_up_rust_passes_direct_bind_and_nat_policy(tmp_path: Path, monkeyp
         lambda *_args, **_kwargs: type("FakeProcess", (), {"pid": 5151})(),
     )
     monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
-    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "patch_rust_upload_limit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: {})
 
@@ -485,11 +485,11 @@ def test_bring_up_rust_passes_direct_bind_and_nat_policy(tmp_path: Path, monkeyp
         nat_enabled=False,
     )
 
-    assert captured["p2p_bind_ip"] == "192.0.2.10"
-    assert captured["p2p_bind_interface"] is None
-    assert captured["nat_enabled"] is False
+    assert captured["settings"]["network.p2p.bindIp"] == "192.0.2.10"
+    assert captured["settings"]["network.p2p.bindInterface"] is None
+    assert captured["settings"]["network.nat.enabled"] is False
     assert (
-        captured["server_keepalive_minutes"]
+        captured["settings"]["network.servers.keepaliveMinutes"]
         == soak_launch.STOCK_SERVER_KEEPALIVE_MINUTES
         == 20
     )
@@ -543,7 +543,7 @@ def test_bring_up_rust_preserves_daemon_identity_with_bounded_binary_output(
     monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
     monkeypatch.setattr(
         soak_launch,
-        "patch_upload_limit",
+        "patch_rust_upload_limit",
         lambda *_args, **_kwargs: actions.append("upload-limit"),
     )
     monkeypatch.setattr(soak_launch, "retry_http_json", fake_retry)
@@ -701,7 +701,7 @@ def test_bring_up_rust_can_reuse_existing_shared_profile(tmp_path: Path, monkeyp
         lambda _exe_path, _profile_dir, _handle, **_kwargs: fake_process,
     )
     monkeypatch.setattr(soak_launch, "wait_until", lambda _description, _timeout, predicate: predicate() or {})
-    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "patch_rust_upload_limit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: None)
 
@@ -771,7 +771,7 @@ def test_bring_up_rust_tries_explicit_fallback_server_after_primary_timeout(
         lambda _exe_path, _profile_dir, _handle, **_kwargs: FakeProcess(),
     )
     monkeypatch.setattr(soak_launch, "wait_until", fake_wait_until)
-    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(soak_launch, "patch_rust_upload_limit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "retry_http_json", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(soak_launch, "connect_operator_server", fake_connect)
 

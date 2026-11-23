@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import (
     nat_live_matrix,
+    rust_client,
     server_failure_accounting,
     vpn_transfer_completion,
 )
@@ -145,28 +146,6 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def container_delivery_matches(
-    container: str, expected_size: int, expected_sha256: str
-) -> bool:
-    candidates = docker(
-        "exec",
-        container,
-        "find",
-        "/data/ed2k",
-        "-type",
-        "f",
-        "-size",
-        f"{expected_size}c",
-        "-print0",
-    ).stdout.split("\0")
-    for candidate in filter(None, candidates):
-        digest = docker(
-            "exec", container, "sha256sum", "--", candidate
-        ).stdout.split()[0].lower()
-        if digest == expected_sha256:
-            return True
-    return False
-
 
 def container_logs(container: str) -> str:
     result = docker("logs", container)
@@ -276,8 +255,13 @@ def main() -> int:
         report["captureImageId"] = docker("image", "inspect", args.capture_image,
                                            "--format", "{{.Id}}").stdout.strip()
         started = True
-        command(*compose, "up", "--detach", "--no-build", "--pull", "never",
+        command(*compose, "up", "--detach", "--no-build", "--pull", "never", "gluetun",
                 env=env, timeout=300)
+        rust_client.prepare_container_profile(command, compose, env=env, settings={
+            "network.p2p.bindInterface": "tun0", "security.vpnGuard.mode": "block",
+        })
+        command(*compose, "up", "--detach", "--no-build", "--pull", "never",
+                "emulebb-rust", env=env, timeout=300)
         gluetun = command(*compose, "ps", "--quiet", "gluetun", env=env).stdout.strip()
         rust = command(*compose, "ps", "--quiet", "emulebb-rust", env=env).stdout.strip()
         if not gluetun or not rust:
@@ -321,11 +305,8 @@ def main() -> int:
             time.sleep(2)
         health = docker("inspect", "--format", "{{.State.Health.Status}}", gluetun).stdout.strip()
         tun = docker("exec", gluetun, "ip", "-4", "-o", "addr", "show", "dev", "tun0")
-        processes = docker("top", rust).stdout
         if health != "healthy" or not tun.stdout.strip():
             raise RuntimeError("Gluetun is not healthy with an IPv4 tun0")
-        if "--p2p-bind-interface tun0" not in processes:
-            raise RuntimeError("Rust daemon was not pinned to tun0")
         tun_ip = nat_live_matrix.tunnel_ipv4(tun.stdout)
         tun_route_table = docker(
             "exec", gluetun, "ip", "-4", "route", "show", "dev", "tun0"
@@ -337,6 +318,10 @@ def main() -> int:
         settings = docker("exec", rust, "cat",
                           "/config/emulebb-rust/emulebb-rust-settings.toml").stdout
         api_key = tomllib.loads(settings)["rest"]["api_key"]
+        effective = response_data(request_json("http://127.0.0.1:20017/api/v1/settings", api_key))["effective"]
+        if (effective["network"]["p2p"]["bindInterface"] != "tun0"
+                or effective["security"]["vpnGuard"]["mode"] != "block"):
+            raise RuntimeError("Rust effective settings do not bind and guard tun0")
         status = request_json("http://127.0.0.1:20017/api/v1/status", api_key)
         report["tunnelHealthy"] = True
         report["p2pInterfacePinned"] = True
@@ -345,7 +330,7 @@ def main() -> int:
         if args.nat_matrix:
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
                 return request_json(
-                    api + "/app/settings",
+                    api + "/settings",
                     api_key,
                     method="PATCH",
                     payload=payload,
@@ -374,6 +359,7 @@ def main() -> int:
                     time.sleep(2)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
+                read_settings=lambda: request_json(api + "/settings", api_key, timeout=90),
                 apply_settings=apply_nat_settings,
                 restart_daemon=restart_for_nat,
                 read_nat_status=lambda: request_json(
@@ -408,17 +394,17 @@ def main() -> int:
             transfer = vpn_transfer_completion.load_exact_transfer(args.inputs)
             report["transferCompletion"] = vpn_transfer_completion.wait_for_completion(
                 row=transfer,
-                create_transfer=lambda payload: request_json(
-                    api + "/transfers",
+                create_download=lambda payload: response_data(request_json(
+                    api + "/downloads",
                     api_key,
                     method="POST",
                     payload=payload,
+                )),
+                read_download=lambda download_id: response_data(
+                    request_json(api + f"/downloads/{download_id}", api_key)
                 ),
-                read_transfer=lambda file_hash: response_data(
-                    request_json(api + f"/transfers/{file_hash}", api_key)
-                ),
-                verify_delivered_sha256=lambda size, digest: container_delivery_matches(
-                    rust, size, digest
+                verify_delivered_sha256=lambda path, size, digest: vpn_transfer_completion.container_delivery_matches(
+                    docker, rust, path, size, digest
                 ),
                 read_daemon_logs=lambda: container_logs(rust),
                 timeout_seconds=args.transfer_timeout_seconds,

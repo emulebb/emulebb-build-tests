@@ -110,7 +110,8 @@ def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:
     assert "localStorage" not in read_script
 
 
-@pytest.mark.parametrize("failure", [None, "automatic", "cancel", "body", "size", "hash", "duplicate", "cleanup", "body-cleanup"])
+@pytest.mark.parametrize("failure", [None, "automatic", "cancel", "body", "size", "hash", "duplicate", "cleanup", "body-cleanup",
+    "creation-200", "creation-id", "creation-hash"])
 def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_size(monkeypatch, failure):
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -119,9 +120,9 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
 
     file_hash = "00112233445566778899aabbccddeeff"
     link = f"ed2k://|file|Android%20Intent%20Sample.bin|1|{file_hash}|/"
-    baseline = [{"hash": "b" * 32, "sizeBytes": 262144, "state": "completed"}]
+    baseline = [{"id": "7", "hash": "b" * 32, "sizeBytes": 262144, "state": "completed"}]
     items = list(baseline)
-    calls = []
+    calls, removals = [], []
     cleanup = {}
 
     class Page:
@@ -139,13 +140,13 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             self.observer = None
 
         def post(self):
-            body = {"links": [link], "paused": True, "knownFilePolicy": "reject"}
+            body = {"source": {"type": "ed2k-link", "link": link}, "intent": "stopped"}
             if failure in {"body", "body-cleanup"}:
-                body = {"link": link, "paused": True}
-            self.observer(SimpleNamespace(method="POST", url="http://127.0.0.1:1234/api/v1/transfers",
+                body = {"source": {"type": "ed2k-link"}, "intent": "stopped"}
+            self.observer(SimpleNamespace(method="POST", url="http://127.0.0.1:1234/api/v1/downloads",
                                           post_data_json=body))
-            items.append({"hash": "c" * 32 if failure == "hash" else file_hash,
-                          "sizeBytes": 2 if failure == "size" else 1, "state": "paused"})
+            items.append({"id": "8", "hash": "c" * 32 if failure == "hash" else file_hash,
+                          "sizeBytes": 2 if failure == "size" else 1, "intent": "stopped"})
 
         def goto(self, url, **kwargs):
             self.value = parse_qs(urlparse(url).fragment)["ed2k"][0]
@@ -160,7 +161,7 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             return self.control("key")
 
         def get_by_label(self, name, **kwargs):
-            assert name in {"eD2K links", "Paused"}
+            assert name in {"eD2K links", "Stopped"}
             return self.control(name)
 
         def control(self, name):
@@ -187,12 +188,16 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
 
         @contextmanager
         def expect_response(self, predicate, **kwargs):
-            response = SimpleNamespace(ok=True, request=SimpleNamespace(method="POST"),
-                                       url="http://127.0.0.1:1234/api/v1/transfers")
+            response = SimpleNamespace(ok=True, status=200 if failure == "creation-200" else 201,
+                                       request=SimpleNamespace(method="POST"),
+                                       url="http://127.0.0.1:1234/api/v1/downloads",
+                                       json=lambda: {"data": {"id": "0" if failure == "creation-id" else "8",
+                                           "hash": "c" * 32 if failure == "creation-hash" else file_hash, "sizeBytes": 1}})
             assert predicate(response)
             yield SimpleNamespace(value=response)
 
-    monkeypatch.setattr(rust_webui_live_proof, "api_data", lambda *args: {"items": list(items)})
+    monkeypatch.setattr(rust_webui_live_proof, "api_document", lambda *args: {
+        "data": list(items), "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}})
 
     def wait(description, timeout_seconds, probe):
         result = probe()
@@ -200,11 +205,15 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             raise RuntimeError("confirmed file-link transfer was not persisted")
         return result
 
-    def delete(base, method, path, key):
-        assert method == "DELETE" and path == f"/api/v1/transfers/{file_hash}/files?confirm=true"
+    def delete(base, method, path, key, body, *, expected_status):
+        removals.append(body)
+        assert method == "POST" and path == "/api/v1/downloads/remove"
+        assert expected_status == 207
+        assert body == {"ids": ["8"], "deleteData": True}
         if failure in {"cleanup", "body-cleanup"}:
             raise ValueError("synthetic-private-key-not-for-receipts")
-        items[:] = [item for item in items if item["hash"] != file_hash]
+        items[:] = [item for item in items if item["id"] != "8"]
+        return {"data": [{"id": "8", "status": "accepted", "httpStatus": 200}]}
 
     monkeypatch.setattr(rust_webui_live_proof, "_wait_for_api", wait)
     monkeypatch.setattr(rust_local_ed2k, "request_json", delete)
@@ -214,18 +223,23 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
         with pytest.raises(RuntimeError, match={"automatic": "before authentication", "cancel": "cancellation",
             "body": "exact requested", "body-cleanup": "exact requested", "size": "not persisted", "hash": "not persisted",
             "duplicate": "automatically changed",
-            "cleanup": "cleanup failed"}[failure]):
+            "cleanup": "cleanup failed", "creation-200": "exact requested",
+            "creation-id": "exact requested", "creation-hash": "exact requested"}[failure]):
             rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
     else:
         result = rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
-        assert result["status"] == "passed" and result["transferHash"] == file_hash and result["sizeBytes"] == 1
+        assert result["status"] == "passed" and result["downloadId"] == "8" and result["sizeBytes"] == 1
         from emule_test_harness.android_apk_lifecycle import FILE_LINK_BROWSER_REQUIRED_CHECKS
         assert FILE_LINK_BROWSER_REQUIRED_CHECKS == frozenset({
             "signInPreserved", "cancelWithoutEnqueue", "explicitConfirmation", "repeatedNavigationWithoutEnqueue"})
         assert all(result[name] is True for name in FILE_LINK_BROWSER_REQUIRED_CHECKS)
         assert calls == ["Connect", "Cancel links", "Add links", "Cancel links"]
-    assert cleanup["status"] == ("failed" if failure in {"cleanup", "body-cleanup", "hash"} else "passed")
-    if failure not in {"cleanup", "body-cleanup", "hash"}:
+    assert cleanup["status"] == ("failed" if failure in {"automatic", "cancel", "duplicate", "body", "cleanup", "body-cleanup",
+        "creation-200", "creation-id", "creation-hash"} else "passed")
+    if failure in {"automatic", "cancel", "body", "body-cleanup", "creation-200", "creation-id", "creation-hash"}:
+        assert removals == [], "an unreceipted enqueue must not grant deletion authority"
+    if failure not in {"automatic", "cancel", "duplicate", "body", "cleanup", "body-cleanup",
+            "creation-200", "creation-id", "creation-hash"}:
         assert items == baseline
 
 
@@ -312,23 +326,20 @@ def test_matched_shared_catalog_requires_exact_fixture_identity() -> None:
         ),
     )
     matched = rust_webui_live_proof._matched_shared_catalog(
-        {
-            "items": [
+        [
                 {
-                    "name": "nested.bin",
+                    "displayName": "nested.bin",
                     "sizeBytes": 64,
                     "hash": "b" * 32,
-                    "ed2kLink": "ed2k://|file|nested.bin|64|" + "b" * 32 + "|/",
                 },
                 {
-                    "name": "root.txt",
+                    "displayName": "root.txt",
                     "sizeBytes": 32,
                     "hash": "a" * 32,
-                    "ed2kLink": "ed2k://|file|root.txt|32|" + "a" * 32 + "|/",
                 },
-            ]
-        },
+        ],
         fixtures,
+        lambda file_hash: {"hash": file_hash, "ed2kLink": "ed2k://|file|fixture|1|" + file_hash + "|/"},
     )
 
     assert matched == [
@@ -348,7 +359,8 @@ def test_matched_shared_catalog_requires_exact_fixture_identity() -> None:
         },
     ]
     assert rust_webui_live_proof._matched_shared_catalog(
-        {"items": [{"name": "root.txt", "sizeBytes": 31}]}, fixtures
+        [{"displayName": "root.txt", "sizeBytes": 31}], fixtures,
+        lambda _file_hash: pytest.fail("incomplete collection must not request details"),
     ) is None
 
 
@@ -380,22 +392,34 @@ def test_request_recorder_counts_only_same_origin_api_and_static_assets() -> Non
 
     recorder.record_url("http://192.0.2.10:4731/api/v1/snapshot?limit=500")
     recorder.record_url("http://192.0.2.10:4731/api/v1/logs?limit=300")
-    recorder.record_url("http://192.0.2.10:4731/api/v1/transfers/abcdef0123456789abcdef0123456789/sources")
+    recorder.record_url("http://192.0.2.10:4731/api/v1/downloads/12/sources")
     recorder.record_url("http://192.0.2.10:4731/assets/index-test.js")
     recorder.record_url("http://example.invalid/api/v1/snapshot?limit=500")
 
     assert recorder.snapshot()["apiCounts"] == {
         "logs?limit=300": 1,
         "snapshot?limit=500": 1,
-        "transfers/{hash}/sources": 1,
+        "downloads/{id}/sources": 1,
     }
     assert recorder.snapshot()["staticAssets"] == {"/assets/index-test.js": 1}
 
 
-def test_steady_request_load_allows_snapshot_polling_only() -> None:
+@pytest.mark.parametrize("meta", [
+    {"apiVersion": "v1", "hasMore": False},
+    {"apiVersion": "v1", "hasMore": True, "nextCursor": "next"},
+    {"apiVersion": "v1", "hasMore": False, "nextCursor": "next"},
+])
+def test_webui_download_inventory_requires_a_complete_native_page(monkeypatch, meta):
+    monkeypatch.setattr(rust_webui_live_proof, "api_document", lambda *_args: {"data": [], "meta": meta})
+    with pytest.raises(RuntimeError, match="complete bounded download page"):
+        rust_webui_live_proof._download_rows("http://127.0.0.1:1234", "key")
+
+
+def test_steady_request_load_allows_snapshot_and_bounded_download_preview() -> None:
     check = rust_webui_live_proof.steady_request_load_check(
         {
             "snapshot?limit=500": 6,
+            "downloads?view=all&limit=12": 6,
             "app": 1,
             "capabilities": 1,
         }
@@ -404,13 +428,15 @@ def test_steady_request_load_allows_snapshot_polling_only() -> None:
     assert check == {"ok": True, "repeatedSecondaryEndpoints": {}}
 
 
-def test_steady_request_load_rejects_stale_bundle_secondary_polling() -> None:
+def test_steady_request_load_rejects_broad_secondary_polling() -> None:
     check = rust_webui_live_proof.steady_request_load_check(
         {
             "snapshot?limit=500": 6,
             "logs?limit=300": 6,
-            "shared-files?limit=500": 6,
+            "library/files?limit=200": 6,
             "uploads": 6,
+            "downloads?view=all&limit=200": 6,
+            "downloads?view=all&limit=12&cursor=sample": 6,
         }
     )
 
@@ -418,8 +444,10 @@ def test_steady_request_load_rejects_stale_bundle_secondary_polling() -> None:
         "ok": False,
         "repeatedSecondaryEndpoints": {
             "logs?limit=300": 6,
-            "shared-files?limit=500": 6,
+            "library/files?limit=200": 6,
             "uploads": 6,
+            "downloads?view=all&limit=200": 6,
+            "downloads?view=all&limit=12&cursor=sample": 6,
         },
     }
 
@@ -572,11 +600,200 @@ def test_profile_settings_api_key_reads_generated_secret(tmp_path) -> None:
     assert rust_webui_live_proof.profile_settings_api_key(settings) == "generated-key"
 
 
-def test_profile_settings_api_key_rejects_retired_bootstrap_spelling(tmp_path) -> None:
+def test_profile_settings_api_key_requires_a_string(tmp_path) -> None:
     settings = tmp_path / "emulebb-rust-settings.toml"
-    settings.write_text('[rest]\napiKey = "synthetic-retired-key"\n', encoding="utf-8")
+    settings.write_text('[rest]\napi_key = 42\n', encoding="utf-8")
     with pytest.raises(RuntimeError, match="REST API key is missing"):
         rust_webui_live_proof.profile_settings_api_key(settings)
+
+
+@pytest.fixture
+def native_settings_form():
+    values = {"enabled": True, "limit": 123, "path": "sample", "list": ["one", "two"], "optional": None}
+    fields = [{"key": "sample." + key} for key in values]
+    snapshot = {"meta": {"settingsRevision": "9007199254740993"}, "data": {"saved": {"sample": {
+        key: {"mode": "default" if key == "enabled" else "custom", "value": value}
+        for key, value in values.items()}}}}
+    rows = [{"key": "sample." + key, "default": key == "enabled", "unset": value is None,
+             "text": "" if value is None else "\n".join(value) if isinstance(value, list)
+             else str(value).lower() if isinstance(value, bool) else str(value)} for key, value in values.items()]
+    return {"fields": fields}, snapshot, rows
+
+
+def test_native_settings_form_requires_all_emitted_fields_and_saved_modes(native_settings_form):
+    surface, snapshot, rows = native_settings_form
+    assert rust_webui_live_proof._settings_form_check(surface, snapshot, list(reversed(rows))) == {
+        "ok": True, "fieldCount": 5, "defaultCount": 1}
+
+
+@pytest.mark.parametrize("fault", ["missing", "duplicate", "unexpected", "mode", "value", "null", "revision"])
+def test_native_settings_form_rejects_incomplete_or_incorrect_rendering(native_settings_form, fault):
+    surface, snapshot, rows = native_settings_form
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows.append(dict(rows[0]))
+    elif fault == "unexpected":
+        rows[0]["key"] = "sample.other"
+    elif fault == "mode":
+        rows[0]["default"] = False
+    elif fault == "value":
+        rows[1]["text"] = "124"
+    elif fault == "null":
+        rows[-1]["unset"] = False
+    else:
+        snapshot["meta"]["settingsRevision"] = 123
+    with pytest.raises(RuntimeError):
+        rust_webui_live_proof._settings_form_check(surface, snapshot, rows)
+
+
+@pytest.mark.parametrize("fault", [None, "conflict", "duplicate", "wrong_body", "unchanged_revision"])
+def test_native_settings_save_requires_one_confirmed_owned_write(fault):
+    from types import SimpleNamespace
+
+    body = {"expectedRevision": "9007199254740993", "reset": ["sample.limit"]}
+    writes = []
+    response = SimpleNamespace(status=409 if fault == "conflict" else 200,
+                               request=SimpleNamespace(method="PATCH"),
+                               url="http://127.0.0.1/api/v1/settings",
+                               json=lambda: {"meta": {"settingsRevision": "9007199254740993"
+                                             if fault == "unchanged_revision" else "9007199254740994"}})
+
+    class Observed:
+        value = response
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class Page:
+        listener = None
+
+        def on(self, event, callback):
+            assert event == "request"
+            self.listener = callback
+
+        def remove_listener(self, event, callback):
+            assert event == "request" and self.listener == callback
+            self.listener = None
+
+        def expect_response(self, predicate, *, timeout):
+            assert predicate(response) and timeout == 1000
+            return Observed()
+
+        def get_by_role(self, role, *, name, exact):
+            assert (role, name, exact) == ("button", "Save", True)
+            return self
+
+        def click(self):
+            writes.append("click")
+            request = SimpleNamespace(method="PATCH", url=response.url,
+                                      post_data_json={} if fault == "wrong_body" else body)
+            self.listener(request)
+            if fault == "duplicate":
+                self.listener(request)
+
+    page = Page()
+    if fault is None:
+        assert rust_webui_live_proof._save_settings_form(page, body, 1) == response.json()
+    else:
+        with pytest.raises(RuntimeError):
+            rust_webui_live_proof._save_settings_form(page, body, 1)
+    assert writes == ["click"]
+    assert page.listener is None
+
+
+@pytest.fixture
+def browser_network_settings(monkeypatch):
+    snapshot = {"meta": {"settingsRevision": "17"}, "data": {
+        "saved": {"network": {"autoConnect": {"mode": "default", "value": True}, "nat": {
+            "enabled": {"mode": "default", "value": True},
+            "requireInitialMapping": {"mode": "default", "value": False}}}},
+        "effective": {"network": {"autoConnect": True, "nat": {"enabled": True, "requireInitialMapping": False}}},
+        "application": {"pendingRestart": [], "failed": []}}}
+    monkeypatch.setattr(rust_webui_live_proof, "_read_settings_form", lambda *args, **kwargs: ({}, snapshot, {}))
+    monkeypatch.setattr(rust_webui_live_proof, "_wait_for_settings_form", lambda *args: {"ok": True})
+    return snapshot
+
+
+@pytest.mark.parametrize("fault", [None, "custom", "pending", "failure", "effective"])
+def test_zero_configuration_checks_saved_defaults_and_running_state(browser_network_settings, fault):
+    snapshot = browser_network_settings
+    if fault == "custom":
+        snapshot["data"]["saved"]["network"]["autoConnect"]["mode"] = "custom"
+    elif fault == "pending":
+        snapshot["data"]["application"]["pendingRestart"] = ["network.autoConnect"]
+    elif fault == "failure":
+        snapshot["data"]["application"]["failed"] = [{"key": "network.autoConnect"}]
+    elif fault == "effective":
+        snapshot["data"]["effective"]["network"]["autoConnect"] = False
+    if fault:
+        with pytest.raises(RuntimeError):
+            rust_webui_live_proof._assert_zero_configuration_defaults(None, base_url="local", api_key="key", timeout_seconds=1)
+    else:
+        assert rust_webui_live_proof._assert_zero_configuration_defaults(
+            None, base_url="local", api_key="key", timeout_seconds=1) == {
+                "autoConnect": True, "upnpEnabled": True, "requireInitialMapping": False,
+                "verifiedThroughRenderedWebui": True}
+
+
+@pytest.mark.parametrize("changed", [(), ("enabled",), ("enabled", "requireInitialMapping")])
+@pytest.mark.parametrize("outcome", ["applied", "restart", "failure", "uncertain"])
+def test_nat_form_saves_only_changed_values_once_and_reports_application(
+        monkeypatch, browser_network_settings, changed, outcome):
+    snapshot = browser_network_settings
+    for name in changed:
+        leaf = snapshot["data"]["saved"]["network"]["nat"][name]
+        leaf.update(mode="custom", value=not leaf["value"])
+    if outcome == "restart":
+        snapshot["data"]["application"]["pendingRestart"] = ["network.nat.enabled"]
+    elif outcome == "failure":
+        snapshot["data"]["application"]["failed"] = [{"key": "network.nat.enabled"}]
+    controls, writes = [], []
+
+    class Editor:
+        def __init__(self, key):
+            self.key = key
+
+        def locator(self, selector):
+            return self
+
+        @property
+        def last(self):
+            return self
+
+        def uncheck(self):
+            controls.append((self.key, "custom"))
+
+        def set_checked(self, value):
+            controls.append((self.key, value))
+
+    def save(_page, body, timeout):
+        writes.append(body)
+        if outcome == "uncertain":
+            raise RuntimeError("unconfirmed response")
+        for name, value in body["set"]["network"]["nat"].items():
+            snapshot["data"]["saved"]["network"]["nat"][name] = {"mode": "default", "value": value}
+        return snapshot
+
+    monkeypatch.setattr(rust_webui_live_proof, "_settings_editor", lambda page, key: Editor(key))
+    monkeypatch.setattr(rust_webui_live_proof, "_save_settings_form", save)
+    if outcome == "failure" or (outcome == "uncertain" and changed):
+        with pytest.raises(RuntimeError):
+            rust_webui_live_proof._configure_best_effort_upnp(None, base_url="local", api_key="key", timeout_seconds=1)
+    else:
+        assert rust_webui_live_proof._configure_best_effort_upnp(
+            None, base_url="local", api_key="key", timeout_seconds=1) == {
+                "enabled": True, "requireInitialMapping": False,
+                "restartRequired": outcome == "restart", "writes": int(bool(changed)),
+                "configuredThroughRenderedWebui": True}
+    assert len(writes) == int(bool(changed))
+    assert len(controls) == 2 * len(changed)
+    if changed:
+        assert writes == [{"expectedRevision": "17", "set": {"network": {"nat": {
+            name: name == "enabled" for name in changed}}}}]
 
 
 def test_sanitize_report_text_applies_runtime_redactions() -> None:
@@ -586,3 +803,28 @@ def test_sanitize_report_text_applies_runtime_redactions() -> None:
     )
 
     assert text == "{redacted} {redacted} {hash} {path}"
+
+
+@pytest.mark.parametrize("counts", [{}, {"totalEntries": 1, "publishedEntries": 0},
+    {"totalEntries": 0, "publishedEntries": 1}, {"totalEntries": False, "publishedEntries": 0}])
+def test_sharing_publication_proof_requires_a_known_empty_baseline(counts):
+    with pytest.raises(RuntimeError, match="empty baseline"):
+        rust_webui_live_proof._require_empty_ed2k_catalog(counts)
+
+
+@pytest.mark.parametrize("success", [0, 1_800_000_000])
+def test_fresh_catalog_publication_is_proven_without_a_later_clock_tick(success):
+    baseline = {"totalEntries": 0, "publishedEntries": 0, "lastSuccessAt": success}
+    rust_webui_live_proof._require_empty_ed2k_catalog(baseline)
+    current = {"totalEntries": 3, "publishedEntries": 3, "pendingEntries": 0,
+               "lastError": None, "lastSuccessAt": success}
+    assert rust_webui_live_proof._ed2k_fixture_published(current, 3)
+
+
+@pytest.mark.parametrize("changes", [{"totalEntries": 4}, {"publishedEntries": 2},
+    {"pendingEntries": 1}, {"lastSuccessAt": None}, {"lastSuccessAt": True},
+    {"lastError": "synthetic failure"}])
+def test_catalog_publication_requires_complete_successful_fixture_outcomes(changes):
+    current = {"totalEntries": 3, "publishedEntries": 3, "pendingEntries": 0,
+               "lastError": None, "lastSuccessAt": 10, **changes}
+    assert not rust_webui_live_proof._ed2k_fixture_published(current, 3)

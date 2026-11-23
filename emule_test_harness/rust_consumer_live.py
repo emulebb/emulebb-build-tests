@@ -20,11 +20,14 @@ from urllib.request import Request, urlopen
 
 from .live_dependencies import safe_extract_zip
 from .paths import get_workspace_output_root
+from . import rust_metadata
+from .workspace_layout import resolve_selected_workspace_repo
 from .rust_webui_live_proof import (
     ConsumerNetworkWorkflow,
     ConsumerSharedFixture,
     _matched_shared_catalog,
     api_data,
+    api_document,
     profile_settings_api_key,
     run_webui_live_proof,
     sanitize_report_text,
@@ -474,26 +477,36 @@ def _restore_existing_daemon(suspended: SuspendedDaemon) -> int:
     raise RuntimeError(f"restored operator daemon REST did not become ready: {last_error}")
 
 
-def _persistence_snapshot(base_url: str, api_key: str, transfer_hash: str) -> dict[str, Any]:
+def _persistence_snapshot(base_url: str, api_key: str, download_id: str, *, expected_hash: str) -> dict[str, Any]:
+    """Read fixed counts and the captured durable job without scanning history."""
+    if (not isinstance(download_id, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", download_id)
+            or int(download_id) > 9223372036854775807):
+        raise RuntimeError("consumer workflow did not retain a canonical download ID")
     searches = api_data(base_url, "searches", api_key)
     search_rows = searches.get("items", []) if isinstance(searches, dict) else []
-    transfers = api_data(base_url, "transfers", api_key)
-    transfer_rows = transfers.get("items", []) if isinstance(transfers, dict) else []
+    snapshot = api_data(base_url, "snapshot?limit=1", api_key)
+    counts = snapshot.get("downloads") if isinstance(snapshot, dict) else None
+    if (not isinstance(counts, dict) or any(type(counts.get(key)) is not int or counts[key] < 0
+                                          for key in ("unfinished", "completed"))):
+        raise RuntimeError("persisted download counts did not return nonnegative integers")
     try:
-        transfer = api_data(base_url, f"transfers/{transfer_hash}", api_key)
+        download = api_data(base_url, f"downloads/{download_id}", api_key)
     except HTTPError as error:
         if error.code != 404:
             raise
-        transfer = None
-    if transfer is not None and not isinstance(transfer, dict):
-        raise RuntimeError("persisted transfer did not return an object")
+        download = None
+    if download is not None and (not isinstance(download, dict) or download.get("id") != download_id
+                                 or download.get("hash") != expected_hash):
+        raise RuntimeError("persisted download identity differs from the captured job")
     return {
         "searchCount": len(search_rows),
-        "transferCount": len(transfer_rows),
-        "transferPresent": bool(transfer and transfer.get("hash")),
-        "transferCompleted": bool(transfer)
-        and int(transfer.get("completedBytes") or 0) == int(transfer.get("sizeBytes") or -1),
-        "transferState": str(transfer.get("state") or "unknown") if transfer else "deleted",
+        "downloadCount": counts["unfinished"] + counts["completed"],
+        "downloadPresent": download is not None,
+        "downloadCompleted": bool(download and download.get("state") == "completed"
+                                  and download.get("payloadVerified") is True
+                                  and isinstance(download.get("delivery"), dict)
+                                  and download["delivery"].get("state") == "delivered"),
+        "downloadState": str(download.get("state") or "unknown") if download else "deleted",
     }
 
 
@@ -504,10 +517,18 @@ def _shared_persistence_snapshot(
 ) -> dict[str, Any]:
     """Verify that the synthetic root and exact shared catalog survive restart."""
 
-    directories = api_data(base_url, "shared-directories", api_key)
-    roots = directories.get("roots", []) if isinstance(directories, dict) else []
-    files = api_data(base_url, "shared-files?limit=100", api_key)
-    matched = _matched_shared_catalog(files, fixtures)
+    from .rust_rest_contract import iter_library_files, iter_library_locations, iter_library_roots
+    fetch = lambda path: api_document(base_url, path, api_key)
+    files = list(iter_library_files(fetch, view="shared"))
+    matched = _matched_shared_catalog(
+        files, fixtures, lambda file_hash: api_data(base_url, f"library/files/{file_hash}", api_key)
+    )
+    paths = [Path(location["path"]).resolve()
+             for file in files
+             for location in iter_library_locations(fetch, file["hash"])
+             if location["present"]]
+    roots = [row for row in iter_library_roots(fetch)
+             if matched and paths and all(path.is_relative_to(Path(row["path"]).resolve()) for path in paths)]
     if not isinstance(roots, list) or len(roots) != 1 or matched is None:
         raise RuntimeError("synthetic shared root or catalog did not persist across restart")
     return {
@@ -651,10 +672,10 @@ def run_consumer_live(
         server_count = len(server_list.get("items", [])) if isinstance(server_list, dict) else 0
         if server_count == 0:
             raise RuntimeError("fresh consumer profile did not download and import server.met")
-        nodes_dat_path = profile_dir / "nodes.dat"
-        nodes_dat_bytes = nodes_dat_path.stat().st_size if nodes_dat_path.is_file() else 0
-        if nodes_dat_bytes == 0:
-            raise RuntimeError("fresh consumer profile did not download nodes.dat")
+        discovery = rust_metadata.read_discovery_snapshot(
+            resolve_selected_workspace_repo(Path(__file__).parents[1], "emulebb-rust"), metadata_path)
+        if discovery["kad"]["status"] != "initialized" or discovery["kad"]["contactCount"] == 0:
+            raise RuntimeError("fresh consumer profile did not initialize Kad contacts in SQLite")
         _wait_for_p2p_ports(process, log_path, min(60.0, network_timeout_seconds))
         report["checks"]["firstRun"] = {
             "freshProfile": metadata_path.is_file(),
@@ -668,8 +689,7 @@ def run_consumer_live(
             "upnpBestEffort": True,
             "serverMetDownloadedAndImported": True,
             "serverCount": server_count,
-            "nodesDatDownloaded": True,
-            "nodesDatBytes": nodes_dat_bytes,
+            "discovery": discovery,
         }
 
         workflow = ConsumerNetworkWorkflow(
@@ -759,14 +779,15 @@ def run_consumer_live(
         if restarted_api_key != api_key:
             raise RuntimeError("default-profile API key changed across restart")
         _wait_for_rest(base_url, api_key, process, log_path)
-        persistence = _persistence_snapshot(base_url, api_key, str(transfer["hash"]))
+        persistence = _persistence_snapshot(base_url, api_key, transfer_check["downloadId"],
+                                            expected_hash=str(transfer["hash"]))
         shared_persistence = _shared_persistence_snapshot(base_url, api_key, shared_fixtures)
         if persistence["searchCount"] < 3:
             raise RuntimeError("search state did not persist across restart")
         if complete_transfer:
-            if not persistence["transferPresent"] or not persistence["transferCompleted"]:
-                raise RuntimeError("completed-transfer state did not persist across restart")
-        elif persistence["transferCount"] != 0:
+            if not persistence["downloadPresent"] or not persistence["downloadCompleted"]:
+                raise RuntimeError("completed download state did not persist across restart")
+        elif persistence["downloadCount"] != 0:
             raise RuntimeError("WebUI-deleted transfer queue was not empty after restart")
         second_proof = run_webui_live_proof(
             base_url=base_url,

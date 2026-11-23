@@ -7,11 +7,11 @@ import struct
 from pathlib import Path
 
 from emule_test_harness import mfc_known_met, rust_metadata
-from emule_test_harness.paths import get_required_emule_workspace_root
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
 
 
 def _rust_repo() -> Path:
-    return get_required_emule_workspace_root() / "repos" / "emulebb-rust"
+    return resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
 
 
 def _read_export_record(known_met: Path, file_hash: str):
@@ -145,7 +145,10 @@ def test_parse_known_met_reads_stock_upload_stats_and_priority(tmp_path: Path) -
     assert entry.all_time_uploaded_bytes == 0x1_0000_0123
     assert entry.all_time_upload_requests == 7
     assert entry.all_time_upload_accepts == 3
-    assert entry.last_upload_request_ms == 1_700_000_111_000
+    assert entry.last_upload_requested_at_s == 1_700_000_111
+    from dataclasses import asdict
+    from emule_test_harness.emule_profile_export import _manifest_known_file
+    assert _manifest_known_file(asdict(entry))["lastUploadRequestedAtSeconds"] == 1_700_000_111
 
 
 def test_import_known_met_uses_known2_aich_hashset(tmp_path: Path) -> None:
@@ -260,13 +263,29 @@ def test_seed_shared_directory_roots_persists_startup_roots(tmp_path: Path) -> N
                    shared_directory_roots.shareable,
                    shared_directory_roots.accessible,
                    shared_directory_roots.enabled,
-                   shared_directory_roots.deleted_at_ms
+                   shared_directory_roots.deleted_at_s
             FROM shared_directory_roots
             JOIN local_paths ON local_paths.id = shared_directory_roots.path_id
             """
         ).fetchall()
 
     assert rows == [(str(root), 0, 1, 0, 1, None)]
+
+    with sqlite3.connect(db_path) as conn:
+        first_id = conn.execute("SELECT id FROM shared_directory_roots").fetchone()[0]
+    rust_metadata.seed_shared_directory_roots(db_path, [{"path": str(root)}])
+    with sqlite3.connect(db_path) as conn:
+        retired = conn.execute(
+            "SELECT enabled,shareable,accessible,deleted_at_s FROM shared_directory_roots WHERE id=?",
+            (first_id,),
+        ).fetchone()
+        active = conn.execute(
+            "SELECT id,watch_enabled,scan_required FROM shared_directory_roots WHERE deleted_at_s IS NULL"
+        ).fetchall()
+    assert retired[:3] == (0, 0, 0)
+    assert isinstance(retired[3], int) and retired[3] > 0
+    assert len(active) == 1 and active[0][0] > first_id
+    assert active[0][1:] == (0, 0)
 
 
 def test_import_known_met_seeds_all_duplicate_paths(tmp_path: Path) -> None:

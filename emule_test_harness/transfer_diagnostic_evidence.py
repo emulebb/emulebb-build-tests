@@ -392,14 +392,35 @@ def _semantic_check(
 def _manifest_check(
     manifest: dict[str, Any] | None,
     *,
+    verified_content: dict[str, Any] | None,
     expected_file_hash: str,
     expected_file_name: str,
     expected_file_size: int,
     hashset_answer: dict[str, Any],
 ) -> dict[str, Any]:
     manifest = manifest if isinstance(manifest, dict) else {}
-    md4_hashset = manifest.get("md4_hashset")
-    aich_hashset = manifest.get("aich_hashset")
+    retired = manifest.get("internal_storage_retired") is True
+    history = manifest.get("completion_history")
+    canonical = verified_content if isinstance(verified_content, dict) else {}
+    canonical_identity = (
+        retired
+        and type(manifest.get("terminal_completed_at_s")) is int
+        and manifest["terminal_completed_at_s"] >= 0
+        and manifest.get("completed") is True
+        and isinstance(history, dict)
+        and history.get("size_bytes") == expected_file_size
+        and type(history.get("first_completed_at_s")) is int
+        and type(history.get("last_completed_at_s")) is int
+        and history["last_completed_at_s"] >= history["first_completed_at_s"]
+        and canonical.get("known_file_id") == manifest.get("known_file_id")
+        and type(canonical.get("known_file_id")) is int
+        and canonical.get("part_size_bytes") == manifest.get("piece_size") == ED2K_PART_SIZE
+        and canonical.get("part_count") == (expected_file_size + ED2K_PART_SIZE - 1) // ED2K_PART_SIZE
+        and canonical.get("aich_root") == manifest.get("aich_root") == history.get("aich_root")
+    )
+    hashsets = canonical if retired else manifest
+    md4_hashset = hashsets.get("md4_hashset")
+    aich_hashset = hashsets.get("aich_hashset")
     expected_md4 = hashset_answer.get("md4Hashset")
     expected_aich = hashset_answer.get("aichHashset")
     checks = {
@@ -412,11 +433,13 @@ def _manifest_check(
         "aichAcquired": manifest.get("aich_hashset_acquired") is True,
         "aichRoot": manifest.get("aich_root") == hashset_answer.get("aichRoot"),
         "aichHashset": isinstance(aich_hashset, list) and aich_hashset == expected_aich,
+        "canonicalIdentity": canonical_identity if retired else True,
     }
     return {
         "name": "Rust persisted the exact bilateral MD4 and AICH startup metadata",
         "ok": all(checks.values()),
         "checks": checks,
+        "hashsetEvidence": "verified_local_content" if retired else "job_rows",
         "md4HashsetCount": len(md4_hashset) if isinstance(md4_hashset, list) else 0,
         "aichHashsetCount": len(aich_hashset) if isinstance(aich_hashset, list) else 0,
     }
@@ -602,6 +625,7 @@ def build_transfer_diagnostic_evidence(
     expected_transport_mode: str,
     expected_payload_encoding: str,
     rust_manifest: dict[str, Any] | None,
+    rust_verified_content: dict[str, Any] | None = None,
     rust_records: Iterable[dict[str, Any]],
     mfc_records: Iterable[dict[str, Any]],
     metadata_recovery_required: bool = False,
@@ -803,6 +827,7 @@ def build_transfer_diagnostic_evidence(
     }
     startup_checks["persistedManifest"] = _manifest_check(
         rust_manifest,
+        verified_content=rust_verified_content,
         expected_file_hash=normalized_hash,
         expected_file_name=expected_file_name,
         expected_file_size=expected_file_size,

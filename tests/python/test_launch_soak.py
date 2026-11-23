@@ -423,7 +423,7 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
         },
     )
     bundle = {
-        "schema": "emulebb.diagnostic-bundle.v6",
+        "schema": "emulebb.diagnostic-bundle.v8",
         "capturedAt": "2026-10-25T12:00:00Z",
         "summary": {
             "artifactFileCount": 1,
@@ -493,14 +493,14 @@ def test_capture_rust_diagnostic_bundle_persists_exact_campaign_artifact(
     assert artifact.read_bytes() == encoded_bundle
     assert json.loads(artifact.read_text(encoding="utf-8")) == bundle
     assert evidence["phase"] == "ready"
-    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v6"
+    assert evidence["bundleSchema"] == "emulebb.diagnostic-bundle.v8"
     assert evidence["bundleSummary"] == bundle["summary"]
     assert evidence["retainedCount"] == 1
     assert not old_campaign_artifact.exists()
     assert all(path.read_bytes() == b"a" * 512 for path in adjacent_artifacts)
 
 
-def test_capture_rust_diagnostic_bundle_rejects_non_v6_response(
+def test_capture_rust_diagnostic_bundle_requires_schema_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -543,11 +543,11 @@ def test_capture_rust_diagnostic_bundle_rejects_non_v6_response(
         module,
         "retry_http_bytes",
         lambda *_args, **_kwargs: json.dumps(
-            {"schema": "emulebb.diagnostic-bundle.v3"}, separators=(",", ":")
+            {"schema": None}, separators=(",", ":")
         ).encode("utf-8"),
     )
 
-    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v6"):
+    with pytest.raises(RuntimeError, match="must use emulebb.diagnostic-bundle.v8"):
         module.capture_rust_diagnostic_bundle(
             base_url="http://127.0.0.1:4711",
             run_paths=run_paths,

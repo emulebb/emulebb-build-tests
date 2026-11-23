@@ -216,13 +216,14 @@ REST_SURFACE_TEST_SERVER = {
     "name": "REST surface smoke disposable",
 }
 REST_SURFACE_MISSING_HASH = "0123456789abcdef0123456789abcdef"
+REST_SURFACE_MISSING_UPLOAD_ID = "12345678-1234-4234-8234-123456789abc"
 REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
 REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
 REST_SURFACE_QBIT_DOWNLOAD_HASH = "11223344556677889900aabbccddeeff"
 REST_CONTRACT_VERSION = rust_rest_contract.REST_CONTRACT_VERSION
 REST_CONTRACT_VERSION_HEADER = rust_rest_contract.REST_CONTRACT_VERSION_HEADER
-REST_MFC_CORE_SETTING_KEYS = {
+REST_CORE_SETTING_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
     "maxConnections",
@@ -240,25 +241,12 @@ REST_MFC_CORE_SETTING_KEYS = {
     "networkKademlia",
     "networkEd2k",
 }
-REST_RUST_CORE_SETTING_KEYS = REST_MFC_CORE_SETTING_KEYS.difference(
-    {"reconnect", "safeServerConnect", "addServersFromServer"}
-)
-REST_RUST_ED2K_SERVER_SETTING_KEYS = {
-    "reconnectEnabled",
-    "safeServerConnect",
-    "addServersFromServer",
-    "serverKeepaliveMinutes",
-}
-REST_CORE_SETTING_KEYS = (
-    REST_RUST_CORE_SETTING_KEYS if RUST_CONTRACT_ONLY else REST_MFC_CORE_SETTING_KEYS
-)
 
 
 def safe_server_connect_settings_patch(value: object) -> dict[str, dict[str, object]]:
-    """Return the selected product's settings owner for safe server connect."""
+    """Return the MFC settings body for its live server-connect fixture."""
 
-    section = "ed2k" if RUST_CONTRACT_ONLY else "core"
-    return {section: {"safeServerConnect": value}}
+    return {"core": {"safeServerConnect": value}}
 
 
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
@@ -360,6 +348,10 @@ TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrComp
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
 DIAGNOSTIC_BUNDLE_MIN_BYTES = 64 * 1024
 UNSAFE_OPENAPI_OPERATIONS = {
+    "deleteLibraryTag",
+    "setLibrarySharing",
+    "addLibraryFileTags",
+    "removeLibraryFileTags",
     "bootstrapKad",
     "captureDiagnosticBundle",
     "captureDiagnosticDump",
@@ -378,6 +370,9 @@ UNSAFE_OPENAPI_OPERATIONS = {
     "refreshNat",
     "reloadIpFilter",
     "reloadSharedDirectories",
+    # WHY: a full-library scan can hash payloads. Generic probes leave that I/O
+    # to the explicitly controlled library qualification phases.
+    "scanLibrary",
     "replaceSharedDirectories",
     "triggerDiagnosticCrashTest",
     "shutdownApp",
@@ -447,6 +442,7 @@ REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "deleteFriend": (404,),
 }
 OPENAPI_TAG_FAMILIES = {
+    "Library": "library",
     "App": "app",
     "Diagnostics": "diagnostics",
     "Stats": "status",
@@ -455,6 +451,7 @@ OPENAPI_TAG_FAMILIES = {
     "VpnGuard": "vpn-guard",
     "Categories": "categories",
     "Transfers": "transfers",
+    "Downloads": "downloads",
     "SharedFiles": "shared",
     "SharedDirectories": "shared-directories",
     "Uploads": "uploads",
@@ -709,101 +706,45 @@ def _commit_openapi_operation(
 
 
 def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[dict[str, object]]:
-    """Extracts operation metadata from the source OpenAPI YAML without extra dependencies."""
+    """Extracts operation metadata from the parsed OpenAPI document."""
 
+    document = load_openapi_document(openapi_path)
+    paths = document.get("paths")
+    if not isinstance(paths, dict):
+        raise RuntimeError("OpenAPI document is missing paths")
     operations: list[dict[str, object]] = []
-    current_path: str | None = None
-    current_method: str | None = None
-    current_operation_id: str | None = None
-    current_tag: str | None = None
-    current_has_request_body = False
-    current_request_body_required = False
-    current_success_response_statuses: list[str] = []
-    current_success_response_refs: list[str] = []
-    current_response_status: str | None = None
-    in_paths = False
-    for raw_line in openapi_path.read_text(encoding="utf-8").splitlines():
-        if raw_line == "paths:":
-            in_paths = True
+    for path, path_item in paths.items():
+        if not isinstance(path_item, dict):
             continue
-        if not in_paths:
-            continue
-        if raw_line.startswith("components:"):
-            break
-        if raw_line.startswith("  /") and raw_line.rstrip().endswith(":"):
+        for method, operation in path_item.items():
+            if method not in {"get", "post", "patch", "delete"} or not isinstance(operation, dict):
+                continue
+            tags = operation.get("tags")
+            tag = tags[0] if isinstance(tags, list) and tags and isinstance(tags[0], str) else None
+            responses = operation.get("responses")
+            success_statuses: list[str] = []
+            success_refs: list[str] = []
+            if isinstance(responses, dict):
+                for status, response in responses.items():
+                    status_text = str(status)
+                    if not (len(status_text) == 3 and status_text.startswith("2") and status_text.isdecimal()):
+                        continue
+                    reference = response.get("$ref") if isinstance(response, dict) else None
+                    if isinstance(reference, str) and reference.startswith("#/components/responses/"):
+                        success_statuses.append(status_text)
+                        success_refs.append(reference.rsplit("/", 1)[-1])
+            request_body = operation.get("requestBody")
             _commit_openapi_operation(
                 operations,
-                path=current_path,
-                method=current_method,
-                operation_id=current_operation_id,
-                tag=current_tag,
-                has_request_body=current_has_request_body,
-                request_body_required=current_request_body_required,
-                success_response_statuses=current_success_response_statuses,
-                success_response_refs=current_success_response_refs,
+                path=str(path),
+                method=method,
+                operation_id=operation.get("operationId"),
+                tag=tag,
+                has_request_body=request_body is not None,
+                request_body_required=isinstance(request_body, dict) and request_body.get("required") is True,
+                success_response_statuses=success_statuses,
+                success_response_refs=success_refs,
             )
-            current_path = raw_line.strip()[:-1]
-            current_method = None
-            current_operation_id = None
-            current_tag = None
-            current_has_request_body = False
-            current_request_body_required = False
-            current_success_response_statuses = []
-            current_success_response_refs = []
-            current_response_status = None
-            continue
-        stripped = raw_line.strip()
-        if stripped in {"get:", "post:", "patch:", "delete:"}:
-            _commit_openapi_operation(
-                operations,
-                path=current_path,
-                method=current_method,
-                operation_id=current_operation_id,
-                tag=current_tag,
-                has_request_body=current_has_request_body,
-                request_body_required=current_request_body_required,
-                success_response_statuses=current_success_response_statuses,
-                success_response_refs=current_success_response_refs,
-            )
-            current_method = stripped[:-1]
-            current_operation_id = None
-            current_tag = None
-            current_has_request_body = False
-            current_request_body_required = False
-            current_success_response_statuses = []
-            current_success_response_refs = []
-            current_response_status = None
-            continue
-        if current_method is None:
-            continue
-        if stripped.startswith("operationId:"):
-            current_operation_id = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("tags:"):
-            tag_text = stripped.split(":", 1)[1].strip()
-            if tag_text.startswith("[") and tag_text.endswith("]"):
-                current_tag = tag_text[1:-1].split(",", 1)[0].strip()
-        elif stripped == "requestBody:":
-            current_has_request_body = True
-        elif current_has_request_body and stripped.startswith("required:"):
-            current_request_body_required = stripped.split(":", 1)[1].strip().lower() == "true"
-        elif stripped.startswith('"2') and stripped.endswith('":'):
-            current_response_status = stripped.split(":", 1)[0].strip('"')
-        elif current_response_status is not None and stripped.startswith("$ref:"):
-            response_ref = stripped.rsplit("/", 1)[-1].strip('"')
-            current_success_response_statuses.append(current_response_status)
-            current_success_response_refs.append(response_ref)
-            current_response_status = None
-    _commit_openapi_operation(
-        operations,
-        path=current_path,
-        method=current_method,
-        operation_id=current_operation_id,
-        tag=current_tag,
-        has_request_body=current_has_request_body,
-        request_body_required=current_request_body_required,
-        success_response_statuses=current_success_response_statuses,
-        success_response_refs=current_success_response_refs,
-    )
     return operations
 
 
@@ -827,6 +768,8 @@ def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
     """Converts one OpenAPI path template to a live-smoke safe concrete path."""
 
     path = "/api/v1" + openapi_path
+    if openapi_path.startswith(("/uploads/", "/upload-queue/")):
+        path = path.replace("{id}", REST_SURFACE_MISSING_UPLOAD_ID)
     path = path.replace("{hash}", REST_SURFACE_MISSING_HASH)
     path = path.replace("{clientId}", REST_SURFACE_MISSING_HASH)
     path = path.replace("{userHash}", REST_SURFACE_MISSING_HASH)
@@ -915,6 +858,7 @@ def normalize_contract_path_for_openapi(path: str) -> str:
     """Converts one concrete smoke path back to its OpenAPI template form."""
 
     normalized = path.split("?", 1)[0]
+    normalized = normalized.replace(REST_SURFACE_MISSING_UPLOAD_ID, "{id}")
     normalized = normalized.replace(REST_SURFACE_MISSING_HASH, "{hash}")
     normalized = normalized.replace("/api/v1", "", 1) or "/"
     normalized = normalized.replace("/categories/999999", "/categories/{categoryId}")
@@ -1498,11 +1442,9 @@ def assert_rest_stress_adapter_operations_match_contract() -> dict[str, object]:
     }
 REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = ()
 REST_INTENTIONALLY_UNSUPPORTED = (
-    "category_crud",
     "shared_file_rename",
     "completed_transfer_rename",
     "custom_save_path",
-    "broad_preferences",
 )
 
 
@@ -3703,7 +3645,8 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
     }
 
 
-def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str) -> dict[str, object]:
+def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str, *,
+                                       request_bodies: dict[str, dict[str, object]] | None = None) -> dict[str, object]:
     """Exercises and reports the safe broadband REST contract surface."""
 
     routes: list[dict[str, object]] = []
@@ -3735,7 +3678,9 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             continue
         start = time.monotonic()
         try:
-            request_body = get_contract_route_body(str(route["name"])) if bool(route["hasRequestBody"]) else None
+            request_body = ((request_bodies or {}).get(operation_id)
+                            if operation_id in (request_bodies or {}) else
+                            get_contract_route_body(str(route["name"]))) if bool(route["hasRequestBody"]) else None
             if bool(route["requestBodyRequired"]) and request_body is None:
                 raise RuntimeError(f"OpenAPI operation requires a request body but no safe contract payload is registered: {route['name']}")
             result = http_request(
@@ -3749,7 +3694,11 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             openapi_response_path = str(
                 route.get("openapiPath") or normalize_contract_path_for_openapi(str(route["path"]))
             )
-            if 200 <= status < 300:
+            if status == 204:
+                assert result.get("body_text") == "" and result.get("raw_json") is None, "HTTP 204 must have an empty body"
+                validate_openapi_operation_response_payload(str(route["method"]), openapi_response_path, status, None)
+                outcome = "success"
+            elif 200 <= status < 300:
                 require_success_envelope(result)
                 validate_openapi_operation_response_payload(
                     str(route["method"]),
@@ -4257,17 +4206,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     assert isinstance(core_settings, dict), compact_http_result(settings)
     missing_core_keys = sorted(REST_CORE_SETTING_KEYS.difference(core_settings.keys()))
     assert not missing_core_keys, missing_core_keys
-    ed2k_settings = settings_payload.get("ed2k")
-    if RUST_CONTRACT_ONLY:
-        assert isinstance(ed2k_settings, dict), compact_http_result(settings)
-        missing_ed2k_keys = sorted(
-            REST_RUST_ED2K_SERVER_SETTING_KEYS.difference(ed2k_settings.keys())
-        )
-        assert not missing_ed2k_keys, missing_ed2k_keys
     surface["app_settings_get"] = {
         "status": settings["status"],
         "coreKeys": sorted(core_settings.keys()),
-        "ed2kKeys": sorted(ed2k_settings.keys()) if isinstance(ed2k_settings, dict) else [],
     }
 
     invalid_setting = http_request(
@@ -4328,13 +4269,6 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
 
     safe_core_update = {key: core_settings[key] for key in REST_CORE_SETTING_KEYS}
     safe_settings_update: dict[str, object] = {"core": safe_core_update}
-    safe_ed2k_update: dict[str, object] = {}
-    if RUST_CONTRACT_ONLY:
-        assert isinstance(ed2k_settings, dict)
-        safe_ed2k_update = {
-            key: ed2k_settings[key] for key in REST_RUST_ED2K_SERVER_SETTING_KEYS
-        }
-        safe_settings_update["ed2k"] = safe_ed2k_update
     settings_set = http_request(
         base_url,
         "/api/v1/app/settings",
@@ -4347,11 +4281,6 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     assert isinstance(updated_core, dict), compact_http_result(settings_set)
     for key, expected_value in safe_core_update.items():
         assert updated_core.get(key) == expected_value, compact_http_result(settings_set)
-    if RUST_CONTRACT_ONLY:
-        updated_ed2k = settings_set_payload.get("ed2k")
-        assert isinstance(updated_ed2k, dict), compact_http_result(settings_set)
-        for key, expected_value in safe_ed2k_update.items():
-            assert updated_ed2k.get(key) == expected_value, compact_http_result(settings_set)
     surface["app_settings_set_noop"] = {
         "status": settings_set["status"],
         "updated": safe_settings_update,

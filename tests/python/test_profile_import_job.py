@@ -83,27 +83,22 @@ def test_destination_cannot_overlap_media(job, quiet_roots):
         module.load_job(job)
 
 
-@pytest.mark.parametrize("pending,missing,rejected,expected", [(0, 0, 0, 0), (1, 0, 0, 2), (0, 1, 0, 2), (0, 0, 1, 2)])
-def test_operator_status_keeps_valid_import_without_hashing(job, quiet_roots, monkeypatch, pending, missing, rejected, expected):
+@pytest.mark.parametrize("unmatched,missing,rejected,expected", [(0, 0, 0, 0), (1, 0, 0, 2), (0, 1, 0, 2), (0, 0, 1, 2)])
+def test_operator_status_keeps_valid_import_without_hashing(job, quiet_roots, monkeypatch, unmatched, missing, rejected, expected):
     parsed = module.load_job(job)
     monkeypatch.setattr(module, "write_exchange", lambda *a, **k: {"summary": {"recoveryMissingSets": missing, "skippedKnown": 0}})
     monkeypatch.setattr(module, "command_prefix", lambda *a: ["sample-client"])
     calls = []
     def run(command, timeout):
         calls.append(command)
-        if command[-1] == "reconcile-shared-files":
-            return {"hashedCount": 0, "completedReadBytes": 0, "activeHashCount": 0, "running": False,
-                    "plannedHashCount": pending, "statFailedCount": 0, "skippedFailedCount": 0, "skippedIntakeCount": 0,
-                    "scannedCount": 1}
-        return {"rejectedRecoverySets": rejected}
+        return {"rejectedRecoverySets": rejected, "unmatchedPaths": unmatched}
     monkeypatch.setattr(module.audit, "run_json", run)
     for name in ("validate_imported_hashes", "validate_stock_records", "validate_native_bindings", "profile_counts"):
         monkeypatch.setattr(module.audit, name, lambda *a, **k: {})
     code, report = module.run_job(parsed)
     assert code == expected
     assert report["destinationModified"]
-    assert len(calls) == 2
-    assert all("import-emule-profile" in c or "reconcile-shared-files" in c for c in calls)
+    assert calls == [["sample-client", "import", "profile", str(Path(report["report"]).parent / "hashes.sqlite")]]
     assert Path(report["report"]).is_file()
 
 
@@ -177,223 +172,18 @@ def test_docker_command_is_network_none_and_media_readonly(job, quiet_roots, mon
 
 
 @pytest.mark.native
-def test_direct_directory_import_hashes_then_reuses(tmp_path):
-    if os.name != "nt":
-        pytest.skip("Windows executable integration")
-    import sqlite3
-    from emule_test_harness.paths import get_workspace_output_root
-    from emule_test_harness.profile_import_audit import create_import_fixture
-
-    binary = get_workspace_output_root() / "tools/emulebb-rust/bin/emulebb-rust.exe"
-    create_import_fixture(tmp_path / "fixture")
-    profile = tmp_path / "profile"
-    command = [
-        str(binary),
-        "--profile",
-        str(profile),
-        "import-shared-directories",
-        str(tmp_path / "fixture/stock/config/shareddir.dat"),
-    ]
-    first = module.audit.run_json(command, 120)
-    assert first["hashing"]["hashedCount"] == 4
-    assert first["hashing"]["completedReadBytes"] == 19
-    assert first["missingAichRecoverySets"] == 0
-    second = module.audit.run_json(command, 120)
-    assert second["hashing"]["hashedCount"] == 0
-    assert second["hashing"]["reusedCount"] == 4
-    with sqlite3.connect(profile / "emulebb-rust-metadata.db") as db:
-        assert db.execute("SELECT count(*) FROM aich_recovery_sets").fetchone()[0] == 3
-        assert (
-            db.execute(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'imported_%'"
-            ).fetchone()[0]
-            == 0
-        )
-
-
-@pytest.mark.native
-@pytest.mark.parametrize("index", [0, 1])
-def test_operator_selected_directory_lists_after_metadata_import(tmp_path, index):
-    """Explicit operator inputs only: real media is read, never copied or modified."""
-    config_path = os.environ.get("EMULEBB_IMPORT_DIRECTORY_TEST_INPUT")
-    if os.name != "nt" or not config_path:
-        pytest.skip("requires explicitly selected directory-test inputs")
-    import hashlib
-    import sqlite3
-    from emule_test_harness.paths import get_workspace_output_root
-
-    config = json.loads(Path(config_path).read_text(encoding="utf-8"))
-    binary = get_workspace_output_root() / "tools/emulebb-rust/bin/emulebb-rust.exe"
-    archive = Path(config["archive"])
-    digest = hashlib.sha256(archive.read_bytes()).digest()
-    directory_list = Path(config["directoryLists"][index])
-    directory_digest = hashlib.sha256(directory_list.read_bytes()).digest()
-    profile = tmp_path / "profile"
-    if index == 1 and config.get("resumeProfile"):
-        profile = Path(config["resumeProfile"])
-    imported = before = None
-    if index == 0:
-        imported = module.audit.run_json(
-            [
-                str(binary),
-                "--profile",
-                str(profile),
-                "import-emule-profile",
-                str(archive),
-            ],
-            120,
-        )
-        before = module.audit.run_json(
-            [str(binary), "--profile", str(profile), "reconcile-shared-files"], 120
-        )
-    report_path = tmp_path / "directory-test.json"
-    report = {"status": "hashing-directory-list", "import": imported, "before": before}
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    command = [
-        str(binary),
-        "--profile",
-        str(profile),
-        "import-shared-directories",
-        config["directoryLists"][index],
-    ]
-    if index == 0:
-        with (
-            (tmp_path / "hashing.stdout.json").open("w", encoding="utf-8") as stdout,
-            (tmp_path / "hashing.stderr.log").open("w", encoding="utf-8") as stderr,
-        ):
-            result = subprocess.run(
-                command, stdout=stdout, stderr=stderr, text=True, timeout=7200
-            )
-        assert result.returncode == 0, (
-            f"directory import failed; inspect {report_path.parent}"
-        )
-        after = json.loads(
-            (tmp_path / "hashing.stdout.json").read_text(encoding="utf-8")
-        )
-        repeat = module.audit.run_json(command, 7200)
-        report.update(status="complete", after=after, repeat=repeat)
-        assert after["reconciliation"]["plannedHashCount"] == 0
-        assert after["reconciliation"]["statFailedCount"] == 0
-        assert repeat["hashing"]["hashedCount"] == 0
-        assert repeat["hashing"]["completedReadBytes"] == 0
-    else:
-        # WHY: the operator selected a large library for interruption testing,
-        # not a full hash pass. Count durable paths and kill this process only.
-        first = _hash_until_durable_paths(command, profile, tmp_path, 200, "first")
-        second = _hash_until_durable_paths(
-            command,
-            profile,
-            tmp_path,
-            len(first) + config.get("additionalSampleFiles", 100),
-            "resumed",
-        )
-        assert first.keys() <= second.keys()
-        assert all(second[key] == value for key, value in first.items())
-        reconciliation = module.audit.run_json(
-            [str(binary), "--profile", str(profile), "reconcile-shared-files"], 7200
-        )
-        assert reconciliation["reusedCount"] >= len(second)
-        assert reconciliation["plannedHashCount"] > 0
-        report.update(
-            status="sampled-and-interrupted",
-            firstDurablePaths=len(first),
-            resumedDurablePaths=len(second),
-            reconciliation=reconciliation,
-        )
-    from emule_test_harness.ini import read_ini_text
-    from emule_test_harness.mfc_known_met import normal_windows_display_path
-
-    listed = [
-        Path(line.strip()).resolve()
-        for line in read_ini_text(directory_list).splitlines()
-        if line.strip() and not line.strip().startswith(("#", ";"))
-    ]
-    with sqlite3.connect(profile / "emulebb-rust-metadata.db") as db:
-        native_roots = db.execute(
-            "SELECT p.native_path FROM shared_directory_roots r JOIN local_paths p ON p.id=r.path_id JOIN shared_directory_root_origins o ON o.root_id=r.id WHERE o.origin='explicit' AND r.enabled=1"
-        ).fetchall()
-    roots = [
-        Path(normal_windows_display_path(row[0].decode("utf-16-le"))).resolve()
-        for row in native_roots
-    ]
-    assert all(any(path.is_relative_to(root) for root in roots) for path in listed)
-    assert all(
-        not child.is_relative_to(parent)
-        for child in roots
-        for parent in roots
-        if child != parent
-    )
-    assert all(root in listed or index == 0 for root in roots)
-    report.update(listedRoots=len(listed), collapsedRoots=len(roots))
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    assert hashlib.sha256(archive.read_bytes()).digest() == digest
-    assert hashlib.sha256(directory_list.read_bytes()).digest() == directory_digest
-    with sqlite3.connect(profile / "emulebb-rust-metadata.db") as db:
-        assert (
-            db.execute(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'imported_%'"
-            ).fetchone()[0]
-            == 0
-        )
-
-
-def _hash_until_durable_paths(command, profile, output, target, label):
-    """Kill an owned offline process after a bounded sample; retain committed hashes."""
-    import sqlite3
-    import time
-    from contextlib import closing
-
-    database = profile / "emulebb-rust-metadata.db"
-
-    def snapshot():
-        if not database.is_file():
-            return {}
-        try:
-            with closing(
-                sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)
-            ) as db:
-                return dict(
-                    db.execute(
-                        "SELECT p.native_path,k.ed2k_hash FROM local_file_instances i JOIN local_paths p ON p.id=i.path_id JOIN known_files k ON k.id=i.known_file_id"
-                    )
-                )
-        except sqlite3.OperationalError:
-            return {}
-
-    with (
-        (output / f"{label}.stdout.log").open("w", encoding="utf-8") as stdout,
-        (output / f"{label}.stderr.log").open("w", encoding="utf-8") as stderr,
-    ):
-        process = subprocess.Popen(command, stdout=stdout, stderr=stderr, text=True)
-        deadline = time.monotonic() + 3600
-        try:
-            while len(snapshot()) < target:
-                assert process.poll() is None, (
-                    f"hash process exited early; inspect {output}"
-                )
-                assert time.monotonic() < deadline, "bounded hashing deadline exceeded"
-                time.sleep(0.1)
-        finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=30)
-    result = snapshot()
-    assert len(result) >= target
-    return result
-
-
-@pytest.mark.native
 @pytest.mark.parametrize("relocated", [False, True])
 def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path, relocated):
-    """A corrupt optional tree must reach reconciliation, not fail verification early."""
+    """A corrupt optional tree preserves valid imported MD4 bindings."""
     if os.name != "nt":
         pytest.skip("Windows executable integration")
     from emule_test_harness.paths import get_workspace_output_root
     from emule_test_harness.profile_import_audit import create_import_fixture
 
-    binary = get_workspace_output_root() / "tools/emulebb-rust/bin/emulebb-rust.exe"
-    if not binary.is_file():
-        pytest.skip("requires staged Rust executable")
+    from emule_test_harness import rust_client
+    from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+    rust = resolve_selected_workspace_repo(Path(__file__).resolve().parents[2], "emulebb-rust")
+    binary = Path(rust_client.verified_runtime_stage(rust, get_workspace_output_root())["executable"])
     fixture = tmp_path / "fixture"
     create_import_fixture(fixture)
     if relocated:
@@ -452,9 +242,6 @@ def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path, relocated):
     )
     assert report["import"]["rejectedRecoverySets"] == 1
     assert report["hashValidation"]["unavailableRecoverySets"] == 1
-    assert report["reconciliation"]["reusedCount"] == 4
-    assert report["reconciliation"]["plannedHashCount"] == 0
-    assert report["reconciliation"]["completedReadBytes"] == 0
     assert report["bindingValidation"]["verifiedPathBindings"] == 4
 
     # Repair the optional source cache and merge into the same live profile.
@@ -496,8 +283,6 @@ def test_rejected_aich_keeps_md4_reuse_without_workspace(tmp_path, relocated):
         assert merged["hashValidation"]["retainedExistingRecoverySets"] == (1 if scenario == "recovery-conflict" else 0)
         assert merged["hashValidation"]["preservedConflictingRecords"] == (1 if scenario == "aich-conflict" else 0)
         assert merged["counts"]["known_files"] == 3
-        assert merged["reconciliation"]["reusedCount"] == 4
-        assert merged["reconciliation"]["completedReadBytes"] == 0
         assert merged["import"]["conflictingPaths"] == (1 if scenario in ("aich-conflict", "ed2k-conflict") else 0)
 
 
@@ -590,8 +375,6 @@ target="/data/sample"
         report = json.loads(
             next((state / "reports").glob("*/summary.json")).read_text(encoding="utf-8")
         )
-        assert report["reconciliation"]["reusedCount"] == 4
-        assert report["reconciliation"]["plannedHashCount"] == 0
         assert report["hashValidation"]["verifiedRecoverySets"] == 3
         # Repeat against the Linux-created profile, then reject a corrupt
         # incoming optional tree while proving the existing tree is unchanged.
@@ -608,21 +391,3 @@ target="/data/sample"
             assert merged["auditBaseline"]["contentRecords"] == 3
             assert merged["auditBaseline"]["recoverySets"] == 3
             assert merged["hashValidation"]["retainedExistingRecoverySets"] == int(corrupt)
-            assert merged["reconciliation"]["reusedCount"] == 4
-            assert merged["reconciliation"]["plannedHashCount"] == 0
-            assert merged["reconciliation"]["completedReadBytes"] == 0
-        # Direct native .dat import uses paths visible inside the container.
-        # Exercise the other BOM encoding and the regular MD4/AICH pipeline.
-        (control / "shareddir-linux.dat").write_bytes(
-            b"\xfe\xff" + "/data/sample\n".encode("utf-16-be")
-        )
-        native_command = prefix + [
-            "import-shared-directories",
-            "/import/shareddir-linux.dat",
-        ]
-        first = module.audit.run_json(native_command, 120)
-        assert first["hashing"]["hashedCount"] == 4
-        assert first["hashing"]["completedReadBytes"] == 19
-        repeated = module.audit.run_json(native_command, 120)
-        assert repeated["hashing"]["hashedCount"] == 0
-        assert repeated["hashing"]["reusedCount"] == 4

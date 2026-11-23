@@ -97,20 +97,21 @@ jobs:
         with:
           repository: emulebb/emulebb-tooling
           # Keep the beta API contract aligned with the tested Rust revision.
-          ref: 47b7f686c871ecc18b9f2f2c306c014d7744e3ed
+          ref: 315e7194cded78e853f436e52eff8792634f6c82
           path: repos/emulebb-tooling
 
       - name: Checkout build tooling
         uses: actions/checkout@v7
         with:
           repository: emulebb/emulebb-build
+          ref: 988b3e4f61eeec8bde68089a695ac2ef3c7e6d9f
           path: repos/emulebb-build
 
       - name: Checkout Rust client
         uses: actions/checkout@v7
         with:
           repository: emulebb/emulebb-rust
-          ref: 080a5dea70186da31dab958757b5b8c0fd883f82
+          ref: 9fadba55bbe853210472090f64bc3c229178cfed
           path: repos/emulebb-rust
 
       - name: Checkout upstream-clean ed2k-server dependency
@@ -156,7 +157,14 @@ jobs:
 
       - name: Install harness dependencies
         working-directory: repos/emulebb-build-tests
-        run: python -m pip install -e .[dev,live]
+        run: python -m pip install -e .[dev,live] -e ../emulebb-build
+
+      - name: Generate the workspace manifest for the pinned checkouts
+        working-directory: repos/emulebb-build
+        run: >-
+          python -B -c "from pathlib import Path; from emule_workspace.materialize import write_workspace_manifest;
+          from emule_workspace.topology import canonical_topology;
+          write_workspace_manifest(Path.cwd().parents[1], canonical_topology(), 'workspace')"
 
       - name: Check Rust OpenAPI metadata drift
         working-directory: repos/emulebb-build-tests

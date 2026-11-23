@@ -8,21 +8,29 @@ import json
 import os
 import socket
 import sqlite3
+import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import cache
 from pathlib import Path
 from typing import Callable
 
 from . import (
     ed2k_server as ed2k_harness,
+    kad_nodes,
     rust_client,
+    rust_cgroup_budget,
     rust_local_ed2k,
     rust_metadata,
+    rust_openapi_responses,
+    rust_rest_conformance,
+    rust_rest_contract,
     rust_shared_library_fixture as fixture,
     rust_shared_library_storage as storage,
 )
@@ -33,13 +41,21 @@ from .paths import (
 )
 from .script_modules import load_script_module
 
-REPORT_SCHEMA = "emulebb.rust-shared-library-io.v6"
-MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v2"
+REPORT_SCHEMA = "emulebb.rust-shared-library-io.v8"
+RETAINED_DOWNLOAD_EXPECTED = {
+    "downloadJobs": 100_000,
+    "unfinishedDownloads": 1_000,
+    "completedDownloads": 99_000,
+    "startedDownloads": 100,
+    "stoppedDownloads": 900,
+}
+MEDIA_REPORT_SCHEMA = "emulebb.rust-shared-library-media-io.v3"
 LAN_STARTUP_REPORT_SCHEMA = "emulebb.rust-shared-library-lan-startup.v1"
 OFFERFILES_SCALE_REPORT_SCHEMA = "emulebb.rust-offerfiles-scale.v1"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local-only-key"
+COUPLED_P2P_IP = "127.0.0.1"
 DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
@@ -48,26 +64,34 @@ CATALOG_HYDRATION_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_LAN_STARTUP_TIMEOUT_SECONDS = 5 * 60
 DEFAULT_OFFERFILES_SCALE_TIMEOUT_SECONDS = 3 * 60 * 60
 STATUS_LATENCY_LIMIT_SECONDS = 10.0
-SHARED_FILES_PROBE_PATH = "/shared-files?limit=1"
+LIBRARY_FILES_PROBE_PATH = "/library/files?view=shared&limit=1&countTotal=true"
+LIBRARY_FILE_SORTS = (
+    "displayName", "sizeBytes", "sessionUploadedBytes", "sessionUploadRequests",
+    "sessionAcceptedUploads", "lifetimeUploadedBytes", "lifetimeUploadRequests",
+    "lifetimeAcceptedUploads", "lastUploadRequestedAt", "lastUploadedAt",
+)
+LIBRARY_SUBSTRING_PROBES = ("FiLe-000", "CASE-VARIANT", "[bracketed]", "a_%", "CAF\u00c9")
 OFFERFILES_SCALE_BATCH_MAX = 200
 OFFERFILES_SCALE_MIN_INTERVAL_MS = 500
 OFFERFILES_SCALE_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 OFFERFILES_SCALE_PACING_TOLERANCE_SECONDS = 2.0
 ACTIVE_LOCAL_SOURCES_SQL = """
-    SELECT DISTINCT local_file_instances.path_id,
+    SELECT local_file_instances.path_id,
            local_file_instances.known_file_id,
-           local_file_instances.file_size,
+           local_file_instances.size_bytes,
            local_file_instances.verified_fingerprint
     FROM local_file_instances
-    JOIN shared_file_memberships
-      ON shared_file_memberships.path_id = local_file_instances.path_id
-    JOIN shared_directory_roots
-      ON shared_directory_roots.id = shared_file_memberships.root_id
-    WHERE shared_file_memberships.removed_at_ms IS NULL
+    WHERE EXISTS (
+      SELECT 1 FROM shared_file_memberships
+      JOIN shared_directory_roots
+        ON shared_directory_roots.id = shared_file_memberships.root_id
+      WHERE shared_file_memberships.path_id = local_file_instances.path_id
+      AND shared_file_memberships.removed_at_s IS NULL
       AND shared_directory_roots.enabled = 1
-      AND shared_directory_roots.deleted_at_ms IS NULL
+      AND shared_directory_roots.deleted_at_s IS NULL
       AND shared_directory_roots.accessible = 1
       AND shared_directory_roots.shareable = 1
+    )
 """
 DEFAULT_MEDIA_ROOTS_FILE = (
     Path(__file__).resolve().parent.parent
@@ -75,14 +99,23 @@ DEFAULT_MEDIA_ROOTS_FILE = (
 )
 
 
-dtt = load_script_module(
-    "deterministic_two_client_transfer_shared_library_io",
-    "deterministic-two-client-transfer.py",
-)
-local_kad = load_script_module(
-    "local_kad_swarm_shared_library_io",
-    "local-kad-swarm.py",
-)
+@cache
+def _lan_transfer_harness():
+    """Load Windows cross-client controls only for the LAN-specific commands."""
+    return load_script_module("deterministic_two_client_transfer_shared_library_io",
+                              "deterministic-two-client-transfer.py")
+
+
+@cache
+def _lan_kad_harness():
+    """Keep LAN swarm dependencies out of the portable library/history campaign."""
+    return load_script_module("local_kad_swarm_shared_library_io", "local-kad-swarm.py")
+
+
+@cache
+def _native_transfer_harness():
+    """Reuse native package payload, port and explicit client-admission helpers."""
+    return load_script_module("package_transfer_shared_library_io", "smoke-rust-release-package.py")
 
 
 @dataclass(frozen=True)
@@ -98,16 +131,41 @@ class HarnessPaths:
     owner_path: Path
     runs_root: Path
     reports_root: Path
-    staged_executable: Path
+    staged_executable: Path | None
 
 
-def resolve_paths() -> HarnessPaths:
+def resolve_paths(*, rust_repo: Path | None = None, registered_stage: bool = False,
+                  require_runtime: bool = False) -> HarnessPaths:
     """Resolve mandatory operator state without mutating environment variables."""
 
     workspace_root = get_required_emule_workspace_root()
     output_root = get_workspace_output_root()
-    rust_repo = workspace_root / "repos" / "emulebb-rust"
+    explicit_source = rust_repo is not None
+    rust_repo = (rust_repo or workspace_root / "repos" / "emulebb-rust").resolve()
     scenario_root = output_root / "profiles" / "emulebb-rust-shared-library-io"
+    reports_root = output_root / "reports" / "emulebb-rust" / "shared-library-io"
+    executable = rust_client.staged_executable(output_root)
+    boundary = workspace_root / "workspaces" / "agents"
+    if registered_stage:
+        if not explicit_source or not rust_repo.is_relative_to(boundary):
+            raise RuntimeError("Registered campaign requires an explicit managed Rust source")
+        from .workspace_layout import resolve_selected_workspace_repo
+
+        selected = resolve_selected_workspace_repo(Path(__file__).parents[1], "emulebb-rust")
+        if rust_repo != selected:
+            raise RuntimeError("Campaign Rust source differs from the registered companion")
+        parts = rust_repo.relative_to(boundary).parts
+        if len(parts) != 2 or parts[1] != "emulebb-rust":
+            raise RuntimeError("Campaign requires a registered Rust repository root")
+        scenario_root = output_root / "profiles" / "workstreams" / parts[0] / "emulebb-rust-shared-library-io"
+        reports_root = output_root / "reports" / "workstreams" / parts[0] / "shared-library-io"
+        # Fixture preparation needs no executable. Runtime admission must never
+        # fall back to the operator stage when the selected receipt is missing.
+        executable = None
+        if require_runtime:
+            executable = Path(rust_client.verified_runtime_stage(rust_repo, output_root)["executable"])
+    elif rust_repo.is_relative_to(boundary):
+        raise RuntimeError("Managed campaign requires --registered-stage")
     if not rust_repo.is_dir():
         raise RuntimeError(
             f"emulebb-rust repository is missing below EMULEBB_WORKSPACE_ROOT: {rust_repo}"
@@ -116,7 +174,6 @@ def resolve_paths() -> HarnessPaths:
         raise RuntimeError(
             "shared-library I/O scenario root escaped EMULEBB_WORKSPACE_OUTPUT_ROOT"
         )
-    executable_name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
     return HarnessPaths(
         workspace_root=workspace_root,
         output_root=output_root,
@@ -126,12 +183,8 @@ def resolve_paths() -> HarnessPaths:
         manifest_path=scenario_root / "fixture-manifest.json",
         owner_path=scenario_root / ".emulebb-rust-shared-library-io-owner.json",
         runs_root=scenario_root / "runs",
-        reports_root=output_root / "reports" / "emulebb-rust" / "shared-library-io",
-        staged_executable=output_root
-        / "tools"
-        / "emulebb-rust"
-        / "bin"
-        / executable_name,
+        reports_root=reports_root,
+        staged_executable=executable,
     )
 
 
@@ -371,6 +424,10 @@ def prepare_fixture(
         raise RuntimeError(
             f"refusing to use unowned scenario directory: {paths.scenario_root}"
         )
+    if paths.owner_path.is_file():
+        owner = json.loads(paths.owner_path.read_text(encoding="utf-8"))
+        if owner.get("schema") != OWNER_SCHEMA:
+            raise RuntimeError("fixture ownership marker is invalid")
     if paths.owner_path.is_file() and paths.manifest_path.is_file():
         existing = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
         if existing.get("schema") != FIXTURE_SCHEMA:
@@ -404,6 +461,7 @@ def prepare_fixture(
                         }
                     ],
                 }
+    space = fixture_space_preflight(paths, spec, target)
     storage.make_directories(paths.scenario_root)
     if not paths.owner_path.exists():
         write_json(
@@ -444,6 +502,7 @@ def prepare_fixture(
         "createdCount": created,
         "reusedCount": reused,
         "prunedCount": pruned,
+        "spacePreflight": space,
         "elapsedSeconds": round(time.monotonic() - started, 3),
         "fixture": validation,
         "targetRoots": [
@@ -460,6 +519,28 @@ def prepare_fixture(
             }
         ],
     }
+
+
+def fixture_space_preflight(paths: HarnessPaths, spec: FixtureSpec,
+                            target: dict[str, object]) -> dict[str, int]:
+    """Admit remaining fixture bytes before changing ownership or payload files."""
+    remaining = 0
+    largest = 0
+    for _index, path, size in iter_fixture_files(paths.fixture_root, spec):
+        if storage.is_file(path) and storage.stat(path).st_size == size:
+            continue
+        remaining += size
+        largest = max(largest, size)
+    probe = Path(str(target.get("mountPath") or paths.output_root))
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    free = shutil.disk_usage(probe).free
+    # WHY: payload replacement retains the previous file until an atomic rename.
+    # Reserve one extra temporary payload, without crediting future pruning.
+    required = remaining + largest
+    if free < required:
+        raise RuntimeError(f"Insufficient fixture space: need {required} bytes, available {free}")
+    return {"remainingPayloadBytes": remaining, "requiredFreeBytes": required, "availableFreeBytes": free}
 
 
 def load_prepared_manifest(paths: HarnessPaths) -> dict[str, object]:
@@ -568,7 +649,7 @@ def wait_for_rest(
             )
         try:
             client.request(
-                "GET", "/shared-directories", timeout_seconds=2.0, record=False
+                "GET", "/library/scan", timeout_seconds=2.0, record=False
             )
             return
         except Exception as exc:  # noqa: BLE001 - preserve only the final error type below
@@ -606,9 +687,11 @@ def counter_delta(
 class ProcessSampler:
     """Collect compact process CPU, memory, handle, and I/O observations."""
 
-    def __init__(self, process: subprocess.Popen[str], interval_seconds: float) -> None:
+    def __init__(self, process: subprocess.Popen[str], interval_seconds: float, *, observed_pid: int | None = None) -> None:
         psutil = _load_psutil()
-        self.process = psutil.Process(process.pid)
+        self.process = psutil.Process(process.pid if observed_pid is None else observed_pid)
+        self.controller = psutil.Process(os.getpid())
+        self.metric_errors: dict[str, str] = {}
         self.interval_seconds = interval_seconds
         self.next_sample = 0.0
         self.samples: list[dict[str, object]] = []
@@ -617,47 +700,71 @@ class ProcessSampler:
         now = time.monotonic()
         if not force and now < self.next_sample:
             return
+        self.next_sample = now + self.interval_seconds
         try:
             memory = self.process.memory_info()
             cpu = self.process.cpu_times()
-            io = self.process.io_counters()
-            self.samples.append(
-                {
-                    "cpuSeconds": round(float(cpu.user + cpu.system), 3),
-                    "workingSetBytes": int(memory.rss),
-                    "privateBytes": int(
-                        getattr(memory, "private", getattr(memory, "vms", 0))
-                    ),
-                    "handleCount": int(self.process.num_handles())
-                    if os.name == "nt"
-                    else None,
-                    "readCount": int(io.read_count),
-                    "writeCount": int(io.write_count),
-                    "readBytes": int(io.read_bytes),
-                    "writeBytes": int(io.write_bytes),
-                }
-            )
-        except Exception:  # process may be exiting between poll and sample
+        except Exception as error:  # A process may exit between poll and sample.
+            self.metric_errors["cpuMemory"] = type(error).__name__
             return
-        self.next_sample = now + self.interval_seconds
+        try:
+            io = self.process.io_counters()
+        except Exception as error:
+            # WHY: restricted /proc I/O access must not discard observable RSS/CPU.
+            self.metric_errors["io"] = type(error).__name__
+            io = None
+        try:
+            handles = self.process.num_handles() if os.name == "nt" else None
+        except Exception as error:
+            self.metric_errors["handles"] = type(error).__name__
+            handles = None
+        try:
+            controller_rss = int(self.controller.memory_info().rss)
+        except Exception as error:
+            self.metric_errors["controllerMemory"] = type(error).__name__
+            controller_rss = None
+        peak = getattr(memory, "peak_wset", None)
+        private = getattr(memory, "private", None)
+        self.samples.append({
+            "cpuSeconds": round(float(cpu.user + cpu.system), 3),
+            "workingSetBytes": int(memory.rss),
+            "lifetimePeakWorkingSetBytes": int(peak) if peak is not None else None,
+            # Virtual address space is not private resident or committed memory.
+            "privateBytes": int(private) if private is not None else None,
+            "controllerWorkingSetBytes": controller_rss,
+            "handleCount": int(handles) if handles is not None else None,
+            **{key: int(getattr(io, attribute)) if io is not None else None for key, attribute in (
+                ("readCount", "read_count"), ("writeCount", "write_count"),
+                ("readBytes", "read_bytes"), ("writeBytes", "write_bytes"),
+            )},
+        })
 
     def summary(self, start_index: int = 0) -> dict[str, object]:
         rows = self.samples[start_index:]
         if not rows:
-            return {"sampleCount": 0}
+            return {"sampleCount": 0, "metricErrors": dict(self.metric_errors)}
         first, last = rows[0], rows[-1]
+
+        def observed_max(key: str) -> int | None:
+            return max((int(row[key]) for row in rows if row.get(key) is not None), default=None)
+
+        def observed_delta(key: str) -> int | None:
+            return int(last[key]) - int(first[key]) if first[key] is not None and last[key] is not None else None
+
         return {
             "sampleCount": len(rows),
-            "cpuSecondsDelta": round(
-                float(last["cpuSeconds"]) - float(first["cpuSeconds"]), 3
-            ),
-            "peakWorkingSetBytes": max(int(row["workingSetBytes"]) for row in rows),
-            "peakPrivateBytes": max(int(row["privateBytes"]) for row in rows),
-            "peakHandleCount": max(int(row["handleCount"] or 0) for row in rows),
-            "readBytesDelta": int(last["readBytes"]) - int(first["readBytes"]),
-            "writeBytesDelta": int(last["writeBytes"]) - int(first["writeBytes"]),
-            "readCountDelta": int(last["readCount"]) - int(first["readCount"]),
-            "writeCountDelta": int(last["writeCount"]) - int(first["writeCount"]),
+            "lifetimeCpuSeconds": float(last["cpuSeconds"]),
+            "cpuSecondsDelta": round(float(last["cpuSeconds"]) - float(first["cpuSeconds"]), 3),
+            "peakWorkingSetBytes": observed_max("workingSetBytes"),
+            "lifetimePeakWorkingSetBytes": observed_max("lifetimePeakWorkingSetBytes"),
+            "peakPrivateBytes": observed_max("privateBytes"),
+            "peakControllerWorkingSetBytes": observed_max("controllerWorkingSetBytes"),
+            "peakHandleCount": observed_max("handleCount"),
+            "readBytesDelta": observed_delta("readBytes"),
+            "writeBytesDelta": observed_delta("writeBytes"),
+            "readCountDelta": observed_delta("readCount"),
+            "writeCountDelta": observed_delta("writeCount"),
+            "metricErrors": dict(self.metric_errors),
         }
 
 
@@ -670,7 +777,7 @@ PROGRESS_FIELDS = (
     "reusedCount",
     "newCount",
     "changedCount",
-    "missingMtimeCount",
+    "missingFingerprintCount",
     "statFailedCount",
     "skippedFailedCount",
     "skippedIntakeCount",
@@ -685,8 +792,8 @@ PROGRESS_FIELDS = (
     "plannedReadBytes",
     "completedReadBytes",
     "readRateBytesPerSec",
-    "startedAtMs",
-    "updatedAtMs",
+    "startedAt",
+    "updatedAt",
 )
 
 
@@ -733,9 +840,9 @@ def wait_for_shared_catalog_hydration(
                 f"emulebb-rust exited during catalog hydration with code {process.returncode}"
             )
         shared = client.request(
-            "GET", SHARED_FILES_PROBE_PATH, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", LIBRARY_FILES_PROBE_PATH, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
-        last_total = shared.get("total")
+        last_total = shared["meta"]["total"]
         if last_total == expected:
             return {
                 "sharedFilesTotal": last_total,
@@ -750,6 +857,44 @@ def wait_for_shared_catalog_hydration(
     )
 
 
+def reload_log_offsets(profile_dir: Path) -> dict[Path, int]:
+    """Mark existing log bytes before starting a campaign phase."""
+    return {path: path.stat().st_size for path in (profile_dir / "logs").glob("emulebb-rust*.jsonl")}
+
+
+def completed_reload_from_logs(
+    profile_dir: Path, offsets: dict[Path, int], expected_scanned: int,
+) -> dict[str, object] | None:
+    """Stream the first current completion, retaining only numeric counters."""
+    fields = [field for field in PROGRESS_FIELDS if field not in {
+        "phase", "running", "pending", "readRateBytesPerSec",
+    }]
+    for path in sorted((profile_dir / "logs").glob("emulebb-rust*.jsonl")):
+        with path.open("rb") as handle:
+            offset = offsets.get(path, 0)
+            if offset:
+                handle.seek(offset - 1)
+                if handle.read(1) != b"\n":
+                    handle.readline()  # Discard a record already in flight at the phase boundary.
+            else:
+                handle.seek(0)
+            for line in handle:
+                if b'shared-directory reload completed' not in line:
+                    continue
+                if not line.endswith(b"\n"):
+                    continue  # The existing log worker may still be flushing.
+                event = json.loads(line)
+                data = event.get("fields", {})
+                if (event.get("target") != "emulebb_core::shared_directories"
+                        or data.get("message") != "shared-directory reload completed"):
+                    continue
+                if any(type(data.get(field)) is not int or data[field] < 0 for field in fields):
+                    raise RuntimeError("reload completion log has invalid counters")
+                if data["scannedCount"] == expected_scanned:
+                    return {field: data[field] for field in fields} | {"phase": "idle"}
+    return None
+
+
 def wait_for_reload(
     *,
     label: str,
@@ -760,6 +905,8 @@ def wait_for_reload(
     expected_scanned: int,
     timeout_seconds: float,
     poll_seconds: float,
+    completion_logs: tuple[Path, dict[Path, int]] | None = None,
+    observe: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Poll one reload to completion while retaining only sanitized counters."""
 
@@ -771,6 +918,7 @@ def wait_for_reload(
     max_disk_active = 0
     observations: list[dict[str, object]] = []
     final: dict[str, object] | None = None
+    completed_reload: dict[str, object] | None = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -778,9 +926,11 @@ def wait_for_reload(
             )
         sampler.maybe_sample()
         data = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
+        if observe is not None:
+            observe(progress)
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
             max_disk_active,
@@ -789,12 +939,20 @@ def wait_for_reload(
         )
         if not observations or time.monotonic() - started >= len(observations) * 30:
             observations.append(progress)
+            print(f"{label}: scanned={progress.get('scannedCount')} hashed={progress.get('hashedCount')} "
+                  f"active={progress.get('activeHashCount')} readBytes={progress.get('completedReadBytes')}",
+                  file=sys.stderr, flush=True)
         if (
             progress.get("running") is False
             and progress.get("pending") is False
             and int(data.get("hashingCount") or 0) == 0
             and int(progress.get("scannedCount") or 0) == expected_scanned
         ):
+            if completion_logs is not None:
+                completed_reload = completed_reload_from_logs(*completion_logs, expected_scanned)
+                if completed_reload is None:
+                    time.sleep(poll_seconds)
+                    continue
             final = progress
             break
         time.sleep(poll_seconds)
@@ -804,14 +962,16 @@ def wait_for_reload(
     disk_after = disk_io_snapshot(disk_counter_key)
     shared = client.request(
         "GET",
-        SHARED_FILES_PROBE_PATH,
+        LIBRARY_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
         "label": label,
         "elapsedSeconds": round(time.monotonic() - started, 3),
-        "sharedFilesTotal": shared.get("total"),
-        "progress": final,
+        "sharedFilesTotal": shared["meta"]["total"],
+        "progress": completed_reload if completed_reload is not None else final,
+        "settledProgress": final,
+        "completionSource": "structuredLog" if completion_logs is not None else "liveProgress",
         "maxActiveHashCount": max_active,
         "maxPerDiskActiveCount": max_disk_active,
         "process": sampler.summary(process_start),
@@ -850,11 +1010,6 @@ def run_dynamic_reload_phase(
 ) -> dict[str, object]:
     """Run a reload whose real-media file count is intentionally unknown."""
 
-    before_dirs = client.request(
-        "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
-    )
-    before_progress = compact_progress(before_dirs)
-    before_started = before_progress.get("startedAtMs")
     disk_before = disk_io_snapshots(counter_keys)
     process_start = len(sampler.samples)
     started = time.monotonic()
@@ -864,7 +1019,6 @@ def run_dynamic_reload_phase(
     max_disk_active = 0
     observations: list[dict[str, object]] = []
     final: dict[str, object] | None = None
-    saw_activity = False
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -872,18 +1026,10 @@ def run_dynamic_reload_phase(
             )
         sampler.maybe_sample()
         data = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
         scanned = int(progress.get("scannedCount") or 0)
-        saw_activity = (
-            saw_activity
-            or bool(progress.get("running"))
-            or (
-                progress.get("startedAtMs") is not None
-                and progress.get("startedAtMs") != before_started
-            )
-        )
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
             max_disk_active,
@@ -912,8 +1058,7 @@ def run_dynamic_reload_phase(
                 )
         count_ok = expected_scanned is None or scanned == expected_scanned
         if (
-            saw_activity
-            and count_ok
+            count_ok
             and progress.get("running") is False
             and progress.get("pending") is False
             and int(data.get("hashingCount") or 0) == 0
@@ -927,13 +1072,13 @@ def run_dynamic_reload_phase(
     disk_after = disk_io_snapshots(counter_keys)
     shared = client.request(
         "GET",
-        SHARED_FILES_PROBE_PATH,
+        LIBRARY_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     return {
         "label": label,
         "elapsedSeconds": round(time.monotonic() - started, 3),
-        "sharedFilesTotal": shared.get("total"),
+        "sharedFilesTotal": shared["meta"]["total"],
         "progress": final,
         "maxActiveHashCount": max_active,
         "maxPerDiskActiveCount": max_disk_active,
@@ -955,20 +1100,21 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
             transfer_file_count += int(entry.is_file(follow_symlinks=False))
     counts: dict[str, int] = {}
     if database.is_file():
-        with sqlite3.connect(
+        with closing(sqlite3.connect(
             f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30
-        ) as connection:
+        )) as connection:
             active_sources = ACTIVE_LOCAL_SOURCES_SQL
             for key, query in {
                 "knownFiles": "SELECT COUNT(*) FROM known_files",
                 "verifiedContentRows": "SELECT COUNT(*) FROM verified_local_content",
                 "localInstanceRows": "SELECT COUNT(*) FROM local_file_instances",
-                "transferRows": "SELECT COUNT(*) FROM transfers",
-                "activeTransferRows": (
-                    "SELECT COUNT(*) FROM transfers WHERE removed_at_ms IS NULL"
-                ),
+                "downloadJobs": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL",
+                "unfinishedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NULL",
+                "completedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NOT NULL",
+                "startedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NULL AND intent='started' AND delete_requested_at_s IS NULL",
+                "stoppedDownloads": "SELECT COUNT(*) FROM download_jobs WHERE removed_at_s IS NULL AND terminal_completed_at_s IS NULL AND intent='stopped' AND delete_requested_at_s IS NULL",
                 "activeShareSources": f"WITH active_sources AS ({active_sources}) SELECT COUNT(*) FROM active_sources",
-                "activeShareBytes": f"WITH active_sources AS ({active_sources}) SELECT coalesce(sum(file_size), 0) FROM active_sources",
+                "activeShareBytes": f"WITH active_sources AS ({active_sources}) SELECT coalesce(sum(size_bytes), 0) FROM active_sources",
                 "activeLongPathSources": f"""
                     WITH active_sources AS ({active_sources})
                     SELECT COUNT(*) FROM active_sources
@@ -983,15 +1129,15 @@ def profile_storage_snapshot(profile_dir: Path) -> dict[str, object]:
                       ON verified_local_content.known_file_id = known_files.id
                     WHERE verified_local_content.known_file_id IS NULL
                        OR length(verified_local_content.aich_root) != 20
-                       OR verified_local_content.part_size <= 0
-                       OR known_files.size_bytes != active_sources.file_size
+                       OR verified_local_content.part_size_bytes <= 0
+                       OR known_files.size_bytes != active_sources.size_bytes
                        OR length(active_sources.verified_fingerprint) = 0
                        OR (SELECT COUNT(*) FROM verified_local_md4_hashes
                            WHERE known_file_id = known_files.id) != verified_local_content.part_count
                        OR (SELECT COUNT(*) FROM verified_local_aich_hashes
                            WHERE known_file_id = known_files.id) != verified_local_content.part_count
                 """,
-                "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_ms IS NULL",
+                "activeMemberships": "SELECT COUNT(*) FROM shared_file_memberships WHERE removed_at_s IS NULL",
                 "scanFailures": "SELECT COUNT(*) FROM shared_file_scan_failures",
             }.items():
                 counts[key] = int(connection.execute(query).fetchone()[0])
@@ -1011,7 +1157,7 @@ def storage_acceptance(
     expected_active: int,
     expected_bytes: int,
     expected_minimum_long: int,
-    require_known_exact: bool = False,
+    expected_known: int | None = None,
 ) -> dict[str, bool]:
     counts = (
         snapshot.get("rowCounts") if isinstance(snapshot.get("rowCounts"), dict) else {}
@@ -1024,38 +1170,409 @@ def storage_acceptance(
         >= expected_minimum_long,
         "databaseScanFailures": counts.get("scanFailures") == 0,
     }
-    if require_known_exact:
-        checks["databaseKnownFiles"] = counts.get("knownFiles") == expected_active
+    if expected_known is not None:
+        checks["databaseKnownFiles"] = counts.get("knownFiles") == expected_known
     return checks
 
 
+def retained_download_observation(client: RestClient) -> dict[str, object]:
+    """Capture the combined workload's public counts without timing promises."""
+    counts = client.request("GET", "/snapshot")["downloads"]
+    stats = client.request("GET", "/stats")
+    resources = stats.get("downloadResources", {})
+    observed = {
+        "unfinished": counts.get("unfinished"), "completed": counts.get("completed"),
+        "total": stats.get("downloadCount"),
+        "started": sum(resources.get(key, 0) for key in ("active", "preparing", "waiting")),
+    }
+    observed["ok"] = observed == {
+        "unfinished": RETAINED_DOWNLOAD_EXPECTED["unfinishedDownloads"],
+        "completed": RETAINED_DOWNLOAD_EXPECTED["completedDownloads"],
+        "total": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+        "started": RETAINED_DOWNLOAD_EXPECTED["startedDownloads"],
+    }
+    return observed
+
+
+def prove_library_reads(
+    fetch_page: Callable[[str], dict], *, spec: FixtureSpec,
+    sample: Callable[[], object],
+) -> dict[str, object]:
+    """Stream all sort directions and literal searches, retaining only page summaries.
+
+    Run against the unchanged baseline, before watcher mutations or uploads.
+    These statistics therefore exercise large equal-key cohorts, not live counters.
+    """
+    traversals = []
+    for sort, order, search in [
+        (sort, order, None) for sort in LIBRARY_FILE_SORTS for order in ("asc", "desc")
+    ] + [("displayName", "asc", query) for query in LIBRARY_SUBSTRING_PROBES]:
+        started = time.monotonic()
+        page_count = 0
+        first_page = last_page = None
+        previous = None
+        row_count = 0
+
+        def fetch(path: str) -> dict:
+            nonlocal page_count, first_page, last_page
+            document = fetch_page(path)
+            rows = document.get("data", [])
+            summary = {
+                "rows": len(rows),
+                "firstHash": rows[0].get("hash") if rows else None,
+                "lastHash": rows[-1].get("hash") if rows else None,
+            }
+            page_count += 1
+            if first_page is None:
+                first_page = summary
+            last_page = summary
+            sample()
+            return document
+
+        for row in rust_rest_contract.iter_library_files(
+            fetch, view="shared", sort=sort, order=order, search=search,
+        ):
+            name = row["displayName"].lower()
+            if row.get("present") is not True or row.get("sharingEnabled") is not True:
+                raise RuntimeError("library shared traversal returned an ineligible row")
+            if search is not None and search.lower() not in name:
+                raise RuntimeError("library substring traversal returned a nonmatching name")
+            if sort == "displayName":
+                key = (name, row["hash"])
+            else:
+                value = row.get(sort)
+                nullable = sort in ("sizeBytes", "lastUploadRequestedAt", "lastUploadedAt")
+                if (value is None and not nullable) or (
+                    value is not None and (type(value) is not int or value < 0)
+                ):
+                    raise RuntimeError(f"library sort {sort} returned an invalid value")
+                key = (value is not None, value if value is not None else 0, row["hash"])
+            if previous is not None and not (key > previous if order == "asc" else key < previous):
+                raise RuntimeError(f"library {sort}/{order} traversal did not strictly advance")
+            previous = key
+            row_count += 1
+            if row_count > spec.file_count:
+                raise RuntimeError("library traversal exceeded the unchanged baseline")
+        expected = spec.file_count if search is None else sum(
+            search.lower() in fixture.relative_file_for_index(index, spec).name.lower()
+            for index in range(spec.file_count)
+        )
+        if row_count != expected:
+            raise RuntimeError(f"library {sort}/{order} traversal returned {row_count}, expected {expected}")
+        traversals.append({
+            "sort": sort, "order": order, "search": search, "rows": row_count,
+            "pages": page_count, "firstPage": first_page, "lastPage": last_page,
+            "elapsedSeconds": round(time.monotonic() - started, 3),
+        })
+    return {"ok": True, "traversals": traversals}
+
+
+class _MissingHashingOverlap(RuntimeError):
+    """The complete transfer lifecycle passed without concurrent hashing."""
+
+
+def run_coupled_reload(
+    *, paths: HarnessPaths, run_root: Path, profile_dir: Path, client: RestClient,
+    process: subprocess.Popen[str], sampler: ProcessSampler,
+    receiver_log_path: Path,
+    reload_args: dict[str, object], evidence: dict[str, object],
+    before_scan: Callable[[], None] | None = None,
+) -> dict[str, object]:
+    """Verify real payload progress during hashing, then restore the job cohort.
+
+    Both real daemons inherit the campaign cgroup. The extra client-owned hash
+    remains known after explicit removal; baseline jobs and library copies do not
+    change. Failure evidence is updated in the caller-owned report throughout.
+    """
+    native = _native_transfer_harness()
+    base_url = client.base_url.removesuffix("/api/v1")
+    deadline = time.monotonic() + float(reload_args["timeout_seconds"])
+    source_process = source_client = source_sampler = None
+    read_attempts: list[dict] = []
+    start_attempts: list[dict] = []
+    evidence.update(status="running", readAttempts=read_attempts, startAttempts=start_attempts,
+                    observations=[], overlapObservations=0)
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError("coupled scan/transfer exceeded the campaign deadline")
+        return value
+
+    def read(path: str) -> dict:
+        return native._parallel_read(
+            lambda: native.request_json(base_url, "GET", "/api/v1" + path, API_KEY),
+            read_attempts, path=path,
+        )
+
+    def startup_quiescent() -> bool | None:
+        sampler.maybe_sample()
+        with receiver_log_path.open(encoding="utf-8", errors="replace") as log:
+            initialized = any("initial shared-directory reload disabled by daemon settings" in line
+                              for line in log)
+        scan = read("/library/scan")
+        progress = compact_progress(scan)
+        ready = (progress.get("running") is False and progress.get("pending") is False
+                 and scan.get("hashingCount") == 0)
+        evidence["startupQuiescence"] = {"initialized": initialized, "scanQuiescent": ready}
+        return True if initialized and ready else None
+
+    try:
+        rust_local_ed2k.wait_for(
+            startup_quiescent, timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining()),
+            interval_seconds=0.5,
+            description="coupled receiver startup quiescence", retry_exceptions=(),
+        )
+        openapi = rust_openapi_responses.load_openapi_document()
+        resource_schema = rust_openapi_responses.openapi_schema_component(openapi, "DownloadResources")
+        acknowledgement_schema = rust_openapi_responses.openapi_schema_component(
+            openapi, "ServerConnectAcknowledgement")
+        payload_path = run_root / "coupled-source-data" / "Foundation.Coupled.Payload.bin"
+        payload = native._write_transfer_payload(payload_path, 64 * 1024 * 1024,
+                                                 identity=b"foundation-coupled-scan")
+        ip = COUPLED_P2P_IP
+        ports: set[int] = {20019, 20020}
+        source_tcp = native._available_unique_port(ports, host=ip)
+        source_udp = native._available_unique_port(ports, host=ip, socket_type=socket.SOCK_DGRAM)
+        source_rest = choose_loopback_port()
+        source_profile = run_root / "coupled-source-profile"
+        rust_client.write_rust_profile(
+            source_profile, rust_repo=paths.rust_repo, rest_addr="127.0.0.1", rest_port=source_rest,
+            api_key=API_KEY, local_only_discovery=True, replace_servers=True,
+            settings={"network.ed2kEnabled": True, "network.kadEnabled": False,
+                      "network.p2p.bindIp": ip, "network.p2p.tcpPort": source_tcp,
+                      "network.p2p.udpPort": source_udp, "sharing.scanOnStartup": False,
+                      "transfers.uploadLimitBytesPerSecond": 512 * 1024,
+                      "storage.incomingDirectory": str(source_profile / "incoming")},
+        )
+        source_process, source_client, source_sampler = start_configured_daemon(
+            paths, source_profile, run_root / "coupled-source.log",
+            rest_address="127.0.0.1", rest_port=source_rest,
+        )
+        # The existing manual-connect profiles intentionally start no P2P runtime.
+        # Use the public activation path with one uncontactable local server,
+        # matching package smoke without adding a server process or outside route.
+        ports.add(source_rest)
+        server_port = native._available_unique_port(ports, host=ip)
+        evidence["networkActivation"] = {}
+        for label, url in (("source", source_client.base_url.removesuffix("/api/v1")),
+                           ("receiver", base_url)):
+            native.request_json(url, "POST", "/api/v1/servers", API_KEY,
+                                {"address": ip, "port": server_port}, expected_statuses=(201,))
+            activated = native.request_json(url, "POST", "/api/v1/servers/operations/connect", API_KEY)
+            evidence["networkActivation"][label] = activated
+            rust_openapi_responses.validate_openapi_schema(openapi, acknowledgement_schema, activated)
+        published = rust_local_ed2k.publish_shared_tree(
+            source_client.base_url.removesuffix("/api/v1"), API_KEY,
+            root=payload_path.parent, file_name=payload_path.name, timeout_seconds=min(120, remaining()),
+        )["sharedFiles"]["matched"]
+        file_hash = published["hash"]
+        admission = native.request_json(base_url, "POST", "/api/v1/downloads", API_KEY,
+            {"source": {"type": "ed2k-link", "link": rust_local_ed2k.ed2k_link_with_source(
+                published["ed2kLink"], ip, source_tcp)}, "intent": "stopped"}, expected_statuses=(201,))
+        job_id = rust_local_ed2k.require_download_id(admission, expected_hash=file_hash)
+        evidence.update(jobId=job_id, hash=file_hash, payloadBytes=payload["sizeBytes"],
+                        payloadSha256=payload["sha256"], sourceUploadLimitBytesPerSecond=512 * 1024)
+        native._start_parallel_job(base_url, job_id, start_attempts, api_key=API_KEY)
+        previous_hashing_bytes = None
+        last_print = 0.0
+
+        def observe(progress: dict[str, object]) -> dict[str, object]:
+            nonlocal previous_hashing_bytes, last_print
+            source_sampler.maybe_sample()
+            sampler.maybe_sample()
+            row = read(f"/downloads/{job_id}")
+            totals = native._parallel_read(
+                lambda: rust_local_ed2k.download_part_totals(base_url, API_KEY, job_id),
+                read_attempts, path=f"/downloads/{job_id}/parts",
+            )
+            resources = read("/stats")["downloadResources"]
+            rust_openapi_responses.validate_openapi_schema(openapi, resource_schema, resources)
+            resident = resources["residentMemory"]
+            if (resident["usedBytes"] > resident["limitBytes"]
+                    or resident["limitBytes"] != 128 * 1024 * 1024
+                    or resident["softTargetBytes"] != 64 * 1024 * 1024):
+                raise RuntimeError("coupled transfer exceeded the resident budget contract")
+            observed = {"state": row.get("state"), "waitingReason": row.get("waitingReason"),
+                        "presentBytes": totals["presentBytes"], "verifiedBytes": totals["verifiedBytes"],
+                        "activeHashCount": int(progress.get("activeHashCount") or 0),
+                        "active": resources.get("active"), "preparing": resources.get("preparing"),
+                        "residentMemory": resources.get("residentMemory"),
+                        "concurrency": resources.get("concurrency")}
+            evidence["latest"] = observed
+            if observed["activeHashCount"] > 0:
+                if previous_hashing_bytes is not None and observed["presentBytes"] > previous_hashing_bytes:
+                    evidence["overlapObservations"] += 1
+                previous_hashing_bytes = observed["presentBytes"]
+            if row.get("state") == "failed":
+                raise RuntimeError("coupled payload entered failed state")
+            if time.monotonic() - last_print >= 15:
+                evidence["observations"] = (evidence["observations"] + [observed])[-20:]
+                print("coupledTransfer: " + json.dumps(observed, sort_keys=True), file=sys.stderr, flush=True)
+                last_print = time.monotonic()
+            return observed
+
+        rust_local_ed2k.wait_for(
+            lambda: True if 0 < observe({})["presentBytes"] < payload["sizeBytes"] else None,
+            timeout_seconds=min(120, remaining()), interval_seconds=0.5,
+            description="coupled payload byte progress before scan", retry_exceptions=(),
+        )
+        if before_scan is not None:
+            before_scan()
+        if "completion_logs" in reload_args:
+            reload_args = {**reload_args, "completion_logs": (profile_dir, reload_log_offsets(profile_dir))}
+        client.request("POST", "/library/scan", {})
+        changed = wait_for_reload(client=client, process=process, sampler=sampler,
+                                  **{**reload_args, "timeout_seconds": remaining()}, observe=observe)
+        evidence["mutationScan"] = changed
+        rust_local_ed2k.wait_for(
+            lambda: True if observe({})["state"] == "completed" else None,
+            timeout_seconds=min(300, remaining()), interval_seconds=0.5,
+            description="coupled payload completion after scan", retry_exceptions=(),
+        )
+        delivered = rust_local_ed2k.wait_for_download_completed(
+            base_url, API_KEY, job_id, expected_hash=file_hash, expected_size=payload["sizeBytes"],
+            expected_sha256=payload["sha256"], expected_delivery_path=profile_dir / "incoming" / payload_path.name,
+            timeout_seconds=min(300, remaining()),
+        )
+        evidence["delivery"] = {"state": delivered["state"], "ownership": delivered["deliveryOwnership"],
+                                "verifiedSha256": payload["sha256"]}
+        if delivered["deliveryOwnership"] != "owned":
+            raise RuntimeError("coupled fixture output is not owned by its download")
+        removed = native.request_document(base_url, "POST", "/api/v1/downloads/remove", API_KEY,
+                                           {"ids": [job_id], "deleteData": True}, expected_statuses=(207,))
+        outcome = rust_local_ed2k.require_download_batch(removed, job_id)
+        if outcome.get("status") != "accepted" or outcome.get("httpStatus") != 202:
+            raise RuntimeError("coupled fixture removal was not accepted")
+
+        def retired() -> bool | None:
+            try:
+                read(f"/downloads/{job_id}")
+            except rust_local_ed2k.RustRestFailure as error:
+                if error.status != 404 or error.response_error.get("code") != "NOT_FOUND":
+                    raise
+            else:
+                evidence["retirement"] = {"jobAbsent": False}
+                return None
+            file = read(f"/library/files/{file_hash}")
+            if type(file.get("present")) is not bool:
+                raise RuntimeError("coupled retirement requires a library presence boolean")
+            evidence["retirement"] = {"jobAbsent": True, "libraryPresent": file["present"],
+                                      "outputExists": (profile_dir / "incoming" / payload_path.name).exists()}
+            return True if not file["present"] and not evidence["retirement"]["outputExists"] else None
+
+        rust_local_ed2k.wait_for(retired, timeout_seconds=min(120, remaining()), interval_seconds=0.5,
+                                description="coupled fixture retirement", retry_exceptions=())
+        evidence["baselineRestored"] = retained_download_observation(client)
+        evidence["ok"] = evidence["overlapObservations"] > 0 and evidence["baselineRestored"]["ok"]
+        evidence["status"] = "passed" if evidence["ok"] else "failed"
+    except Exception as error:
+        evidence["status"] = "failed"
+        native._attach_failure_diagnostics(error, "coupled-receiver", base_url, receiver_log_path,
+                                           api_key=API_KEY)
+        if source_client is not None:
+            native._attach_failure_diagnostics(
+                error, "coupled-source", source_client.base_url.removesuffix("/api/v1"),
+                run_root / "coupled-source.log", api_key=API_KEY,
+            )
+        evidence["failureDiagnostics"] = list(getattr(error, "__notes__", ()))
+        error.add_note("Coupled transfer evidence: " + json.dumps(evidence, sort_keys=True))
+        raise
+    finally:
+        evidence["sourceShutdown"] = stop_daemon(source_process, source_client)
+        if source_sampler is not None:
+            evidence["sourceProcess"] = source_sampler.summary()
+    evidence["ok"] = evidence["ok"] and evidence["sourceShutdown"].get("exitCode") == 0
+    if not evidence["ok"]:
+        evidence["status"] = "failed"
+        if evidence["baselineRestored"]["ok"] and evidence["sourceShutdown"].get("exitCode") == 0:
+            raise _MissingHashingOverlap("coupled transfer completed without hashing overlap")
+        raise RuntimeError("coupled hashing/transfer overlap or baseline restoration failed")
+    return changed
+
+
+def run_coupled_preflight(paths: HarnessPaths, run_root: Path, evidence: dict[str, object]) -> None:
+    """Prove native wiring and strict overlap rejection before preparing the library.
+
+    The receiver has the full retained-job cohort but no populated library. A
+    verified transfer, removal and restored baseline must reach the explicit
+    missing-overlap failure; any earlier failure remains fatal.
+    """
+    run_root.mkdir(parents=True)
+    profile = run_root / "receiver-profile"
+    process = client = sampler = None
+    evidence.update(status="running", negativeControl={})
+    try:
+        process, client, sampler = start_daemon(
+            paths, profile, run_root / "receiver.log", choose_loopback_port(),
+            retained_downloads=RETAINED_DOWNLOAD_EXPECTED["downloadJobs"], p2p_bind_ip=COUPLED_P2P_IP,
+        )
+        try:
+            run_coupled_reload(
+                paths=paths, run_root=run_root, profile_dir=profile,
+                client=client, process=process, sampler=sampler, evidence=evidence["negativeControl"],
+                receiver_log_path=run_root / "receiver.log",
+                reload_args={"label": "emptyLibraryPreflight", "disk_counter_key": None,
+                             "expected_scanned": 0, "timeout_seconds": 600, "poll_seconds": 0.5},
+            )
+        except _MissingHashingOverlap:
+            evidence["expectedOverlapRejection"] = True
+        else:
+            raise RuntimeError("empty-library preflight unexpectedly qualified hashing overlap")
+        evidence["status"] = "passed"
+    except BaseException:
+        evidence["status"] = "failed"
+        raise
+    finally:
+        evidence["receiverShutdown"] = stop_daemon(process, client)
+        if sampler is not None:
+            evidence["receiverProcess"] = sampler.summary()
+    if evidence["receiverShutdown"].get("exitCode") != 0:
+        evidence["status"] = "failed"
+        raise RuntimeError("coupled preflight receiver did not stop gracefully")
+
+
 def start_daemon(
-    paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int
+    paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int,
+    *, retained_downloads: int = 0, trace_metadata: bool = False, heap_profile_dir: Path | None = None,
+    p2p_bind_ip: str | None = None,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=paths.rust_repo,
-        incoming_dir=profile_dir / "incoming",
-        rest_addr="127.0.0.1",
+        rest_addr='127.0.0.1',
         rest_port=port,
         api_key=API_KEY,
-        auto_connect=False,
-        nat_enabled=False,
-        initial_shared_directory_reload=False,
         local_only_discovery=True,
         replace_servers=True,
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.autoConnect': False,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': False,
+            **({'network.p2p.bindIp': p2p_bind_ip} if p2p_bind_ip is not None else {}),
+        },
     )
-    rust_metadata.replace_settings_section(
-        profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
-        "core",
-        {"autoConnect": False, "networkEd2k": False, "networkKademlia": False},
+    rust_metadata.edit_app_settings(
+        paths.rust_repo, profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        {"network.autoConnect": False, "network.ed2kEnabled": p2p_bind_ip is not None, "network.kadEnabled": False},
     )
+    if retained_downloads:
+        rust_metadata.seed_retained_download_scale(
+            profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE, count=retained_downloads,
+        )
+    process_env = None
+    if trace_metadata:
+        process_env = os.environ.copy()
+        process_env["RUST_LOG"] = process_env.get("RUST_LOG", "info") + ",emulebb_metadata=debug,emulebb_core::shared_file_api=debug"
     return start_configured_daemon(
         paths,
         profile_dir,
         log_path,
         rest_address="127.0.0.1",
         rest_port=port,
+        process_env=process_env,
+        heap_profile_dir=heap_profile_dir,
     )
 
 
@@ -1066,15 +1583,41 @@ def start_configured_daemon(
     *,
     rest_address: str,
     rest_port: int,
+    process_env: dict[str, str] | None = None,
+    heap_profile_dir: Path | None = None,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     """Start one already-configured profile and attach REST/resource observers."""
 
-    process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
+    if paths.staged_executable is None:
+        raise RuntimeError("Campaign runtime bundle was not admitted")
+    if heap_profile_dir is not None:
+        heap_profile_dir.mkdir(parents=True, exist_ok=False)
+        with log_path.open("w", encoding="utf-8") as output:
+            process = rust_client.spawn_rust_daemon(paths.staged_executable, profile_dir,
+                output_handle=output, env=process_env,
+                command_prefix=("heaptrack", "-o", str(heap_profile_dir / "daemon")))
+    elif process_env is None:
+        process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path)
+    else:
+        process = rust_client.start_rust_client_executable(paths.staged_executable, profile_dir, log_path, env=process_env)
     client = RestClient(f"http://{rest_address}:{rest_port}/api/v1", API_KEY)
-    wait_for_rest(client, process, 60.0)
-    sampler = ProcessSampler(process, 2.0)
-    sampler.maybe_sample(force=True)
-    return process, client, sampler
+    try:
+        wait_for_rest(client, process, 300.0 if heap_profile_dir is not None else 60.0)
+        observed_pid = None
+        if heap_profile_dir is not None:
+            # Observe the daemon, not heaptrack's shell/interpreter processes.
+            children = _load_psutil().Process(process.pid).children(recursive=True)
+            matches = [child.pid for child in children if Path(child.exe()).resolve() == paths.staged_executable.resolve()]
+            if len(matches) != 1:
+                raise RuntimeError("Heap profiler did not expose one admitted daemon child")
+            observed_pid = matches[0]
+        sampler = ProcessSampler(process, 2.0, observed_pid=observed_pid)
+        sampler.maybe_sample(force=True)
+        return process, client, sampler
+    except BaseException:
+        # Ownership transfers to the caller only on a successful return.
+        stop_daemon(process, client)
+        raise
 
 
 def stop_daemon(
@@ -1112,31 +1655,30 @@ def _configure_lan_startup_profile(
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=paths.rust_repo,
-        incoming_dir=profile_dir / "incoming",
         rest_addr=lan_bind_addr,
         rest_port=spec.rest_port,
         api_key=API_KEY,
-        auto_connect=True,
-        p2p_bind_ip=lan_bind_addr,
-        ed2k_port=spec.tcp_port,
-        kad_port=spec.udp_port,
         server_endpoint=server_endpoint,
-        kad_bootstrap_nodes=None,
-        kad_bootstrap_min_routing_contacts=1,
-        nat_enabled=False,
-        initial_shared_directory_reload=initial_reload,
+        local_kad_seed=kad_nodes.BootstrapContact(lan_bind_addr, peer_spec.udp_port, peer_spec.tcp_port),
         local_only_discovery=True,
         replace_servers=True,
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.autoConnect': True,
+            'network.p2p.bindIp': lan_bind_addr,
+            'network.p2p.tcpPort': spec.tcp_port,
+            'network.p2p.udpPort': spec.udp_port,
+            'network.kadEnabled': True,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': initial_reload,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     metadata_path = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
-    rust_metadata.replace_settings_section(
-        metadata_path,
-        "core",
-        {
-            "autoConnect": True,
-            "networkEd2k": True,
-            "networkKademlia": True,
-        },
+    rust_metadata.edit_app_settings(
+        paths.rust_repo, metadata_path,
+        {"network.autoConnect": True, "network.ed2kEnabled": True, "network.kadEnabled": True},
     )
     if shared_root is not None:
         rust_metadata.seed_shared_directory_roots(
@@ -1150,27 +1692,14 @@ def _configure_lan_startup_profile(
                 }
             ],
         )
-    nodes = local_kad.write_nodes_dat(
-        profile_dir / "nodes.dat",
-        owner=spec,
-        peers=[spec, peer_spec],
-        peer_address=lan_bind_addr,
-    )
-    preflight = local_kad.validate_local_nodes_dat(
-        profile_dir / "nodes.dat",
-        peer_address=lan_bind_addr,
-        expected_udp_ports={peer_spec.udp_port},
-    )
+    discovery = rust_metadata.read_discovery_snapshot(paths.rust_repo, metadata_path)
     return {
         "profileFingerprint": path_fingerprint(profile_dir),
         "initialSharedDirectoryReload": initial_reload,
         "sharedRootFingerprint": (
             path_fingerprint(shared_root) if shared_root is not None else None
         ),
-        "nodes": {
-            "contactCount": nodes["contact_count"],
-            "validated": preflight["validated"],
-        },
+        "discovery": discovery,
     }
 
 
@@ -1484,11 +2013,11 @@ def _lan_startup_observation(
     target_nick: str,
 ) -> dict[str, object]:
     directories = target_client.request(
-        "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+        "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
     )
     shared = target_client.request(
         "GET",
-        SHARED_FILES_PROBE_PATH,
+        LIBRARY_FILES_PROBE_PATH,
         timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
     )
     status = target_client.request(
@@ -1529,12 +2058,12 @@ def _lan_startup_observation(
         "observedAtUtc": utc_now(),
         "progress": compact_progress(directories),
         "hashingCount": directories.get("hashingCount"),
-        "sharedFilesTotal": shared.get("total"),
+        "sharedFilesTotal": shared["meta"]["total"],
         "ed2kConnected": stats.get("ed2kConnected"),
         "ed2kPublish": diagnostics.get("ed2kPublish"),
         "kadPublish": diagnostics.get("kadPublish"),
-        "targetKad": local_kad.compact_local_kad_status(target_kad),
-        "seedKad": local_kad.compact_local_kad_status(seed_kad),
+        "targetKad": _lan_kad_harness().compact_local_kad_status(target_kad),
+        "seedKad": _lan_kad_harness().compact_local_kad_status(seed_kad),
         "serverFileCount": int(server_stats_data.get("file_count") or 0),
         "serverTargetPublicationCount": int(target_client.get("shared_files") or 0),
         "serverTargetPublishedHashes": [],
@@ -1550,7 +2079,7 @@ def run_lan_startup_campaign(
     validation = validate_fixture(paths.fixture_root)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -1558,9 +2087,9 @@ def run_lan_startup_campaign(
     target_disk_row = target_disk(paths, inventory)
     assert_ssd_target(target_disk_row, allow_non_ssd=args.allow_non_ssd)
 
-    lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
-    ports = dtt.choose_distinct_ports(lan_bind_addr)
-    seed_spec = local_kad.KadClientSpec(
+    lan_bind_addr = _lan_transfer_harness().rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    ports = _lan_transfer_harness().choose_distinct_ports(lan_bind_addr)
+    seed_spec = _lan_kad_harness().KadClientSpec(
         index=1,
         profile_id="rust-lan-seed",
         nick="rust-lan-seed",
@@ -1568,7 +2097,7 @@ def run_lan_startup_campaign(
         udp_port=ports["client1_udp"],
         rest_port=ports["client1_rest"],
     )
-    target_spec = local_kad.KadClientSpec(
+    target_spec = _lan_kad_harness().KadClientSpec(
         index=2,
         profile_id="rust-library-target",
         nick="rust-library-target",
@@ -1781,26 +2310,29 @@ def _configure_offerfiles_scale_profile(
     rust_client.write_rust_profile(
         profile_dir,
         rust_repo=paths.rust_repo,
-        incoming_dir=profile_dir / "incoming",
         rest_addr=lan_bind_addr,
         rest_port=rest_port,
         api_key=API_KEY,
-        auto_connect=True,
-        network_kademlia=False,
-        p2p_bind_ip=p2p_bind_ip,
-        ed2k_port=ed2k_port,
-        ed2k_nickname=client_nick,
-        kad_port=kad_port,
         server_endpoint=server_endpoint,
-        nat_enabled=False,
-        initial_shared_directory_reload=False,
         local_only_discovery=True,
         replace_servers=True,
+        settings={
+            'storage.incomingDirectory': str(profile_dir / 'incoming'),
+            'network.autoConnect': True,
+            'network.kadEnabled': False,
+            'network.p2p.bindIp': p2p_bind_ip,
+            'network.p2p.tcpPort': ed2k_port,
+            'network.nickname': client_nick,
+            'network.p2p.udpPort': kad_port,
+            'network.nat.enabled': False,
+            'sharing.scanOnStartup': False,
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
-    rust_metadata.replace_settings_section(
-        profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
-        "core",
-        {"autoConnect": True, "networkEd2k": True, "networkKademlia": False},
+    rust_metadata.edit_app_settings(
+        paths.rust_repo, profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
+        {"network.autoConnect": True, "network.ed2kEnabled": True, "network.kadEnabled": False},
     )
 
 
@@ -1938,7 +2470,7 @@ def run_offerfiles_scale_campaign(
     validation = validate_fixture(paths.fixture_root)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -1946,8 +2478,8 @@ def run_offerfiles_scale_campaign(
     target_disk_row = target_disk(paths, inventory)
     assert_ssd_target(target_disk_row, allow_non_ssd=args.allow_non_ssd)
 
-    lan_bind_addr = dtt.rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
-    ports = dtt.choose_distinct_ports(lan_bind_addr)
+    lan_bind_addr = _lan_transfer_harness().rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    ports = _lan_transfer_harness().choose_distinct_ports(lan_bind_addr)
     client_nick = "rust-offerfiles-scale"
     if args.resume_run_id:
         run_id = args.resume_run_id
@@ -2031,12 +2563,8 @@ def run_offerfiles_scale_campaign(
                 paths, profile_dir, run_root / "offline-scan.log", choose_loopback_port()
             )
             client.request(
-                "PATCH",
-                "/shared-directories",
-                {
-                    "confirmReplaceRoots": True,
-                    "roots": [{"path": str(paths.fixture_root) + os.sep}],
-                },
+                "POST", "/library/roots",
+                {"path": str(paths.fixture_root) + os.sep, "watchEnabled": False},
             )
             offline_scan = wait_for_reload(
                 label="offerfilesOfflineScan",
@@ -2255,7 +2783,7 @@ def media_initial_acceptance(
         "databaseHashIntegrity": int(counts.get("invalidActiveShareIntegrity") or 0)
         == 0,
         "databaseScanFailures": int(counts.get("scanFailures") or 0) == 0,
-        "noTransferRows": int(counts.get("activeTransferRows") or 0) == 0,
+        "noDownloadJobs": counts.get("downloadJobs") == 0,
     }
     return {"ok": all(checks.values()), "checks": checks}
 
@@ -2292,6 +2820,16 @@ def media_no_change_acceptance(
     return {"ok": all(checks.values()), "checks": checks}
 
 
+def graceful_shutdowns(report: dict[str, object], phases: tuple[str, ...]) -> bool:
+    """Require a graceful zero exit for every expected process lifetime."""
+    for phase in phases:
+        result = report.get(phase)
+        if (not isinstance(result, dict) or result.get("method") != "rest"
+                or type(result.get("exitCode")) is not int or result["exitCode"] != 0):
+            return False
+    return True
+
+
 def rest_summary(clients: list[RestClient]) -> dict[str, object]:
     samples = [sample for client in clients for sample in client.samples]
     errors = [error for client in clients for error in client.errors]
@@ -2299,7 +2837,7 @@ def rest_summary(clients: list[RestClient]) -> dict[str, object]:
     status_latencies = [
         float(sample["latencySeconds"])
         for sample in samples
-        if sample.get("method") == "GET" and sample.get("path") == "/shared-directories"
+        if sample.get("method") == "GET" and sample.get("path") == "/library/scan"
     ]
     return {
         "requestCount": len(samples),
@@ -2317,15 +2855,30 @@ def _normalized_path_key(path: str | Path) -> str:
     return os.path.normcase(normalized)
 
 
+def _watcher_loss_revision(profile_dir: Path, root_id: str) -> int:
+    """Read one subscribed root's durable loss watermark for explicit recovery."""
+    database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    with closing(sqlite3.connect(
+        f"file:{database.as_posix()}?mode=ro", uri=True, timeout=5
+    )) as connection:
+        row = connection.execute(
+            "SELECT watch_loss_revision FROM shared_directory_roots "
+            "WHERE id = ? AND enabled = 1 AND deleted_at_s IS NULL", (root_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("Watcher recovery root no longer exists")
+    return int(row[0])
+
+
 def _watcher_database_rows(profile_dir: Path) -> dict[str, dict[str, object]]:
     """Read active watcher-probe identities without returning paths to reports."""
 
     database = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
     if not database.is_file():
         return {}
-    with sqlite3.connect(
+    with closing(sqlite3.connect(
         f"file:{database.as_posix()}?mode=ro", uri=True, timeout=5
-    ) as connection:
+    )) as connection:
         rows = connection.execute(
             f"""
             WITH active_sources AS ({ACTIVE_LOCAL_SOURCES_SQL})
@@ -2456,15 +3009,23 @@ def _sample_watcher_rest(
     for key, row in selected:
         data = client.request(
             "GET",
-            f"/shared-files/{row['hash']}",
+            f"/library/files/{row['hash']}",
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
-        source_path = data.get("path")
+        locations = rust_rest_contract.iter_library_locations(
+            lambda path: client.request(
+                "GET", path, timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            ),
+            str(row["hash"]).lower(),
+        )
+        matching_location = any(
+            location["present"] and _normalized_path_key(location["path"]) == key
+            for location in locations
+        )
         if (
             str(data.get("hash") or "").casefold() != str(row["hash"]).casefold()
             or int(data.get("sizeBytes") or -1) != int(row["sizeBytes"])
-            or not isinstance(source_path, str)
-            or _normalized_path_key(source_path) != key
+            or not matching_location
         ):
             failures += 1
     return {
@@ -2485,7 +3046,7 @@ class WatcherConvergenceError(TimeoutError):
     def __init__(self, phase_report: dict[str, object]) -> None:
         self.phase_report = phase_report
         reason = (
-            "did not converge within its phase timeout"
+            "did not converge"
             if not phase_report["acceptance"]["checks"]["converged"]
             else "failed strict post-convergence acceptance"
         )
@@ -2495,6 +3056,7 @@ class WatcherConvergenceError(TimeoutError):
 def run_watcher_phase(
     *,
     label: str,
+    watch_root_id: str,
     action: Callable[[], dict[str, int]],
     expected_paths: dict[str, dict[str, object]],
     expected_catalog_total: int,
@@ -2508,14 +3070,32 @@ def run_watcher_phase(
     previous_hashes: dict[str, str] | None = None,
     require_changed_hashes: bool = False,
     require_same_hashes: bool = False,
+    spec: FixtureSpec = PRODUCTION_SPEC,
 ) -> tuple[dict[str, object], dict[str, str]]:
-    """Apply one live mutation and wait for REST plus SQLite convergence."""
+    """Prove exact live convergence with bounded, revision-proven recovery.
+
+    Saturated native notifications may set scanRequired. Record that public
+    signal and exercise the operator's scan action. Permit a second explicit
+    acknowledgement only for a newer durable loss revision; never retry a
+    failed scan or accept a root that still requires scanning.
+    """
 
     started = time.monotonic()
     deadline = started + timeout_seconds
     process_start = len(sampler.samples)
     disk_before = disk_io_snapshot(disk_counter_key)
+    root_path = f"/library/roots/{watch_root_id}"
+    before_root = client.request("GET", root_path)
+    if before_root["scanRequired"] is not False or before_root["watchEnabled"] is not True:
+        raise RuntimeError("Watcher phase requires an enabled root with an acknowledged baseline")
     operation = action()
+    print(f"{label}: mutation complete; checking exact content and root acknowledgement",
+          file=sys.stderr, flush=True)
+    scan_required_observed = False
+    recovery_scans: list[dict[str, object]] = []
+    observed_loss_revision: int | None = None
+    recovery_failure: str | None = None
+    root_scan_required = True
     final_rows: dict[str, dict[str, object]] = {}
     final_evidence, _ = _watcher_row_evidence(
         {},
@@ -2536,10 +3116,10 @@ def run_watcher_phase(
         try:
             shared = client.request(
                 "GET",
-                SHARED_FILES_PROBE_PATH,
+                LIBRARY_FILES_PROBE_PATH,
                 timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
             )
-            shared_total = int(shared.get("total") or 0)
+            shared_total = int(shared["meta"]["total"] or 0)
             rows = _watcher_database_rows(profile_dir)
             evidence, rows_ok = _watcher_row_evidence(
                 rows,
@@ -2550,6 +3130,33 @@ def run_watcher_phase(
             )
             final_rows = rows
             final_evidence = evidence
+            root = client.request("GET", root_path)
+            if root["watchEnabled"] is not True:
+                raise RuntimeError("Watcher root was disabled during the mutation phase")
+            root_scan_required = root["scanRequired"]
+            if root_scan_required is True:
+                scan_required_observed = True
+                revision = _watcher_loss_revision(profile_dir, watch_root_id)
+                observed_loss_revision = revision
+                if recovery_scans and revision <= recovery_scans[-1]["observedLossRevision"]:
+                    recovery_failure = "scanDidNotAcknowledgeObservedLoss"
+                    break
+                if len(recovery_scans) >= 2:
+                    recovery_failure = "newLossAfterAcknowledgmentBudget"
+                    break
+                recovery = {"observedLossRevision": revision}
+                recovery_scans.append(recovery)
+                print(f"{label}: explicit acknowledgement {len(recovery_scans)} for loss revision {revision}",
+                      file=sys.stderr, flush=True)
+                recovery["scan"] = run_dynamic_reload_phase(
+                        label=f"{label}ExplicitRecovery{len(recovery_scans)}",
+                        action=lambda: client.request("POST", "/library/scan", {}),
+                        client=client, process=process, sampler=sampler,
+                        counter_keys=[] if disk_counter_key is None else [disk_counter_key],
+                        timeout_seconds=max(0.0, deadline - time.monotonic()),
+                        poll_seconds=poll_seconds,
+                )
+                continue
             for path_class in class_convergence:
                 if class_convergence[path_class] is not None:
                     continue
@@ -2584,7 +3191,7 @@ def run_watcher_phase(
                     class_ok = not rows
                 if class_ok:
                     class_convergence[path_class] = round(time.monotonic() - started, 3)
-            if shared_total == expected_catalog_total and rows_ok:
+            if shared_total == expected_catalog_total and rows_ok and root_scan_required is False:
                 converged = True
                 break
         except sqlite3.OperationalError:
@@ -2612,12 +3219,13 @@ def run_watcher_phase(
         "metadataIntegrity": final_evidence["invalidIntegrityCount"] == 0,
         "hashTransition": final_evidence["hashTransitionOk"] is True,
         "restIdentitySample": rest_sample["failureCount"] == 0,
+        "rootScanAcknowledged": root_scan_required is False,
     } | storage_acceptance(
         storage_snapshot,
         expected_active=expected_catalog_total,
-        expected_bytes=PRODUCTION_SPEC.total_bytes
+        expected_bytes=spec.total_bytes
         + sum(int(value["sizeBytes"]) for value in expected_paths.values()),
-        expected_minimum_long=fixture.baseline_long_path_count()
+        expected_minimum_long=fixture.baseline_long_path_count(spec)
         + sum(1 for value in expected_paths.values() if value["pathClass"] == "long"),
     )
     report = {
@@ -2627,6 +3235,14 @@ def run_watcher_phase(
         "sharedFilesTotal": shared_total,
         "database": final_evidence,
         "restIdentitySample": rest_sample,
+        "watchRecovery": {
+            "scanRequiredObserved": scan_required_observed,
+            "explicitScanCount": len(recovery_scans),
+            "scanRequiredAfter": root_scan_required,
+            "observedLossRevision": observed_loss_revision,
+            "failure": recovery_failure,
+            "scans": recovery_scans,
+        },
         "throughput": {
             "filesPerSecond": round(operation["fileCount"] / elapsed, 3),
             "mibPerSecond": round(operation["totalBytes"] / MIB / elapsed, 3),
@@ -2642,6 +3258,8 @@ def run_watcher_phase(
     }
     if not report["acceptance"]["ok"]:
         raise WatcherConvergenceError(report)
+    print(f"{label}: exact content and root acknowledgement passed",
+          file=sys.stderr, flush=True)
     return report, {key: str(row["hash"]) for key, row in final_rows.items()}
 
 
@@ -2661,47 +3279,112 @@ def watcher_log_summary(log_paths: list[Path]) -> dict[str, object]:
         "failed to create shared-directory watcher",
         "failed to watch shared directory",
     )
+    finalization_markers = {
+        "rootCommitStarted": "shared-directory reload committing root memberships",
+        "rootCommitFinished": "shared-directory reload committed root memberships",
+        "catalogRebuildStarted": "shared-directory reload rebuilding complete catalog",
+        "reloadFinished": "shared-directory reload completed",
+    }
+    finalization_counts = dict.fromkeys(finalization_markers, 0)
+    last_finalization_event = None
     for path in log_paths:
         if not path.is_file():
             continue
         byte_count = path.stat().st_size
         marker_counts["logByteCount"] += byte_count
         marker_counts["nonEmptyLogCount"] += int(byte_count > 0)
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            marker_counts["watcherRegistrations"] += int(
-                "watching shared directory for auto-pickup" in line
-            )
-            marker_counts["autoShared"] += int("auto-shared monitored file" in line)
-            marker_counts["autoRemoved"] += int(
-                "auto-removed monitored file from shared catalog" in line
-            )
-            marker_counts["watcherErrors"] += int(
-                any(marker in line for marker in error_markers)
-            )
-    return marker_counts
+        # Keep failure reporting bounded when a long campaign has large logs.
+        # Only fixed event names and counters enter the report, never log text.
+        with path.open(encoding="utf-8", errors="replace") as lines:
+            for line in lines:
+                marker_counts["watcherRegistrations"] += int(
+                    "watching shared directory for auto-pickup" in line
+                )
+                marker_counts["autoShared"] += int("auto-shared monitored file" in line)
+                marker_counts["autoRemoved"] += int(
+                    "auto-removed monitored file from shared catalog" in line
+                )
+                marker_counts["watcherErrors"] += int(
+                    any(marker in line for marker in error_markers)
+                )
+                for event, marker in finalization_markers.items():
+                    if marker in line:
+                        finalization_counts[event] += 1
+                        last_finalization_event = event
+    return {**marker_counts, "reloadFinalization": {
+        **finalization_counts, "lastEvent": last_finalization_event,
+    }}
+
+
+def copy_replay_database(paths: HarnessPaths, run_id: str, profile_dir: Path, *, source_report: Path | None = None) -> dict[str, object]:
+    """Snapshot a current owned baseline without modifying the failed original."""
+    if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        raise RuntimeError("replay run ID must be one path segment")
+    source_run = (paths.runs_root / run_id).resolve(strict=True)
+    if source_run.parent != paths.runs_root.resolve(strict=True):
+        raise RuntimeError("replay source escaped the owned runs root")
+    report_path = source_report if source_report is not None else paths.reports_root / f"rust-shared-library-io-{run_id}.json"
+    report_bytes = report_path.read_bytes()
+    report = json.loads(report_bytes)
+    if (report.get("schema") != REPORT_SCHEMA or report.get("runId") != run_id
+            or report.get("paths", {}).get("fixtureFingerprint") != path_fingerprint(paths.fixture_root)):
+        raise RuntimeError("replay source identity does not match this fixture")
+    phases = report.get("phases", [])
+    checks = phases[0].get("acceptance", {}).get("checks", {}) if phases else {}
+    if not all(checks.get(key) is True for key in (
+        "databaseActiveBytes", "databaseActiveShares", "databaseHashIntegrity",
+        "databaseKnownFiles", "databaseLongPathShares", "databaseScanFailures",
+    )):
+        raise RuntimeError("replay source has no verified complete library baseline")
+    source_db = source_run / "profile" / rust_metadata.RUST_PROFILE_METADATA_FILE
+    rust_metadata.require_current_profile_database(paths.rust_repo, source_db)
+    storage.make_directories(profile_dir)
+    target_db = profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE
+    if target_db.exists():
+        raise RuntimeError("replay destination database already exists")
+    with closing(sqlite3.connect(source_db.resolve().as_uri() + "?mode=ro", uri=True)) as source:
+        with closing(sqlite3.connect(target_db)) as target:
+            source.backup(target)
+    rust_metadata.require_current_profile_database(paths.rust_repo, target_db)
+    rows = profile_storage_snapshot(profile_dir)["rowCounts"]
+    if any(rows.get(key) != value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()):
+        raise RuntimeError("replay download fixture differs from the combined workload")
+    return {"sourceRunId": run_id, "sourceReportSha256": hashlib.sha256(report_bytes).hexdigest()}
 
 
 def run_campaign(
-    paths: HarnessPaths, args: argparse.Namespace
+    paths: HarnessPaths, args: argparse.Namespace, *, replay_report: Path | None = None,
+    heap_profile_dir: Path | None = None, stop_after_watcher_create: bool = False,
+    spec: FixtureSpec = PRODUCTION_SPEC, memory_bytes: int | None = None,
 ) -> tuple[Path, dict[str, object]]:
     """Run initial scan, watcher lifecycle, reload, and persistence phases."""
 
+    if memory_bytes is not None and fixture.capacity_tier(spec.file_count) != (spec, memory_bytes):
+        raise RuntimeError("Library fixture and memory limit are not an approved capacity tier")
+    resource_budget_before = rust_cgroup_budget.sample_budget()
     manifest = load_prepared_manifest(paths)
-    # A terminated prior run may have left only harness-owned probe files behind.
-    storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
+    if manifest.get("fileCount") != spec.file_count or manifest.get("totalBytes") != spec.total_bytes:
+        raise RuntimeError("Prepared fixture differs from the selected capacity tier")
+    watch_root = paths.scenario_root / "watcher-library"
+    # Probe data is isolated from the large, unwatched baseline root.
+    storage.remove_tree(watch_root / "_watcher-probe-v2")
+    storage.make_directories(watch_root)
     storage.remove_tree(paths.scenario_root / "watcher-staging")
     restored = {"fileCount": 0, "totalBytes": 0}
     if manifest.get("contentGeneration") == "mutation-v2":
-        restored = restore_fixture_baseline(paths.fixture_root)
-        update_fixture_generation(paths, "base-v2")
+        # A replay reuses the current physical generation and its matching
+        # snapshot. Restoring bytes would invalidate that snapshot's proofs.
+        if args.watcher_replay_from is None:
+            restored = restore_fixture_baseline(paths.fixture_root, spec)
+            update_fixture_generation(paths, "base-v2")
     elif manifest.get("contentGeneration") != "base-v2":
         raise RuntimeError(
             "fixture content generation is unknown; rerun prepare after cleanup"
         )
-    validation = validate_fixture(paths.fixture_root)
+    validation = validate_fixture(paths.fixture_root, spec)
     if not validation["ok"]:
         raise RuntimeError(f"fixture failed pre-run validation: {validation}")
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -2728,8 +3411,8 @@ def run_campaign(
             bus_type=str(target.get("busType") or ""),
             friendly_name=str(target.get("friendlyName") or ""),
             mount_path=Path(mount_path),
-            expected_file_count=PRODUCTION_SPEC.file_count,
-            expected_bytes=PRODUCTION_SPEC.total_bytes,
+            expected_file_count=spec.file_count,
+            expected_bytes=spec.total_bytes,
         )
     ]
     report: dict[str, object] = {
@@ -2748,15 +3431,26 @@ def run_campaign(
             "outputRootFingerprint": path_fingerprint(paths.output_root),
         },
         "fixture": validation,
+        "retainedDownloadFixture": dict(RETAINED_DOWNLOAD_EXPECTED),
+        "capacityTarget": {"libraryFiles": spec.file_count, "retainedJobs": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+                           "memoryBytes": memory_bytes},
+        "qualificationScope": {
+            "physicalLibrary": True, "downloadHistory": "metadata-only",
+            "containerLimitsEnforced": False,
+            "initialPayloadHashing": args.watcher_replay_from is None,
+            "fullCampaign": args.watcher_replay_from is None,
+        },
         "preRunBaselineRestore": restored,
         "targetRoots": [item.sanitized(path_fingerprint) for item in storage_targets],
         "diskInventory": sanitized_disk_inventory(inventory),
         "phases": [],
         "watcherLifecycle": [],
+        "downloadSnapshots": [],
     }
     process: subprocess.Popen[str] | None = None
     client: RestClient | None = None
     clients: list[RestClient] = []
+    samplers: list[ProcessSampler] = []
     log_paths: list[Path] = []
     overall_started = time.monotonic()
     overall_deadline = overall_started + args.timeout_seconds
@@ -2773,66 +3467,112 @@ def run_campaign(
         return min(args.watcher_timeout_seconds, remaining_seconds())
 
     try:
+        replay = args.watcher_replay_from is not None
+        if replay:
+            report["replay"] = copy_replay_database(paths, args.watcher_replay_from, profile_dir, source_report=replay_report)
+        initial_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         initial_log = run_root / "initial.log"
         log_paths.append(initial_log)
         process, client, sampler = start_daemon(
-            paths, profile_dir, initial_log, choose_loopback_port()
+            paths, profile_dir, initial_log, choose_loopback_port(),
+            retained_downloads=0 if replay else RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+            trace_metadata=replay,
+            heap_profile_dir=heap_profile_dir,
         )
         clients.append(client)
-        client.request(
-            "PATCH",
-            "/shared-directories",
-            {
-                "confirmReplaceRoots": True,
-                "roots": [{"path": str(paths.fixture_root) + os.sep}],
-            },
-        )
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
+        if replay:
+            client.request("POST", "/library/scan", {})
+        else:
+            client.request("POST", "/library/roots", {"path": str(watch_root), "watchEnabled": True})
+            client.request(
+                "POST", "/library/roots",
+                {"path": str(paths.fixture_root) + os.sep, "watchEnabled": False},
+            )
         initial = wait_for_reload(
-            label="bestEffortInitial",
+            label="watcherReplayBaseline" if replay else "bestEffortInitial",
             client=client,
             process=process,
             sampler=sampler,
             disk_counter_key=target.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
+            expected_scanned=spec.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
+            completion_logs=initial_completion_logs,
         )
         initial["storage"] = profile_storage_snapshot(profile_dir)
         initial["acceptance"] = phase_acceptance(
             initial,
             {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
-                "plannedHashCount": PRODUCTION_SPEC.file_count,
-                "hashedCount": PRODUCTION_SPEC.file_count,
-                "reusedCount": 0,
-                "plannedReadBytes": PRODUCTION_SPEC.total_bytes,
-                "diskCount": 1,
-                "newCount": PRODUCTION_SPEC.file_count,
+                "sharedFilesTotal": spec.file_count,
+                "scannedCount": spec.file_count,
+                "plannedHashCount": 0 if replay else spec.file_count,
+                "hashedCount": 0 if replay else spec.file_count,
+                "reusedCount": spec.file_count if replay else 0,
+                "plannedReadBytes": 0 if replay else spec.total_bytes,
+                "diskCount": 0 if replay else 1,
+                "newCount": 0 if replay else spec.file_count,
             },
         )
         initial["acceptance"]["checks"].update(
             storage_acceptance(
                 initial["storage"],
-                expected_active=PRODUCTION_SPEC.file_count,
-                expected_bytes=PRODUCTION_SPEC.total_bytes,
-                expected_minimum_long=fixture.baseline_long_path_count(),
-                require_known_exact=True,
+                expected_active=spec.file_count,
+                expected_bytes=spec.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(spec),
+                expected_known=None if replay else spec.file_count + RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
             )
         )
         initial["acceptance"]["ok"] = all(initial["acceptance"]["checks"].values())
         report["phases"].append(initial)
+        read_start = len(sampler.samples)
+        report["downloadTraversal"] = {
+            "views": rust_rest_conformance.prove_retained_download_pages(
+                lambda path: client.request("GET", path, timeout_seconds=30.0),
+                {"jobs": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"],
+                 "completed": RETAINED_DOWNLOAD_EXPECTED["completedDownloads"],
+                 "stopped": RETAINED_DOWNLOAD_EXPECTED["stoppedDownloads"],
+                 "queued": RETAINED_DOWNLOAD_EXPECTED["startedDownloads"]},
+                sample=lambda: sampler.maybe_sample(),
+            ),
+            "process": sampler.summary(read_start),
+        }
+
+        def fetch_library_page(path: str) -> dict:
+            return client.request("GET", path, timeout_seconds=min(120.0, remaining_seconds()))
+
+        read_start = len(sampler.samples)
+        report["libraryReads"] = prove_library_reads(
+            fetch_library_page, spec=spec, sample=sampler.maybe_sample,
+        )
+        report["libraryReads"]["process"] = sampler.summary(read_start)
+
+        root_update_started = time.monotonic()
+        roots = list(rust_rest_contract.iter_library_roots(lambda path: client.request("GET", path)))
+        baseline = next(row for row in roots if _normalized_path_key(row["path"]) == _normalized_path_key(paths.fixture_root))
+        watched = next(row for row in roots if _normalized_path_key(row["path"]) == _normalized_path_key(watch_root))
+        report["rootWatchPolicy"] = {"largeRootEnabled": baseline["watchEnabled"], "watcherRootEnabled": watched["watchEnabled"]}
+        updated = client.request("PATCH", f"/library/roots/{baseline['id']}", {"watchEnabled": False})
+        report["populatedRootUpdate"] = {
+            "elapsedSeconds": round(time.monotonic() - root_update_started, 3),
+            "resourceId": updated["id"],
+            "ok": updated["id"] == baseline["id"] and updated["watchEnabled"] is False
+                and _normalized_path_key(updated["path"]) == _normalized_path_key(paths.fixture_root),
+        }
+        if not report["populatedRootUpdate"]["ok"]:
+            raise RuntimeError("populated root policy update changed resource identity")
 
         report["watcherStaging"] = fixture.stage_watcher_cohort(staging_root)
-        created_paths = _expected_watcher_paths(paths.fixture_root, renamed=False)
-        renamed_paths = _expected_watcher_paths(paths.fixture_root, renamed=True)
+        created_paths = _expected_watcher_paths(watch_root, renamed=False)
+        renamed_paths = _expected_watcher_paths(watch_root, renamed=True)
         created, created_hashes = run_watcher_phase(
-            label="watcherCreate",
+            spec=spec, label="watcherCreate", watch_root_id=watched["id"],
             action=lambda: fixture.install_watcher_cohort(
-                staging_root, paths.fixture_root
+                staging_root, watch_root
             ),
             expected_paths=created_paths,
-            expected_catalog_total=PRODUCTION_SPEC.file_count
+            expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
             client=client,
             process=process,
@@ -2843,11 +3583,17 @@ def run_campaign(
             poll_seconds=args.watcher_poll_seconds,
         )
         report["watcherLifecycle"].append(created)
+        if stop_after_watcher_create:
+            # This diagnostic deliberately omits the remaining qualification phases.
+            report.update(status="diagnosticComplete", acceptance={"ok": False},
+                          diagnostic={"watcherCreateComplete": True, "workloadQualified": False})
+            report["qualificationScope"]["fullCampaign"] = False
+            return report_path, report
         modified, modified_hashes = run_watcher_phase(
-            label="watcherModify",
-            action=lambda: fixture.modify_watcher_cohort(paths.fixture_root),
+            spec=spec, label="watcherModify", watch_root_id=watched["id"],
+            action=lambda: fixture.modify_watcher_cohort(watch_root),
             expected_paths=created_paths,
-            expected_catalog_total=PRODUCTION_SPEC.file_count
+            expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
             client=client,
             process=process,
@@ -2861,10 +3607,10 @@ def run_campaign(
         )
         report["watcherLifecycle"].append(modified)
         renamed, renamed_hashes = run_watcher_phase(
-            label="watcherRename",
-            action=lambda: fixture.rename_watcher_cohort(paths.fixture_root),
+            spec=spec, label="watcherRename", watch_root_id=watched["id"],
+            action=lambda: fixture.rename_watcher_cohort(watch_root),
             expected_paths=renamed_paths,
-            expected_catalog_total=PRODUCTION_SPEC.file_count
+            expected_catalog_total=spec.file_count
             + fixture.WATCHER_FILE_COUNT,
             client=client,
             process=process,
@@ -2878,10 +3624,10 @@ def run_campaign(
         )
         report["watcherLifecycle"].append(renamed)
         deleted, _ = run_watcher_phase(
-            label="watcherDelete",
-            action=lambda: fixture.delete_watcher_cohort(paths.fixture_root),
+            spec=spec, label="watcherDelete", watch_root_id=watched["id"],
+            action=lambda: fixture.delete_watcher_cohort(watch_root),
             expected_paths={},
-            expected_catalog_total=PRODUCTION_SPEC.file_count,
+            expected_catalog_total=spec.file_count,
             client=client,
             process=process,
             sampler=sampler,
@@ -2892,9 +3638,30 @@ def run_campaign(
             previous_hashes=renamed_hashes,
         )
         report["watcherLifecycle"].append(deleted)
+        if replay:
+            report["downloadSnapshots"].append(retained_download_observation(client))
+        sampler.maybe_sample(force=True)
         report["initialShutdown"] = stop_daemon(process, client)
         process = None
         client = None
+
+        if replay:
+            rows = deleted["storage"]["rowCounts"]
+            checks = {
+                "baseline": initial["acceptance"]["ok"],
+                "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
+            "optionalRootWatching": report["rootWatchPolicy"] == {"largeRootEnabled": False, "watcherRootEnabled": True},
+                "watcherLifecycle": len(report["watcherLifecycle"]) == 4
+                    and all(phase["acceptance"]["ok"] for phase in report["watcherLifecycle"]),
+                "downloadRowsPreserved": all(rows.get(key) == value for key, value in RETAINED_DOWNLOAD_EXPECTED.items()),
+                "downloadRestCounts": all(value["ok"] for value in report["downloadSnapshots"]),
+                "gracefulShutdown": graceful_shutdowns(report, ("initialShutdown",)),
+                "noWatcherErrors": watcher_log_summary(log_paths)["watcherErrors"] == 0,
+                "noRestErrors": rest_summary(clients)["errorCount"] == 0,
+            }
+            report["acceptance"] = {"scope": "watcherReplay", "ok": all(checks.values()), "checks": checks}
+            report["status"] = "passed" if report["acceptance"]["ok"] else "failed"
+            return report_path, report
 
         restart_log = run_root / "restart.log"
         log_paths.append(restart_log)
@@ -2902,16 +3669,18 @@ def run_campaign(
             paths, profile_dir, restart_log, choose_loopback_port()
         )
         clients.append(client)
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
         warm_shared = client.request(
             "GET",
-            SHARED_FILES_PROBE_PATH,
+            LIBRARY_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["warmRestart"] = {
-            "sharedFilesTotal": warm_shared.get("total"),
+            "sharedFilesTotal": warm_shared["meta"]["total"],
             "hashingCount": warm_dirs.get("hashingCount"),
             "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
@@ -2919,31 +3688,33 @@ def run_campaign(
         report["warmRestart"]["hydration"] = wait_for_shared_catalog_hydration(
             client=client,
             process=process,
-            expected=PRODUCTION_SPEC.file_count,
+            expected=spec.file_count,
             timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
             poll_seconds=args.poll_seconds,
         )
 
-        client.request("POST", "/shared-directories/operations/reload", {})
+        no_change_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
+        client.request("POST", "/library/scan", {})
         no_change = wait_for_reload(
             label="noChangeReload",
             client=client,
             process=process,
             sampler=sampler,
             disk_counter_key=target.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
+            expected_scanned=spec.file_count,
             timeout_seconds=remaining_seconds(),
             poll_seconds=args.poll_seconds,
+            completion_logs=no_change_completion_logs,
         )
         no_change["storage"] = profile_storage_snapshot(profile_dir)
         no_change["acceptance"] = phase_acceptance(
             no_change,
             {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
+                "sharedFilesTotal": spec.file_count,
+                "scannedCount": spec.file_count,
                 "plannedHashCount": 0,
                 "hashedCount": 0,
-                "reusedCount": PRODUCTION_SPEC.file_count,
+                "reusedCount": spec.file_count,
                 "plannedReadBytes": 0,
                 "diskCount": 0,
                 "newCount": 0,
@@ -2952,82 +3723,91 @@ def run_campaign(
         no_change["acceptance"]["checks"].update(
             storage_acceptance(
                 no_change["storage"],
-                expected_active=PRODUCTION_SPEC.file_count,
-                expected_bytes=PRODUCTION_SPEC.total_bytes,
-                expected_minimum_long=fixture.baseline_long_path_count(),
+                expected_active=spec.file_count,
+                expected_bytes=spec.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(spec),
             )
         )
         no_change["acceptance"]["ok"] = all(no_change["acceptance"]["checks"].values())
         report["phases"].append(no_change)
+        sampler.maybe_sample(force=True)
         report["preMutationShutdown"] = stop_daemon(process, client)
         process = None
         client = None
 
-        mutation = mutate_fixture(paths.fixture_root)
-        update_fixture_generation(paths, "mutation-v2")
-        report["mutation"] = mutation
+        def prepare_coupled_mutation() -> None:
+            report["mutation"] = mutate_fixture(paths.fixture_root, spec)
+            update_fixture_generation(paths, "mutation-v2")
+
         mutation_log = run_root / "mutation.log"
         log_paths.append(mutation_log)
+        mutation_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         process, client, sampler = start_daemon(
-            paths, profile_dir, mutation_log, choose_loopback_port()
+            paths, profile_dir, mutation_log, choose_loopback_port(),
+            p2p_bind_ip=COUPLED_P2P_IP,
         )
         clients.append(client)
-        client.request("POST", "/shared-directories/operations/reload", {})
-        changed = wait_for_reload(
-            label="onePercentMutation",
-            client=client,
-            process=process,
-            sampler=sampler,
-            disk_counter_key=target.get("counterKey"),
-            expected_scanned=PRODUCTION_SPEC.file_count,
-            timeout_seconds=remaining_seconds(),
-            poll_seconds=args.poll_seconds,
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
+        report["coupledTransfer"] = {}
+        changed = run_coupled_reload(
+            paths=paths, run_root=run_root, profile_dir=profile_dir,
+            client=client, process=process, sampler=sampler, evidence=report["coupledTransfer"],
+            receiver_log_path=mutation_log,
+            before_scan=prepare_coupled_mutation,
+            reload_args={"label": "onePercentMutation", "disk_counter_key": target.get("counterKey"),
+                         "expected_scanned": spec.file_count, "timeout_seconds": remaining_seconds(),
+                         "poll_seconds": args.poll_seconds, "completion_logs": mutation_completion_logs},
         )
+        report["qualificationScope"]["activePayloadDuringHashing"] = True
         changed["storage"] = profile_storage_snapshot(profile_dir)
         changed["acceptance"] = phase_acceptance(
             changed,
             {
-                "sharedFilesTotal": PRODUCTION_SPEC.file_count,
-                "scannedCount": PRODUCTION_SPEC.file_count,
-                "plannedHashCount": len(mutation_indices()),
-                "hashedCount": len(mutation_indices()),
-                "reusedCount": PRODUCTION_SPEC.file_count - len(mutation_indices()),
-                "plannedReadBytes": expected_mutation_bytes(),
+                "sharedFilesTotal": spec.file_count,
+                "scannedCount": spec.file_count,
+                "plannedHashCount": len(mutation_indices(spec)),
+                "hashedCount": len(mutation_indices(spec)),
+                "reusedCount": spec.file_count - len(mutation_indices(spec)),
+                "plannedReadBytes": expected_mutation_bytes(spec),
                 "diskCount": 1,
-                "changedCount": len(mutation_indices()),
+                "changedCount": len(mutation_indices(spec)),
                 "newCount": 0,
             },
         )
         changed["acceptance"]["checks"].update(
             storage_acceptance(
                 changed["storage"],
-                expected_active=PRODUCTION_SPEC.file_count,
-                expected_bytes=PRODUCTION_SPEC.total_bytes,
-                expected_minimum_long=fixture.baseline_long_path_count(),
+                expected_active=spec.file_count,
+                expected_bytes=spec.total_bytes,
+                expected_minimum_long=fixture.baseline_long_path_count(spec),
             )
         )
         changed["acceptance"]["ok"] = all(changed["acceptance"]["checks"].values())
         report["phases"].append(changed)
+        sampler.maybe_sample(force=True)
         report["mutationShutdown"] = stop_daemon(process, client)
         process = None
         client = None
 
         final_log = run_root / "final-restart.log"
         log_paths.append(final_log)
-        process, client, _ = start_daemon(
+        process, client, sampler = start_daemon(
             paths, profile_dir, final_log, choose_loopback_port()
         )
         clients.append(client)
+        samplers.append(sampler)
+        report["downloadSnapshots"].append(retained_download_observation(client))
         final_shared = client.request(
             "GET",
-            SHARED_FILES_PROBE_PATH,
+            LIBRARY_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         final_dirs = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["finalRestart"] = {
-            "sharedFilesTotal": final_shared.get("total"),
+            "sharedFilesTotal": final_shared["meta"]["total"],
             "hashingCount": final_dirs.get("hashingCount"),
             "watcherActiveCount": len(_watcher_database_rows(profile_dir)),
             "storage": profile_storage_snapshot(profile_dir),
@@ -3035,10 +3815,11 @@ def run_campaign(
         report["finalRestart"]["hydration"] = wait_for_shared_catalog_hydration(
             client=client,
             process=process,
-            expected=PRODUCTION_SPEC.file_count,
+            expected=spec.file_count,
             timeout_seconds=min(CATALOG_HYDRATION_TIMEOUT_SECONDS, remaining_seconds()),
             poll_seconds=args.poll_seconds,
         )
+        sampler.maybe_sample(force=True)
         report["finalShutdown"] = stop_daemon(process, client)
         process = None
         client = None
@@ -3067,44 +3848,60 @@ def run_campaign(
                 bool(value) for value in watcher_results
             ),
         }
+        storage_snapshots = [phase["storage"] for phase in report["phases"]] + [warm["storage"], final["storage"]]
         global_checks = {
+            "coupledPayloadDuringHashing": report["coupledTransfer"]["ok"] is True,
+            "libraryReadTraversal": report["libraryReads"]["ok"] is True,
+            "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
+            "optionalRootWatching": report["rootWatchPolicy"] == {"largeRootEnabled": False, "watcherRootEnabled": True},
+            "resourceSamplesPresent": len(samplers) == 4
+                and all(sampler.summary().get("sampleCount", 0) > 0 for sampler in samplers),
+            "gracefulShutdowns": graceful_shutdowns(report, (
+                "initialShutdown", "preMutationShutdown", "mutationShutdown", "finalShutdown",
+            )),
+            "retainedDownloadRowsPreserved": all(
+                snapshot["rowCounts"].get(key) == expected
+                for snapshot in storage_snapshots for key, expected in RETAINED_DOWNLOAD_EXPECTED.items()
+            ),
+            "retainedDownloadRestCounts": len(report["downloadSnapshots"]) == 4
+                and all(value["ok"] is True for value in report["downloadSnapshots"]),
             "fixtureExact": validation["ok"] is True,
             "longPathBaselineExact": validation["longPathFileCount"]
-            == fixture.baseline_long_path_count(),
+            == fixture.baseline_long_path_count(spec),
             "warmRestartCatalogCohort": startup_catalog_cohort_accepted(
-                warm["sharedFilesTotal"], PRODUCTION_SPEC.file_count
+                warm["sharedFilesTotal"], spec.file_count
             ),
             "warmRestartCatalogHydrated": warm["hydration"]["sharedFilesTotal"]
-            == PRODUCTION_SPEC.file_count,
+            == spec.file_count,
             "warmRestartIdle": int(warm["hashingCount"] or 0) == 0,
             "warmRestartNoWatcherRows": int(warm["watcherActiveCount"]) == 0,
             "warmRestartStorage": all(
                 storage_acceptance(
                     warm["storage"],
-                    expected_active=PRODUCTION_SPEC.file_count,
-                    expected_bytes=PRODUCTION_SPEC.total_bytes,
-                    expected_minimum_long=fixture.baseline_long_path_count(),
+                    expected_active=spec.file_count,
+                    expected_bytes=spec.total_bytes,
+                    expected_minimum_long=fixture.baseline_long_path_count(spec),
                 ).values()
             ),
             "finalRestartCatalogCohort": startup_catalog_cohort_accepted(
-                final["sharedFilesTotal"], PRODUCTION_SPEC.file_count
+                final["sharedFilesTotal"], spec.file_count
             ),
             "finalRestartCatalogHydrated": final["hydration"]["sharedFilesTotal"]
-            == PRODUCTION_SPEC.file_count,
+            == spec.file_count,
             "finalRestartIdle": int(final["hashingCount"] or 0) == 0,
             "finalRestartNoWatcherRows": int(final["watcherActiveCount"]) == 0,
             "finalRestartStorage": all(
                 storage_acceptance(
                     final["storage"],
-                    expected_active=PRODUCTION_SPEC.file_count,
-                    expected_bytes=PRODUCTION_SPEC.total_bytes,
-                    expected_minimum_long=fixture.baseline_long_path_count(),
+                    expected_active=spec.file_count,
+                    expected_bytes=spec.total_bytes,
+                    expected_minimum_long=fixture.baseline_long_path_count(spec),
                 ).values()
             ),
-            "mutationExact": mutation
+            "mutationExact": report["mutation"]
             == {
-                "fileCount": len(mutation_indices()),
-                "totalBytes": expected_mutation_bytes(),
+                "fileCount": len(mutation_indices(spec)),
+                "totalBytes": expected_mutation_bytes(spec),
             },
             "watcherRegistered": int(logs["watcherRegistrations"]) > 0
             or functional_watcher_registration,
@@ -3137,9 +3934,11 @@ def run_campaign(
         if process is not None:
             report["emergencyShutdown"] = stop_daemon(process, client)
         storage.remove_tree(staging_root)
-        storage.remove_tree(paths.fixture_root / "_watcher-probe-v2")
+        storage.remove_tree(watch_root / "_watcher-probe-v2")
         report["rest"] = rest_summary(clients)
         report["watcherLogs"] = watcher_log_summary(log_paths)
+        report["processes"] = [sampler.summary() for sampler in samplers]
+        rust_cgroup_budget.finish_report(report, resource_budget_before, memory_bytes=memory_bytes)
         report["finishedAtUtc"] = utc_now()
         report["elapsedSeconds"] = round(time.monotonic() - overall_started, 3)
         write_json(report_path, report)
@@ -3177,7 +3976,7 @@ def run_media_campaign(
             f"multi-HDD run resolved only {len(counter_keys)} physical disks; "
             f"at least {args.minimum_disks} are required"
         )
-    if not paths.staged_executable.is_file():
+    if paths.staged_executable is None or not paths.staged_executable.is_file():
         raise RuntimeError(
             f"staged emulebb-rust executable is missing: {paths.staged_executable}"
         )
@@ -3232,16 +4031,13 @@ def run_media_campaign(
             paths, profile_dir, run_root / "initial.log", choose_loopback_port()
         )
         clients.append(client)
+        def create_roots() -> None:
+            for root in roots:
+                client.request("POST", "/library/roots", {"path": str(root), "watchEnabled": False})
+
         initial = run_dynamic_reload_phase(
             label="multiHddInitial",
-            action=lambda: client.request(
-                "PATCH",
-                "/shared-directories",
-                {
-                    "confirmReplaceRoots": True,
-                    "roots": [{"path": str(root) + os.sep} for root in roots],
-                },
-            ),
+            action=create_roots,
             client=client,
             process=process,
             sampler=sampler,
@@ -3266,21 +4062,21 @@ def run_media_campaign(
         clients.append(client)
         warm_shared = client.request(
             "GET",
-            SHARED_FILES_PROBE_PATH,
+            LIBRARY_FILES_PROBE_PATH,
             timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS,
         )
         warm_dirs = client.request(
-            "GET", "/shared-directories", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
+            "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         report["warmRestart"] = {
-            "sharedFilesTotal": warm_shared.get("total"),
+            "sharedFilesTotal": warm_shared["meta"]["total"],
             "hashingCount": warm_dirs.get("hashingCount"),
             "storage": profile_storage_snapshot(profile_dir),
         }
         no_change = run_dynamic_reload_phase(
             label="multiHddNoChangeReload",
             action=lambda: client.request(
-                "POST", "/shared-directories/operations/reload", {}
+                "POST", "/library/scan", {}
             ),
             client=client,
             process=process,
@@ -3355,7 +4151,7 @@ def describe_media_roots(
         "targetRoots": [target.sanitized(path_fingerprint) for target in targets],
         "physicalDisks": sanitized_disk_inventory(inventory),
         "reportDirectory": str(reports_root),
-        "stagedExecutable": str(paths.staged_executable),
+        "stagedExecutable": str(paths.staged_executable) if paths.staged_executable else None,
         "commands": {"run": "python scripts/rust-shared-library-io.py media-run"},
     }
 
@@ -3386,9 +4182,9 @@ def inspect_partial_media_run(
     if not database.is_file():
         raise RuntimeError("retained multi-HDD run has no metadata database")
     snapshot = profile_storage_snapshot(profile_dir)
-    with sqlite3.connect(
+    with closing(sqlite3.connect(
         f"file:{database.as_posix()}?mode=ro", uri=True, timeout=30
-    ) as connection:
+    )) as connection:
         hash_rows, hash_bytes = connection.execute(
             """
             SELECT COUNT(*), coalesce(sum(size_bytes), 0)
@@ -3434,7 +4230,7 @@ def inspect_partial_media_run(
         "hashIntegrity": int(counts.get("invalidActiveShareIntegrity") or 0) == 0,
         "scanFailures": int(counts.get("scanFailures") or 0) == 0,
         "noUnexpectedErrors": error_lines == probe_errors,
-        "noTransferRows": int(counts.get("activeTransferRows") or 0) == 0,
+        "noDownloadJobs": counts.get("downloadJobs") == 0,
     }
     return {
         "schema": MEDIA_REPORT_SCHEMA,
@@ -3469,13 +4265,26 @@ def inspect_partial_media_run(
 def describe(paths: HarnessPaths) -> dict[str, object]:
     inventory = physical_disk_inventory()
     target = target_disk(paths, inventory)
+    commands = {
+        "prepare": "python scripts/rust-shared-library-io.py prepare",
+        "run": "python scripts/rust-shared-library-io.py run",
+        "lanStartup": "python scripts/rust-shared-library-io.py lan-startup --lan-bind-addr <LAN-IP>",
+        "cleanup": "python scripts/rust-shared-library-io.py cleanup --confirm-delete",
+    }
+    boundary = paths.workspace_root / "workspaces" / "agents"
+    if paths.rust_repo.is_relative_to(boundary):
+        workstream = paths.rust_repo.relative_to(boundary).parts[0]
+        commands = {action: f"python -m emule_workspace test rust-shared-library-io {action} --workstream {workstream}"
+                    for action in ("describe", "prepare", "run")}
     return {
         "schema": REPORT_SCHEMA,
         "command": "describe",
         "fixturePath": str(paths.fixture_root),
         "fixtureFingerprint": path_fingerprint(paths.fixture_root),
         "reportDirectory": str(paths.reports_root),
-        "stagedExecutable": str(paths.staged_executable),
+        "stagedExecutable": str(paths.staged_executable) if paths.staged_executable else None,
+        "rustSource": str(paths.rust_repo),
+        "scenarioRoot": str(paths.scenario_root),
         "fixture": fixture_manifest(
             PRODUCTION_SPEC, status="planned", disk_number=target.get("diskNumber")
         ),
@@ -3494,15 +4303,12 @@ def describe(paths: HarnessPaths) -> dict[str, object]:
             }
         ],
         "physicalDisks": inventory,
-        "commands": {
-            "prepare": "python scripts/rust-shared-library-io.py prepare",
-            "run": "python scripts/rust-shared-library-io.py run",
-            "lanStartup": (
-                "python scripts/rust-shared-library-io.py lan-startup "
-                "--lan-bind-addr <LAN-IP>"
-            ),
-            "cleanup": "python scripts/rust-shared-library-io.py cleanup --confirm-delete",
-        },
+        "preparationState": (
+            {"ownerPresent": paths.owner_path.is_file(),
+             "manifest": json.loads(paths.manifest_path.read_text(encoding="utf-8"))}
+            if paths.manifest_path.is_file() else {"ownerPresent": paths.owner_path.is_file(), "manifest": None}
+        ),
+        "commands": commands,
     }
 
 
@@ -3529,8 +4335,92 @@ def cleanup(paths: HarnessPaths, *, confirmed: bool) -> dict[str, object]:
     }
 
 
+def extract_container_archive(archive: Path, unpacked: Path) -> Path:
+    """Extract an admitted portable archive into a fresh native directory."""
+    package = load_script_module("shared_library_portable_package", "smoke-rust-release-package.py")
+    unpacked.mkdir(parents=True, exist_ok=False)
+    with subprocess.Popen(["zstd", "--decompress", "--stdout", "--", str(archive)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            package._extract_portable_stream(process.stdout, unpacked)
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+        _, errors = process.communicate()
+        if process.returncode:
+            raise RuntimeError(f"Campaign archive decompression failed: {errors.decode(errors='replace')[-2000:]}")
+    return unpacked / "emulebb-rust/emulebb-rust"
+
+
+def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
+    """Admit a verified archive and reuse the full campaign inside a capped container."""
+    from .build_provenance import require_clean_git_source
+
+    spec, memory_bytes = fixture.capacity_tier(args.library_files)
+    if sys.platform != "linux":
+        raise RuntimeError("Container campaign requires native Linux execution")
+    output = get_workspace_output_root().resolve()
+    native, reports = args.native_root.resolve(), args.report_root.resolve()
+    archive, rust_repo = args.archive.resolve(), args.rust_repo.resolve()
+    if (not native.is_relative_to(output) or native == output
+            or not reports.is_relative_to(output) or reports.is_relative_to(native)
+            or not archive.is_relative_to(output) or not archive.is_file()):
+        raise RuntimeError("Container campaign paths must stay in their owned output boundaries")
+    if not native.is_dir() or any(item.name != "tmp" for item in native.iterdir()):
+        raise RuntimeError("Container campaign requires a fresh native volume")
+    if require_clean_git_source(rust_repo, label="container Rust").revision != args.source_sha:
+        raise RuntimeError("Container Rust source differs from the admitted archive")
+    reports.mkdir(parents=True, exist_ok=True)
+    result = {"schema": "emulebb.rust-container-campaign.v1", "status": "running",
+              "capacityTarget": {"libraryFiles": spec.file_count, "memoryBytes": memory_bytes,
+                                 "retainedJobs": RETAINED_DOWNLOAD_EXPECTED["downloadJobs"]},
+              "qualificationScope": {"containerLimitsEnforced": False}, "acceptance": {"ok": False}}
+    before = rust_cgroup_budget.sample_budget()
+    try:
+        if before is None or not rust_cgroup_budget.matches_target(before, memory_bytes):
+            raise RuntimeError("Container campaign kernel limits do not match the required budget")
+        package = load_script_module("shared_library_portable_package", "smoke-rust-release-package.py")
+        manifest = package._verify_package_manifest(archive, args.source_sha, args.version,
+                                                    "x86_64-unknown-linux-gnu")
+        unpacked = native / "runtime"
+        executable = extract_container_archive(archive, unpacked)
+        scenario = native / "scenario"
+        paths = HarnessPaths(
+            workspace_root=get_required_emule_workspace_root(), output_root=output, rust_repo=rust_repo,
+            scenario_root=scenario, fixture_root=scenario / "fixture/library",
+            manifest_path=scenario / "fixture-manifest.json",
+            owner_path=scenario / ".emulebb-rust-shared-library-io-owner.json",
+            runs_root=scenario / "runs", reports_root=reports / "campaign",
+            staged_executable=executable,
+        )
+        result["coupledPreflight"] = {}
+        run_coupled_preflight(paths, native / "preflight", result["coupledPreflight"])
+        # Docker's physical backing may be opaque. Retain the actual inventory;
+        # this campaign qualifies resource limits and correctness, not SSD speed.
+        controller = _load_psutil().Process(os.getpid())
+        result["controllerMemory"] = {"beforePreparationWorkingSetBytes": int(controller.memory_info().rss)}
+        result["preparation"] = prepare_fixture(paths, allow_non_ssd=True, spec=spec)
+        result["controllerMemory"]["afterPreparationWorkingSetBytes"] = int(controller.memory_info().rss)
+        campaign_args = build_parser().parse_args(["run", "--allow-non-ssd"])
+        report_path, report = run_campaign(paths, campaign_args, spec=spec, memory_bytes=memory_bytes)
+        result.update(status=report["status"], campaignReport=str(report_path),
+                      sourceSha=args.source_sha, archiveSha256=manifest["sha256"],
+                      acceptance={"ok": report.get("acceptance", {}).get("ok") is True})
+    except BaseException as error:
+        result.update(status="failed", error=type(error).__name__)
+        raise
+    finally:
+        # Cover extraction and fixture preparation as well as all daemon phases.
+        rust_cgroup_budget.finish_report(result, before, memory_bytes=memory_bytes)
+        write_json(reports / "container-result.json", result)
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rust-repo", type=Path)
+    parser.add_argument("--registered-stage", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser(
         "describe",
@@ -3556,6 +4446,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WATCHER_POLL_SECONDS,
     )
     run.add_argument("--allow-non-ssd", action="store_true")
+    run.add_argument("--watcher-replay-from", help="copy an owned verified baseline for focused watcher/restart proof; excludes initial hashing qualification")
+    container = subparsers.add_parser("container-run", help="run the full campaign from a verified native archive")
+    container.add_argument("--archive", type=Path, required=True)
+    container.add_argument("--source-sha", required=True)
+    container.add_argument("--version", required=True)
+    container.add_argument("--native-root", type=Path, required=True)
+    container.add_argument("--report-root", type=Path, required=True)
+    container.add_argument("--library-files", type=int, choices=(50_000, 100_000), required=True)
+    heap = subparsers.add_parser("container-heap-profile", help="diagnostic copied-profile watcher replay; never workload qualification")
+    heap.add_argument("--archive", type=Path, required=True)
+    heap.add_argument("--source-sha", required=True)
+    heap.add_argument("--version", required=True)
+    heap.add_argument("--source-receipt", type=Path, required=True)
+    heap.add_argument("--report-root", type=Path, required=True)
     lan_startup = subparsers.add_parser(
         "lan-startup",
         help=(
@@ -3629,7 +4533,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        paths = resolve_paths()
+        if args.command == "container-heap-profile":
+            from .rust_library_heap_profile import run
+            result = run(args)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["status"] == "diagnosticComplete" else 1
+        if args.command == "container-run":
+            result = run_container_campaign(args)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["status"] == "passed" else 1
+        paths = resolve_paths(rust_repo=args.rust_repo, registered_stage=args.registered_stage,
+                              require_runtime=args.command not in {"describe", "prepare"})
         if args.command == "describe":
             result = describe(paths)
         elif args.command == "prepare":

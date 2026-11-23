@@ -184,3 +184,56 @@ def test_low_id_search_reference_is_authoritative_source_evidence(monkeypatch) -
 def test_parse_file_hash_rejects_non_exact_values(value: str) -> None:
     with pytest.raises(ValueError, match="exactly 32 hexadecimal"):
         observer.parse_file_hash(value)
+
+
+def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_refusal(monkeypatch):
+    import struct
+    from types import SimpleNamespace
+    value = bytes.fromhex(FILE_HASH)
+    frames = [
+        SimpleNamespace(marker=0xe3, opcode=0x4c, payload=bytes(32)),
+        SimpleNamespace(marker=0xe3, opcode=0x59, payload=value + struct.pack("<H", 10) + b"Sample.bin"),
+        SimpleNamespace(marker=0xe3, opcode=0x55, payload=b""),
+        SimpleNamespace(marker=0xe3, opcode=0x46, payload=value + struct.pack("<II", 0, 4) + b"data"),
+        SimpleNamespace(marker=0xe3, opcode=0x48, payload=value),
+    ]
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.sent, self.transcript, self.closed = [], [], False
+        def connect(self): pass
+        def close(self): self.closed = True
+        def send(self, opcode, payload): self.sent.append((opcode, payload))
+        def receive_until(self, opcodes):
+            frame = frames.pop(0)
+            assert frame.opcode in opcodes
+            return frame
+    monkeypatch.setattr(observer.ed2k_wire, "Ed2kWireClient", Client)
+    with observer.Ed2kFilePeerObserver("127.0.0.1", 4662) as peer:
+        assert peer.filename_available(FILE_HASH)
+        assert peer.start_upload(FILE_HASH)
+        assert peer.request_range(FILE_HASH, 0, 4) == b"data"
+        assert peer.request_range(FILE_HASH, 4, 8) is None
+        assert [opcode for opcode, _ in peer.client.sent] == [1, 0x58, 0x54, 0x47, 0x47]
+        assert peer.client.sent[3][1] == value + struct.pack("<6I", 0, 0, 0, 4, 0, 0)
+        with pytest.raises(ValueError, match="bounded"):
+            peer.request_range(FILE_HASH, 0, 184_321)
+    assert peer.client.closed
+
+
+def test_peer_observer_closes_failed_hello_and_does_not_treat_other_hash_as_refusal(monkeypatch):
+    from types import SimpleNamespace
+    class Client:
+        def __init__(self, *args, **kwargs): self.closed = False
+        def connect(self): pass
+        def close(self): self.closed = True
+        def send(self, *args): pass
+        def receive_until(self, opcodes):
+            return SimpleNamespace(marker=0xe3, opcode=0x4c, payload=b"short")
+    monkeypatch.setattr(observer.ed2k_wire, "Ed2kWireClient", Client)
+    peer = observer.Ed2kFilePeerObserver("127.0.0.1", 4662)
+    with pytest.raises(ValueError, match="HELLOANSWER"):
+        peer.__enter__()
+    assert peer.client.closed
+    peer.client.receive_until = lambda opcodes: SimpleNamespace(marker=0xe3, opcode=0x48, payload=bytes(16))
+    with pytest.raises(ValueError, match="hash"):
+        peer.filename_available(FILE_HASH)

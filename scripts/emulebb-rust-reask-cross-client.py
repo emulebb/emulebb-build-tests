@@ -55,6 +55,7 @@ from emule_test_harness import soak_build_refresh  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
+from emule_test_harness.rust_local_ed2k import download_detail, require_download_id  # noqa: E402
 
 cc = load_script_module(
     "emulebb_rust_emulebb_cross_client_for_reask",
@@ -68,11 +69,9 @@ SUITE_NAME = "emulebb-rust-reask-cross-client"
 API_KEY = "emulebb-rust-reask-cross-client-key"
 QUEUED_SOURCE_REASK_PATH = "/api/v1/diagnostics/protocol-controls/queued-source-reasks"
 QUEUE_PRESSURE_PATH = "/api/v1/diagnostics/protocol-fixtures/client-udp-queue-pressure"
-SHARED_DIRECTORIES_PATH = "/api/v1/shared-directories"
 MFC_SHARED_FILES_PATH = "/api/v1/shared-files?offset=0&limit=100"
 MFC_SHARED_RELOAD_PATH = "/api/v1/shared-files/operations/reload"
-RUST_SHARED_FILES_PATH = "/api/v1/shared-files"
-RUST_SHARED_RELOAD_PATH = "/api/v1/shared-directories/operations/reload"
+RUST_SHARED_RELOAD_PATH = "/api/v1/library/scan"
 STOCK_CLIENT_UDP_RECORD_ID = "stock.client-udp.corpus"
 PROTOCOL_CATALOG_PATH = REPO_ROOT / "manifests" / "protocol-parity-catalog.json"
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
@@ -426,8 +425,8 @@ def find_upload_waiter(
         and row.get("port") == requester_port
         and str(row.get("requestedFileHash") or "").casefold() == normalized_hash
         and row.get("waitingQueue") is True
-        and isinstance(row.get("clientId"), str)
-        and bool(str(row["clientId"]).strip())
+        and isinstance(row.get("id"), str)
+        and bool(str(row["id"]).strip())
     ]
     if len(matches) > 1:
         raise RuntimeError("multiple exact upload waiters matched the requester")
@@ -435,7 +434,7 @@ def find_upload_waiter(
         return None
     waiter = matches[0]
     return {
-        "clientId": waiter["clientId"],
+        "id": waiter["id"],
         "address": requester_host,
         "requestedFileHash": normalized_hash,
         "waitingQueue": True,
@@ -505,9 +504,9 @@ def remove_upload_waiter(
     requester_tcp_endpoint: str,
     timeout: float,
 ) -> dict[str, object]:
-    client_id = str(waiter.get("clientId") or "")
+    client_id = str(waiter.get("id") or "")
     if not client_id:
-        raise RuntimeError("upload waiter clientId is missing")
+        raise RuntimeError("upload waiter id is missing")
     response = dtt.retry_rest_request(
         base_url,
         f"/api/v1/upload-queue/{quote(client_id, safe='')}/operations/remove",
@@ -894,19 +893,21 @@ def start_rust(
         rest_addr=lan_bind_addr,
         rest_port=rest_port,
         api_key=api_key,
-        p2p_bind_ip=p2p_address,
-        ed2k_port=ed2k_port,
-        ed2k_nickname=nickname,
-        kad_port=kad_port,
         server_endpoint=server_endpoint,
-        enable_udp_reask=enable_reask,
-        # The hairpin server reports each client's actual TEST-NET bind address,
-        # so this selects the production clear or user-hash-keyed UDP path.
-        obfuscation_enabled=obfuscation_enabled,
         local_only_discovery=True,
-        upload_limit_kibps=upload_limit_kibps,
-        base_upload_slots=base_upload_slots,
-        upload_slot_elastic_percent=upload_slot_elastic_percent,
+        settings={
+            'network.p2p.bindIp': p2p_address,
+            'network.p2p.tcpPort': ed2k_port,
+            'network.nickname': nickname,
+            'network.p2p.udpPort': kad_port,
+            'security.obfuscationEnabled': obfuscation_enabled,
+            'transfers.uploadLimitBytesPerSecond': (upload_limit_kibps) * 1024,
+            **({'transfers.upload.baseSlots': base_upload_slots} if base_upload_slots is not None else {}),
+            **({'transfers.upload.elasticPercent': upload_slot_elastic_percent}
+               if upload_slot_elastic_percent is not None else {}),
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
     executable = converged_live_wire.resolve_rust_diagnostics_exe(
@@ -943,18 +944,13 @@ def start_rust(
         if shared_dir is not None:
             cc.request_json(
                 base_url,
-                "PATCH",
-                "/api/v1/shared-directories",
-                api_key,
-                {
-                    "roots": [{"path": str(Path(shared_dir).resolve())}],
-                    "confirmReplaceRoots": True,
-                },
+                "POST", "/api/v1/library/roots", api_key,
+                {"path": str(Path(shared_dir).resolve()), "watchEnabled": False},
             )
             cc.request_json(
                 base_url,
                 "POST",
-                "/api/v1/shared-directories/operations/reload",
+                "/api/v1/library/scan",
                 api_key,
             )
         cc.request_json(base_url, "POST", "/api/v1/servers/operations/connect", api_key)
@@ -978,31 +974,24 @@ def start_rust(
 def rust_shared_file_link(base_url, api_key, *, file_name, timeout):
     """Wait for one Rust shared-file link and return its normalized hash and link."""
 
+    result = cc.wait_for_rust_shared_file(
+        base_url, api_key, file_name=file_name, timeout_seconds=timeout
+    )
+    detail = result["matched"]
+    return _canonical_hash(detail["hash"], field="Rust library hash"), detail["ed2kLink"]
+
+
+def wait_for_rust_library_presence(base_url, api_key, *, file_hash, present, timeout):
+    """Check sharing eligibility by point detail, including retained copyless hashes."""
+    file_hash = _canonical_hash(file_hash, field="Rust library hash")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = cc.request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-        data = _api_data(response)
-        if isinstance(data, dict):
-            rows = data.get("sharedFiles")
-            if not isinstance(rows, list):
-                rows = data.get("items")
-        else:
-            rows = None
-        for row in rows or []:
-            if isinstance(row, dict) and row.get("name") == file_name:
-                file_hash = _canonical_hash(row.get("hash"), field="Rust shared hash")
-                link_response = cc.request_json(
-                    base_url,
-                    "GET",
-                    f"/api/v1/shared-files/{file_hash}/ed2k-link",
-                    api_key,
-                )
-                link_payload = _api_data(link_response)
-                if not isinstance(link_payload, dict) or not link_payload.get("link"):
-                    raise RuntimeError("Rust shared-file link response is incomplete")
-                return file_hash, str(link_payload["link"])
-        time.sleep(2.0)
-    raise RuntimeError(f"Rust never published shared file {file_name!r}")
+        detail = cc.rust_upload_soak.find_library_file(base_url, api_key, file_hash)
+        eligible = detail is not None and detail.get("present") is True and detail.get("sharingEnabled") is True
+        if eligible is present:
+            return detail if eligible else None
+        time.sleep(0.25)
+    raise RuntimeError("Rust library did not reach the requested sharing eligibility")
 
 
 def find_shared_file_by_hash(
@@ -1079,37 +1068,6 @@ def reload_shared_catalog(
         )
     return receipt
 
-
-def clear_shared_roots(
-    base_url: str,
-    api_key: str,
-) -> dict[str, object]:
-    """Replace an ephemeral responder profile's shared roots with none."""
-
-    request = {"roots": [], "confirmReplaceRoots": True}
-    response = dtt.retry_rest_request(
-        base_url,
-        SHARED_DIRECTORIES_PATH,
-        method="PATCH",
-        api_key=api_key,
-        json_body=request,
-        timeout_seconds=30.0,
-    )
-    status = int(response.get("status") or 0)
-    payload = _api_data(response.get("raw_json"))
-    receipt = {
-        "request": request,
-        "response": {
-            "status": status,
-            "json": payload if isinstance(payload, dict) else None,
-        },
-    }
-    if status != 200:
-        raise RuntimeError(
-            "shared-root replacement failed: "
-            f"{dtt.rest_smoke.compact_http_result(response)!r}"
-        )
-    return receipt
 
 
 def restore_shared_fixture(shared_path: Path, withdrawn_path: Path) -> None:
@@ -1197,33 +1155,31 @@ def withdraw_rust_shared_root(
 ) -> dict[str, object]:
     """Withdraw one Rust fixture by clearing its ephemeral production roots."""
 
-    wait_for_shared_file_presence(
+    wait_for_rust_library_presence(
         base_url,
         api_key,
         file_hash=file_hash,
         present=True,
-        shared_files_path=RUST_SHARED_FILES_PATH,
         timeout=timeout,
     )
-    shared_directories = clear_shared_roots(base_url, api_key)
+    library_roots = cc.rust_local_ed2k.clear_explicit_library_roots(base_url, api_key)
     reload_response = reload_shared_catalog(
         base_url,
         api_key,
         reload_path=RUST_SHARED_RELOAD_PATH,
     )
-    wait_for_shared_file_presence(
+    wait_for_rust_library_presence(
         base_url,
         api_key,
         file_hash=file_hash,
         present=False,
-        shared_files_path=RUST_SHARED_FILES_PATH,
         timeout=timeout,
     )
     return {
         "fileHash": _canonical_hash(file_hash, field="file_hash"),
         "method": "shared-roots-cleared",
         "fixturePath": str(fixture_path.resolve()),
-        "sharedDirectories": shared_directories,
+        "libraryRoots": library_roots,
         "presentBefore": True,
         "reloadResponse": reload_response,
         "absentAfter": True,
@@ -1256,6 +1212,51 @@ def find_transfer_source(
     if len(matches) > 1:
         raise RuntimeError("transfer source list exposed the exact source twice")
     return matches[0] if matches else None
+
+
+def create_rust_download(base_url: str, api_key: str, link: str, file_hash: str) -> str:
+    """Capture the exact Rust job while retaining protocol hash evidence separately."""
+    payload = cc.request_json(base_url, "POST", "/api/v1/downloads", api_key,
+                              {"source": {"type": "ed2k-link", "link": link}, "intent": "started"})
+    return require_download_id(_api_data(payload), expected_hash=file_hash)
+
+
+def wait_for_rust_source_absent(base_url: str, api_key: str, *, download_id: str,
+                                file_hash: str, source_tcp_endpoint: str,
+                                source_user_hash: str, timeout: float) -> dict[str, object]:
+    """Prove absence across current source pages for the captured Rust job."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        download_detail(base_url, api_key, download_id, expected_hash=file_hash)
+        cursor = None
+        found = False
+        while True:
+            path = f"/api/v1/downloads/{download_id}/sources?limit=200"
+            if cursor is not None:
+                path += "&cursor=" + quote(cursor, safe="")
+            payload = cc.request_json(base_url, "GET", path, api_key)
+            if (not isinstance(payload, dict) or not isinstance(payload.get("data"), list)
+                    or not isinstance(payload.get("meta"), dict)):
+                raise RuntimeError("Rust source evidence requires a cursor page")
+            if find_transfer_source(payload, source_tcp_endpoint=source_tcp_endpoint,
+                                    source_user_hash=source_user_hash) is not None:
+                found = True
+                break
+            meta = payload["meta"]
+            if meta.get("hasMore") is False:
+                break
+            next_cursor = meta.get("nextCursor")
+            if (meta.get("hasMore") is not True or not payload["data"]
+                    or not isinstance(next_cursor, str) or not 0 < len(next_cursor) <= 512
+                    or next_cursor == cursor):
+                raise RuntimeError("Rust source evidence cursor did not advance")
+            cursor = next_cursor
+        if not found:
+            return {"downloadId": download_id, "fileHash": file_hash,
+                    "sourceTcpEndpoint": source_tcp_endpoint,
+                    "sourceUserHash": source_user_hash, "verifiedAbsent": True}
+        time.sleep(0.25)
+    raise RuntimeError("Rust requester retained the exact file-not-found source")
 
 
 def wait_for_transfer_source_absent(
@@ -1763,25 +1764,13 @@ def run_rust_requester_phase(
             for runtime in rust_clients
         ]
         for occupier in occupiers:
-            cc.request_json(
-                occupier.base_url,
-                "POST",
-                "/api/v1/transfers",
-                args.api_key,
-                {"link": link, "paused": False},
-            )
+            create_rust_download(occupier.base_url, args.api_key, link, file_hash)
         capacity = wait_for_upload_capacity(
             mfc["diagnosticsDir"],
             active_slots=2,
             timeout=args.reask_observe_timeout_seconds,
         )
-        cc.request_json(
-            requester.base_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {"link": link, "paused": False},
-        )
+        requester_download_id = create_rust_download(requester.base_url, args.api_key, link, file_hash)
         registration = wait_for_udp_reask_registration(
             requester.diagnostics_dir,
             side="rust",
@@ -1858,9 +1847,10 @@ def run_rust_requester_phase(
                 process=requester.process,
             )
             applied = completion["applied"]
-            source_absence_receipt = wait_for_transfer_source_absent(
+            source_absence_receipt = wait_for_rust_source_absent(
                 requester.base_url,
                 args.api_key,
+                download_id=requester_download_id,
                 file_hash=file_hash,
                 source_tcp_endpoint=mfc["tcpEndpoint"],
                 source_user_hash=registration["sourceUserHash"],
@@ -2020,13 +2010,7 @@ def run_mfc_requester_phase(
             occupier.nickname,
             args.server_connect_timeout_seconds,
         )
-        cc.request_json(
-            occupier.base_url,
-            "POST",
-            "/api/v1/transfers",
-            args.api_key,
-            {"link": link, "paused": False},
-        )
+        create_rust_download(occupier.base_url, args.api_key, link, file_hash)
         occupied_slot = wait_for_rust_occupied_upload_slot(
             uploader.diagnostics_dir,
             file_hash=file_hash,

@@ -10,6 +10,34 @@ import pytest
 from emule_test_harness import ed2k_wire, rust_local_ed2k
 
 
+@pytest.mark.parametrize("retry_exceptions", [(), (ValueError,)])
+def test_wait_probe_does_not_hide_an_undeclared_failure(monkeypatch, retry_exceptions):
+    calls, sleeps = [], []
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", sleeps.append)
+    def probe():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("fatal probe")
+        return "unexpected recovery"
+    with pytest.raises(RuntimeError, match="fatal probe"):
+        rust_local_ed2k.wait_for(probe, timeout_seconds=1, interval_seconds=0.1,
+                                description="strict probe", retry_exceptions=retry_exceptions)
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_wait_probe_retries_an_explicitly_declared_failure(monkeypatch):
+    calls, sleeps = [], []
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", sleeps.append)
+    def probe():
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("transient")
+        return "ready"
+    assert rust_local_ed2k.wait_for(probe, timeout_seconds=1, interval_seconds=0.1,
+                                   description="declared retry", retry_exceptions=(ValueError,)) == "ready"
+    assert len(calls) == 2 and sleeps == [0.1]
+
+
 def test_ed2k_link_with_source_appends_plain_source_hint() -> None:
     link = "ed2k://|file|payload.bin|4096|00112233445566778899aabbccddeeff|/"
 
@@ -61,8 +89,24 @@ def test_request_json_preserves_default_and_accepts_explicit_deadline(monkeypatc
     assert calls == [(10.0 if timeout_seconds is None else timeout_seconds, b'{"value": 1}')]
 
 
+@pytest.mark.parametrize("actual,accepted", [(207, True), (200, False), (201, False)])
+def test_request_json_requires_exact_batch_http_status(monkeypatch, actual, accepted):
+    class Response(io.BytesIO):
+        status = actual
+
+    monkeypatch.setattr(rust_local_ed2k.urllib.request, "urlopen",
+        lambda request, *, timeout: Response(b'{"data":[{"id":"12","status":"accepted","httpStatus":200}]}'))
+    if accepted:
+        assert rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/downloads/stop",
+            "key", {"ids": ["12"]}, expected_status=207)["data"][0]["id"] == "12"
+    else:
+        with pytest.raises(RuntimeError, match="expected 207"):
+            rust_local_ed2k.request_json("http://127.0.0.1", "POST", "/api/v1/downloads/stop",
+                "key", {"ids": ["12"]}, expected_status=207)
+
+
 @pytest.mark.parametrize("code,message,expected", [
-    ("BAD_REQUEST", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
+    ("INVALID_ARGUMENT", "failed to initialize Kad runtime for ED2K listener: /private/credential", "kad-listener-initialization"),
     ("EMULE_ERROR", "failed to bind eD2k TCP listener on 192.0.2.20:20029", "ed2k-listener-bind"),
     ("PRIVATE_SECRET", "private operator text", "unrecognized"),
     (["secret"], "private operator text", "unrecognized"),
@@ -71,7 +115,7 @@ def test_rest_failure_has_closed_status_code_and_core_context(code, message, exp
     error = rust_local_ed2k.RustRestFailure("private raw message", status=400,
         detail=json.dumps({"error": {"code": code, "message": message}}))
     assert error.safe_failure == {"httpStatus": 400,
-        "apiCode": code if code in ("BAD_REQUEST", "EMULE_ERROR") else "unrecognized", "coreContext": expected}
+        "apiCode": code if code in ("INVALID_ARGUMENT", "EMULE_ERROR") else "unrecognized", "coreContext": expected}
     assert "private" not in json.dumps(error.safe_failure) and "192.0.2.20" not in json.dumps(error.safe_failure)
 
 
@@ -454,19 +498,16 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
 
     def fake_request_json(_base_url, method, path, _api_key, body=None):
         calls.append((method, path, body))
-        if path == "/api/v1/shared-directories":
-            return {"roots": [body["roots"][0]], "items": []}
-        if path == "/api/v1/shared-directories/operations/reload":
+        if path == "/api/v1/library/roots":
+            return {"id": "1", **body}
+        if path == "/api/v1/library/scan":
             return {"ok": True}
-        if path == "/api/v1/shared-files":
-            return {
-                "items": [
-                    {
-                        "name": "Nested.bin",
-                        "ed2kLink": "ed2k://|file|Nested.bin|1|00112233445566778899aabbccddeeff|/",
-                    }
-                ]
-            }
+        if path.startswith("/api/v1/library/files?"):
+            return {"data": [{"hash": "41"*16,"displayName": "Nested.bin"}],
+                    "meta": {"hasMore": False,"nextCursor": None,"total": 1}}
+        if path == "/api/v1/library/files/"+"41"*16:
+            return {"hash": "41"*16,"displayName": "Nested.bin",
+                    "ed2kLink": "ed2k://|file|Nested.bin|1|"+"41"*16+"|/"}
         raise AssertionError(path)
 
     monkeypatch.setattr(rust_local_ed2k, "request_json", fake_request_json)
@@ -479,10 +520,115 @@ def test_publish_shared_tree_configures_current_root_and_returns_link(monkeypatc
     )
 
     assert calls[0] == (
-        "PATCH",
-        "/api/v1/shared-directories",
-        {"roots": [{"path": str(tmp_path / "shared-tree")}], "confirmReplaceRoots": True},
+        "POST",
+        "/api/v1/library/roots",
+        {"path": str(tmp_path / "shared-tree"), "watchEnabled": False},
     )
-    assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
-    assert calls[2] == ("GET", "/api/v1/shared-files", None)
-    assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"
+    assert calls[1] == ("POST", "/api/v1/library/scan", None)
+    assert calls[2] == ("GET", "/api/v1/library/files?view=shared&limit=200&q=Nested.bin&rootId=1&countTotal=true", None)
+    assert result["sharedFiles"]["matched"]["displayName"] == "Nested.bin"
+
+
+@pytest.mark.parametrize("ownership", ["owned", "unowned"])
+def test_download_completion_uses_retained_job_and_actual_delivery_path(monkeypatch, tmp_path: Path,
+                                                                      ownership: str) -> None:
+    delivered = tmp_path / "incoming" / "payload.bin"
+    delivered.parent.mkdir()
+    delivered.write_bytes(b"verified payload")
+    file_hash = "00112233445566778899aabbccddeeff"
+    calls = []
+    def response(_base, method, path, _key):
+        calls.append((method, path))
+        return {"id": "17", "hash": file_hash, "sizeBytes": delivered.stat().st_size,
+                "state": "completed", "completedAt": 123, "payloadVerified": True,
+                "delivery": {"path": str(delivered), "state": "delivered", "ownership": ownership}}
+    monkeypatch.setattr(rust_local_ed2k, "request_json", response)
+    monkeypatch.setattr(rust_local_ed2k, "wait_for", lambda probe, **_kwargs: probe())
+    row = rust_local_ed2k.wait_for_download_completed(
+        "http://127.0.0.1:4711", "key", "17", expected_hash=file_hash,
+        expected_size=delivered.stat().st_size,
+        expected_sha256=rust_local_ed2k.file_sha256(delivered),
+        expected_delivery_path=delivered, timeout_seconds=2.0,
+    )
+    assert row["delivered_file_exists"] is True
+    assert row["delivered_file_size"] == delivered.stat().st_size
+    assert row["deliveryOwnership"] == ownership
+    assert calls == [("GET", "/api/v1/downloads/17")]
+    assert rust_local_ed2k.wait_for_download_completed(
+        "http://127.0.0.1:4711", "key", "17", expected_hash=file_hash,
+        expected_size=delivered.stat().st_size,
+        expected_sha256="0" * 64, expected_delivery_path=delivered,
+        timeout_seconds=2.0,
+    ) is None
+    invalid = response("", "GET", "/api/v1/downloads/17", "key")
+    invalid["delivery"]["ownership"] = "none"
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: invalid)
+    assert rust_local_ed2k.wait_for_download_completed(
+        "http://127.0.0.1:4711", "key", "17", expected_hash=file_hash,
+        expected_size=delivered.stat().st_size,
+        expected_sha256=rust_local_ed2k.file_sha256(delivered),
+        expected_delivery_path=delivered, timeout_seconds=2.0,
+    ) is None
+
+
+
+def test_download_admission_retains_job_id_separate_from_hash():
+    row = {"id": "9223372036854775807", "hash": "a" * 32}
+    assert rust_local_ed2k.require_download_id(row, expected_hash="a" * 32) == row["id"]
+    with pytest.raises(RuntimeError, match="job identity"):
+        rust_local_ed2k.require_download_id({**row, "hash": "b" * 32}, expected_hash="a" * 32)
+
+
+def test_download_batch_cannot_hide_a_failed_item():
+    with pytest.raises(RuntimeError, match="did not accept captured job"):
+        rust_local_ed2k.require_download_batch({"data": [{"id": "7", "status": "failed", "httpStatus": 409,
+            "error": {"code": "DOWNLOAD_COMPLETED", "message": "Completed", "details": {}}}]}, "7")
+    row = {"id": "7", "status": "unchanged", "httpStatus": 200}
+    assert rust_local_ed2k.require_download_batch({"data": [row]}, "7") == row
+
+
+def test_download_part_totals_stream_pages_and_separate_presence_from_verification(monkeypatch):
+    calls = []
+    def read(_base, method, path, _key):
+        calls.append(path)
+        assert method == "GET"
+        if "cursor=" not in path:
+            return {"data": [{"index": 0, "sizeBytes": 100, "presentBytes": 100, "complete": False}],
+                    "meta": {"hasMore": True, "nextCursor": "next-page"}}
+        return {"data": [{"index": 1, "sizeBytes": 50, "presentBytes": 50, "complete": True}],
+                "meta": {"hasMore": False, "nextCursor": None}}
+    monkeypatch.setattr(rust_local_ed2k, "request_json", read)
+    assert rust_local_ed2k.download_part_totals("http://127.0.0.1", "key", "7") == {
+        "partCount": 2, "presentBytes": 150, "verifiedBytes": 50,
+    }
+    assert calls == ["/api/v1/downloads/7/parts?limit=200", "/api/v1/downloads/7/parts?limit=200&cursor=next-page"]
+
+
+def test_download_part_totals_refuse_repeated_parts(monkeypatch):
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: {
+        "data": [{"index": 0, "sizeBytes": 10, "presentBytes": 0, "complete": False}],
+        "meta": {"hasMore": True, "nextCursor": "next-page"},
+    })
+    with pytest.raises(RuntimeError, match="ordering"):
+        rust_local_ed2k.download_part_totals("http://127.0.0.1", "key", "7")
+
+
+
+def test_download_detail_refuses_a_same_hash_replacement(monkeypatch):
+    monkeypatch.setattr(rust_local_ed2k, "request_json", lambda *_args: {"id": "8", "hash": "a" * 32})
+    with pytest.raises(RuntimeError, match="substituted another job"):
+        rust_local_ed2k.download_detail("http://127.0.0.1", "key", "7", expected_hash="a" * 32)
+
+
+def test_clear_explicit_library_roots_preserves_managed_resources(monkeypatch):
+    calls = []
+    def request(_base, method, path, _key, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "GET":
+            return {"data": [{"id": "2", "managed": True}, {"id": "9", "managed": False}],
+                    "meta": {"hasMore": False, "nextCursor": None}}
+        assert (method, path, kwargs) == ("DELETE", "/api/v1/library/roots/9", {"expected_status": 204})
+        return {}
+    monkeypatch.setattr(rust_local_ed2k, "request_json", request)
+    assert rust_local_ed2k.clear_explicit_library_roots("http://127.0.0.1:4711", "synthetic") == {"removed": ["9"]}
+    assert len(calls) == 2

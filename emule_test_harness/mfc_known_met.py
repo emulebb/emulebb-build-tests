@@ -1,9 +1,7 @@
-"""Import MFC ``known.met`` hashes into Rust metadata.
+"""Export stock hashes and import verified path matches into Rust metadata.
 
-``known.met`` stores file names, hashes, timestamps, sizes, and upload stats,
-but not directory paths. Stock profile migration therefore seeds pathless cache
-rows; Rust associates them with real shared-root files later only after a unique
-``(file name, size, mtime_s)`` match.
+Pathless records use the profile exchange's explicit hashes-only enrichment;
+path bindings require a unique file-name, size and modification-time match.
 """
 
 from __future__ import annotations
@@ -65,7 +63,7 @@ class KnownMetEntry:
     all_time_uploaded_bytes: int
     all_time_upload_requests: int
     all_time_upload_accepts: int
-    last_upload_request_ms: int
+    last_upload_requested_at_s: int | None
 
 
 @dataclass(frozen=True)
@@ -231,7 +229,7 @@ def build_imported_known_rows(
             entry.all_time_uploaded_bytes > 0
             or entry.all_time_upload_requests > 0
             or entry.all_time_upload_accepts > 0
-            or entry.last_upload_request_ms > 0
+            or entry.last_upload_requested_at_s is not None
         ):
             stats_records += 1
         imported_rows.append(
@@ -248,7 +246,7 @@ def build_imported_known_rows(
                 "all_time_uploaded_bytes": entry.all_time_uploaded_bytes,
                 "all_time_upload_requests": entry.all_time_upload_requests,
                 "all_time_upload_accepts": entry.all_time_upload_accepts,
-                "last_upload_request_ms": entry.last_upload_request_ms,
+                "last_upload_requested_at_s": entry.last_upload_requested_at_s,
             }
         )
 
@@ -281,16 +279,27 @@ def import_mfc_known_met_cache(
         from .emule_profile_export import ExportJob
         from .profile_exchange import write_exchange
         from .profile_import_audit import run_json
-        from .paths import get_workspace_output_root
+        from .paths import get_required_emule_workspace_root, get_workspace_output_root
+        from . import rust_client
         from datetime import datetime, timezone
         import uuid
         if metadata_db.name != rust_metadata.RUST_PROFILE_METADATA_FILE:
             raise ValueError("hash import requires a Rust profile directory, not an arbitrary database filename")
         output=get_workspace_output_root()
+        workspace=get_required_emule_workspace_root()
+        source=rust_repo.resolve()
+        # WHY: a managed source must never execute an unrelated operator binary;
+        # the existing runtime owner verifies its complete staged bundle.
+        if source.is_relative_to(workspace/"workspaces"/"agents"):
+            executable=Path(rust_client.verified_runtime_stage(source,output)["executable"])
+        elif source == (workspace/"repos"/"emulebb-rust").resolve():
+            executable=rust_client.staged_executable(output)
+        else:
+            raise ValueError("hash import requires a canonical or registered Rust source")
         archive=output/"reports"/"profile-import"/(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+uuid.uuid4().hex[:8])/"hashes.sqlite"
         job=ExportJob(archive,known_met.parent,"auto","windows",archive,())
         write_exchange(job,hashes_only=True)
-        summary["liveImport"]=run_json([str(output/"tools/emulebb-rust/bin/emulebb-rust.exe"),"--profile",str(metadata_db.parent),"import-emule-profile","--hashes-only",str(archive)],7200)
+        summary["liveImport"]=run_json([str(executable),"--profile",str(metadata_db.parent),"import","profile","--hashes-only",str(archive)],7200)
         summary["archive"]=str(archive)
     return {**summary,"dryRun":dry_run,"metadataDb":str(metadata_db)}
 
@@ -380,7 +389,7 @@ def import_mfc_known_met_hashes(
             entry.all_time_uploaded_bytes > 0
             or entry.all_time_upload_requests > 0
             or entry.all_time_upload_accepts > 0
-            or entry.last_upload_request_ms > 0
+            or entry.last_upload_requested_at_s is not None
         )
         if has_stats:
             stats_records += 1
@@ -494,7 +503,7 @@ def import_mfc_shared_file_rows_hashes(
             if entry.all_time_uploaded_bytes > 0
             or entry.all_time_upload_requests > 0
             or entry.all_time_upload_accepts > 0
-            or entry.last_upload_request_ms > 0
+            or entry.last_upload_requested_at_s is not None
         ),
         "dryRun": dry_run,
         "skipped": reason_counts,
@@ -687,7 +696,7 @@ def _read_known_met_record(reader: BinaryReader) -> KnownMetEntry:
         all_time_uploaded_bytes=all_time_uploaded_bytes,
         all_time_upload_requests=all_time_upload_requests,
         all_time_upload_accepts=all_time_upload_accepts,
-        last_upload_request_ms=last_request_s * 1000,
+        last_upload_requested_at_s=last_request_s or None,
     )
 
 

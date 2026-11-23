@@ -51,12 +51,11 @@ PYTEST_CASES: tuple[PytestCase, ...] = (
     ),
     PytestCase(
         case_id="rest-contract",
-        title="Rust REST contract parity",
-        paths=("..\\emulebb-build-tests\\tests\\python\\test_emulebb_rust_rest_contract.py",),
+        title="Rust REST selected OpenAPI contract",
+        paths=("..\\emulebb-build-tests\\tests\\python\\test_rust_openapi_routes.py"
+               "::test_selected_rust_route_contract_matches_selected_openapi",),
         evidence={
             "restContractPytestPassed": True,
-            "restContractRouteParityRequired": True,
-            "restContractOpenApiParityRequired": True,
         },
     ),
     PytestCase(
@@ -175,8 +174,6 @@ def build_requirement_checks(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "stagedSourceProvenance": "unverified",
         "restContractPytestPassed": bool(
             evidence_by_id.get("rest-contract", {}).get("restContractPytestPassed")
-            and evidence_by_id.get("rest-contract", {}).get("restContractRouteParityRequired")
-            and evidence_by_id.get("rest-contract", {}).get("restContractOpenApiParityRequired")
             and "rest-contract" in passed_ids
         ),
     }

@@ -205,28 +205,24 @@ def run_job(job: ImportJob) -> tuple[int, dict]:
             prefix = command_prefix(job, report_dir, cleanup)
             report["destinationModified"] = True
             path = str(archive) if job.backend == "windows" else "/import/hashes.sqlite"
-            report["import"] = audit.run_json(prefix + ["import-emule-profile", path], job.timeout)
+            report["import"] = audit.run_json(prefix + ["import", "profile", path], job.timeout)
             report["hashValidation"] = audit.validate_imported_hashes(
                 job.profile, archive, rejected_recovery_sets=report["import"]["rejectedRecoverySets"],
                 baseline=baseline,
             )
             report["stockValidation"] = audit.validate_stock_records(job.profile, job.exchange.source_profile, archive)
-            progress = report["reconciliation"] = audit.run_json(prefix + ["reconcile-shared-files"], job.timeout)
-            audit.validate_reconciliation(progress)
             report["bindingValidation"] = audit.validate_native_bindings(
                 job.profile, job.exchange, exchange=archive, host_mappings=job.hosts if job.hosts else None,
                 allow_unrelated=True, conflicting_paths=report["import"].get("conflictingPaths",0),
                 baseline=baseline,
             )
             report["counts"] = audit.profile_counts(job.profile)
-            attention = any(progress[k] for k in ("plannedHashCount", "statFailedCount", "skippedFailedCount", "skippedIntakeCount"))
-            attention |= progress.get("scannedCount", 0) == 0
-            attention |= bool(report["import"].get("unmatchedPaths",0) or report["import"].get("conflictingPaths",0))
+            attention = bool(report["import"].get("unmatchedPaths",0) or report["import"].get("conflictingPaths",0))
             attention |= bool(report["hashValidation"].get("preservedConflictingRecords",0))
             attention |= bool(report["export"]["recoveryMissingSets"] or report["export"]["skippedKnown"]
                               or report["import"]["rejectedRecoverySets"])
             code = 2 if attention else 0
-            report["status"] = "needs-attention" if attention else "complete-reuse"
+            report["status"] = "needs-attention" if attention else "complete"
     except (Exception, KeyboardInterrupt) as error:
         report.update(status="failed", error=str(error))
         code = 1
@@ -246,11 +242,10 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         print(f"Preflight failed: {error}")
         return 1
-    progress = report.get("reconciliation", {})
-    print(f"Result: {report['status']}; reused={progress.get('reusedCount', 0)}; "
-          f"pending hashing={progress.get('plannedHashCount', 0)}; "
-          f"unresolved={progress.get('skippedFailedCount', 0)}; "
-          f"stat failures={progress.get('statFailedCount', 0)}")
+    print(f"Result: {report['status']}; verified bindings="
+          f"{report.get('bindingValidation', {}).get('verifiedPathBindings', 0)}; "
+          f"unmatched paths={report.get('import', {}).get('unmatchedPaths', 0)}; "
+          f"conflicting paths={report.get('import', {}).get('conflictingPaths', 0)}")
     print(f"AICH recovery sets: imported={report.get('import', {}).get('importedRecoverySets', 0)}; "
           f"missing={report.get('export', {}).get('recoveryMissingSets', 0)}; "
           f"rejected={report.get('import', {}).get('rejectedRecoverySets', 0)}")

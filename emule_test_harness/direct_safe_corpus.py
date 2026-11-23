@@ -45,10 +45,10 @@ def _matched_candidates_with_activity(
         if len(entry.md4_hashset) != mfc_known_met.expected_md4_hash_count(entry.size_bytes):
             continue
         known_by_key[(entry.name.casefold(), entry.size_bytes, entry.modified_s)][entry.ed2k_hash.lower()] = (
-            int(getattr(entry, "last_upload_request_ms", 0)),
-            int(getattr(entry, "all_time_upload_accepts", 0)),
-            int(getattr(entry, "all_time_upload_requests", 0)),
-            int(getattr(entry, "all_time_uploaded_bytes", 0)),
+            int(entry.last_upload_requested_at_s or 0),
+            int(entry.all_time_upload_accepts),
+            int(entry.all_time_upload_requests),
+            int(entry.all_time_uploaded_bytes),
         )
     matches: list[tuple[Path, str, int, tuple[int, int, int, int]]] = []
     for candidate in mfc_known_met.scan_shared_file_candidates([{"path": str(source_root), "recursive": False}]):

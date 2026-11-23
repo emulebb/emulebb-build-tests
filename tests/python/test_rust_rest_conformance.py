@@ -1,13 +1,81 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import urllib.parse
 
 import pytest
+import jsonschema
 
 from emule_test_harness import rust_rest_conformance
+from emule_test_harness.rust_rest_contract import iter_downloads, iter_library_roots
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+
+
+def test_kad_bootstrap_progress_uses_nullable_fractions():
+    module = rust_rest_conformance.load_rest_smoke_module()
+    schema = module.load_openapi_document()["components"]["schemas"]["Kad"]["properties"]["bootstrapProgress"]
+    validator = jsonschema.Draft202012Validator(schema)
+    for value in (None, 0, 0.5, 1):
+        validator.validate(value)
+    for value in (-0.1, 1.1, "0.5", True):
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(value)
+
+
+def test_library_roots_follow_short_pages_without_skipping_id_gaps():
+    calls = []
+    def fetch(path):
+        calls.append(path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        assert query["limit"] == ["100"]
+        if len(calls) == 1:
+            return {"data": [{"id": "1"}], "meta": {"hasMore": True, "nextCursor": "opaque-next"}}
+        assert query["cursor"] == ["opaque-next"]
+        return {"data": [{"id": "7"}], "meta": {"hasMore": False, "nextCursor": None}}
+    assert [row["id"] for row in iter_library_roots(fetch)] == ["1", "7"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("document", [
+    {"data": [], "meta": {"hasMore": True, "nextCursor": "next"}},
+    {"data": [{"id": "01"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "2"}, {"id": "1"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "1"}] * 101, "meta": {"hasMore": False, "nextCursor": None}},
+])
+def test_library_roots_require_bounded_advancing_pages(document):
+    with pytest.raises(RuntimeError):
+        list(iter_library_roots(lambda path: document))
+
+
+def test_download_pages_keep_full_width_ids_and_follow_short_pages():
+    calls = []
+    def fetch(path):
+        calls.append(path)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        assert query["view"] == ["all"] and query["limit"] == ["200"]
+        if len(calls) == 1:
+            return {"data": [{"id": "9007199254740993"}, {"id": "7"}],
+                    "meta": {"hasMore": True, "nextCursor": "opaque-next"}}
+        assert query["cursor"] == ["opaque-next"]
+        return {"data": [{"id": "1"}], "meta": {"hasMore": False, "nextCursor": None}}
+    assert [row["id"] for row in iter_downloads(fetch)] == ["9007199254740993", "7", "1"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("document", [
+    {"data": [], "meta": {"hasMore": False}},
+    {"data": [], "meta": {"hasMore": True, "nextCursor": "next"}},
+    {"data": [{"id": "01"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "1"}, {"id": "2"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "9223372036854775808"}], "meta": {"hasMore": False, "nextCursor": None}},
+    {"data": [{"id": "7"}] * 201, "meta": {"hasMore": False, "nextCursor": None}},
+])
+def test_download_pages_require_bounded_advancing_current_identities(document):
+    with pytest.raises(RuntimeError):
+        list(iter_downloads(lambda path: document))
 
 
 def test_explicit_contract_load_does_not_override_operator_environment(tmp_path, monkeypatch):
@@ -117,7 +185,7 @@ def test_load_rest_smoke_module_pins_rust_openapi_path(
     )
     assert (
         rust_rest_conformance.OPENAPI_CONTRACT_ENV
-        not in rust_rest_conformance.os.environ
+        not in os.environ
     )
 
 
@@ -141,7 +209,7 @@ def test_load_rest_smoke_module_restores_existing_openapi_path(
         rust_rest_conformance.RUST_OPENAPI_CONTRACT_PATH
     )
     assert (
-        rust_rest_conformance.os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV]
+        os.environ[rust_rest_conformance.OPENAPI_CONTRACT_ENV]
         == "operator-contract.yaml"
     )
 
@@ -158,45 +226,64 @@ def test_rust_openapi_network_tags_are_mapped_to_rest_families() -> None:
     assert module.OPENAPI_TAG_FAMILIES["IpFilter"] == "ip-filter"
 
 
-def test_rust_openapi_shared_root_routes_use_controlled_external_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    shared_root = tmp_path / "contract-shared-root"
-    monkeypatch.setenv("EMULEBB_REST_CONTRACT_SHARED_ROOT", str(shared_root))
+def test_rust_library_routes_use_resource_ids_and_current_body_shapes() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
-    routes_by_operation = {
-        route["operationId"]: route for route in module.REST_CONTRACT_ROUTES
+    routes = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+    assert routes["createLibraryRoot"]["path"] == "/api/v1/library/roots"
+    for operation in ("getLibraryRoot", "updateLibraryRoot", "deleteLibraryRoot"):
+        assert routes[operation]["path"] == "/api/v1/library/roots/9223372036854775807"
+        assert module.normalize_contract_path_for_openapi(routes[operation]["path"]) == "/library/roots/{id}"
+    assert module.get_contract_route_body("createLibraryRoot") == {}
+    assert module.get_contract_route_body("updateLibraryRoot") == {"watchEnabled": False}
+    assert routes["removeSharedFileIgnorePattern"]["path"] == (
+        "/api/v1/library/ignores?" + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"}))
+    assert routes["updateSharedFileIgnoreRule"]["path"] == "/api/v1/library/ignores/defaults/noise.desktop-ini"
+    assert module.assert_contract_routes_match_openapi()["ok"] is True
+    assert module.get_contract_route_body("addSharedFileIgnorePattern") == {"pattern": "rest-contract-ignored-*.bin"}
+    assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {"enabled": True}
+
+
+def test_rust_category_contract_uses_name_paths_and_nullable_download_body() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
+    routes = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+    for operation_id in ("getCategory", "patchCategory", "deleteCategory"):
+        route = routes[operation_id]
+        assert route["path"] == "/api/v1/categories/MissingCategory"
+        assert route["openapiPath"] == "/categories/{categoryName}"
+        assert module.normalize_contract_path_for_openapi(route["path"]) == route["openapiPath"]
+    report = module.assert_contract_routes_match_openapi()
+    assert report["ok"] is True, json.dumps(report, sort_keys=True)
+    assert module.get_contract_route_body("patchCategory") == {"comment": "REST contract"}
+    assert module.get_contract_route_body("downloadSearchResult") == {
+        "intent": "stopped", "category": None,
     }
 
-    assert routes_by_operation["addSharedDirectoryRoot"]["path"] == (
-        "/api/v1/shared-directories/roots"
-    )
-    assert routes_by_operation["removeSharedDirectoryRoot"]["path"] == (
-        "/api/v1/shared-directories/roots?"
-        + urllib.parse.urlencode({"path": str(shared_root.resolve())})
-    )
-    assert routes_by_operation["removeSharedFileIgnorePattern"]["path"] == (
-        "/api/v1/shared-directories/ignores?"
-        + urllib.parse.urlencode({"pattern": "rest-contract-ignored-*.bin"})
-    )
-    assert routes_by_operation["updateSharedFileIgnoreRule"]["path"] == (
-        "/api/v1/shared-directories/ignores/defaults/noise.desktop-ini"
-    )
-    assert module.normalize_contract_path_for_openapi(
-        routes_by_operation["updateSharedFileIgnoreRule"]["path"]
-    ) == "/shared-directories/ignores/defaults/{ruleKey}"
-    assert module.assert_contract_routes_match_openapi()["ok"] is True
-    assert module.get_contract_route_body("addSharedDirectoryRoot") == {
-        "path": str(shared_root.resolve())
+
+def test_rust_download_path_uses_public_job_id() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    path = module.concrete_contract_path("/downloads/{id}/parts", "listDownloadParts")
+    assert path == "/api/v1/downloads/9223372036854775807/parts"
+    assert module.normalize_contract_path_for_openapi(path) == "/downloads/{id}/parts"
+
+
+def test_rust_download_contract_uses_explicit_id_action_bodies() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
+    routes = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+    assert routes["getDownload"]["path"] == "/api/v1/downloads/9223372036854775807"
+    assert routes["startDownloads"]["successResponseStatuses"] == ["207"]
+    missing = rust_rest_conformance.RUST_MISSING_DOWNLOAD_ID
+    assert module.get_contract_route_body("createDownload") == {}
+    assert module.get_contract_route_body("patchDownload") == {"category": None}
+    for action in ("startDownloads", "stopDownloads", "verifyDownloads"):
+        assert module.get_contract_route_body(action) == {"ids": [missing]}
+    assert module.get_contract_route_body("removeDownloads") == {
+        "ids": [missing], "deleteData": False,
     }
-    assert shared_root.is_dir()
-    assert module.get_contract_route_body("addSharedFileIgnorePattern") == {
-        "pattern": "rest-contract-ignored-*.bin"
-    }
-    assert module.get_contract_route_body("updateSharedFileIgnoreRule") == {
-        "enabled": True
-    }
+    assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES["getDownload"] == (404,)
 
 
 def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
@@ -206,6 +293,25 @@ def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
         "confirmCapture": True,
         "maxBytes": 65_536,
     }
+
+
+def test_library_point_probes_have_valid_bodies_and_require_missing_hash_response() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    module = rust_rest_conformance.load_rest_smoke_module(
+        tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    routes = {row["operationId"]: row for row in module.REST_CONTRACT_ROUTES}
+    base_path = "/api/v1/library/files/0123456789abcdef0123456789abcdef"
+    for operation, suffix, success in (
+        ("getLibraryFile", "", "200"),
+        ("patchLibraryFile", "", "204"),
+        ("listLibraryFileLocations", "/locations", "200"),
+    ):
+        assert routes[operation]["path"] == base_path + suffix
+        assert routes[operation]["successResponseStatuses"] == [success]
+        assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES[operation] == (404,)
+    report = module.assert_contract_routes_match_openapi()
+    assert report["ok"] is True, json.dumps(report, sort_keys=True)
+    assert module.get_contract_route_body("patchLibraryFile") == {"uploadPriority": "normal"}
 
 
 def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
@@ -218,7 +324,7 @@ def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
         "captureDiagnosticBundle",
         "refreshNat",
         "probeVpnGuard",
-        "reloadSharedDirectories",
+        "scanLibrary",
         "connectServerAny",
         "disconnectServers",
         "connectServer",
@@ -229,43 +335,37 @@ def test_rust_openapi_live_disruptive_operations_are_unsafe() -> None:
         "deleteSearches",
         "reloadIpFilter",
         "clearLogs",
-        "replaceSharedDirectories",
     }:
         assert routes_by_operation[operation_id]["safe"] is False
         assert routes_by_operation[operation_id]["safety"] == "unsafe"
 
 
-def test_rust_openapi_transfer_schema_includes_delivery_fields() -> None:
-    module = rust_rest_conformance.load_rest_smoke_module()
-    transfer_properties = module.load_openapi_document()["components"]["schemas"][
-        "Transfer"
-    ]["properties"]
-
-    assert transfer_properties["deliveredPath"]["type"] == ["string", "null"]
-    assert transfer_properties["inIncoming"] == {"type": "boolean"}
+def test_rust_openapi_download_schema_separates_job_and_delivery_identity() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
+    schemas = module.load_openapi_document()["components"]["schemas"]
+    download = schemas["Download"]
+    assert download["properties"]["id"] == {"$ref": "#/components/schemas/DownloadId"}
+    assert download["properties"]["hash"]["pattern"] == "^[0-9a-f]{32}$"
+    assert download["properties"]["hash"]["minLength"] == 32
+    assert download["properties"]["hash"]["maxLength"] == 32
+    assert download["properties"]["delivery"]["oneOf"] == [
+        {"$ref": "#/components/schemas/DownloadDelivery"}, {"type": "null"},
+    ]
+    assert "payloadVerified" in download["required"]
 
 
 def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
 
-    for component in ("Ed2kSettings", "Ed2kSettingsUpdate"):
-        properties = schemas[component]["properties"]
-        assert properties["nickname"] == {"type": "string", "maxLength": 50}
-        assert properties["useServerPriorities"] == {
-            "type": "boolean",
-            "description": (
-                "Apply stable high, normal, then low server-priority ordering; "
-                "stock default true."
-            ),
-        }
-        assert properties["autoConnectStaticOnly"] == {
-            "type": "boolean",
-            "description": (
-                "Restrict application startup auto-connect to static servers; "
-                "explicit targeted connects are unaffected."
-            ),
-        }
+    network = schemas["SettingsPartial"]["properties"]["network"]["properties"]
+    assert network["nickname"]["type"] == "string"
+    assert network["nickname"]["x-maxUtf8Bytes"] == 128
+    servers = network["servers"]["properties"]
+    assert servers["usePriorities"]["type"] == "boolean"
+    assert servers["staticOnly"]["type"] == "boolean"
 
     server = schemas["Server"]
     assert "auxiliaryPorts" in server["required"]
@@ -275,60 +375,61 @@ def test_rust_openapi_documents_ed2k_identity_and_server_connection_metadata() -
     }
 
 
-def test_rust_openapi_smoke_uses_ed2k_owned_server_controls() -> None:
+def test_rust_openapi_smoke_uses_canonical_server_controls() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
-
-    removed_core_fields = {"reconnect", "safeServerConnect", "addServersFromServer"}
-    for component in ("CoreSettings", "CoreSettingsUpdate"):
-        assert removed_core_fields.isdisjoint(schemas[component]["properties"])
-    for component in ("Ed2kSettings", "Ed2kSettingsUpdate"):
-        properties = schemas[component]["properties"]
-        assert properties["reconnectEnabled"]["type"] == "boolean"
-        assert properties["safeServerConnect"]["type"] == "boolean"
-        assert properties["addServersFromServer"]["type"] == "boolean"
-        assert properties["serverKeepaliveMinutes"]["type"] == "integer"
-        assert properties["serverKeepaliveMinutes"]["minimum"] == 0
-        assert properties["serverKeepaliveMinutes"]["maximum"] == 1_440
-        assert "keepaliveSecs" not in properties
-
-    assert removed_core_fields.isdisjoint(module.REST_CORE_SETTING_KEYS)
-    assert module.REST_RUST_ED2K_SERVER_SETTING_KEYS == {
-        "reconnectEnabled",
-        "safeServerConnect",
-        "addServersFromServer",
-        "serverKeepaliveMinutes",
-    }
+    servers = schemas["SettingsPartial"]["properties"]["network"]["properties"]["servers"]["properties"]
+    for key in ("autoReconnect", "safeConnect", "acceptServerListUpdates"):
+        assert servers[key]["type"] == "boolean"
+    assert servers["keepaliveMinutes"] == {"type": "integer", "minimum": 0, "maximum": 1440, "multipleOf": 1}
     assert module.get_contract_route_body("patchSettings") == {
-        "ed2k": {"safeServerConnect": True}
-    }
-    assert module.get_contract_route_body("app_preferences_patch") == {
-        "safeServerConnect": True
+        "expectedRevision": "1", "set": {"network": {"servers": {"safeConnect": True}}},
     }
 
 
-def test_rust_openapi_documents_all_supported_nat_backends() -> None:
+def test_live_settings_fixture_uses_selected_contract_and_exact_observed_revision(monkeypatch):
+    module = rust_rest_conformance.load_rest_smoke_module()
+    module.REST_CONTRACT_ROUTES = [route for route in module.REST_CONTRACT_ROUTES
+                                   if route["operationId"] == "patchSettings"]
+    requests = []
+    def request(base, path, *, method="GET", json_body=None, **kwargs):
+        requests.append((method, path, json_body))
+        document = {"data": {"ok": True},
+                    "meta": {"apiVersion": "v1", "settingsRevision": "9007199254740993"}}
+        return {"status": 200, "content_type": "application/json", "json": document["data"],
+                "raw_json": document, "body_text": json.dumps(document)}
+    monkeypatch.setattr(module, "http_request", request)
+    monkeypatch.setattr(module, "validate_openapi_operation_response_payload", lambda *args: None)
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:4711", "key", "contract")
+    assert summary["routes"][0]["ok"], summary["routes"][0]
+    assert requests == [("GET", "/api/v1/settings", None), ("PATCH", "/api/v1/settings", {
+        "expectedRevision": "9007199254740993", "set": {"network": {"servers": {"safeConnect": True}}}})]
+    assert module.OPENAPI_CONTRACT_PATH == resolve_selected_workspace_repo(
+        Path(__file__).resolve().parents[2], "emulebb-tooling") / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+
+
+def test_rust_openapi_documents_nat_backend_choices() -> None:
     module = rust_rest_conformance.load_rest_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
-
-    for component in ("NatSettings", "NatSettingsUpdate"):
-        assert schemas[component]["properties"]["backendOrder"]["items"]["enum"] == [
-            "pcp_natpmp",
-            "upnp_miniupnpc",
-        ]
+    order = schemas["SettingsPartial"]["properties"]["network"]["properties"]["nat"]["properties"]["backendOrder"]
+    assert order["items"]["enum"] == ["pcp-natpmp", "upnp"]
+    assert order["minItems"] == 1 and order["maxItems"] == 2 and order["uniqueItems"] is True
 
 
-def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> None:
-    module = rust_rest_conformance.load_rest_smoke_module()
+def test_rust_openapi_diagnostics_documents_download_event_runtime_metrics() -> None:
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    openapi = tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml"
+    module = rust_rest_conformance.load_rest_smoke_module(openapi)
     schemas = module.load_openapi_document()["components"]["schemas"]
 
-    assert "transferEvents" in schemas["RuntimeDiagnostics"]["required"]
-    assert schemas["RuntimeDiagnostics"]["properties"]["transferEvents"] == {
-        "$ref": "#/components/schemas/TransferEventRuntimeDiagnostics"
+    assert "downloadEvents" in schemas["RuntimeDiagnostics"]["required"]
+    assert schemas["RuntimeDiagnostics"]["properties"]["downloadEvents"] == {
+        "$ref": "#/components/schemas/DownloadEventRuntimeDiagnostics"
     }
-    assert schemas["TransferEventRuntimeDiagnostics"]["required"] == [
+    assert schemas["DownloadEventRuntimeDiagnostics"]["required"] == [
         "enabled",
         "stream",
+        "epoch",
         "channelCapacity",
         "queuedEventCount",
         "subscriberCount",
@@ -336,10 +437,10 @@ def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> 
         "nextEventId",
         "resumeBehavior",
     ]
-    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["stream"][
+    assert schemas["DownloadEventRuntimeDiagnostics"]["properties"]["stream"][
         "enum"
     ] == ["sse"]
-    assert schemas["TransferEventRuntimeDiagnostics"]["properties"]["resumeBehavior"][
+    assert schemas["DownloadEventRuntimeDiagnostics"]["properties"]["resumeBehavior"][
         "enum"
     ] == ["reset"]
     for field_name in (
@@ -349,13 +450,13 @@ def test_rust_openapi_diagnostics_documents_transfer_event_runtime_metrics() -> 
         "latestEventId",
     ):
         assert (
-            schemas["TransferEventRuntimeDiagnostics"]["properties"][field_name][
+            schemas["DownloadEventRuntimeDiagnostics"]["properties"][field_name][
                 "minimum"
             ]
             == 0
         )
     assert (
-        schemas["TransferEventRuntimeDiagnostics"]["properties"]["nextEventId"][
+        schemas["DownloadEventRuntimeDiagnostics"]["properties"]["nextEventId"][
             "minimum"
         ]
         == 1
@@ -470,28 +571,28 @@ def test_run_response_conformance_reports_event_stream_failure() -> None:
     }
 
 
-def write_transfer_event_openapi(path: Path) -> Path:
+def write_download_event_openapi(path: Path) -> Path:
     path.write_text(
         """
 openapi: 3.1.0
 components:
   schemas:
-    TransferEvent:
+    DownloadEvent:
       oneOf:
-        - $ref: "#/components/schemas/TransferSyncResetEvent"
-    TransferSyncResetEvent:
+        - $ref: "#/components/schemas/DownloadSyncResetEvent"
+    DownloadSyncResetEvent:
       type: object
       additionalProperties: false
-      required: [id, type, reason]
+      required: [id, epoch, type, reason]
       properties:
-        id: { type: integer, minimum: 1 }
+        id: { type: integer, minimum: 0 }
+        epoch: { type: string, format: uuid }
         type:
           type: string
           enum: [sync.reset]
         reason:
           type: string
-          enum: [last-event-id]
-        lastEventId: { type: string }
+          enum: [initial, reconnect, lagged, epoch-changed]
 """,
         encoding="utf-8",
     )
@@ -500,15 +601,15 @@ components:
 
 def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -> None:
     requests = []
-    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    openapi_yaml = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(request, *, timeout: float):
         requests.append((request, timeout))
         return FakeEventStreamResponse(
             [
                 b"event: sync.reset\n",
-                b"id: 42\n",
-                b'data: {"id":42,"type":"sync.reset","reason":"last-event-id","lastEventId":"1"}\n',
+                b"id: 00000000-0000-4000-8000-000000000001:42\n",
+                b'data: {"id":42,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset","reason":"reconnect"}\n',
                 b"\n",
             ]
         )
@@ -532,12 +633,12 @@ def test_run_event_stream_conformance_reads_resume_reset_frame(tmp_path: Path) -
             "X-Contract-Version": "2.0.0",
             "X-Accel-Buffering": "no",
         },
-        "payloadSchema": "TransferEvent",
+        "payloadSchema": "DownloadEvent",
     }
     request, timeout = requests[0]
     assert request.full_url == "http://127.0.0.1:4711/api/v1/events"
     assert request.headers["Accept"] == "text/event-stream"
-    assert request.headers["Last-event-id"] == "1"
+    assert request.headers["Last-event-id"] == "00000000-0000-4000-8000-000000000001:1"
     assert request.headers["X-api-key"] == "test-key"
     assert timeout == 2.0
 
@@ -560,15 +661,15 @@ def test_run_event_stream_conformance_rejects_api_root_base_url() -> None:
 def test_run_event_stream_conformance_fails_without_stream_headers(
     tmp_path: Path,
 ) -> None:
-    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    openapi_yaml = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(_request, *, timeout: float):
         assert timeout == 2.0
         return FakeEventStreamResponse(
             [
                 b"event: sync.reset\n",
-                b"id: 42\n",
-                b'data: {"id":42,"type":"sync.reset","reason":"last-event-id","lastEventId":"1"}\n',
+                b"id: 00000000-0000-4000-8000-000000000001:42\n",
+                b'data: {"id":42,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset","reason":"reconnect"}\n',
                 b"\n",
             ],
             headers={
@@ -597,15 +698,15 @@ def test_run_event_stream_conformance_fails_without_stream_headers(
 def test_run_event_stream_conformance_fails_on_schema_invalid_payload(
     tmp_path: Path,
 ) -> None:
-    openapi_yaml = write_transfer_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    openapi_yaml = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
 
     def opener(_request, *, timeout: float):
         assert timeout == 2.0
         return FakeEventStreamResponse(
             [
                 b"event: sync.reset\n",
-                b"id: 42\n",
-                b'data: {"id":42,"type":"sync.reset","lastEventId":"1"}\n',
+                b"id: 00000000-0000-4000-8000-000000000001:42\n",
+                b'data: {"id":42,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset"}\n',
                 b"\n",
             ]
         )
@@ -676,3 +777,43 @@ def test_run_cli_reports_api_root_base_url_as_preflight_error(
 
     assert exit_code == 2
     assert "preflight failed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("cursor, expected", [
+    ("00000000-0000-4000-8000-000000000001:18446744073709551615", True),
+    ("00000000-0000-4000-8000-000000000002:18446744073709551615", False),
+    ("00000000-0000-4000-8000-000000000001:18446744073709552000", False),
+])
+def test_event_cursor_matches_payload_epoch_and_exact_revision(tmp_path, cursor, expected):
+    openapi = write_download_event_openapi(tmp_path / "REST-API-OPENAPI.yaml")
+    def opener(_request, *, timeout):
+        return FakeEventStreamResponse([
+            b"event: sync.reset\n", f"id: {cursor}\n".encode(),
+            b'data: {"id":18446744073709551615,"epoch":"00000000-0000-4000-8000-000000000001","type":"sync.reset","reason":"reconnect"}\n',
+            b"\n",
+        ])
+    result = rust_rest_conformance.run_event_stream_conformance(
+        "http://127.0.0.1:4711", "test-key", opener=opener, openapi_path=openapi,
+    )
+    assert result["ok"] is expected
+    if not expected:
+        assert result["missing"] == ["cursor"]
+
+
+def test_sharing_mutation_is_explicitly_unsafe_for_generic_profile_probes():
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    module = rust_rest_conformance.load_rest_smoke_module(tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    row = next(route for route in module.REST_CONTRACT_ROUTES if route["operationId"] == "setLibrarySharing")
+    assert row["safe"] is False
+    assert module.get_contract_route_body("setLibrarySharing") == {"enabled": False, "hashes": ["ff" * 16]}
+
+
+def test_search_result_resources_keep_their_template_and_expected_missing_lookup():
+    tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+    smoke = rust_rest_conformance.load_rest_smoke_module(
+        tooling / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    for resource, operation in [("observations", "listSearchResultObservations"), ("download", "downloadSearchResult")]:
+        template = "/searches/{searchId}/results/{resultId}/" + resource
+        path = smoke.concrete_contract_path(template, operation)
+        assert smoke.normalize_contract_path_for_openapi(path) == template
+    assert smoke.REST_CONTRACT_EXPECTED_ERROR_STATUSES["listSearchResultObservations"] == (404,)

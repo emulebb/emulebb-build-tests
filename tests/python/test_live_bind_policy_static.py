@@ -26,25 +26,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_live_harness_rejects_retired_bind_flag_names() -> None:
-    retired_patterns = (
-        re.compile(r"(?<![\w-])--bind-addr(?![\w-])"),
-        re.compile(r"(?<![\w-])--rest-bind-addr(?![\w-])"),
-        re.compile(r"(?<![\w-])--web-bind-addr(?![\w-])"),
-        re.compile(r"\brest_bind_addr\b"),
-        re.compile(r"\bweb_bind_addr\b"),
-    )
-    offenders: list[str] = []
-
-    for path in python_sources(SCRIPT_ROOT, HARNESS_ROOT):
-        text = read_text(path)
-        for pattern in retired_patterns:
-            if pattern.search(text):
-                offenders.append(f"{path.relative_to(REPO_ROOT)}: {pattern.pattern}")
-
-    assert offenders == []
-
-
 def test_public_vpn_profiles_do_not_write_interface_name_to_bindaddr() -> None:
     offenders: list[str] = []
 

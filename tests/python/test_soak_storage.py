@@ -787,7 +787,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v6", "seq": 1},
+        payload={"schema": "emulebb.diagnostic-bundle.v8", "seq": 1},
         now_ns=1,
     )
     second = soak_storage.persist_bounded_json_artifact(
@@ -796,7 +796,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v6", "seq": 2},
+        payload={"schema": "emulebb.diagnostic-bundle.v8", "seq": 2},
         now_ns=2,
     )
     third = soak_storage.persist_bounded_json_artifact(
@@ -805,7 +805,7 @@ def test_persist_bounded_json_artifact_rotates_whole_atomic_files(
         directory=directory,
         stream_name="diagnostic_bundles",
         stem="rust-diagnostic-bundle-ready",
-        payload={"schema": "emulebb.diagnostic-bundle.v6", "seq": 3},
+        payload={"schema": "emulebb.diagnostic-bundle.v8", "seq": 3},
         now_ns=3,
     )
 
@@ -863,7 +863,7 @@ def test_persist_bounded_json_bytes_artifact_preserves_exact_server_bytes(
             bundle_max_bytes=1_024,
         ),
     )
-    encoded = b'{"schema":"emulebb.diagnostic-bundle.v6","exact":true}'
+    encoded = b'{"schema":"emulebb.diagnostic-bundle.v8","exact":true}'
 
     result = soak_storage.persist_bounded_json_bytes_artifact(
         store=store,
@@ -903,7 +903,7 @@ def test_persist_bounded_json_artifact_fails_closed_on_store_reservation(
             directory=directory,
             stream_name="diagnostic_bundles",
             stem="rust-diagnostic-bundle-ready",
-            payload={"schema": "emulebb.diagnostic-bundle.v6"},
+            payload={"schema": "emulebb.diagnostic-bundle.v8"},
             now_ns=1,
         )
 

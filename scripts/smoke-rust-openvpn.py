@@ -28,8 +28,10 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness.rust_rest_contract import settings_patch
 from emule_test_harness import (
     nat_live_matrix,
+    rust_client,
     server_failure_accounting,
     vpn_transfer_completion,
 )
@@ -71,28 +73,6 @@ def sha256_file(path: Path) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
-
-def container_delivery_matches(
-    container: str, expected_size: int, expected_sha256: str
-) -> bool:
-    candidates = docker(
-        "exec",
-        container,
-        "find",
-        "/data/ed2k",
-        "-type",
-        "f",
-        "-size",
-        f"{expected_size}c",
-        "-print0",
-    ).stdout.split("\0")
-    for candidate in filter(None, candidates):
-        digest = docker(
-            "exec", container, "sha256sum", "--", candidate
-        ).stdout.split()[0].lower()
-        if digest == expected_sha256:
-            return True
-    return False
 
 
 def container_logs(container: str) -> str:
@@ -493,7 +473,6 @@ def main() -> int:
     env = {
         **os.environ,
         "EMULEBB_TEST_VPN_PRIVATE_ROOT": str(args.private_root.resolve()),
-        "EMULEBB_TEST_P2P_INTERFACE": "" if args.binding_mode == "none" else "tun0",
         "EMULEBB_TEST_RUST_LOG": args.rust_log,
         "EMULEBB_TEST_RUST_IMAGE": args.image,
     }
@@ -551,6 +530,13 @@ def main() -> int:
             "image", "inspect", args.capture_image, "--format", "{{.Id}}"
         ).stdout.strip()
         started = True
+        command(*compose, "up", "--detach", "--no-build", "--pull", "never", "openvpn",
+                env=env, timeout=180)
+        rust_client.prepare_container_profile(command, compose, env=env, settings=(
+            {} if args.binding_mode == "none" else {
+                "network.p2p.bindInterface": "tun0", "security.vpnGuard.mode": "block",
+            }
+        ))
         command(
             *compose,
             "up",
@@ -558,6 +544,7 @@ def main() -> int:
             "--no-build",
             "--pull",
             "never",
+            "emulebb-rust",
             env=env,
             timeout=180,
         )
@@ -609,13 +596,8 @@ def main() -> int:
             re.search(rf"^{re.escape(prefix)}(?:\s+.*)?\s+dev tun0(?:\s|$)", route_table, re.MULTILINE)
             for prefix in ("0.0.0.0/1", "128.0.0.0/1")
         )
-        processes = docker("top", rust).stdout
-        interface_pinned = "--p2p-bind-interface tun0" in processes
-        if interface_pinned != (args.binding_mode != "none"):
-            raise RuntimeError("Rust daemon P2P interface arguments did not match the requested mode")
         report["tun0Present"] = True
         report["publicRouteUsesTun0"] = True
-        report["p2pInterfacePinned"] = interface_pinned
 
         deadline = time.monotonic() + 120
         while True:
@@ -643,31 +625,29 @@ def main() -> int:
         ).stdout
         api_key = tomllib.loads(settings)["rest"]["api_key"]
         api = "http://127.0.0.1:14712/api/v1"
-        settings_patch: dict[str, object] = {}
+        effective = response_data(request_json(api + "/settings", api_key))["effective"]
+        wanted_interface = None if args.binding_mode == "none" else "tun0"
+        if effective["network"]["p2p"]["bindInterface"] != wanted_interface:
+            raise RuntimeError("Rust effective interface does not match the requested binding mode")
+        if wanted_interface and effective["security"]["vpnGuard"]["mode"] != "block":
+            raise RuntimeError("Rust effective VPN guard is not blocking")
+        report["p2pInterfacePinned"] = wanted_interface is not None
+        settings_values: dict[str, object] = {}
         if args.disable_protocol_obfuscation or args.nat_matrix:
-            settings_patch["ed2k"] = {"obfuscationEnabled": False}
+            settings_values["security"] = {"obfuscationEnabled": False}
         if args.binding_mode == "interface-ip":
-            settings_patch["daemon"] = {
-                "p2pBindInterface": "tun0",
-                "p2pBindIp": tun_ip,
-            }
-        if settings_patch:
-            updated = response_data(
-                request_json(
-                    api + "/app/settings",
-                    api_key,
-                    method="PATCH",
-                    payload=settings_patch,
-                    timeout=90,
-                )
-            )
+            settings_values["network"] = {"p2p": {"bindInterface": "tun0", "bindIp": tun_ip}}
+        if settings_values:
+            snapshot = request_json(api + "/settings", api_key, timeout=90)
+            updated = response_data(request_json(
+                api + "/settings", api_key, method="PATCH",
+                payload=settings_patch(snapshot, set_values=settings_values), timeout=90))
+            saved = updated["saved"]
             if args.disable_protocol_obfuscation or args.nat_matrix:
-                updated_ed2k = updated.get("ed2k", {})
-                if not isinstance(updated_ed2k, dict) or updated_ed2k.get("obfuscationEnabled") is not False:
+                if saved["security"]["obfuscationEnabled"]["value"] is not False:
                     raise RuntimeError("REST settings PATCH did not disable protocol obfuscation")
             if args.binding_mode == "interface-ip":
-                updated_daemon = updated.get("daemon", {})
-                if not isinstance(updated_daemon, dict) or updated_daemon.get("p2pBindIp") != tun_ip:
+                if saved["network"]["p2p"]["bindIp"]["value"] != tun_ip:
                     raise RuntimeError("REST settings PATCH did not set the tun0 P2P bind IP")
             command(*compose, "restart", "emulebb-rust", env=env, timeout=90)
             deadline = time.monotonic() + 120
@@ -688,16 +668,15 @@ def main() -> int:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Rust WebUI did not restart after settings update")
                 time.sleep(2)
-            persisted = response_data(
-                request_json(api + "/app/settings", api_key, timeout=90)
-            )
+            persisted = response_data(request_json(api + "/settings", api_key, timeout=90))
+            if persisted["application"]["pendingRestart"] or persisted["application"]["failed"]:
+                raise RuntimeError("Saved VPN settings were not applied after restart")
+            effective = persisted["effective"]
             if args.disable_protocol_obfuscation or args.nat_matrix:
-                persisted_ed2k = persisted.get("ed2k", {})
-                if not isinstance(persisted_ed2k, dict) or persisted_ed2k.get("obfuscationEnabled") is not False:
+                if effective["security"]["obfuscationEnabled"] is not False:
                     raise RuntimeError("protocol-obfuscation setting did not persist across restart")
             if args.binding_mode == "interface-ip":
-                persisted_daemon = persisted.get("daemon", {})
-                if not isinstance(persisted_daemon, dict) or persisted_daemon.get("p2pBindIp") != tun_ip:
+                if effective["network"]["p2p"]["bindIp"] != tun_ip:
                     raise RuntimeError("P2P bind IP did not persist across restart")
                 report["p2pBindIpMatchesTun0"] = True
         report["protocolObfuscationEnabled"] = not (
@@ -707,7 +686,7 @@ def main() -> int:
         if args.nat_matrix:
             def apply_nat_settings(payload: dict[str, object]) -> dict[str, object]:
                 return request_json(
-                    api + "/app/settings",
+                    api + "/settings",
                     api_key,
                     method="PATCH",
                     payload=payload,
@@ -736,6 +715,7 @@ def main() -> int:
                     time.sleep(2)
 
             report["natMatrix"] = nat_live_matrix.run_matrix(
+                read_settings=lambda: request_json(api + "/settings", api_key, timeout=90),
                 apply_settings=apply_nat_settings,
                 restart_daemon=restart_for_nat,
                 read_nat_status=lambda: request_json(
@@ -787,17 +767,17 @@ def main() -> int:
             transfer = vpn_transfer_completion.load_exact_transfer(args.inputs)
             report["transferCompletion"] = vpn_transfer_completion.wait_for_completion(
                 row=transfer,
-                create_transfer=lambda payload: request_json(
-                    api + "/transfers",
+                create_download=lambda payload: response_data(request_json(
+                    api + "/downloads",
                     api_key,
                     method="POST",
                     payload=payload,
+                )),
+                read_download=lambda download_id: response_data(
+                    request_json(api + f"/downloads/{download_id}", api_key)
                 ),
-                read_transfer=lambda file_hash: response_data(
-                    request_json(api + f"/transfers/{file_hash}", api_key)
-                ),
-                verify_delivered_sha256=lambda size, digest: container_delivery_matches(
-                    rust, size, digest
+                verify_delivered_sha256=lambda path, size, digest: vpn_transfer_completion.container_delivery_matches(
+                    docker, rust, path, size, digest
                 ),
                 read_daemon_logs=lambda: container_logs(rust),
                 timeout_seconds=args.transfer_timeout_seconds,

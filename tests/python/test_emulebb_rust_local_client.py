@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import socket
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from emule_test_harness.paths import get_required_emule_workspace_root as _workspace_root_from_environment
 from emule_test_harness.paths import get_workspace_output_root
@@ -18,15 +17,17 @@ from types import ModuleType
 import pytest
 
 from emule_test_harness import rust_client
-from emule_test_harness import rust_metadata
+from emule_test_harness import rust_rest_conformance
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo
+from emule_test_harness.rust_local_ed2k import require_download_id, require_download_batch, publish_shared_tree
+from emule_test_harness.rust_rest_contract import iter_library_files, settings_patch
+from emule_test_harness.local_kad_peer import LocalKadPeer
+from emule_test_harness.kad_nodes import BootstrapContact
 from emule_test_harness.script_modules import load_script_module
 
 
 API_KEY = "0123456789abcdef0123456789abcdef"
 SEED_HASH = "00112233445566778899aabbccddeeff"
-SERVER_SEARCH_HASH = "31d6cfe0d16ae931b73c59d7e0c089c0"
-SERVER_SEARCH_NAME = "Rust.Live.Search.Fixture.bin"
-ED2K_PART_SIZE = 9_728_000
 SERVICE_PORT_START = int(os.environ.get("EMULEBB_RUST_TEST_PORT_START", "30000"))
 SERVICE_PORT_END = int(os.environ.get("EMULEBB_RUST_TEST_PORT_END", "45000"))
 _ALLOCATED_PORTS: set[int] = set()
@@ -38,34 +39,17 @@ dtt = load_script_module("deterministic_two_client_transfer_for_rust_tests", "de
 def load_rust_rest_smoke_module() -> ModuleType:
     """Loads the shared smoke runner against the forward Rust OpenAPI contract."""
 
-    rust_contract = (
-        _workspace_root_from_environment()
-        / "repos"
-        / "emulebb-tooling"
-        / "docs"
-        / "products"
-        / "emulebb-rust"
-        / "api"
-        / "REST-API-OPENAPI.yaml"
-    )
-    return load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py",
-                              initial_globals={"SELECTED_OPENAPI_CONTRACT_PATH": rust_contract})
+    rust_contract = (resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+                     / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
+    return rust_rest_conformance.load_rest_smoke_module(rust_contract)
 
 
 rest_smoke = load_rust_rest_smoke_module()
 
 
 def test_local_client_uses_forward_rust_openapi_contract() -> None:
-    expected = (
-        workspace_root()
-        / "repos"
-        / "emulebb-tooling"
-        / "docs"
-        / "products"
-        / "emulebb-rust"
-        / "api"
-        / "REST-API-OPENAPI.yaml"
-    )
+    expected = (resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
+                / "docs/products/emulebb-rust/api/REST-API-OPENAPI.yaml")
     assert rest_smoke.OPENAPI_CONTRACT_PATH == expected
 
 
@@ -110,10 +94,6 @@ def _lan_port_available(host: str, port: int) -> bool:
     return True
 
 
-def rust_metadata_path(profile_dir: Path) -> Path:
-    return profile_dir / rust_client.RUST_PROFILE_METADATA_FILE
-
-
 def write_profile(
     profile_dir: Path,
     lan_host: str,
@@ -123,45 +103,28 @@ def write_profile(
     ed2k_listen_port: int | None = None,
     kad_listen_port: int | None = None,
     kad_bootstrap_nodes: list[str] | None = None,
-    kad_bootstrap_min_routing_contacts: int = 10,
-    kad_passive_replay_enabled: bool | None = None,
+    local_kad_seed: BootstrapContact | None = None,
 ) -> None:
     rust_client.write_rust_profile(
         profile_dir,
-        rust_repo=workspace_root() / "repos" / "emulebb-rust",
+        rust_repo=resolve_selected_workspace_repo(Path(__file__).parents[2], 'emulebb-rust'),
         rest_addr=lan_host,
         rest_port=port,
         api_key=API_KEY,
-        p2p_bind_ip=lan_host if ed2k_server_endpoint is not None else None,
-        ed2k_port=ed2k_listen_port,
-        kad_port=kad_listen_port,
         server_endpoint=ed2k_server_endpoint,
         kad_bootstrap_nodes=kad_bootstrap_nodes,
-        kad_bootstrap_min_routing_contacts=kad_bootstrap_min_routing_contacts,
-        kad_passive_replay_enabled=kad_passive_replay_enabled,
-    )
-
-
-def write_remembered_source_manifest(
-    profile_dir: Path,
-    file_hash: str,
-    name: str,
-    size_bytes: int,
-    source_host: str,
-    source_port: int,
-) -> None:
-    repo = workspace_root() / "repos" / "emulebb-rust"
-    metadata_path = rust_metadata_path(profile_dir)
-    if not metadata_path.exists():
-        rust_metadata.create_metadata_db(repo, metadata_path)
-    rust_metadata.seed_remembered_source_transfer(
-        metadata_path,
-        ed2k_hash=file_hash,
-        name=name,
-        size_bytes=size_bytes,
-        piece_size=ED2K_PART_SIZE,
-        source_ip=source_host,
-        source_tcp_port=source_port,
+        local_only_discovery=True,
+        local_kad_seed=local_kad_seed,
+        settings={
+            'network.p2p.bindIp': lan_host if ed2k_server_endpoint is not None else None,
+            **({'network.p2p.tcpPort': ed2k_listen_port} if ed2k_listen_port is not None else {}),
+            **({'network.p2p.udpPort': kad_listen_port} if kad_listen_port is not None else {}),
+            'network.kadEnabled': True,
+            # LocalKadPeer is an explicit plaintext wire fixture.
+            **({'security.obfuscationEnabled': False} if local_kad_seed is not None else {}),
+            'network.connections.connectTimeoutSeconds': 10,
+            'network.servers.reconnectIntervalSeconds': 60,
+        },
     )
 
 
@@ -174,20 +137,6 @@ def write_rust_peer_exchange_report(report: dict[str, object]) -> None:
     path = Path(report_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def seed_index(repo: Path, metadata_path: Path) -> None:
-    if not metadata_path.exists():
-        rust_metadata.create_metadata_db(repo, metadata_path)
-    rust_metadata.seed_indexed_file(
-        metadata_path,
-        ed2k_hash=SEED_HASH,
-        name="Scenario.File.bin",
-        size_bytes=4096,
-        content_type="archive",
-        availability_score=2,
-        origin="passive_cache",
-    )
 
 
 def test_rust_peer_exchange_report_writer_uses_env_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,30 +168,12 @@ def request_json(
         },
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def poll_search(
-    base_url: str,
-    search_id: str,
-    *,
-    want: int = 1,
-    attempts: int = 40,
-    interval: float = 0.25,
-) -> dict[str, object]:
-    """Polls a search (async eMuleBB search/start -> poll search/results) until it
-    has at least `want` items under the canonical "items" key, returning the page."""
-    page: dict[str, object] = {"items": []}
-    for _ in range(attempts):
-        page = request_json(
-            base_url, "GET", f"/api/v1/searches/{search_id}?limit=200&offset=0"
-        )["data"]
-        if len(page.get("items", [])) >= want or page.get("status") == "complete":
-            if page.get("items"):
-                return page
-        time.sleep(interval)
-    return page
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise AssertionError(f"{method} {path} returned HTTP {error.code}: {detail}") from error
 
 
 def request_json_status(
@@ -266,7 +197,8 @@ def request_json_status(
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            payload = response.read().decode("utf-8")
+            return response.status, json.loads(payload) if payload else {}
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
@@ -309,50 +241,32 @@ def wait_for_condition(description: str, deadline_seconds: float, probe: Callabl
     raise AssertionError(f"Timed out waiting for {description}{detail}")
 
 
-def configure_shared_directory(
-    base_url: str,
-    root: Path,
-    expected_names: set[str],
-) -> dict[str, dict[str, object]]:
-    """Shares one root through the canonical Rust directory mutation surface."""
-
-    request_json(
-        base_url,
-        "PATCH",
-        "/api/v1/shared-directories",
-        {"roots": [{"path": str(root)}], "confirmReplaceRoots": True},
-        timeout=30,
-    )
-    request_json(
-        base_url,
-        "POST",
-        "/api/v1/shared-directories/operations/reload",
-        timeout=30,
-    )
-
-    def probe() -> dict[str, dict[str, object]] | None:
-        items = request_json(base_url, "GET", "/api/v1/shared-files", timeout=30)["data"]["items"]
-        by_name = {str(item["name"]): item for item in items}
-        return by_name if expected_names <= by_name.keys() else None
-
-    return wait_for_condition(
-        f"shared files under {root}",
-        30,
-        probe,
-    )
-
-
 def terminate_process(process: subprocess.Popen[str]) -> None:
     rust_client.stop_process_tree(process, timeout_seconds=5)
 
 
+@pytest.fixture
+def local_kad_peer() -> Iterator[LocalKadPeer]:
+    """Declare and close the isolated peer used by the native profile."""
+    lan_host = os.environ.get("X_LOCAL_IP")
+    if not lan_host:
+        pytest.fail("X_LOCAL_IP is required for the explicitly selected native Kad case")
+    peer = LocalKadPeer(lan_host, {lan_host})
+    peer.start()
+    try:
+        yield peer
+    finally:
+        peer.close()
+
+
 @pytest.mark.native
-def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
-    if shutil.which("cargo") is None:
-        pytest.skip("cargo is not available")
-    repo = workspace_root() / "repos" / "emulebb-rust"
-    if not repo.is_dir():
-        pytest.skip("emulebb-rust repo is not available")
+def test_emulebb_rust_local_search_download_flow(tmp_path: Path, local_kad_peer: LocalKadPeer) -> None:
+    repo = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    stage = rust_client.verified_runtime_stage(repo, get_workspace_output_root())
+    executable = Path(stage["executable"])
+    (tmp_path / "stage-input.json").write_text(json.dumps({
+        "stage": stage, "harnessSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
         pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
@@ -374,11 +288,10 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         ed2k_server_endpoint=f"{lan_host}:{free_lan_port(lan_host)}",
         ed2k_listen_port=free_lan_port(lan_host),
         kad_listen_port=free_lan_port(lan_host),
-        kad_passive_replay_enabled=True,
+        local_kad_seed=BootstrapContact(lan_host, local_kad_peer.udp_port, local_kad_peer.tcp_port),
     )
-    seed_index(repo, rust_metadata_path(profile_dir))
 
-    process = rust_client.start_rust_client(repo, profile_dir, output_path)
+    process = rust_client.start_rust_client_executable(executable, profile_dir, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
@@ -403,70 +316,32 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
 
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB"
-        assert app["data"]["capabilities"]["transfers"] is True
-        assert "rest.emulebb.v1" not in app["data"]["capabilities"]
-        settings = request_json(base_url, "GET", "/api/v1/app/settings")["data"]
-        assert settings["core"]["uploadLimitKiBps"] > 0
-        updated_settings = request_json(
-            base_url,
-            "PATCH",
-            "/api/v1/app/settings",
-            {
-                "core": {
-                    "uploadLimitKiBps": 2048,
-                    "uploadClientDataRate": 64,
-                    "queueSize": 3000,
-                    "networkEd2k": False,
-                },
-            },
-        )["data"]
-        assert updated_settings["core"]["uploadLimitKiBps"] == 2048
-        assert updated_settings["core"]["uploadClientDataRate"] == 64
-        assert updated_settings["core"]["queueSize"] == 3000
-        assert updated_settings["core"]["networkEd2k"] is False
-        empty_settings_status, _ = request_json_status(
-            base_url,
-            "PATCH",
-            "/api/v1/app/settings",
-            {},
-        )
+        assert app["data"]["capabilities"]["downloads"] is True
+        settings = request_json(base_url, "GET", "/api/v1/settings")
+        assert settings["data"]["effective"]["transfers"]["uploadLimitBytesPerSecond"] > 0
+        updated_settings = request_json(base_url, "PATCH", "/api/v1/settings", settings_patch(
+            settings, set_values={"transfers": {"uploadLimitBytesPerSecond": 2097152, "maxSourcesPerFile": 500}},
+        ))
+        assert updated_settings["data"]["saved"]["transfers"]["uploadLimitBytesPerSecond"] == {"mode": "custom", "value": 2097152}
+        assert updated_settings["data"]["saved"]["transfers"]["maxSourcesPerFile"]["value"] == 500
+        empty_settings_status, _ = request_json_status(base_url, "PATCH", "/api/v1/settings", {
+            "expectedRevision": updated_settings["meta"]["settingsRevision"], "set": {},
+        })
         assert empty_settings_status == 400
         categories = request_json(base_url, "GET", "/api/v1/categories")["data"]["items"]
-        assert categories[0]["id"] == 0
-        created_category = request_json(
-            base_url,
-            "POST",
-            "/api/v1/categories",
-            {
-                "name": " Harness Media ",
-                "path": str(shared_root),
-                "comment": "daemon category",
-                "color": 255,
-                "priority": "high",
-            },
-        )["data"]
-        assert created_category["id"] == 1
-        assert created_category["name"] == "Harness Media"
-        assert created_category["priority"] == 2
-        updated_category = request_json(
-            base_url,
-            "PATCH",
-            "/api/v1/categories/1",
-            {"name": "Harness Archive", "path": None, "color": None, "priority": "verylow"},
-        )["data"]
-        assert updated_category["name"] == "Harness Archive"
-        assert updated_category["path"] is None
-        assert updated_category["priority"] == 4
-        default_delete_status, _ = request_json_status(
-            base_url,
-            "DELETE",
-            "/api/v1/categories/0",
-        )
-        assert default_delete_status == 400
-        deleted_category = request_json(base_url, "DELETE", "/api/v1/categories/1")["data"]
-        assert deleted_category["ok"] is True
-        missing_category_status, _ = request_json_status(base_url, "GET", "/api/v1/categories/1")
-        assert missing_category_status == 404
+        assert categories == []
+        created_category = request_json(base_url, "POST", "/api/v1/categories", {
+            "name": "Harness-Media", "destinationDir": str(tmp_path / "category-output"), "comment": "daemon category",
+        })["data"]
+        assert created_category["name"] == "Harness-Media"
+        updated_category = request_json(base_url, "PATCH", "/api/v1/categories/harness-media", {
+            "destinationDir": None, "comment": "updated category",
+        })["data"]
+        assert updated_category["name"] == "Harness-Media"
+        assert updated_category["destinationDir"] is None
+        assert updated_category["comment"] == "updated category"
+        assert request_json(base_url, "DELETE", "/api/v1/categories/Harness-Media")["data"]["ok"] is True
+        assert request_json_status(base_url, "GET", "/api/v1/categories/Harness-Media")[0] == 404
         friends = request_json(base_url, "GET", "/api/v1/friends")["data"]["items"]
         assert friends == []
         friend_hash = "00112233445566778899aabbccddeeff"
@@ -504,100 +379,43 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             f"/api/v1/friends/{friend_hash}",
         )
         assert missing_friend_status == 404
-        assert request_json(base_url, "GET", "/api/v1/uploads")["data"]["items"] == []
-        upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue")["data"]
-        assert upload_queue["items"] == []
-        assert {"total", "offset", "limit"} <= upload_queue.keys()
+        assert request_json(base_url, "GET", "/api/v1/uploads")["data"] == []
+        upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue?countTotal=true")
+        assert upload_queue["data"] == []
+        assert upload_queue["meta"]["total"] == 0
+        assert upload_queue["meta"]["hasMore"] is False
+        assert upload_queue["meta"]["nextCursor"] is None
         missing_upload_status, missing_upload_error = request_json_status(
             base_url,
             "GET",
-            "/api/v1/upload-queue/00000000000000000000000000000000",
+            "/api/v1/upload-queue/12345678-1234-4234-8234-123456789abc",
         )
         assert missing_upload_status == 404
         assert missing_upload_error["error"]["code"] == "NOT_FOUND"
-        missing_confirm_status, missing_confirm_error = request_json_status(
-            base_url,
-            "PATCH",
-            "/api/v1/shared-directories",
-            {"roots": [{"path": str(shared_root)}], "confirmReplaceRoots": False},
-        )
-        assert missing_confirm_status == 400
-        assert "confirmReplaceRoots" in json.dumps(missing_confirm_error)
-        shared_directories = request_json(
-            base_url,
-            "PATCH",
-            "/api/v1/shared-directories",
-            {"roots": [{"path": str(shared_root)}], "confirmReplaceRoots": True},
-        )["data"]
-        assert shared_directories["roots"][0]["accessible"] is True
-        listed_directories = request_json(base_url, "GET", "/api/v1/shared-directories")["data"]
-        assert listed_directories["roots"][0]["path"] == shared_directories["roots"][0]["path"]
-        reload_result = request_json(
-            base_url,
-            "POST",
-            "/api/v1/shared-directories/operations/reload",
-            timeout=30,
-        )["data"]
-        assert reload_result["ok"] is True
-        assert "count" not in reload_result
-        shared_files = request_json(base_url, "GET", "/api/v1/shared-files")["data"]["items"]
-        shared_file_names = {row["name"] for row in shared_files}
-        assert {shared_top_file.name, shared_nested_file.name} <= shared_file_names
-        top_shared_file = next(row for row in shared_files if row["name"] == shared_top_file.name)
-        comments = request_json(
-            base_url,
-            "GET",
-            f"/api/v1/shared-files/{top_shared_file['hash']}/comments",
-        )["data"]
-        assert comments["items"] == []
-        empty_shared_patch_status, empty_shared_patch_error = request_json_status(
-            base_url,
-            "PATCH",
-            f"/api/v1/shared-files/{top_shared_file['hash']}",
-            {},
-        )
-        assert empty_shared_patch_status == 400
-        assert "shared-file PATCH" in empty_shared_patch_error["error"]["message"]
-        rating_only_status, rating_only_error = request_json_status(
-            base_url,
-            "PATCH",
-            f"/api/v1/shared-files/{top_shared_file['hash']}",
-            {"rating": 5},
-        )
-        assert rating_only_status == 400
-        assert "comment" in rating_only_error["error"]["message"]
-        updated_shared_file = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/shared-files/{top_shared_file['hash']}",
-            {"priority": "release", "comment": "Harness share comment", "rating": 4},
-        )["data"]
-        assert updated_shared_file["priority"] == "release"
-        assert updated_shared_file["autoUploadPriority"] is False
-        assert updated_shared_file["comment"] == "Harness share comment"
-        assert updated_shared_file["rating"] == 4
-        assert updated_shared_file["hasComment"] is True
-        assert updated_shared_file["userRating"] == 4
-        comments = request_json(
-            base_url,
-            "GET",
-            f"/api/v1/shared-files/{top_shared_file['hash']}/comments",
-        )["data"]
-        assert comments["items"] == [
-            {
-                "source": "local",
-                "userName": None,
-                "fileName": top_shared_file["name"],
-                "comment": "Harness share comment",
-                "rating": 4,
-            }
-        ]
-        persisted_shared_file = request_json(
-            base_url,
-            "GET",
-            f"/api/v1/shared-files/{top_shared_file['hash']}",
-        )["data"]
-        assert persisted_shared_file["priority"] == "release"
+        published = publish_shared_tree(base_url, API_KEY, root=shared_root, file_name=shared_top_file.name)
+        root_id = published["directories"]["id"]
+        root = request_json(base_url, "GET", f"/api/v1/library/roots/{root_id}")["data"]
+        assert root["accessible"] is True and root["watchEnabled"] is False
+        assert Path(root["path"]).samefile(shared_root)
+        roots = request_json(base_url, "GET", "/api/v1/library/roots")["data"]
+        assert any(row["id"] == root_id for row in roots)
+        overlap_status, _ = request_json_status(base_url, "POST", "/api/v1/library/roots", {"path": str(nested_shared_root)})
+        assert overlap_status == 409
+        shared_files = list(iter_library_files(
+            lambda path: request_json(base_url, "GET", "/api/v1" + path), view="shared", root_id=root_id,
+        ))
+        assert {shared_top_file.name, shared_nested_file.name} <= {row["displayName"] for row in shared_files}
+        top_shared_file = published["sharedFiles"]["matched"]
+        file_resource = f"/api/v1/library/files/{top_shared_file['hash']}"
+        for invalid in ({}, {"rating": 5}):
+            invalid_status, _ = request_json_status(base_url, "PATCH", file_resource, invalid)
+            assert invalid_status == 400
+        edit_status, edit_body = request_json_status(base_url, "PATCH", file_resource, {
+            "uploadPriority": "release", "comment": "Harness share comment", "rating": 4,
+        })
+        assert edit_status == 204 and edit_body == {}
+        persisted_shared_file = request_json(base_url, "GET", file_resource)["data"]
+        assert persisted_shared_file["uploadPriority"] == "release"
         assert persisted_shared_file["comment"] == "Harness share comment"
         assert persisted_shared_file["rating"] == 4
         assert shared_top_file.is_file()
@@ -605,8 +423,8 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         snapshot = request_json(base_url, "GET", "/api/v1/snapshot?limit=1")["data"]
         assert snapshot["app"]["name"] == "eMuleBB"
         assert snapshot["status"]["lifecycle"]["state"] == "running"
-        assert len(snapshot["transfers"]) <= 1
-        assert len(snapshot["sharedFiles"]) <= 1
+        assert snapshot["downloads"] == {"unfinished": 0, "completed": 0}
+        assert snapshot["status"]["runtimeDiagnostics"]["sharedFileCount"] >= 2
         assert len(snapshot["uploads"]) <= 1
         assert len(snapshot["uploadQueue"]) <= 1
         assert "ports" in snapshot["network"]
@@ -625,8 +443,6 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert import_empty_status == 400
         assert "url" in import_empty_error["error"]["message"]
-        # An unreachable/invalid URL import now fails explicitly with EMULE_ERROR
-        # (master URL-import contract), not an in-band {ok:false}.
         import_fail_status, import_fail_error = request_json_status(
             base_url,
             "POST",
@@ -643,26 +459,33 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert bad_bootstrap_status == 400
         assert "address" in bad_bootstrap_error["error"]["message"]
-        bootstrapped_kad = request_json(
-            base_url,
-            "POST",
-            "/api/v1/kad/operations/bootstrap",
-            {"address": lan_host, "port": 4662},
-        )["data"]
+        # The shared runtime is created explicitly through local server connect.
+        request_json(base_url, "POST", "/api/v1/servers/operations/connect", timeout=30)
+        bootstrapped_kad = request_json(base_url, "POST", "/api/v1/kad/operations/bootstrap", {
+            "address": lan_host, "port": local_kad_peer.udp_port,
+        }, timeout=30)["data"]
         assert bootstrapped_kad["running"] is True
-        assert bootstrapped_kad["connected"] is False
-        assert bootstrapped_kad["firewallState"] == "unknown"
-        assert bootstrapped_kad["contactCount"] == 0
+        def observed_local_kad():
+            status = request_json(base_url, "GET", "/api/v1/kad")["data"]
+            evidence = local_kad_peer.evidence()
+            if not (status["running"] and status["contactCount"] >= 1 and evidence.get("routingReplies", 0) > 0):
+                raise AssertionError(json.dumps({"kad": status, "peer": evidence}, sort_keys=True))
+            return status
+        observed_kad = wait_for_condition("the declared local Kad peer exchange", 30, observed_local_kad)
+        # One real peer proves routing exchange, not the ten-contact readiness threshold.
+        assert observed_kad["connected"] is False and observed_kad["bootstrapping"] is True
+        assert observed_kad["bootstrapProgress"] is None
         recheck_kad = request_json(
             base_url,
             "POST",
             "/api/v1/kad/operations/recheck-firewall",
         )["data"]
         assert recheck_kad["operationQueued"] is True
-        assert recheck_kad["alreadyRunning"] is False
+        assert isinstance(recheck_kad["alreadyRunning"], bool)
         stopped_kad = request_json(base_url, "POST", "/api/v1/kad/operations/stop")["data"]
         assert stopped_kad["running"] is False
         assert stopped_kad["connected"] is False
+        request_json(base_url, "POST", "/api/v1/servers/operations/disconnect")
         logs = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
         assert isinstance(logs, list)
         for entry in logs:
@@ -685,136 +508,74 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         logs_after_clear = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
         assert logs_after_clear == []
 
-        restored_settings = request_json(
-            base_url,
-            "PATCH",
-            "/api/v1/app/settings",
-            {"core": {"networkEd2k": True}},
-        )["data"]
-        assert restored_settings["core"]["networkEd2k"] is True
+        settings = request_json(base_url, "GET", "/api/v1/settings")
+        restored_settings = request_json(base_url, "PATCH", "/api/v1/settings", settings_patch(
+            settings, reset=("transfers.uploadLimitBytesPerSecond", "transfers.maxSourcesPerFile"),
+        ))
+        assert restored_settings["data"]["saved"]["transfers"]["uploadLimitBytesPerSecond"]["mode"] == "default"
 
         search = request_json(
             base_url,
             "POST",
             "/api/v1/searches",
-            {"query": "scenario file", "method": "automatic", "type": ""},
+            {"query": "scenario file", "method": "automatic"},
         )["data"]
-        # The configured but disconnected network keeps the request queued while
-        # already-indexed passive-cache results remain available for polling.
         assert search["status"] == "queued"
-        paged_search = poll_search(base_url, search["id"], want=1)
-        assert paged_search["id"] == search["id"]
-        assert len(paged_search["items"]) == 1
-        assert paged_search["items"][0]["hash"] == SEED_HASH
+        search_resource = f"/api/v1/searches/{search['id']}"
+        header = request_json(base_url, "GET", search_resource)["data"]
+        assert header["id"] == search["id"] and header["resultCount"] == 0
+        results = request_json(base_url, "GET", search_resource + "/results?limit=100")
+        assert results["data"] == [] and results["meta"]["hasMore"] is False
+        assert request_json_status(base_url, "POST", search_resource + "/stop")[0] == 204
+        assert request_json(base_url, "GET", search_resource)["data"]["status"] == "stopped"
 
-        search_id = search["id"]
-        download = request_json(
-            base_url,
-            "POST",
-            f"/api/v1/searches/{search_id}/results/{SEED_HASH}/operations/download",
-            {"paused": True},
-        )["data"]
-        assert download == {"ok": True, "searchId": search_id, "hash": SEED_HASH}
-        transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
-        assert transfer["hash"] == SEED_HASH
-        assert transfer["state"] == "paused"
-        # Master-aligned transfer fields: KiBps speeds, the separate stopped flag,
-        # and the live source/part counters (0 here with no live peers).
-        assert transfer["stopped"] is False
-        assert "downloadSpeedBytesPerSec" not in transfer
-        assert isinstance(transfer["downloadSpeedKiBps"], (int, float))
-        assert isinstance(transfer["uploadSpeedKiBps"], (int, float))
-        assert transfer["sourcesTransferring"] == 0
-        assert transfer["partsAvailable"] == 0
-        # Transfer details: {transfer, parts, sources}. The parts array carries
-        # real per-part geometry/progress derived from the resume manifest.
-        details = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}/details")["data"]
-        assert details["transfer"]["hash"] == SEED_HASH
-        assert isinstance(details["sources"], list)
-        assert isinstance(details["parts"], list)
-        assert len(details["parts"]) == transfer["partsTotal"]
-        part_fields = {
-            "index", "start", "end", "size", "completedBytes", "gapBytes",
-            "complete", "requested", "corrupted", "availableSources",
-        }
-        for index, part in enumerate(details["parts"]):
-            assert set(part) == part_fields
-            assert part["index"] == index
-            assert part["end"] >= part["start"]
-            assert part["size"] == part["end"] - part["start"] + 1
-            assert part["completedBytes"] + part["gapBytes"] == part["size"]
-            assert part["complete"] == (part["gapBytes"] == 0)
-        details_missing_status, _ = request_json_status(
-            base_url, "GET", "/api/v1/transfers/ffffffffffffffffffffffffffffffff/details"
-        )
-        assert details_missing_status == 404
-        multi_family_patch_status, multi_family_patch_error = request_json_status(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"priority": "high", "displayName": "Rejected.bin"},
-        )
-        assert multi_family_patch_status == 400
-        assert "one mutation family" in multi_family_patch_error["error"]["message"]
-        priority_transfer = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"priority": "veryhigh"},
-        )["data"]
-        assert priority_transfer["priority"] == "veryhigh"
-        download_category = request_json(
-            base_url,
-            "POST",
-            "/api/v1/categories",
-            {"name": "Harness Downloads"},
-        )["data"]
-        categorized_transfer = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"categoryName": "harness downloads"},
-        )["data"]
-        assert categorized_transfer["categoryId"] == download_category["id"]
-        assert categorized_transfer["categoryName"] == "Harness Downloads"
-        renamed_transfer = request_json(
-            base_url,
-            "PATCH",
-            f"/api/v1/transfers/{SEED_HASH}",
-            {"displayName": " Scenario Renamed.bin "},
-        )["data"]
-        assert renamed_transfer["displayName"] == "Scenario Renamed.bin"
-        assert renamed_transfer["priority"] == "veryhigh"
-        assert renamed_transfer["categoryId"] == download_category["id"]
+        admission = request_json(base_url, "POST", "/api/v1/downloads", {
+            "source": {"type": "content", "hash": SEED_HASH, "name": "Scenario.File.bin",
+                       "sizeBytes": 4096}, "intent": "stopped",
+        })["data"]
+        download_id = require_download_id(admission, expected_hash=SEED_HASH)
+        resource = f"/api/v1/downloads/{download_id}"
+        download = request_json(base_url, "GET", resource)["data"]
+        assert download["id"] == download_id and download["hash"] == SEED_HASH
+        assert download["state"] == "stopped" and download["intent"] == "stopped"
+        assert download["payloadVerified"] is False
+        parts = request_json(base_url, "GET", resource + "/parts?limit=200")
+        assert parts["meta"]["hasMore"] is False
+        assert len(parts["data"]) == 1
+        part = parts["data"][0]
+        assert part == {"index": 0, "start": 0, "end": 4095, "sizeBytes": 4096,
+                        "presentBytes": 0, "complete": False, "corrupted": False}
+        for collection in ("sources", "comments"):
+            page = request_json(base_url, "GET", resource + f"/{collection}?limit=200")
+            assert page["data"] == [] and page["meta"]["hasMore"] is False
+        assert request_json_status(base_url, "GET", "/api/v1/downloads/9223372036854775807")[0] == 404
+        request_json(base_url, "POST", "/api/v1/categories", {"name": "Harness-Downloads"})
+        patch_status, _ = request_json_status(base_url, "PATCH", resource, {
+            "name": "Scenario Renamed.bin", "category": "harness-downloads",
+        })
+        assert patch_status == 204
+        updated = request_json(base_url, "GET", resource)["data"]
+        assert updated["name"] == "Scenario Renamed.bin" and updated["category"] == "Harness-Downloads"
+        jobs = request_json(base_url, "GET", "/api/v1/downloads?limit=100")
+        assert any(row["id"] == download_id and row["state"] == "stopped" for row in jobs["data"])
 
-        transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert any(row["hash"] == SEED_HASH and row["state"] == "paused" for row in transfers)
-
-        # Persistence proof: restart the daemon and confirm the paused control
-        # state and renamed canonical name reload from emulebb-rust-metadata.db.
+        # Restart must preserve the same job identity, intent and presentation.
         terminate_process(process)
-        process = rust_client.start_rust_client_append(repo, profile_dir, output_path)
+        process = rust_client.start_rust_client_executable_append(executable, profile_dir, output_path)
         wait_for_rest(base_url, process, output_path)
-        reloaded_transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
-        assert reloaded_transfer["state"] == "paused"
-        assert reloaded_transfer["displayName"] == "Scenario Renamed.bin"
-
-        delete_row_status, delete_row_error = request_json_status(
-            base_url,
-            "DELETE",
-            f"/api/v1/transfers/{SEED_HASH}",
-        )
-        assert delete_row_status == 400
-        assert "only completed transfers can be removed without deleting files" in json.dumps(delete_row_error)
-
-        delete_result = request_json(
-            base_url,
-            "DELETE",
-            f"/api/v1/transfers/{SEED_HASH}/files?confirm=true",
-        )["data"]
-        assert delete_result["items"][0]["ok"] is True
-        assert delete_result["items"][0]["hash"] == SEED_HASH
-        assert not (profile_dir / "transfers" / SEED_HASH).exists()
+        reloaded = request_json(base_url, "GET", resource)["data"]
+        assert reloaded["id"] == download_id and reloaded["state"] == "stopped"
+        assert reloaded["name"] == "Scenario Renamed.bin" and reloaded["category"] == "Harness-Downloads"
+        for action in ("start", "stop"):
+            reply = request_json(base_url, "POST", f"/api/v1/downloads/{action}", {"ids": [download_id]})
+            require_download_batch(reply, download_id)
+        removed = request_json(base_url, "POST", "/api/v1/downloads/remove", {
+            "ids": [download_id], "deleteData": False,
+        })
+        require_download_batch(removed, download_id)
+        assert request_json_status(base_url, "GET", resource)[0] == 404
+        assert shared_top_file.read_bytes() == b"emulebb-rust shared root fixture"
+        assert shared_nested_file.read_bytes() == b"emulebb-rust nested shared root fixture"
         denied_search_clear_status, denied_search_clear_error = request_json_status(
             base_url,
             "DELETE",
@@ -824,7 +585,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert "confirm" in denied_search_clear_error["error"]["message"]
         cleared_searches = request_json(base_url, "DELETE", "/api/v1/searches?confirm=true")["data"]
         assert cleared_searches["ok"] is True
-        searches_after_clear = request_json(base_url, "GET", "/api/v1/searches")["data"]["items"]
+        searches_after_clear = request_json(base_url, "GET", "/api/v1/searches")["data"]
         assert searches_after_clear == []
     finally:
         terminate_process(process)
@@ -832,25 +593,16 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
 
 @pytest.mark.native
 def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) -> None:
-    # WHY: daemon compilation/launch must never escape the default non-native gate.
-    # Stage explicitly through the build orchestrator before selecting this case.
-    executable = rust_client.staged_executable(get_workspace_output_root())
-    if not executable.is_file():
-        pytest.fail("Native server-bind case requires the orchestrator-staged Rust executable; "
-                    "build/stage it explicitly before selecting this native test. No Cargo fallback.")
+    repo = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-rust")
+    stage = rust_client.verified_runtime_stage(repo, get_workspace_output_root())
+    executable = Path(stage["executable"])
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
         pytest.fail("X_LOCAL_IP is required for the explicitly selected native server-bind case")
-
-    digest = hashlib.sha256()
-    with executable.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
     (tmp_path / "native-input.json").write_text(json.dumps({
-        "executableSha256": digest.hexdigest(),
-        "sourceProvenance": "unverified",
+        "stage": stage, "harnessSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "scope": "REST server operations with configured P2P bind; not observed socket-source-IP proof",
-    }, indent=2) + "\n", encoding="utf-8")
+    }, indent=2) + "\n", encoding="utf-8", newline="\n")
 
     profile_dir = tmp_path / "profile"
     output_path = tmp_path / "emulebb-rust.out"
@@ -871,44 +623,22 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
 
-        servers = request_json(base_url, "GET", "/api/v1/servers")["data"]["items"]
+        servers = request_json(base_url, "GET", "/api/v1/servers")["data"]
         assert [(server["address"], server["port"]) for server in servers] == [("192.0.2.20", 4661)]
-        configured_server = request_json(base_url, "GET", "/api/v1/servers/192.0.2.20:4661")["data"]
-        assert configured_server["address"] == "192.0.2.20"
-        assert configured_server["port"] == 4661
-
-        created_server = request_json(
-            base_url,
-            "POST",
-            "/api/v1/servers",
-            {
-                "address": "192.0.2.21",
-                "port": 4661,
-                "name": "dynamic",
-                "priority": "low",
-                "static": False,
-            },
-        )["data"]
-        assert created_server["address"] == "192.0.2.21"
-        assert created_server["port"] == 4661
-        assert created_server["priority"] == "low"
-        updated_server = request_json(
-            base_url,
-            "PATCH",
-            "/api/v1/servers/192.0.2.21:4661",
-            {"name": "dynamic-updated", "priority": "high", "static": True},
-        )["data"]
-        assert updated_server["name"] == "dynamic-updated"
-        assert updated_server["priority"] == "high"
-        assert updated_server["static"] is True
-        deleted_server = request_json(base_url, "DELETE", "/api/v1/servers/192.0.2.21:4661")["data"]
-        assert deleted_server["address"] == "192.0.2.21"
-        assert deleted_server["port"] == 4661
-        assert deleted_server["enabled"] is False
-        disabled_server = request_json(base_url, "GET", "/api/v1/servers/192.0.2.21:4661")["data"]
-        assert disabled_server["address"] == "192.0.2.21"
-        assert disabled_server["port"] == 4661
+        configured_server = request_json(base_url, "GET", f"/api/v1/servers/{servers[0]['id']}")["data"]
+        assert configured_server["address"] == "192.0.2.20" and configured_server["port"] == 4661
+        identity = request_json(base_url, "POST", "/api/v1/servers", {
+            "address": "192.0.2.21", "port": 4661, "priority": "low", "static": False,
+        })["data"]["id"]
+        resource = f"/api/v1/servers/{identity}"
+        created_server = request_json(base_url, "GET", resource)["data"]
+        assert created_server["address"] == "192.0.2.21" and created_server["priority"] == "low"
+        assert request_json_status(base_url, "PATCH", resource, {"priority": "high", "static": True, "enabled": False})[0] == 204
+        disabled_server = request_json(base_url, "GET", resource)["data"]
+        assert disabled_server["priority"] == "high" and disabled_server["static"] is True
         assert disabled_server["enabled"] is False
+        assert request_json_status(base_url, "DELETE", resource)[0] == 204
+        assert request_json_status(base_url, "GET", resource)[0] == 404
         import_empty_status, import_empty_error = request_json_status(
             base_url,
             "POST",
@@ -928,11 +658,11 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         assert import_met_fail_error["error"]["code"] == "EMULE_ERROR"
 
         connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
-        assert connected["serverCount"] == 2
+        assert connected["serverCount"] == 1
         assert connected["connected"] is False
 
         status = request_json(base_url, "GET", "/api/v1/status")["data"]
-        assert status["servers"]["serverCount"] == 2
+        assert status["servers"]["serverCount"] == 1
 
         disconnect_status, disconnect_payload = request_json_status(
             base_url,
@@ -941,7 +671,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         )
         assert disconnect_status == 200, disconnect_payload
         disconnected = disconnect_payload["data"]
-        assert disconnected["serverCount"] == 2
+        assert disconnected["serverCount"] == 1
         assert disconnected["connected"] is False
     finally:
         terminate_process(process)

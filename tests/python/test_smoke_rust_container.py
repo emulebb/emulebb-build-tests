@@ -66,7 +66,7 @@ def test_wrong_local_tag_cannot_pass_and_its_container_is_removed(monkeypatch):
     assert calls[-1][0:2] == ("network", "rm")
     assert "--internal" in next(call for call in calls if call[:2] == ("network", "create"))
     assert launch[launch.index("--dns") + 1] == "127.0.0.1"
-    assert "EMULEBB_RUST_P2P_INTERFACE=eth0" in launch
+    assert "settings set network.p2p.bindInterface eth0" in launch[-1]
 
 
 def test_cleanup_failure_does_not_hide_original_image_mismatch(monkeypatch):
@@ -108,6 +108,7 @@ def image_runtime(monkeypatch):
         app={"name": "eMuleBB", "version": "0.1.0-beta.2", "apiVersion": "v1",
              "build": "release", "platform": "x64", "lifecycle": {"state": "running"}},
         body=None,
+        health_probes=0, ignore_health_proof=0,
     )
     def docker(*args, **kwargs):
         runtime.calls.append((args, kwargs))
@@ -124,13 +125,15 @@ def image_runtime(monkeypatch):
             stdout = runtime.variant
         elif args[0] == "exec":
             if "cat" in args:
-                stdout = runtime.settings
+                stdout = (json.dumps({"boundAddress": "0.0.0.0:20017", "probeHost": "127.0.0.1",
+                                      "probePort": 20017, "instanceId": "a" * 32})
+                          if args[-1].endswith(".emulebb-rest-listener.json") else runtime.settings)
             elif "pgrep" in args:
                 stdout = runtime.pid
             elif "ps" in args:
                 stdout = runtime.owner
             elif "stat" in args:
-                stdout = "1234:1235\n1234:1235\n"
+                stdout = "1234:1235\n1234:1235\n1234:1235\n"
             elif "id" in args:
                 stdout = "1234" if "-u" in args else "1235"
             elif "dpkg" in args:
@@ -148,7 +151,11 @@ def image_runtime(monkeypatch):
                     stdout = "401"
                 else:
                     stdout = "eMuleBB WebUI"
-            elif "test" not in args and "/usr/local/bin/emulebb-rust-healthcheck" not in args:
+            elif "/usr/local/bin/emulebb-rust-healthcheck" in args:
+                if args[-1].startswith("/tmp/emulebb-health-"):
+                    runtime.health_probes += 1
+                    status = 0 if runtime.health_probes == runtime.ignore_health_proof else 1
+            elif "test" not in args and "mkdir" not in args and "tee" not in args:
                 pytest.fail(f"Unexpected exec command: {args}")
         elif args[0] not in {"network", "run", "port", "stop", "rm"}:
             pytest.fail(f"Unexpected Docker command: {args}")
@@ -173,9 +180,21 @@ def test_image_proves_authenticated_release_and_real_daemon_identity(image_runti
     assert (result["daemonUid"], result["daemonGid"]) == (1234, 1235)
     assert (result["appBuild"], result["appPlatform"], result["appVersion"]) == ("release", app_cpu, "0.1.0-beta.2")
     assert result["imageVariant"] == variant
+    assert result["listenerReceiptHealth"] == {
+        "missingRejected": True, "malformedRejected": True, "staleRejected": True,
+    }
     assert any(("apk" if variant == "alpine" else "dpkg") in args for args, _ in image_runtime.calls)
     assert image_runtime.key not in json.dumps(result)
     assert all(image_runtime.key not in str(args) for args, _ in image_runtime.calls)
+    assert image_runtime.calls[-1][0][:2] == ("network", "rm")
+
+
+@pytest.mark.parametrize("ordinal,fault", [(1, "missing"), (2, "malformed"), (3, "stale")])
+def test_image_health_proof_refuses_false_positive_and_cleans_up(image_runtime, ordinal, fault):
+    image_runtime.ignore_health_proof = ordinal
+    with pytest.raises(RuntimeError, match=f"accepted a {fault}"):
+        run_image_runtime(image_runtime)
+    assert image_runtime.calls[-2][0][:2] == ("rm", "--force")
     assert image_runtime.calls[-1][0][:2] == ("network", "rm")
 
 

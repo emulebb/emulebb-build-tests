@@ -14,6 +14,7 @@ schema change in the client is picked up automatically. Only the small set of se
 from __future__ import annotations
 
 import re
+import hashlib
 import json
 import os
 import sqlite3
@@ -54,9 +55,6 @@ def normalize_search_text(value: str) -> str:
     return " ".join(spaced.split())
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
 
 def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
     """Create ``emulebb-rust-metadata.db`` with the canonical schema and marker row.
@@ -67,36 +65,154 @@ def create_metadata_db(rust_repo: Path, db_path: Path) -> None:
     daemon startup.
     """
 
+    defaults = saved_settings_defaults(rust_repo)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     schema_id, schema_version = _schema_marker(rust_repo)
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.executescript(_schema_sql(rust_repo))
         conn.execute(
-            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_ms) VALUES (?, ?, ?)",
+            "INSERT INTO metadata_schema(schema_id, schema_version, created_at_s) VALUES (?, ?, ?)",
             (schema_id, schema_version, now),
         )
         conn.execute(
             """
-            INSERT INTO profile(id, uuid, created_by, created_at_ms, updated_at_ms)
+            INSERT INTO profile(id, uuid, created_by, created_at_s, updated_at_s)
             VALUES (1, ?, 'emulebb-rust', ?, ?)
             """,
             (str(uuid.uuid4()), now, now),
         )
+        conn.execute("INSERT INTO app_settings(id,revision,document_json) VALUES(1,1,?)",
+                     (_settings_json(defaults),))
         conn.commit()
 
 
+def saved_settings_defaults(rust_repo: Path) -> dict[str, Any]:
+    """Load the Rust-generated test snapshot, checked against compiled defaults."""
+    fixture = rust_repo / "crates/emulebb-settings/tests/fixtures/default-settings.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))
+
+
+def _settings_json(document: dict[str, Any]) -> str:
+    encoded = json.dumps(document, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 131072:
+        raise ValueError("Saved settings fixture exceeds the 128 KiB document budget")
+    return encoded
+
+
+def _setting_leaf(document: dict[str, Any], key: str) -> dict[str, Any]:
+    branch = document
+    for segment in key.split("."):
+        if not isinstance(branch, dict) or segment not in branch:
+            raise ValueError(f"Unknown canonical setting key: {key}")
+        branch = branch[segment]
+    if not isinstance(branch, dict) or set(branch) != {"mode", "value"}:
+        raise ValueError(f"Expected a canonical setting leaf: {key}")
+    return branch
+
+
+def edit_app_settings(rust_repo: Path, db_path: Path, values: dict[str, Any], *,
+                      reset: tuple[str, ...] = ()) -> int:
+    """Prepare one current-schema settings edit in a stopped test profile.
+
+    Keys are current dotted product keys. Native startup owns value validation;
+    this fixture writer enforces structure, modes, revision and serialized size.
+    """
+    if not values and not reset:
+        raise ValueError("Settings edit must contain a set or reset")
+    if len(set(reset)) != len(reset) or set(values).intersection(reset):
+        raise ValueError("Settings edit contains duplicate or overlapping resets")
+    defaults = saved_settings_defaults(rust_repo)
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as conn:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT revision,document_json FROM app_settings WHERE id=1").fetchone()
+            if row is None:
+                raise RuntimeError("Canonical settings singleton is missing")
+            revision, encoded = row
+            if not 1 <= revision < 9223372036854775807:
+                raise ValueError("Settings revision cannot advance")
+            document = json.loads(encoded)
+            for key in reset:
+                leaf, default = _setting_leaf(document, key), _setting_leaf(defaults, key)
+                leaf.update(mode="default", value=default["value"])
+            for key, value in values.items():
+                leaf, default = _setting_leaf(document, key), _setting_leaf(defaults, key)
+                # JSON booleans and integers are distinct product types.
+                same = type(value) is type(default["value"]) and value == default["value"]
+                leaf.update(mode="default" if same else "custom", value=value)
+            encoded = _settings_json(document)
+            changed = conn.execute("UPDATE app_settings SET revision=?,document_json=? WHERE id=1 AND revision=?",
+                                   (revision + 1, encoded, revision)).rowcount
+            if changed != 1:
+                raise RuntimeError("Settings fixture revision changed during write")
+            return revision + 1
+
+
+def read_app_settings(db_path: Path) -> tuple[int, dict[str, Any]]:
+    """Read the complete fixture document without creating or repairing a database."""
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        row = conn.execute("SELECT revision,document_json FROM app_settings WHERE id=1").fetchone()
+        if row is None:
+            raise RuntimeError("Canonical settings singleton is missing")
+        return row[0], json.loads(row[1])
+
+
+def initialize_local_discovery(rust_repo: Path, db_path: Path) -> None:
+    """Mark both discovery domains initialized after staging a local fixture.
+
+    Deliberately empty local lists are complete too. Require an existing current
+    database and both canonical rows; never create or repair fixture state.
+    """
+    expected_marker = _schema_marker(rust_repo)
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as conn:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            markers = conn.execute("SELECT schema_id, schema_version FROM metadata_schema").fetchall()
+            if markers != [expected_marker]:
+                raise RuntimeError("local discovery requires the current metadata schema marker")
+            changed = conn.execute(
+                "UPDATE discovery_initialization SET status = 'initialized' "
+                "WHERE domain IN ('servers', 'kad')"
+            ).rowcount
+            if changed != 2:
+                raise RuntimeError("local discovery requires both canonical initialization rows")
+
+
+def read_discovery_snapshot(rust_repo: Path, db_path: Path) -> dict[str, object]:
+    """Read current-schema discovery state/counts coherently without creating files."""
+    expected = _schema_marker(rust_repo)
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        with conn:
+            conn.execute("BEGIN")
+            if conn.execute("SELECT schema_id, schema_version FROM metadata_schema").fetchall() != [expected]:
+                raise RuntimeError("discovery snapshot requires the current metadata schema marker")
+            states = dict(conn.execute("SELECT domain, status FROM discovery_initialization"))
+            if set(states) != {"servers", "kad"} or any(status not in {"pending", "initialized"} for status in states.values()):
+                raise RuntimeError("discovery snapshot requires both canonical initialization states")
+            revision = conn.execute("SELECT revision FROM kad_routing_revision WHERE id=1").fetchone()
+            if revision is None:
+                raise RuntimeError("discovery snapshot requires the Kad routing revision singleton")
+            return {
+                "servers": {"status": states["servers"], "count": conn.execute(
+                    "SELECT count(*) FROM servers WHERE deleted_at_s IS NULL").fetchone()[0]},
+                "kad": {"status": states["kad"], "revision": revision[0], "contactCount": conn.execute(
+                    "SELECT count(*) FROM kad_routing_contacts").fetchone()[0], "bootstrapEndpointCount": conn.execute(
+                    "SELECT count(*) FROM kad_bootstrap_endpoints").fetchone()[0]},
+            }
+
+
 def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
-    """Require a complete database matching the current Rust profile schema."""
+    """Check the selected marker, profile row, required job tables, and foreign keys.
+
+    The Rust metadata opener remains the authority for full schema semantics.
+    """
 
     schema_id, schema_version = _schema_marker(rust_repo)
     try:
-        with closing(sqlite3.connect(db_path)) as conn:
-            marker = conn.execute(
-                "SELECT schema_version FROM metadata_schema WHERE schema_id = ?",
-                (schema_id,),
-            ).fetchone()
-            if marker != (schema_version,):
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            marker = conn.execute("SELECT schema_id, schema_version FROM metadata_schema").fetchall()
+            if marker != [(schema_id, schema_version)]:
                 raise RuntimeError(
                     f"metadata schema marker must be {schema_id}@{schema_version}, got {marker!r}"
                 )
@@ -105,82 +221,22 @@ def require_current_profile_database(rust_repo: Path, db_path: Path) -> None:
             ).fetchone()[0]
             if profile_count != 1:
                 raise RuntimeError("metadata profile singleton row is missing")
-            missing_name_state = conn.execute(
-                """
-                SELECT count(*)
-                FROM transfers
-                LEFT JOIN transfer_name_state
-                  ON transfer_name_state.transfer_id = transfers.id
-                WHERE transfer_name_state.transfer_id IS NULL
-                """
-            ).fetchone()[0]
-            if missing_name_state:
-                raise RuntimeError(
-                    f"metadata has {missing_name_state} transfer row(s) without transfer_name_state"
-                )
+            for table in (
+                "known_files", "download_history", "download_jobs", "download_job_pieces",
+                "download_job_md4_part_hashes", "download_job_aich_part_hashes",
+                "download_job_verified_ranges", "download_job_sources",
+            ):
+                conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("metadata profile contains broken foreign-key references")
     except sqlite3.DatabaseError as exc:
         raise RuntimeError(f"invalid current Rust profile database {db_path}: {exc}") from exc
-
-
-def _replace_transfer_name_state(conn: sqlite3.Connection, transfer_id: int) -> None:
-    conn.execute("DELETE FROM transfer_name_state WHERE transfer_id = ?", (transfer_id,))
-    conn.execute(
-        """
-        INSERT INTO transfer_name_state(
-            transfer_id, display_name_pinned, follow_majority_filename
-        )
-        VALUES (?, 0, 0)
-        """,
-        (transfer_id,),
-    )
-
-
-def put_setting_json(db_path: Path, section: str, key: str, value: object) -> None:
-    """Upsert one Rust profile settings row using the canonical JSON row shape."""
-
-    if not section.strip():
-        raise ValueError("settings section must not be empty")
-    if not key.strip():
-        raise ValueError("settings key must not be empty")
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute(
-            """
-            INSERT INTO settings(section, key, value_json, updated_at_ms)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(section, key) DO UPDATE SET
-                value_json = excluded.value_json,
-                updated_at_ms = excluded.updated_at_ms
-            """,
-            (section, key, json.dumps(value), _now_ms()),
-        )
-        conn.commit()
-
-
-def replace_settings_section(db_path: Path, section: str, values: dict[str, object]) -> None:
-    """Replace one Rust settings section with scalar JSON setting rows."""
-
-    if not section.strip():
-        raise ValueError("settings section must not be empty")
-    now = _now_ms()
-    with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("DELETE FROM settings WHERE section = ?", (section,))
-        for key, value in sorted(values.items()):
-            if not key.strip():
-                raise ValueError("settings key must not be empty")
-            conn.execute(
-                """
-                INSERT INTO settings(section, key, value_json, updated_at_ms)
-                VALUES (?, ?, ?, ?)
-                """,
-                (section, key, json.dumps(value), now),
-            )
-        conn.commit()
 
 
 def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None:
     """Replace the ordered Rust Kad bootstrap endpoint list."""
 
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("DELETE FROM kad_bootstrap_endpoints")
         for position, endpoint in enumerate(endpoints):
@@ -188,7 +244,7 @@ def replace_kad_bootstrap_endpoints(db_path: Path, endpoints: list[str]) -> None
                 raise ValueError("Kad bootstrap endpoint must not be empty")
             conn.execute(
                 """
-                INSERT INTO kad_bootstrap_endpoints(position, endpoint, updated_at_ms)
+                INSERT INTO kad_bootstrap_endpoints(position, endpoint, updated_at_s)
                 VALUES (?, ?, ?)
                 """,
                 (position, endpoint, now),
@@ -206,18 +262,18 @@ def seed_local_user_hash(db_path: Path, user_hash: bytes) -> None:
     normalized[14] = 0x6F
     if _user_hash_is_bad(bytes(normalized)):
         raise ValueError("ED2K user hash must not be an eMule bad hash")
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             INSERT INTO local_identities(
-                identity_kind, public_identity, private_secret, created_at_ms, updated_at_ms
+                identity_kind, public_identity, private_secret, created_at_s, updated_at_s
             )
             VALUES ('ed2k-user-hash', ?, NULL, ?, ?)
             ON CONFLICT(identity_kind) DO UPDATE SET
                 public_identity = excluded.public_identity,
                 private_secret = NULL,
-                updated_at_ms = excluded.updated_at_ms
+                updated_at_s = excluded.updated_at_s
             """,
             (bytes(normalized), now, now),
         )
@@ -237,17 +293,18 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
     port = int(server.get("port") or 0)
     if not address or not (1 <= port <= 65535):
         raise ValueError("Rust server seed requires host/address and port.")
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
+        _initialize_server_discovery(conn)
         conn.execute(
             """
             INSERT INTO servers(
                 address, port, name, description, server_priority, static_server,
                 enabled, failed_count, ping_ms, users, files, soft_files, hard_files,
-                version, obfuscation_tcp_port, udp_flags, first_seen_at_ms, last_seen_at_ms, deleted_at_ms
+                version, obfuscation_tcp_port, udp_flags, first_seen_at_s, last_seen_at_s, deleted_at_s
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, 0, 0, 0, ?, ?, ?, ?, ?, NULL)
-            ON CONFLICT(address, port) DO UPDATE SET
+            ON CONFLICT(address, port) WHERE deleted_at_s IS NULL DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 server_priority = excluded.server_priority,
@@ -256,8 +313,7 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
                 version = excluded.version,
                 obfuscation_tcp_port = excluded.obfuscation_tcp_port,
                 udp_flags = excluded.udp_flags,
-                last_seen_at_ms = excluded.last_seen_at_ms,
-                deleted_at_ms = NULL
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (
                 address,
@@ -278,11 +334,21 @@ def seed_server(db_path: Path, server: dict[str, object]) -> None:
 
 
 def clear_servers(db_path: Path) -> None:
-    """Remove persisted ED2K server rows from a Rust SQLite profile."""
+    """Deliberately empty the server list and prevent first-run repopulation."""
 
     with closing(sqlite3.connect(db_path)) as conn:
+        _initialize_server_discovery(conn)
         conn.execute("DELETE FROM servers")
         conn.commit()
+
+
+def _initialize_server_discovery(conn: sqlite3.Connection) -> None:
+    """Claim fixture-owned server state in the caller's mutation transaction."""
+    changed = conn.execute(
+        "UPDATE discovery_initialization SET status = 'initialized' WHERE domain = 'servers'"
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("server fixture requires its canonical initialization row")
 
 
 def _optional_int(value: object) -> int | None:
@@ -307,14 +373,14 @@ def seed_indexed_file(
         raise ValueError("Indexed file origin is invalid.")
     hash_blob = bytes.fromhex(ed2k_hash)
     normalized = normalize_search_text(name)
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             """
             INSERT INTO known_files(
                 ed2k_hash, size_bytes, display_name,
-                content_type, availability_score, first_seen_at_ms, last_seen_at_ms, updated_at_ms
+                content_type, availability_score, first_seen_at_s, last_seen_at_s, updated_at_s
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
@@ -322,8 +388,8 @@ def seed_indexed_file(
                 display_name = excluded.display_name,
                 content_type = excluded.content_type,
                 availability_score = max(known_files.availability_score, excluded.availability_score),
-                last_seen_at_ms = excluded.last_seen_at_ms,
-                updated_at_ms = excluded.updated_at_ms
+                last_seen_at_s = excluded.last_seen_at_s,
+                updated_at_s = excluded.updated_at_s
             """,
             (hash_blob, size_bytes, name, content_type, availability_score, now, now, now),
         )
@@ -334,7 +400,7 @@ def seed_indexed_file(
             """
             INSERT INTO known_file_origins(
                 known_file_id, origin, size_bytes, content_type,
-                availability_score, first_seen_at_ms, last_seen_at_ms
+                availability_score, first_seen_at_s, last_seen_at_s
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(known_file_id, origin) DO UPDATE SET
@@ -344,7 +410,7 @@ def seed_indexed_file(
                     known_file_origins.availability_score,
                     excluded.availability_score
                 ),
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (
                 known_file_id,
@@ -358,12 +424,12 @@ def seed_indexed_file(
         )
         conn.execute(
             """
-            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_at_ms, last_seen_at_ms)
+            INSERT INTO file_names(known_file_id, name, normalized_name, seen_count, first_seen_at_s, last_seen_at_s)
             VALUES (?, ?, ?, 1, ?, ?)
             ON CONFLICT(known_file_id, normalized_name) DO UPDATE SET
                 name = excluded.name,
                 seen_count = file_names.seen_count + 1,
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (known_file_id, name, normalized, now, now),
         )
@@ -374,18 +440,18 @@ def seed_indexed_file(
         conn.execute(
             """
             INSERT INTO file_name_origins(
-                file_name_id, origin, first_seen_at_ms, last_seen_at_ms
+                file_name_id, origin, first_seen_at_s, last_seen_at_s
             )
             VALUES (?, ?, ?, ?)
             ON CONFLICT(file_name_id, origin) DO UPDATE SET
-                last_seen_at_ms = excluded.last_seen_at_ms
+                last_seen_at_s = excluded.last_seen_at_s
             """,
             (file_name_id, origin, now, now),
         )
         conn.commit()
 
 
-def seed_transfer_manifest(
+def seed_download_job(
     db_path: Path,
     *,
     ed2k_hash: str,
@@ -400,201 +466,194 @@ def seed_transfer_manifest(
     aich_root_origin: str | None = None,
     aich_hashset: list[str] | None = None,
     sources: list[dict] | None = None,
-    control_state: str | None = None,
     upload_priority: str = "normal",
     auto_upload_priority: bool = False,
     all_time_uploaded_bytes: int = 0,
     all_time_upload_requests: int = 0,
     all_time_upload_accepts: int = 0,
-    last_upload_request_ms: int = 0,
+    last_upload_requested_at_s: int | None = None,
     comment: str = "",
     rating: int = 0,
-) -> None:
-    """Seed an ED2K download fixture with explicit operator-link AICH authority.
+) -> str:
+    """Seed one fresh, ID-keyed download job without granting filesystem authority.
 
-    ``sources`` items are dicts with ``ip``, ``tcp_port`` and optional ``user_hash`` (hex).
-    ``md4_hashset``/``aich_hashset`` are lists of lowercase hex part hashes.
-    A supplied root requires ``aich_root_origin="operator_link"``; it proves no
-    local payload or network consensus. Existing accepted identity is retained.
-    Replacing established transfer AICH authority requires the product writer,
-    not this fixture seed; no live trust-reconciliation algorithm is duplicated.
+    A supplied AICH root is an operator-link claim. Existing accepted known-file,
+    local-content, and completion-history facts remain authoritative. Completed
+    fixture pieces have no delivered path or terminal completion claim.
     """
-
-    md4_hashset = md4_hashset or []
-    aich_hashset = aich_hashset or []
-    sources = sources or []
     hash_blob = bytes.fromhex(ed2k_hash)
+    if len(hash_blob) != 16 or size_bytes <= 0 or piece_size <= 0:
+        raise ValueError("fixture requires a 16-byte hash and positive size and piece size")
     if (aich_root is None) != (aich_root_origin is None) or aich_root_origin not in (None, "operator_link"):
         raise ValueError("a supplied fixture AICH root requires explicit operator_link origin")
     root_blob = bytes.fromhex(aich_root) if aich_root is not None else None
     if root_blob is not None and len(root_blob) != 20:
         raise ValueError("fixture AICH root must contain 20 bytes")
-    piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
-    if completed:
-        visible_state = "completed"
-    elif control_state is not None:
-        visible_state = "queued"
-    else:
-        visible_state = "queued"
-    now = _now_ms()
+    md4_hashset = md4_hashset or []
+    aich_hashset = aich_hashset or []
+    sources = sources or []
+    piece_count = (size_bytes + piece_size - 1) // piece_size
+    now_s = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
-        # WHY: seed admission and writes share the writer slot. A failed fixture
-        # must not partially replace identity, progress or acquired hashsets.
         conn.execute("BEGIN IMMEDIATE")
         history = conn.execute(
-            "SELECT size_bytes, aich_root FROM download_history WHERE ed2k_hash = ?",
-            (hash_blob,),
+            "SELECT size_bytes, aich_root FROM download_history WHERE ed2k_hash = ?", (hash_blob,)
         ).fetchone()
         existing = conn.execute(
             "SELECT id, size_bytes, aich_root, aich_root_origin FROM known_files WHERE ed2k_hash = ?",
             (hash_blob,),
         ).fetchone()
         if existing is not None:
-            transfer = conn.execute(
-                "SELECT aich_root, aich_trust_generation FROM transfers WHERE known_file_id = ?",
+            active = conn.execute(
+                """SELECT 1 FROM download_jobs WHERE known_file_id = ?
+                   AND removed_at_s IS NULL AND terminal_completed_at_s IS NULL""",
                 (existing[0],),
             ).fetchone()
-            if transfer is not None and (transfer[0] is not None or transfer[1] != 0):
-                raise ValueError("cannot reseed established transfer AICH authority")
+            if active is not None:
+                raise ValueError("cannot reseed established download job")
             local = conn.execute(
-                "SELECT aich_root FROM verified_local_content WHERE known_file_id = ?",
-                (existing[0],),
+                "SELECT aich_root FROM verified_local_content WHERE known_file_id = ?", (existing[0],)
             ).fetchone()
             if local is not None and local[0] is not None and local[0] != existing[2]:
                 raise ValueError("fixture requires coherent accepted local AICH identity")
-            accepted = existing[3] is not None or local is not None or conn.execute(
-                "SELECT 1 FROM transfers WHERE known_file_id = ? AND completed = 1 AND final_rehash_pending = 0",
-                (existing[0],),
-            ).fetchone() is not None
-            if accepted and existing[1] != size_bytes:
+            if existing[1] is not None and existing[1] != size_bytes:
                 raise ValueError("fixture conflicts with accepted file size")
             if existing[2] is not None:
                 if root_blob is not None and root_blob != existing[2]:
                     raise ValueError("fixture conflicts with accepted AICH root")
                 root_blob, aich_root_origin = existing[2], existing[3]
-        if history is not None and (history[0] != size_bytes or (
-                history[1] is not None and root_blob is not None and history[1] != root_blob)):
+        if history is not None and (
+            history[0] != size_bytes
+            or (history[1] is not None and root_blob is not None and history[1] != root_blob)
+        ):
             raise ValueError("fixture conflicts with accepted download history")
         if aich_hashset_acquired and root_blob is None:
             raise ValueError("acquired AICH part hashes require an accepted root")
-        generation = 1 if root_blob is not None else 0
-        conn.execute(
-            """
-            INSERT INTO known_files(
-                ed2k_hash, size_bytes, display_name, aich_root, aich_root_origin, all_time_uploaded_bytes,
-                all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_ms,
-                first_seen_at_ms, last_seen_at_ms, updated_at_ms
+        if existing is None:
+            conn.execute(
+                """INSERT INTO known_files(
+                   ed2k_hash, display_name, aich_root, aich_root_origin,
+                   all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
+                   last_upload_requested_at_s, first_seen_at_s, last_seen_at_s, updated_at_s,
+                   upload_priority, auto_upload_priority, comment, rating)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (hash_blob, name, root_blob, aich_root_origin, all_time_uploaded_bytes,
+                 all_time_upload_requests, all_time_upload_accepts, last_upload_requested_at_s,
+                 now_s, now_s, now_s, upload_priority, int(auto_upload_priority), comment, rating),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(ed2k_hash) DO UPDATE SET
-                size_bytes = excluded.size_bytes,
-                display_name = excluded.display_name,
-                aich_root = excluded.aich_root,
-                aich_root_origin = excluded.aich_root_origin,
-                all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
-                all_time_upload_requests = excluded.all_time_upload_requests,
-                all_time_upload_accepts = excluded.all_time_upload_accepts,
-                last_upload_requested_at_ms = excluded.last_upload_requested_at_ms,
-                last_seen_at_ms = excluded.last_seen_at_ms,
-                updated_at_ms = excluded.updated_at_ms
-            """,
-            (hash_blob, size_bytes, name, root_blob, aich_root_origin,
-             all_time_uploaded_bytes, all_time_upload_requests, all_time_upload_accepts,
-             last_upload_request_ms, now, now, now),
-        )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
         ).fetchone()[0]
+        job_id = conn.execute(
+            """INSERT INTO download_jobs(
+               known_file_id, expected_size_bytes, display_name, part_size_bytes, part_count,
+               completed,
+               md4_hashset_acquired, aich_hashset_acquired, aich_root, aich_root_origin,
+               aich_trust_generation, visible_state, delivery_state, created_at_s,
+               updated_at_s, completed_at_s)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+            (known_file_id, size_bytes, name, piece_size, piece_count, int(completed), int(md4_hashset_acquired),
+             int(aich_hashset_acquired), root_blob, aich_root_origin,
+             1 if root_blob is not None else 0, "completed" if completed else "queued",
+             now_s, now_s, now_s if completed else None),
+        ).lastrowid
         conn.execute(
-            """
-            INSERT INTO transfers(
-                known_file_id, completed, md4_hashset_acquired, aich_hashset_acquired,
-                visible_state, control_state, display_name, part_size_bytes, part_count,
-                upload_priority, auto_upload_priority, comment, rating,
-                delivery_state, delivery_ownership, created_at_ms, updated_at_ms, completed_at_ms,
-                aich_root, aich_root_origin, aich_trust_generation
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'none', ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(known_file_id) DO UPDATE SET
-                completed = excluded.completed,
-                md4_hashset_acquired = excluded.md4_hashset_acquired,
-                aich_hashset_acquired = excluded.aich_hashset_acquired,
-                aich_root = excluded.aich_root,
-                aich_root_origin = excluded.aich_root_origin,
-                aich_trust_generation = excluded.aich_trust_generation,
-                visible_state = excluded.visible_state,
-                control_state = excluded.control_state,
-                display_name = excluded.display_name,
-                part_size_bytes = excluded.part_size_bytes,
-                part_count = excluded.part_count,
-                upload_priority = excluded.upload_priority,
-                auto_upload_priority = excluded.auto_upload_priority,
-                comment = excluded.comment,
-                rating = excluded.rating,
-                updated_at_ms = excluded.updated_at_ms,
-                completed_at_ms = excluded.completed_at_ms
-            """,
-            (known_file_id, int(completed), int(md4_hashset_acquired), int(aich_hashset_acquired),
-             visible_state, control_state, name, piece_size, piece_count, upload_priority,
-             int(auto_upload_priority), comment, rating, now, now, now if completed else None,
-             root_blob, aich_root_origin, generation),
+            "UPDATE known_files SET latest_download_job_id = ? WHERE id = ?", (job_id, known_file_id)
         )
-        transfer_id = conn.execute(
-            "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
-        ).fetchone()[0]
-        _replace_transfer_name_state(conn, transfer_id)
-        conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM transfer_md4_part_hashes WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM transfer_aich_part_hashes WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM verified_ranges WHERE transfer_id = ?", (transfer_id,))
-        conn.execute("DELETE FROM transfer_sources WHERE transfer_id = ?", (transfer_id,))
         for piece_index in range(piece_count):
-            state = "Verified" if completed else "Missing"
-            written = expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0
+            present_bytes = expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0
             conn.execute(
-                """
-                INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (transfer_id, piece_index, state, written, now),
+                """INSERT INTO download_job_pieces(job_id, piece_index, state, prefix_bytes, present_bytes, updated_at_s)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (job_id, piece_index, "Verified" if completed else "Missing",
+                 present_bytes, present_bytes, now_s),
             )
         for index, part_hash in enumerate(md4_hashset):
             conn.execute(
-                "INSERT INTO transfer_md4_part_hashes(transfer_id, part_index, md4_hash) VALUES (?, ?, ?)",
-                (transfer_id, index, bytes.fromhex(part_hash)),
+                "INSERT INTO download_job_md4_part_hashes(job_id, part_index, md4_hash) VALUES (?, ?, ?)",
+                (job_id, index, bytes.fromhex(part_hash)),
             )
         for index, part_hash in enumerate(aich_hashset):
             conn.execute(
-                "INSERT INTO transfer_aich_part_hashes(transfer_id, part_index, aich_hash) VALUES (?, ?, ?)",
-                (transfer_id, index, bytes.fromhex(part_hash)),
+                "INSERT INTO download_job_aich_part_hashes(job_id, part_index, aich_hash) VALUES (?, ?, ?)",
+                (job_id, index, bytes.fromhex(part_hash)),
             )
         for source in sources:
             user_hash = source.get("user_hash")
             conn.execute(
-                """
-                INSERT INTO transfer_sources(transfer_id, ip, tcp_port, user_hash, first_seen_at_ms, last_seen_at_ms)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    transfer_id,
-                    source["ip"],
-                    source["tcp_port"],
-                    bytes.fromhex(user_hash) if user_hash else None,
-                    now,
-                    now,
-                ),
+                """INSERT INTO download_job_sources(
+                   job_id, ip, tcp_port, user_hash, first_seen_at_s, last_seen_at_s)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (job_id, source["ip"], source["tcp_port"],
+                 bytes.fromhex(user_hash) if user_hash else None, now_s, now_s),
             )
         if completed:
             conn.execute(
-                """
-                INSERT INTO verified_ranges(transfer_id, start_offset, end_offset, created_at_ms)
-                VALUES (?, 0, ?, ?)
-                """,
-                (transfer_id, size_bytes, now),
+                """INSERT INTO download_job_verified_ranges(job_id, start_offset, end_offset, created_at_s)
+                   VALUES (?, 0, ?, ?)""",
+                (job_id, size_bytes, now_s),
             )
         conn.commit()
+        return str(job_id)
 
+
+def seed_retained_download_scale(db_path: Path, *, count: int = 100_000) -> dict[str, int]:
+    """Seed a stopped profile with retained history and sparse unfinished work.
+
+    This metadata-only fixture grants no deletion authority and creates no
+    output files. It qualifies retained-job browsing, not payload verification
+    or a physical shared library. One transaction and a streaming loop keep
+    fixture construction independent of per-job connection overhead.
+    """
+    if type(count) is not int or count <= 0:
+        raise ValueError("retained download count must be a positive integer")
+    now_s = int(time.time())
+    result = {"jobs": count, "completed": 0, "stopped": 0, "queued": 0}
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM download_jobs LIMIT 1").fetchone():
+            raise ValueError("retained scale fixture requires an empty download collection")
+        for index in range(1, count + 1):
+            hash_blob = index.to_bytes(16, "big")
+            name = f"retained-{index:09d}.bin"
+            bucket = index % 1000
+            state = "queued" if bucket == 0 else "stopped" if bucket < 10 else "completed"
+            complete = state == "completed"
+            result[state] += 1
+            known_id = conn.execute(
+                """INSERT INTO known_files(ed2k_hash,display_name,size_bytes,
+                   first_seen_at_s,last_seen_at_s,updated_at_s) VALUES(?,?,1024,?,?,?)""",
+                (hash_blob, name, now_s, now_s, now_s),
+            ).lastrowid
+            path_id = None
+            if complete:
+                path_id = _upsert_local_path(
+                    conn, str(db_path.parent / "absent-scale-outputs" / name), now_s
+                )
+                conn.execute(
+                    """INSERT INTO download_history(ed2k_hash,size_bytes,display_name,
+                       first_completed_at_s,last_completed_at_s) VALUES(?,1024,?,?,?)""",
+                    (hash_blob, name, now_s, now_s),
+                )
+            job_id = conn.execute(
+                """INSERT INTO download_jobs(known_file_id,expected_size_bytes,display_name,
+                   part_size_bytes,part_count,completed,visible_state,intent,delivery_state,
+                   delivery_ownership,delivered_path_id,terminal_completed_at_s,
+                   internal_storage_retired,created_at_s,updated_at_s,completed_at_s)
+                   VALUES(?,1024,?,9728000,1,?,?,?,?,?,?,?,?,?,?,?)""",
+                (known_id, name, int(complete), "completed" if complete else "queued",
+                 "stopped" if state == "stopped" else "started",
+                 "delivered" if complete else "pending", "unowned" if complete else "none",
+                 path_id, now_s if complete else None, int(complete), now_s, now_s,
+                 now_s if complete else None),
+            ).lastrowid
+            conn.execute("UPDATE known_files SET latest_download_job_id=? WHERE id=?", (job_id, known_id))
+        if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise RuntimeError("retained scale fixture violates metadata references")
+        conn.commit()
+    return result
 
 
 def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> None:
@@ -604,11 +663,14 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
     This helper seeds configuration only; it grants no file serving authority.
     """
 
-    now = _now_ms()
+    now = int(time.time())
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
+        # WHY: root IDs identify a resource lifetime. Replacing a fixture retires
+        # its previous roots; reusing the same path must allocate a fresh ID.
         conn.execute(
-            "UPDATE shared_directory_roots SET deleted_at_ms = ? WHERE deleted_at_ms IS NULL",
+            "UPDATE shared_directory_roots SET monitor_owned=0, shareable=0, "
+            "accessible=0, enabled=0, deleted_at_s=? WHERE deleted_at_s IS NULL",
             (now,),
         )
         for root in roots:
@@ -620,15 +682,9 @@ def seed_shared_directory_roots(db_path: Path, roots: list[dict[str, Any]]) -> N
                 """
                 INSERT INTO shared_directory_roots(
                     path_id, monitor_owned, shareable, accessible,
-                    enabled, created_at_ms, deleted_at_ms
+                    enabled, created_at_s, deleted_at_s
                 )
                 VALUES (?, ?, ?, ?, 1, ?, NULL)
-                ON CONFLICT(path_id) DO UPDATE SET
-                    monitor_owned = excluded.monitor_owned,
-                    shareable = excluded.shareable,
-                    accessible = excluded.accessible,
-                    enabled = 1,
-                    deleted_at_ms = NULL
                 """,
                 (
                     path_id,
@@ -646,118 +702,107 @@ def expected_piece_length(file_size: int, piece_size: int, piece_index: int) -> 
     return max(0, min(start + piece_size, file_size) - start)
 
 
-def seed_remembered_source_transfer(
-    db_path: Path,
-    *,
-    ed2k_hash: str,
-    name: str,
-    size_bytes: int,
-    piece_size: int,
-    source_ip: str,
-    source_tcp_port: int,
-    source_user_hash: str | None = None,
-) -> None:
-    """Seed an incomplete transfer with a single remembered source."""
-
-    seed_transfer_manifest(
-        db_path,
-        ed2k_hash=ed2k_hash,
-        name=name,
-        size_bytes=size_bytes,
-        piece_size=piece_size,
-        sources=[{"ip": source_ip, "tcp_port": source_tcp_port, "user_hash": source_user_hash}],
-    )
-
-
-def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
-    """Read a persisted ED2K transfer manifest from the Rust profile metadata DB.
-
-    Inspect internal download hashsets and sources without fabricating a local
-    shared-file transfer. Return ``None`` when no download exists for the hash.
-    """
-
-    hash_blob = bytes.fromhex(ed2k_hash)
-    with closing(sqlite3.connect(db_path)) as conn:
+def read_download_job_manifest(db_path: Path, job_id: str) -> dict | None:
+    """Read the captured job's persisted protocol manifest and identity facts."""
+    if (not isinstance(job_id, str) or not job_id.isascii() or not job_id.isdecimal()
+            or len(job_id) > 19
+            or str(int(job_id)) != job_id or not 0 < int(job_id) <= 9223372036854775807):
+        raise ValueError("job ID must be a positive canonical decimal i64 string")
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        # A single snapshot keeps retirement of child rows from mixing with
+        # an earlier job/header read during live two-client diagnostics.
+        conn.execute("BEGIN")
         row = conn.execute(
-            """
-            SELECT known_files.id, transfers.id, transfers.control_state,
-                   transfers.display_name, known_files.size_bytes,
-                   coalesce(transfers.part_size_bytes, 0),
-                   transfers.completed, transfers.md4_hashset_acquired,
-                   transfers.aich_hashset_acquired,
-                   CASE WHEN transfers.aich_root IS NULL THEN NULL
-                        ELSE lower(hex(transfers.aich_root)) END,
-                   transfers.upload_priority, transfers.comment, transfers.rating,
-                   transfers.auto_upload_priority, known_files.all_time_uploaded_bytes,
-                   known_files.all_time_upload_requests,
-                   known_files.all_time_upload_accepts,
-                   known_files.last_upload_requested_at_ms,
-                   transfers.source_fingerprint, transfers.aich_root_origin,
-                   transfers.aich_trust_generation
-            FROM known_files
-            JOIN transfers ON transfers.known_file_id = known_files.id
-            WHERE known_files.ed2k_hash = ?
-            """,
-            (hash_blob,),
+            """SELECT jobs.id, lower(hex(known.ed2k_hash)), jobs.display_name,
+                      jobs.expected_size_bytes, jobs.part_size_bytes, jobs.completed,
+                      jobs.md4_hashset_acquired, jobs.aich_hashset_acquired,
+                      CASE WHEN jobs.aich_root IS NULL THEN NULL ELSE lower(hex(jobs.aich_root)) END,
+                      jobs.aich_root_origin, jobs.aich_trust_generation,
+                      known.upload_priority, known.comment, known.rating, known.auto_upload_priority,
+                      known.all_time_uploaded_bytes, known.all_time_upload_requests,
+                      known.all_time_upload_accepts, known.last_upload_requested_at_s,
+                      jobs.execution_generation, jobs.selected_temp_path_id, jobs.storage_path_id,
+                      jobs.storage_directory_marker_id, jobs.terminal_completed_at_s,
+                      jobs.internal_storage_retired, jobs.visible_state, jobs.intent,
+                      jobs.known_file_id
+               FROM download_jobs AS jobs
+               JOIN known_files AS known ON known.id = jobs.known_file_id
+               WHERE jobs.id = ?""",
+            (int(job_id),),
         ).fetchone()
         if row is None:
             return None
-        transfer_id = row[1]
-        sources = []
-        if transfer_id is not None:
-            sources = [
-                {
-                    "ip": src[0],
-                    "tcp_port": src[1],
-                    "user_hash": src[2],
-                }
-                for src in conn.execute(
-                    """
-                    SELECT ip, tcp_port,
-                           CASE WHEN user_hash IS NULL THEN NULL ELSE lower(hex(user_hash)) END
-                    FROM transfer_sources WHERE transfer_id = ?
-                    ORDER BY id
-                    """,
-                    (transfer_id,),
-                )
-            ]
+        sources = [
+            {"ip": src[0], "tcp_port": src[1], "user_hash": src[2]}
+            for src in conn.execute(
+                """SELECT ip, tcp_port,
+                          CASE WHEN user_hash IS NULL THEN NULL ELSE lower(hex(user_hash)) END
+                   FROM download_job_sources WHERE job_id = ? ORDER BY id""",
+                (int(job_id),),
+            )
+        ]
         md4_hashset = [
-            r[0]
-            for r in conn.execute(
-                "SELECT lower(hex(md4_hash)) FROM transfer_md4_part_hashes WHERE transfer_id = ? ORDER BY part_index",
-                (transfer_id,),
+            part[0] for part in conn.execute(
+                "SELECT lower(hex(md4_hash)) FROM download_job_md4_part_hashes WHERE job_id = ? ORDER BY part_index",
+                (int(job_id),),
             )
         ]
         aich_hashset = [
-            r[0]
-            for r in conn.execute(
-                "SELECT lower(hex(aich_hash)) FROM transfer_aich_part_hashes WHERE transfer_id = ? ORDER BY part_index",
-                (transfer_id,),
+            part[0] for part in conn.execute(
+                "SELECT lower(hex(aich_hash)) FROM download_job_aich_part_hashes WHERE job_id = ? ORDER BY part_index",
+                (int(job_id),),
             )
         ]
+        history = conn.execute(
+            """SELECT size_bytes,
+                      CASE WHEN aich_root IS NULL THEN NULL ELSE lower(hex(aich_root)) END,
+                      first_completed_at_s, last_completed_at_s
+               FROM download_history WHERE ed2k_hash = ?""",
+            (bytes.fromhex(row[1]),),
+        ).fetchone()
+        verified = conn.execute(
+            """SELECT content.display_name, content.part_size_bytes, content.part_count,
+                      CASE WHEN content.aich_root IS NULL THEN NULL ELSE lower(hex(content.aich_root)) END,
+                      content.known_file_id
+               FROM verified_local_content AS content
+               JOIN download_jobs AS jobs ON jobs.known_file_id = content.known_file_id
+               WHERE jobs.id = ?""",
+            (int(job_id),),
+        ).fetchone()
+        verified_md4 = [part[0] for part in conn.execute(
+            """SELECT lower(hex(parts.md4_hash)) FROM verified_local_md4_hashes AS parts
+               JOIN download_jobs AS jobs ON jobs.known_file_id = parts.known_file_id
+               WHERE jobs.id = ? ORDER BY parts.part_index""", (int(job_id),)
+        )]
+        verified_aich = [part[0] for part in conn.execute(
+            """SELECT lower(hex(parts.aich_hash)) FROM verified_local_aich_hashes AS parts
+               JOIN download_jobs AS jobs ON jobs.known_file_id = parts.known_file_id
+               WHERE jobs.id = ? ORDER BY parts.part_index""", (int(job_id),)
+        )]
     return {
-        "file_hash": ed2k_hash.lower(),
-        "control_state": row[2],
-        "canonical_name": row[3],
-        "file_size": row[4],
-        "piece_size": row[5],
-        "completed": bool(row[6]),
-        "md4_hashset_acquired": bool(row[7]),
-        "aich_hashset_acquired": bool(row[8]),
-        "aich_root": row[9],
-        "aich_root_origin": row[19],
-        "aich_trust_generation": row[20],
-        "upload_priority": row[10],
-        "comment": row[11],
-        "rating": row[12],
-        "auto_upload_priority": bool(row[13]),
-        "all_time_uploaded_bytes": row[14],
-        "all_time_upload_requests": row[15],
-        "all_time_upload_accepts": row[16],
-        "last_upload_request_ms": row[17],
-        "md4_hashset": md4_hashset,
-        "aich_hashset": aich_hashset,
-        "sources": sources,
+        "job_id": str(row[0]), "file_hash": row[1], "canonical_name": row[2],
+        "file_size": row[3], "piece_size": row[4], "completed": bool(row[5]),
+        "md4_hashset_acquired": bool(row[6]), "aich_hashset_acquired": bool(row[7]),
+        "aich_root": row[8], "aich_root_origin": row[9], "aich_trust_generation": row[10],
+        "upload_priority": row[11], "comment": row[12], "rating": row[13],
+        "auto_upload_priority": bool(row[14]), "all_time_uploaded_bytes": row[15],
+        "all_time_upload_requests": row[16], "all_time_upload_accepts": row[17],
+        "last_upload_requested_at_s": row[18], "execution_generation": row[19],
+        "selected_temp_path_id": row[20], "storage_path_id": row[21],
+        "storage_directory_marker_id": row[22], "terminal_completed_at_s": row[23],
+        "internal_storage_retired": bool(row[24]), "visible_state": row[25], "intent": row[26],
+        "known_file_id": row[27],
+        "md4_hashset": md4_hashset, "aich_hashset": aich_hashset, "sources": sources,
+        "completion_history": None if history is None else {
+            "size_bytes": history[0], "aich_root": history[1],
+            "first_completed_at_s": history[2], "last_completed_at_s": history[3],
+        },
+        "verified_local_content": None if verified is None else {
+            "display_name": verified[0], "part_size_bytes": verified[1],
+            "part_count": verified[2], "aich_root": verified[3],
+            "known_file_id": verified[4],
+            "md4_hashset": verified_md4, "aich_hashset": verified_aich,
+        },
     }
 
 
@@ -805,3 +850,62 @@ def current_platform() -> str:
     if sys.platform == "win32":
         return "windows"
     return "unix"
+
+
+def seed_search_observation_fixture(rust_repo: Path, db_path: Path) -> dict[str, object]:
+    """Stage frozen session provenance for native page/serialization conformance.
+
+    The first observation has three global occurrences but only one in the
+    selected session, so the HTTP proof detects accidental global accounting.
+    """
+    with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=rw", uri=True)) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT schema_id,schema_version FROM metadata_schema").fetchall() != [_schema_marker(rust_repo)]:
+                raise RuntimeError("search fixture requires the current metadata schema marker")
+            session = connection.execute(
+                "INSERT INTO search_sessions(query,normalized_query,requested_method,resolved_method,status,created_at_s,updated_at_s,completed_at_s) "
+                "VALUES('Sample provenance','sample provenance','server','server','completed',1,30,30) RETURNING id"
+            ).fetchone()[0]
+            claim = connection.execute(
+                "INSERT INTO content_claims(ed2k_hash,size_bytes,first_seen_at_s,last_seen_at_s) VALUES(?,?,10,30) RETURNING id",
+                (bytes.fromhex("ab" * 16), (4096).to_bytes(8, "big")),
+            ).fetchone()[0]
+            connection.execute(
+                "INSERT INTO search_results(session_id,claim_id,size_sort_key,ed2k_hash,name,ed2k_source_count,file_type,media_artist,media_album,media_title,"
+                "media_length_seconds,media_bitrate_kbps,media_codec,rating,complete,directory) "
+                "SELECT ?,id,size_sort_key,ed2k_hash,'Beta.bin',9,'Pro','','','',0,0,'',0,0,'' FROM content_claims WHERE id=?", (session,claim),
+            )
+            observations = []
+            for name, sources, first, last, count, session_seen in [
+                ("Alpha.bin",7,10,20,3,20), ("Beta.bin",9,30,30,1,30),
+            ]:
+                observation = connection.execute(
+                    "INSERT INTO content_claim_observations(claim_id,fingerprint,origin,reporter_endpoint,name,source_count,file_type,"
+                    "first_seen_at_s,last_seen_at_s,observation_count) VALUES(?,?,'server','192.0.2.10:4661',?,?,'Pro',?,?,?) RETURNING id",
+                    (claim, hashlib.sha256(json.dumps(["server", "192.0.2.10:4661", {"name":name,"source_count":sources,"file_type":"Pro"}],separators=(",",":"),ensure_ascii=False).encode("utf-8")).digest(),name,sources,first,last,count),
+                ).fetchone()[0]
+                observations.append(str(observation))
+                connection.execute(
+                    "INSERT INTO search_result_observations(session_id,claim_id,observation_id,first_seen_at_s,last_seen_at_s,observation_count) "
+                    "VALUES(?,?,?,?,?,1)",(session,claim,observation,session_seen,session_seen),
+                )
+                connection.execute(
+                    "INSERT INTO search_name_reporters(session_id,claim_id,normalized_name,reporter_endpoint,unknown_origin,"
+                    "quality_useful,quality_sources,quality_complete_sources,quality_rating) VALUES(?,?,?,'192.0.2.10:4661','',1,?,0,0)",
+                    (session,claim,name,sources),
+                )
+                connection.execute(
+                    "INSERT INTO search_name_totals(session_id,claim_id,normalized_name,vote_count,quality_useful,quality_sources,"
+                    "quality_complete_sources,quality_rating) VALUES(?,?,?,1,1,?,0,0)",(session,claim,name,sources),
+                )
+            connection.execute(
+                "INSERT INTO search_ed2k_reporter_maxima(session_id,claim_id,reporter_endpoint,unknown_origin,source_count,complete_source_count) "
+                "VALUES(?,?,'192.0.2.10:4661','',9,0)",(session,claim),
+            )
+            connection.execute(
+                "INSERT INTO search_field_quality(session_id,claim_id,field,quality_useful,quality_sources,quality_complete_sources,quality_rating) "
+                "VALUES(?,?,'file_type',1,9,0,0)",(session,claim),
+            )
+    return {"sessionId":str(session),"resultId":str(claim),"observationIds":observations}

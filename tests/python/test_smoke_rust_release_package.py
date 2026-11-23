@@ -18,6 +18,57 @@ from emule_test_harness.script_modules import load_script_module
 smoke = load_script_module("smoke_rust_release_package", "smoke-rust-release-package.py")
 
 
+@pytest.mark.parametrize("body,code", [
+    (b'{"error":{"code":"PERSISTENCE_BUSY","message":"private detail"}}', "PERSISTENCE_BUSY"),
+    (b'not-json', None), (b'[]', None),
+])
+def test_http_failure_keeps_status_and_bounded_error_code_without_secrets(monkeypatch, body, code):
+    reads = []
+    class Body(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            return super().read(size)
+    error = smoke.urllib.error.HTTPError("http://127.0.0.1/status", 503, "busy", {}, Body(body))
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(smoke.urllib.request, "urlopen", fail)
+    with pytest.raises(smoke.RustRestFailure) as failure:
+        smoke._request("http://127.0.0.1/status", api_key="private-api-key")
+    assert failure.value.status == 503 and failure.value.__cause__ is error
+    assert reads == [8192]
+    assert failure.value.response_error.get("code") == code
+    assert failure.value.__notes__ == [f"API error code={code!r}"]
+    assert "private" not in str(failure.value) + str(failure.value.__notes__)
+
+
+@pytest.mark.parametrize("outcome", ["success", "busy-success", "busy-exhausted", "closing", "other-503", "storage", "malformed"])
+def test_parallel_read_retries_only_recorded_typed_admission_pressure(monkeypatch, outcome):
+    attempts, delays, calls = [], [], []
+    monkeypatch.setattr(smoke.time, "sleep", delays.append)
+    def fetch():
+        calls.append(1)
+        if outcome == "success" or outcome == "busy-success" and len(calls) == 2:
+            return {"value": 7}
+        if outcome == "malformed":
+            raise ValueError("invalid response")
+        code = {"closing": "PERSISTENCE_CLOSING", "other-503": "INTERNAL_SERVER_ERROR",
+                "storage": "PERSISTENCE_FAILED"}.get(outcome, "PERSISTENCE_BUSY")
+        raise smoke.RustRestFailure("read failed", status=500 if outcome == "storage" else 503,
+                                    detail=json.dumps({"error": {"code": code}}))
+    if outcome in ("success", "busy-success"):
+        assert smoke._parallel_read(fetch, attempts, path="/status") == {"value": 7}
+        assert attempts[-1]["httpStatus"] == 200
+    else:
+        with pytest.raises(ValueError if outcome == "malformed" else smoke.RustRestFailure):
+            smoke._parallel_read(fetch, attempts, path="/status")
+    expected = 5 if outcome == "busy-exhausted" else 2 if outcome == "busy-success" else 1
+    assert len(calls) == len(attempts) == expected
+    assert [row["attempt"] for row in attempts] == list(range(1, expected + 1))
+    assert all(row["path"] == "/status" for row in attempts)
+    assert delays == [0.25 * 2 ** index for index in range(expected - 1)]
+    assert [row["retryDelaySeconds"] for row in attempts[:-1]] == delays
+
+
 @pytest.mark.parametrize("field", [None, "version", "build", "platform", "channel", "sourceRevision"])
 def test_explicit_build_identity_rejects_mismatched_runtime_and_cli(monkeypatch, field):
     expected = {"version": "0.1.0-beta.2", "build": "release", "platform": "x64",
@@ -117,14 +168,18 @@ def ownership_contenders(monkeypatch):
             stderr="profile is already in use: fixture; stop its daemon or offline command before retrying",
         )
 
-    def rest(_base, _method, path, _key):
+    def rest(url, **kwargs):
+        path = url.removeprefix("http://127.0.0.1:4711")
         changed = state["calls"] > 0
-        if path == "/api/v1/app/settings":
-            return {"core": {"uploadLimitKiBps": 2 if changed and state["mutation"] == "settings" else 1}}
-        return {"roots": ["changed"] if changed and state["mutation"] == "roots" else []}
+        if path == "/api/v1/settings":
+            data = {"effective": {"transfers": {"uploadLimitBytesPerSecond": 2048 if changed and state["mutation"] == "settings" else 1024}}}
+            return json.dumps({"data": data, "meta": {"apiVersion": "v1"}}).encode()
+        assert path == "/api/v1/library/roots?limit=100"
+        return json.dumps({"data": [{"id": "1", "path": "/synthetic/changed", "managed": False}] if changed and state["mutation"] == "roots" else [],
+                           "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
 
     monkeypatch.setattr(smoke.subprocess, "run", offline)
-    monkeypatch.setattr(smoke, "request_json", rest)
+    monkeypatch.setattr(smoke, "_request", rest)
     try:
         yield profile, bootstrap, state, tmp_path
     finally:
@@ -135,8 +190,8 @@ def test_busy_profile_contenders_require_specific_failure_and_preserve_fixture(o
     profile, bootstrap, state, tmp_path = ownership_contenders
     before = bootstrap.read_bytes()
     result = smoke._reject_offline_profile_writers(tmp_path / "daemon", profile, "http://127.0.0.1:4711", tmp_path)
-    assert len(result) == 3 and all(item["profileBusy"] for item in result)
-    assert state["calls"] == 3 and bootstrap.read_bytes() == before
+    assert len(result) == 4 and all(item["profileBusy"] for item in result)
+    assert state["calls"] == 4 and bootstrap.read_bytes() == before
     # The portable input is real and closed, so a busy verdict is not masking an
     # empty or malformed import archive prepared by this fixture.
     from emule_test_harness.profile_exchange import read_exchange_header
@@ -168,11 +223,15 @@ def test_api_key_meets_daemon_production_validation() -> None:
 
 
 def test_failure_diagnostics_survive_profile_cleanup(monkeypatch, tmp_path):
-    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": [{"message": "socket failure"}]})
+    def logs(url, method, path, key):
+        assert key == "caller-diagnostic-key"
+        return {"items": [{"message": "socket failure"}]}
+    monkeypatch.setattr(smoke, "request_json", logs)
     error = RuntimeError("listener failed")
     log = tmp_path / "daemon.log"
     log.write_text("native error context", encoding="utf-8")
-    smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", log)
+    smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", log,
+                                      api_key="caller-diagnostic-key")
     log.unlink()
     assert "socket failure" in error.__notes__[0]
     assert "native error context" in error.__notes__[1]
@@ -186,6 +245,18 @@ def test_failure_diagnostics_preserve_original_error_when_sources_unavailable(mo
     smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", tmp_path / "missing.log")
     assert str(error) == "original failure"
     assert all("unavailable" in note for note in error.__notes__)
+
+
+def test_failure_diagnostics_keep_early_cause_and_final_state_with_bounded_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": []})
+    log = tmp_path / "daemon.log"
+    log.write_text("initial capacity refusal\n" + "a" * 8000 + "discarded middle" +
+                   "b" * 8000 + "\nfinal source state", encoding="utf-8")
+    error = RuntimeError("parallel completion failed")
+    smoke._attach_failure_diagnostics(error, "leecher", "http://127.0.0.1:4711", log)
+    note = error.__notes__[-1]
+    assert "initial capacity refusal" in note and "final source state" in note
+    assert "discarded middle" not in note and len(note) < 12100
 
 
 def test_linux_capability_probe_reports_missing_emulated_socket_option(monkeypatch):
@@ -210,13 +281,13 @@ def test_linux_capability_probe_reports_missing_emulated_socket_option(monkeypat
     assert caught.value.__cause__.errno == errno.ENOPROTOOPT
 
 
-def test_failed_delivery_retains_transfer_error_context(monkeypatch, tmp_path):
+def test_failed_delivery_retains_download_error_context(monkeypatch, tmp_path):
     def fail(*args, **kwargs):
         raise RuntimeError("delivery timed out")
     monkeypatch.setattr(smoke, "wait_for", fail)
-    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": [{"error": "synthetic publication failure"}]})
+    monkeypatch.setattr(smoke, "_download_page", lambda *args: [{"error": "synthetic publication failure"}])
     with pytest.raises(RuntimeError, match="synthetic publication failure"):
-        smoke._wait_for_transfer_delivery("http://127.0.0.1:4711", "a" * 32,
+        smoke._wait_for_download_delivery("http://127.0.0.1:4711", "7", "a" * 32,
                                           incoming=tmp_path, expected_size=1, expected_sha256="b" * 64)
 
 
@@ -242,28 +313,19 @@ def test_write_profile_isolated_before_first_launch(monkeypatch, tmp_path) -> No
         p2p_ip="192.0.2.10",
     )
 
-    assert calls == [
-        (
-            profile,
-            {
-                "rust_repo": rust_repo,
-                "incoming_dir": incoming,
-                "rest_addr": "127.0.0.1",
-                "rest_port": 4711,
-                "api_key": smoke.API_KEY,
-                "auto_connect": False,
-                "network_kademlia": False,
-                "p2p_bind_ip": "192.0.2.10",
-                "ed2k_port": 4662,
-                "kad_port": 4672,
-                "server_endpoint": "127.0.0.1:4661",
-                "nat_enabled": False,
-                "replace_servers": True,
-                "initial_shared_directory_reload": False,
-                "local_only_discovery": True,
-            },
-        )
-    ]
+    assert calls == [(profile, {
+        "rust_repo": rust_repo, "rest_addr": "127.0.0.1", "rest_port": 4711,
+        "api_key": smoke.API_KEY, "server_endpoint": "127.0.0.1:4661",
+        "replace_servers": True, "local_only_discovery": True,
+        "settings": {
+            "storage.incomingDirectory": str(incoming), "network.autoConnect": False,
+            "network.kadEnabled": False, "network.p2p.bindIp": "192.0.2.10",
+            "network.p2p.tcpPort": 4662, "network.p2p.udpPort": 4672,
+            "network.nat.enabled": False, "sharing.scanOnStartup": False,
+            "network.connections.connectTimeoutSeconds": 10,
+            "network.servers.reconnectIntervalSeconds": 60,
+        },
+    })]
 
 
 def test_webui_asset_paths_accepts_rooted_history_routing_assets() -> None:
@@ -287,7 +349,8 @@ def test_transfer_payload_is_deterministic(tmp_path) -> None:
     assert (tmp_path / "first.bin").read_bytes() == (tmp_path / "second.bin").read_bytes()
 
 
-def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("ownership", ["owned", "unowned"])
+def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path, ownership) -> None:
     incoming = tmp_path / "incoming"
     incoming.mkdir()
     delivered = incoming / "payload.bin"
@@ -298,12 +361,13 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
 
     def completed_shared_file(_base_url, method, path, _api_key):
         requests.append((method, path))
+        if path == "/api/v1/downloads/7":
+            return {"id": "7", "hash": transfer_hash, "state": "completed", "payloadVerified": True,
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": ownership}}
         return {
             "hash": transfer_hash,
-            "complete": True,
-            "partFile": False,
+            "present": True,
             "sizeBytes": delivered.stat().st_size,
-            "path": str(delivered),
         }
 
     monkeypatch.setattr(
@@ -311,9 +375,15 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
         "request_json",
         completed_shared_file,
     )
+    def locations(_base, method, path, _key):
+        requests.append((method, path))
+        return {"data": [{"path": str(delivered), "present": True}],
+                "meta": {"hasMore": False, "nextCursor": None}}
+    monkeypatch.setattr(smoke, "request_document", locations)
 
-    report = smoke._wait_for_transfer_delivery(
+    report = smoke._wait_for_download_delivery(
         "http://127.0.0.1:4711",
+        "7",
         transfer_hash,
         incoming=incoming,
         expected_size=delivered.stat().st_size,
@@ -322,15 +392,18 @@ def test_transfer_delivery_report_omits_temporary_paths(monkeypatch, tmp_path) -
 
     assert report["deliveredPathWithinIncoming"] is True
     assert report["sharedFileRegistered"] is True
-    assert requests == [("GET", f"/api/v1/shared-files/{transfer_hash}")]
+    assert report["deliveryOwnership"] == ownership
+    assert requests == [("GET", "/api/v1/downloads/7"),
+                        ("GET", f"/api/v1/library/files/{transfer_hash}"),
+                        ("GET", f"/api/v1/library/files/{transfer_hash}/locations?limit=200")]
     assert str(tmp_path) not in json.dumps(report)
 
 
 @pytest.mark.parametrize(
     "field,value",
-    [("hash", "ff" * 16), ("complete", False), ("partFile", True), ("sizeBytes", 99)],
+    [("hash", "ff" * 16), ("present", False), ("sizeBytes", 99)],
 )
-def test_transfer_delivery_rejects_wrong_or_incomplete_shared_content(
+def test_download_delivery_rejects_wrong_or_incomplete_shared_content(
     monkeypatch, tmp_path, field, value,
 ) -> None:
     delivered = tmp_path / "payload.bin"
@@ -338,18 +411,26 @@ def test_transfer_delivery_rejects_wrong_or_incomplete_shared_content(
     transfer_hash = "00112233445566778899aabbccddeeff"
     shared = {
         "hash": transfer_hash,
-        "complete": True,
-        "partFile": False,
+        "present": True,
         "sizeBytes": 7,
-        "path": str(delivered),
     }
     shared[field] = value
-    monkeypatch.setattr(smoke, "request_json", lambda *_args: shared)
+    def response(_base, _method, path, _key):
+        if path == "/api/v1/downloads/7":
+            return {"id": "7", "hash": transfer_hash, "state": "completed", "payloadVerified": True,
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "owned"}}
+        return shared
+    monkeypatch.setattr(smoke, "request_json", response)
+    monkeypatch.setattr(smoke, "request_document", lambda *_args: {
+        "data": [{"path": str(delivered), "present": True}],
+        "meta": {"hasMore": False, "nextCursor": None},
+    })
     monkeypatch.setattr(smoke, "wait_for", lambda probe, **_kwargs: probe())
 
     assert (
-        smoke._wait_for_transfer_delivery(
+        smoke._wait_for_download_delivery(
             "http://127.0.0.1:4711",
+            "7",
             transfer_hash,
             incoming=tmp_path,
             expected_size=7,
@@ -357,6 +438,22 @@ def test_transfer_delivery_rejects_wrong_or_incomplete_shared_content(
         )
         is None
     )
+
+
+def test_download_delivery_rejects_none_ownership_even_with_matching_bytes(monkeypatch, tmp_path) -> None:
+    delivered = tmp_path / "payload.bin"
+    delivered.write_bytes(b"payload")
+    file_hash = "00112233445566778899aabbccddeeff"
+    def response(_base, _method, path, _key):
+        if path == "/api/v1/downloads/7":
+            return {"id": "7", "hash": file_hash, "state": "completed", "payloadVerified": True,
+                    "completedAt": 100, "delivery": {"path": str(delivered), "state": "delivered", "ownership": "none"}}
+        raise AssertionError("A job without delivery ownership must not reach shared-file proof")
+    monkeypatch.setattr(smoke, "request_json", response)
+    monkeypatch.setattr(smoke, "wait_for", lambda probe, **_kwargs: probe())
+    assert smoke._wait_for_download_delivery("http://127.0.0.1:4711", "7", file_hash,
+                                              incoming=tmp_path, expected_size=7,
+                                              expected_sha256=smoke.file_sha256(delivered)) is None
 
 
 def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> None:
@@ -390,59 +487,83 @@ def test_linux_appimage_restores_owner_execute_bit(monkeypatch, tmp_path) -> Non
     assert chmod_calls == [(asset, asset.stat().st_mode | stat.S_IXUSR)]
 
 
-def partial_details(*, size=12, verified=True, state="paused", completed=None):
+def partial_details(*, size=12, verified=True, state="stopped", intent="stopped"):
     first = size * 2 // 3
-    return {"transfer": {"hash": "a" * 32, "sizeBytes": size, "completedBytes": first if completed is None else completed,
-                         "partsTotal": 2, "partsObtained": 1 if verified else 0,
-                         "partsProgressText": "#0" if verified else "00", "state": state},
-            "parts": [{"index": 0, "size": first, "completedBytes": first if verified else 0,
-                       "gapBytes": 0 if verified else first, "complete": verified, "corrupted": False},
-                      {"index": 1, "size": size - first, "completedBytes": 0, "gapBytes": size - first,
+    return {"download": {"id": "7", "hash": "a" * 32, "sizeBytes": size,
+                         "completedAt": None, "payloadVerified": False, "intent": intent, "state": state},
+            "parts": [{"index": 0, "start": 0, "end": first - 1, "sizeBytes": first, "presentBytes": first if verified else 0,
+                       "complete": verified, "corrupted": False},
+                      {"index": 1, "start": first, "end": size - 1, "sizeBytes": size - first,
+                       "presentBytes": 0,
                        "complete": False, "corrupted": False}]}
 
 
 def test_partial_checkpoint_accepts_verified_part_zero_and_omits_paths():
-    result = smoke._partial_snapshot(partial_details(), transfer_hash="a" * 32, expected_size=12)
-    assert result == {"partsTotal": 2, "verifiedPartIndices": [0], "verifiedBytes": 8, "completedBytes": 8, "state": "paused"}
+    result = smoke._partial_snapshot(partial_details(), download_id="7", expected_hash="a" * 32,
+                                     expected_size=12)
+    assert result == {"partsTotal": 2, "verifiedPartIndices": [0], "verifiedBytes": 8,
+                      "state": "stopped", "intent": "stopped"}
 
 
-def test_verified_partial_reads_the_details_resource(monkeypatch):
+def test_verified_partial_reads_separate_detail_and_parts_resources(monkeypatch):
     paths = []
     detail = partial_details()
     def api(base_url, method, path, key):
         paths.append(path)
-        return detail if path.endswith("/details") else detail["transfer"]
+        return detail["download"]
+    def page(base_url, path):
+        paths.append(path)
+        return detail["parts"]
+    monkeypatch.setattr(smoke, "_download_page", page)
     monkeypatch.setattr(smoke, "request_json", api)
     monkeypatch.setattr(smoke, "wait_for", lambda probe, **kwargs: probe())
-    result = smoke._wait_for_verified_partial("http://127.0.0.1:4711", "a" * 32, 12)
+    result = smoke._wait_for_verified_partial("http://127.0.0.1:4711", "7", "a" * 32, 12)
     assert result["verifiedPartIndices"] == [0]
-    assert paths == ["/api/v1/transfers/" + "a" * 32 + "/details"]
+    assert paths == ["/api/v1/downloads/7", "/api/v1/downloads/7/parts?limit=200"]
 
 
-@pytest.mark.parametrize("markers,count", [("00", 0), ("0#", 1), ("#0", True)])
-def test_received_bytes_without_matching_verified_markers_are_not_a_checkpoint(markers, count):
+@pytest.mark.parametrize("completed,complete", [(8, False), (7, True), (True, True)])
+def test_received_bytes_without_verified_part_are_not_a_checkpoint(completed, complete):
     detail = partial_details()
-    detail["transfer"].update(partsProgressText=markers, partsObtained=count)
-    assert smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12) is None
+    detail["parts"][0].update(presentBytes=completed, complete=complete)
+    assert smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
+                                   expected_size=12) is None
 
 
-@pytest.mark.parametrize("fault", ["unverified", "corrupted", "zero-progress", "already-complete", "boolean-index", "duplicate-index"])
+@pytest.mark.parametrize("fault", ["unverified", "corrupted", "already-complete", "boolean-index", "duplicate-index"])
 def test_partial_checkpoint_cannot_be_satisfied_by_invalid_or_nonpartial_state(fault):
     detail = partial_details()
     if fault == "unverified":
-        detail["transfer"]["partsObtained"] = 0
+        detail["parts"][0]["complete"] = False
     elif fault == "corrupted":
         detail["parts"][0]["corrupted"] = True
-    elif fault == "zero-progress":
-        detail["transfer"]["completedBytes"] = 0
     elif fault == "already-complete":
-        detail["transfer"]["completedBytes"] = 12
+        detail["download"].update(completedAt=100, payloadVerified=True)
     else:
         detail["parts"][0 if fault == "boolean-index" else 1]["index"] = False if fault == "boolean-index" else 0
         with pytest.raises(RuntimeError, match="part geometry"):
-            smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12)
+            smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
+                                    expected_size=12)
         return
-    assert smoke._partial_snapshot(detail, transfer_hash="a" * 32, expected_size=12) is None
+    assert smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32,
+                                   expected_size=12) is None
+
+
+@pytest.mark.parametrize("fault", ["truncated-page", "missing-first", "gap", "overlap", "wrong-inclusive-size"])
+def test_partial_checkpoint_requires_complete_inclusive_part_geometry(fault):
+    detail = partial_details()
+    if fault == "truncated-page":
+        detail["parts"].pop()
+    elif fault == "missing-first":
+        detail["parts"].pop(0)
+    elif fault == "gap":
+        detail["parts"][1].update(start=9, sizeBytes=3)
+    elif fault == "overlap":
+        detail["parts"][1].update(start=7, sizeBytes=5)
+    else:
+        detail["parts"][1]["sizeBytes"] += 1
+    with pytest.raises(RuntimeError, match="part geometry"):
+        smoke._partial_snapshot(detail, download_id="7", expected_hash="a" * 32, expected_size=12)
 
 
 @pytest.mark.parametrize("document,valid", [({"data": {"ok": True}, "meta": {"apiVersion": "v1"}}, True),
@@ -456,15 +577,50 @@ def test_package_rest_requires_the_current_envelope(monkeypatch, document, valid
             smoke.request_json("http://127.0.0.1:4711", "GET", "/api/v1/app", smoke.API_KEY)
 
 
+def test_download_action_requires_exact_successful_207_item(monkeypatch):
+    payload = {"data": [{"id": "7", "status": "accepted", "httpStatus": 202}],
+               "meta": {"apiVersion": "v1"}}
+    calls = []
+    def request(url, **kwargs):
+        calls.append((url, kwargs))
+        return json.dumps(payload).encode()
+    monkeypatch.setattr(smoke, "_request", request)
+    assert smoke._download_action("http://127.0.0.1:4711", "stop", "7") == "accepted"
+    assert calls[0][0].endswith("/api/v1/downloads/stop")
+    assert calls[0][1]["expected_statuses"] == (207,)
+    assert calls[0][1]["json_body"] == {"ids": ["7"]}
+    for item in ({"id": "8", "status": "accepted", "httpStatus": 202},
+                 {"id": "7", "status": "failed", "httpStatus": 404,
+                  "error": {"code": "NOT_FOUND", "message": "Missing", "details": {}}},
+                 {"id": "7", "status": "accepted", "httpStatus": 202, "error": {}},
+                 {"id": "7", "status": "unchanged", "httpStatus": 202}):
+        payload["data"] = [item]
+        with pytest.raises(RuntimeError, match="failed for job 7"):
+            smoke._download_action("http://127.0.0.1:4711", "stop", "7")
+
+
+def test_download_page_requires_settled_bounded_envelope(monkeypatch):
+    page = {"data": [{"id": "7"}],
+            "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
+    monkeypatch.setattr(smoke, "_request", lambda *args, **kwargs: json.dumps(page).encode())
+    assert smoke._download_page("http://127.0.0.1:4711", "/api/v1/downloads?view=completed") == [{"id": "7"}]
+    page["meta"] = {"apiVersion": "v1", "hasMore": True, "nextCursor": "later"}
+    with pytest.raises(RuntimeError, match="did not settle"):
+        smoke._download_page("http://127.0.0.1:4711", "/api/v1/downloads?view=completed")
+
+
 @pytest.mark.parametrize("fault", [None, "lost-parts", "lost-setting", "changed-part-count"])
-def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(monkeypatch, tmp_path, fault):
+@pytest.mark.parametrize("initial_mode", ["default", "custom"])
+def test_packaged_restart_reuses_binary_and_profile_without_recreating_job(monkeypatch, tmp_path, fault, initial_mode):
     binary = tmp_path / "emulebb-rust"
     binary.write_bytes(b"synthetic binary")
     webui = tmp_path / "webui"
     webui.mkdir()
     (webui / "index.html").write_text("SPA")
     processes, starts, operations, closed = [], [], [], []
-    state = {"paused": False, "limit": 12207, "leecherStarts": 0}
+    initial_limit = 12499968 if initial_mode == "default" else 2000000
+    state = {"stopped": False, "limit": initial_limit, "mode": initial_mode,
+             "revision": 9007199254740993, "leecherStarts": 0}
     def write_profile(profile, **kwargs):
         profile.mkdir()
         (profile / "emulebb-rust-metadata.db").write_bytes(b"synthetic metadata")
@@ -476,40 +632,70 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
         if profile.name == "leecher-profile":
             state["leecherStarts"] += 1
             if fault == "lost-setting" and state["leecherStarts"] == 2:
-                state["limit"] = 12207
+                state["limit"] = initial_limit
+                state["mode"] = initial_mode
         handle = log_path.open("a")
         return process, handle
     def shutdown(base_url, process):
         closed.append(process.ordinal)
         process.returncode = 0
-    def api(base_url, method, path, key, body=None):
+    def api(base_url, method, path, key, body=None, **kwargs):
         operations.append((method, path, body))
-        if path == "/api/v1/app/settings":
-            if method == "PATCH":
-                state["limit"] = body["core"]["downloadLimitKiBps"]
-            return {"core": {"downloadLimitKiBps": state["limit"]}}
-        if path == "/api/v1/transfers" and method == "POST":
-            return {"accepted": True}
-        if path.endswith("/operations/pause"):
-            state["paused"] = True
-            return {"ok": True}
-        if path.endswith("/operations/resume"):
-            state["paused"] = False
-            return {"ok": True}
-        if path == "/api/v1/transfers/" + "a" * 32 + "/details":
+        if path == "/api/v1/downloads" and method == "POST":
+            assert kwargs["expected_statuses"] == (201,)
+            assert body == {"source": {"type": "ed2k-link", "link": body["source"]["link"]},
+                            "intent": "started"}
+            return {"id": "7", "hash": "a" * 32}
+        if path in {"/api/v1/downloads/7", "/api/v1/downloads/7/parts?limit=200"}:
             details = partial_details(size=smoke.TRANSFER_SIZE_BYTES,
                                    verified=not (fault == "lost-parts" and state["leecherStarts"] == 2),
-                                   state="paused" if state["paused"] else "downloading")
+                                   state="stopped" if state["stopped"] else "downloading",
+                                   intent="stopped" if state["stopped"] else "started")
             if fault == "changed-part-count" and state["leecherStarts"] == 2:
-                details["parts"][1]["size"] //= 2
-                details["parts"][1]["gapBytes"] = details["parts"][1]["size"]
-                details["parts"].append({**details["parts"][1], "index": 2})
-                details["transfer"].update(partsTotal=3, partsProgressText="#00")
-            return details
-        if path == "/api/v1/transfers/" + "a" * 32:
-            return partial_details(size=smoke.TRANSFER_SIZE_BYTES)["transfer"]
+                second = details["parts"][1]
+                original_end = second["end"]
+                second["sizeBytes"] //= 2
+                second["end"] = second["start"] + second["sizeBytes"] - 1
+                details["parts"].append({**second, "index": 2, "start": second["end"] + 1,
+                                         "end": original_end, "sizeBytes": original_end - second["end"]})
+            return details["download"] if path == "/api/v1/downloads/7" else details["parts"]
+        if path == "/api/v1/snapshot":
+            return {"downloads": {"unfinished": 0, "completed": 1}}
         return {"ok": True}
     def request(url, **kwargs):
+        if url.endswith("/api/v1/settings"):
+            method = kwargs.get("method", "GET")
+            body = kwargs.get("json_body")
+            operations.append((method, "/api/v1/settings", body))
+            if method == "PATCH":
+                assert body["expectedRevision"] == str(state["revision"])
+                if "set" in body:
+                    state["limit"] = body["set"]["transfers"]["downloadLimitBytesPerSecond"]
+                    state["mode"] = "custom"
+                else:
+                    assert body["reset"] == ["transfers.downloadLimitBytesPerSecond"]
+                    state["limit"], state["mode"] = 12499968, "default"
+                state["revision"] += 1
+            return json.dumps({
+                "data": {"saved": {"transfers": {"downloadLimitBytesPerSecond": {
+                    "mode": state["mode"], "value": state["limit"]}}},
+                    "effective": {"transfers": {"downloadLimitBytesPerSecond": state["limit"]}}},
+                "meta": {"apiVersion": "v1", "settingsRevision": str(state["revision"])},
+            }).encode()
+        if url.endswith("/api/v1/downloads/7/parts?limit=200"):
+            return json.dumps({"data": api(None, "GET", "/api/v1/downloads/7/parts?limit=200", None),
+                               "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
+        if url.endswith("/api/v1/downloads/stop") or url.endswith("/api/v1/downloads/start"):
+            operation = url.rsplit("/", 1)[-1]
+            assert kwargs["expected_statuses"] == (207,)
+            assert kwargs["json_body"] == {"ids": ["7"]}
+            state["stopped"] = operation == "stop"
+            operations.append(("POST", f"/api/v1/downloads/{operation}", kwargs["json_body"]))
+            return json.dumps({"data": [{"id": "7", "status": "accepted", "httpStatus": 202}],
+                               "meta": {"apiVersion": "v1"}}).encode()
+        if "/api/v1/downloads?view=completed" in url:
+            return json.dumps({"data": [{"id": "7", "hash": "a" * 32}],
+                               "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}).encode()
         if url.endswith("/"):
             return b'<title>eMuleBB WebUI</title><div id="app"></div><script src="/assets/app.js"></script>'
         if "/assets/" in url:
@@ -526,23 +712,229 @@ def test_packaged_restart_reuses_binary_and_profile_without_recreating_transfer(
                                                                "build": "release", "platform": "x64", "lifecycle": {"state": "running"}})
     monkeypatch.setattr(smoke, "request_json", api)
     monkeypatch.setattr(smoke, "_request", request)
-    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "--profile --p2p-bind-interface"))
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "--profile"))
     monkeypatch.setattr(smoke, "publish_shared_tree", lambda *args, **kwargs: {"sharedFiles": {"matched": {
-        "hash": "a" * 32, "name": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
+        "hash": "a" * 32, "displayName": smoke.TRANSFER_FILE_NAME, "sizeBytes": smoke.TRANSFER_SIZE_BYTES,
         "ed2kLink": "ed2k://|file|Sample.Payload.bin|12582912|" + "a" * 32 + "|/"}}})
-    monkeypatch.setattr(smoke, "_wait_for_transfer_delivery", lambda *args, **kwargs: {"state": "completed", "deliveredSha256": kwargs["expected_sha256"]})
+    monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda *args, **kwargs: {
+        "id": args[1], "state": "completed", "deliveredSha256": kwargs["expected_sha256"]})
+    monkeypatch.setattr(smoke, "_parallel_download_proof", lambda *args, **kwargs: {"status": "passed"})
     if fault:
         with pytest.raises(RuntimeError, match="did not survive|did not preserve"):
             smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
     else:
         result = smoke._smoke_binary(binary, webui, tmp_path, rust_repo=tmp_path / "rust", render_webui=False)
-        assert result["localTransfer"]["gracefulShutdowns"] == 3
-        assert result["localTransfer"]["partialRestart"]["after"]["verifiedPartIndices"] == [0]
-        assert closed == [2, 3, 1] and state["limit"] == 12207
+        assert result["localDownload"]["gracefulShutdowns"] == 3
+        assert result["localDownload"]["jobId"] == "7"
+        assert result["localDownload"]["retainedCompletedJob"] is True
+        assert result["localDownload"]["partialRestart"]["after"]["verifiedPartIndices"] == [0]
+        assert closed == [2, 3, 1] and state["limit"] == initial_limit
+        assert state["mode"] == initial_mode
+        assert len([op for op in operations if op[:2] == ("PATCH", "/api/v1/settings")]) == 2
     assert len(starts) == 3 and starts[1] == starts[2]
-    assert len([item for item in operations if item[:2] == ("POST", "/api/v1/transfers")]) == 1
-    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/transfers/" + "a" * 32 + "/details")]) == 3
+    assert len([item for item in operations if item[:2] == ("POST", "/api/v1/downloads")]) == 1
+    assert len([item for item in operations if item[:2] == ("GET", "/api/v1/downloads/7")]) == 3
+    assert [item[1] for item in operations if item[1] in ("/api/v1/downloads/stop", "/api/v1/downloads/start")] == (
+        ["/api/v1/downloads/stop"] if fault else ["/api/v1/downloads/stop", "/api/v1/downloads/start"]
+    )
     assert all(process.poll() == 0 for process in processes)
+
+
+@pytest.mark.parametrize("fault", [None, "startup", "shutdown"])
+def test_parallel_source_ownership_drains_every_started_peer(tmp_path, monkeypatch, fault):
+    monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 4)
+    ports, logs, stopped = iter(range(24000, 24100)), [], []
+    monkeypatch.setattr(smoke, "_available_unique_port", lambda *args, **kwargs: next(ports))
+    monkeypatch.setattr(smoke, "_write_profile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, "request_json", lambda *args, **kwargs: {})
+    def start(*args):
+        log = io.StringIO()
+        logs.append(log)
+        return SimpleNamespace(pid=len(logs)), log
+    def ready(url, process, path):
+        if fault == "startup" and process.pid == 2:
+            raise RuntimeError("seed setup failed")
+    def stop(url, process):
+        stopped.append(process.pid)
+        if fault == "shutdown" and process.pid == 2:
+            raise RuntimeError("seed cleanup failed")
+    monkeypatch.setattr(smoke, "_start_daemon", start)
+    monkeypatch.setattr(smoke, "_wait_for_rest", ready)
+    monkeypatch.setattr(smoke, "_shutdown_or_stop", stop)
+    def run():
+        with smoke._parallel_sources(Path("daemon"), tmp_path, rust_repo=tmp_path, p2p_ip="127.0.0.1",
+                                     reserved_ports=set(), first_url="http://127.0.0.1:23000",
+                                     first_port=23001, first_process=SimpleNamespace(pid=0)) as sources:
+            assert len(sources) == 4
+    if fault:
+        with pytest.raises(RuntimeError, match="seed setup|seed cleanup"):
+            run()
+    else:
+        run()
+    assert stopped == ([2, 1] if fault == "startup" else [3, 2, 1])
+    assert all(log.closed for log in logs)
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(tmp_path, monkeypatch, timeout):
+    from emule_test_harness import rust_shared_library_io
+    monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 3)
+    monkeypatch.setattr(smoke, "PARALLEL_PAYLOAD_BYTES", 1024)
+    monkeypatch.setattr(smoke.time, "sleep", lambda *_: None)
+    class Sampler:
+        def __init__(self, *args):
+            self.samples = 0
+        def maybe_sample(self, **kwargs):
+            self.samples += 1
+        def summary(self):
+            return {"sampleCount": self.samples}
+    monkeypatch.setattr(rust_shared_library_io, "ProcessSampler", Sampler)
+    monkeypatch.setattr(smoke, "request_document", lambda *args, **kwargs: {
+        "data": {}, "meta": {"apiVersion": "v1", "settingsRevision": "1"}})
+    sequence, snapshot_calls, page_calls = [], [], []
+    def publish(*args, **kwargs):
+        file_hash = f"{len(sequence) + 1:032x}"
+        return {"sharedFiles": {"matched": {"hash": file_hash,
+            "ed2kLink": f"ed2k://|file|Sample.bin|1024|{file_hash}|/"}}}
+    def request(url, method, path, key, body=None, **kwargs):
+        if path == "/api/v1/downloads":
+            job = {"id": str(len(sequence) + 2), "hash": body["source"]["link"].split("|")[4]}
+            sequence.append(job)
+            return job
+        if path == "/api/v1/snapshot":
+            snapshot_calls.append(path)
+            return {"downloads": {"unfinished": 0, "completed": 1 if len(snapshot_calls) == 1 else 4}}
+        if path == "/api/v1/status":
+            # The overlap ends before the final start. Sampling only the
+            # completion loop must not manufacture evidence of this peak.
+            active = 2 if len(starts) == 2 and not page_calls else 0
+            return {"stats": {"downloadResources": {"active": active, "preparing": 0, "waiting": 0,
+                "concurrency": {"mode": "fixed", "configuredLimit": 3, "target": 3, "burstActive": 0},
+                "residentMemory": {"usedBytes": 1024, "softTargetBytes": 64 * 1024 * 1024,
+                                   "limitBytes": 128 * 1024 * 1024}}}}
+        raise AssertionError(path)
+    def page(*args):
+        page_calls.append(True)
+        return [{**job, "state": "downloading" if len(page_calls) == 1 else "completed"} for job in sequence]
+    starts = []
+    def start(url, job_id, attempts, *, api_key):
+        assert api_key == smoke.API_KEY
+        starts.append(("start", job_id))
+        attempts.append({"id": job_id, "attempt": 1, "status": "accepted", "httpStatus": 202})
+    monkeypatch.setattr(smoke, "publish_shared_tree", publish)
+    monkeypatch.setattr(smoke, "request_json", request)
+    monkeypatch.setattr(smoke, "_download_page", page)
+    monkeypatch.setattr(smoke, "_start_parallel_job", start)
+    monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda url, job_id, *args, **kwargs: {"id": job_id})
+    arguments = dict(sources=[
+        {"url": f"http://127.0.0.1:{port}", "port": port, "process": object()} for port in (24001, 24002, 24003)],
+        leecher_base_url="http://127.0.0.1:24000", p2p_ip="127.0.0.1", incoming=tmp_path / "incoming",
+        leecher_process=object())
+    if timeout:
+        def fail_after_observation(probe, **kwargs):
+            assert kwargs["retry_exceptions"] == ()
+            assert probe() is None
+            raise RuntimeError("completion deadline")
+        monkeypatch.setattr(smoke, "wait_for", fail_after_observation)
+        with pytest.raises(RuntimeError, match="completion deadline") as failure:
+            smoke._parallel_download_jobs(tmp_path, **arguments)
+        evidence = json.loads(failure.value.__notes__[0].split(": ", 1)[1])
+        assert evidence["sampledPeaks"]["chargedActive"] == 2
+        assert evidence["resourceSamples"] == 5
+        assert [row["id"] for row in evidence["latest"]["jobs"]] == ["2", "3", "4"]
+        assert all(row["state"] == "downloading" for row in evidence["latest"]["jobs"])
+        assert evidence["history"] == [evidence["latest"]]
+        return
+    result = smoke._parallel_download_jobs(tmp_path, **arguments)
+    assert len(page_calls) == 2
+    assert result["admissionResourceSamples"] == 4
+    assert result["resourceSamples"] == 6
+    assert result["sampledPeaks"]["chargedActive"] == 2
+    assert result["readRetries"] == 0 and result["readRequests"] == 9
+    assert result["completionTimeoutSeconds"] == 120.0 + 3 * 1024 / (64 * 1024)
+    assert starts == [("start", "2"), ("start", "3"), ("start", "4")]
+    assert len(result["deliveries"]) == 3 and result["controlRetries"] == 0
+
+
+@pytest.mark.parametrize("outcome", ["success", "busy-then-success", "exhausted", "storage", "other-503", "wrong-status", "unchanged"])
+def test_parallel_start_retries_only_recorded_admission_backpressure(monkeypatch, outcome):
+    calls, delays, attempts = [], [], []
+    def response(url, method, path, key, body, **kwargs):
+        calls.append(body)
+        assert key == "fixture-key"
+        assert method == "POST" and path == "/api/v1/downloads/start"
+        assert kwargs["expected_statuses"] == (207,)
+        row = {"id": "7", "status": "accepted", "httpStatus": 202}
+        if outcome == "exhausted" or (outcome == "busy-then-success" and len(calls) < 3):
+            row.update(status="failed", httpStatus=503, error={"code": "DOWNLOAD_UNAVAILABLE"})
+        elif outcome == "storage":
+            row.update(status="failed", httpStatus=500, error={"code": "DOWNLOAD_FAILED"})
+        elif outcome == "other-503":
+            row.update(status="failed", httpStatus=503, error={"code": "INTERNAL_SERVER_ERROR"})
+        elif outcome == "wrong-status":
+            row.update(status="failed", httpStatus=500, error={"code": "DOWNLOAD_UNAVAILABLE"})
+        elif outcome == "unchanged":
+            row.update(status="unchanged", httpStatus=200)
+        return {"data": [row], "meta": {"apiVersion": "v1"}}
+    monkeypatch.setattr(smoke, "request_document", response)
+    monkeypatch.setattr(smoke.time, "sleep", delays.append)
+    if outcome in ("success", "busy-then-success"):
+        smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts, api_key="fixture-key")
+    else:
+        with pytest.raises(RuntimeError, match="did not settle"):
+            smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts, api_key="fixture-key")
+    expected = 3 if outcome == "busy-then-success" else 5 if outcome == "exhausted" else 1
+    assert len(calls) == len(attempts) == expected
+    assert all(body == {"ids": ["7"]} for body in calls)
+    assert [row["attempt"] for row in attempts] == list(range(1, expected + 1))
+    assert delays == [0.25 * 2 ** index for index in range(expected - 1)]
+    assert [row["retryDelaySeconds"] for row in attempts[:-1]] == delays
+
+
+def test_parallel_payload_identity_is_distinct_and_repeatable(tmp_path):
+    first = smoke._write_transfer_payload(tmp_path / "a.bin", 4096, identity=b"a")
+    second = smoke._write_transfer_payload(tmp_path / "b.bin", 4096, identity=b"b")
+    repeated = smoke._write_transfer_payload(tmp_path / "again.bin", 4096, identity=b"a")
+    assert first["sha256"] != second["sha256"]
+    assert first["sha256"] == repeated["sha256"]
+    assert first["sizeBytes"] == second["sizeBytes"] == 4096
+
+
+@pytest.mark.parametrize("fault", [None, "resident", "limit", "soft-target", "active", "mode", "configured", "counter", "missing"])
+def test_parallel_resources_preserve_budget_and_fixed_burst_contract(fault):
+    resources = {"active": 20, "preparing": 2, "waiting": 3,
+                 "concurrency": {"mode": "fixed", "configuredLimit": 16, "target": 16, "burstActive": 4},
+                 "residentMemory": {"usedBytes": 128 * 1024 * 1024,
+                                    "softTargetBytes": 64 * 1024 * 1024, "limitBytes": 128 * 1024 * 1024}}
+    if fault == "resident":
+        resources["residentMemory"]["usedBytes"] += 1
+    elif fault == "limit":
+        resources["residentMemory"]["limitBytes"] *= 2
+    elif fault == "soft-target":
+        resources["residentMemory"]["softTargetBytes"] = 0
+    elif fault == "active":
+        resources["active"] = 21
+    elif fault == "mode":
+        resources["concurrency"]["mode"] = "automatic"
+    elif fault == "configured":
+        resources["concurrency"]["configuredLimit"] = 17
+    elif fault == "counter":
+        resources["preparing"] = True
+    elif fault == "missing":
+        del resources["residentMemory"]
+    peaks = {}
+    if fault:
+        with pytest.raises(RuntimeError, match="resource contract"):
+            smoke._record_download_resources(resources, peaks)
+        assert peaks == {}
+    else:
+        smoke._record_download_resources(resources, peaks)
+        resources.update(active=0, preparing=0, waiting=0)
+        resources["residentMemory"]["usedBytes"] = 0
+        smoke._record_download_resources(resources, peaks)
+        assert peaks["active"] == 20 and peaks["preparing"] == 2
+        assert peaks["residentBytes"] == 128 * 1024 * 1024
+        assert peaks["chargedActive"] == 20
 
 
 @pytest.mark.parametrize("fault", [None, "wrong-source", "corrupt-sbom", "stem-manifest", "wrong-cpu", "changed-during-smoke",

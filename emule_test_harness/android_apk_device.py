@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from .android_apk_lifecycle import APPLICATION_ID, APK_NAVIGATION_CONTROLS, DeviceUiUnavailable, ProductionUi, _request, admit_production_certificate, required_apk_cases
 from .android_apk_profile import OwnedUpdateApproval, admit_owned_update, admit_storage_configuration, read_hashed_receipt
 from .android_adb_failure import AdbOperationFailure, StartupSummaryCapture
+from .rust_rest_contract import iter_library_roots
 
 
 @dataclass(frozen=True)
@@ -81,12 +82,16 @@ def _verify_reset_candidate(payload: dict) -> None:
             raise RuntimeError("Owned reset candidate APK bytes changed")
 
 
-def _verify_fresh_storage(settings: dict, roots: dict) -> None:
+def _verify_fresh_storage(settings: dict, roots: list[dict]) -> None:
     from .android_apk_profile import INCOMING, SHARED
-    entries = roots.get("roots")
-    if (settings.get("daemon", {}).get("incomingDir") != INCOMING or not isinstance(entries, list)
+    entries = roots
+    if (settings.get("effective", {}).get("storage", {}).get("incomingDirectory") != INCOMING
+            or settings.get("saved", {}).get("storage", {}).get("incomingDirectory", {}).get("value") != INCOMING
+            or settings.get("application", {}).get("pendingRestart") or settings.get("application", {}).get("failed") or not isinstance(entries, list)
             or any(not isinstance(root, dict) or not isinstance(root.get("path"), str) for root in entries)
-            or {root["path"] for root in entries} != {SHARED}):
+            or {root["path"] for root in entries} != {SHARED, INCOMING}
+            or {root["path"] for root in entries if root.get("managed") is False} != {SHARED}
+            or any(root.get("watchEnabled") is not False for root in entries)):
         raise RuntimeError("Fresh profile REST storage defaults differ")
 
 
@@ -577,18 +582,18 @@ def _physical_process_resources(port: int, key: str) -> dict:
         resources = document.get("data", {}).get("processResources") if isinstance(document, dict) else None
         if status != 200 or not isinstance(resources, dict):
             raise RuntimeError("Physical diagnostics did not expose process resource counters")
-        sampled = resources.get("sampledAtMs")
+        sampled = resources.get("sampledAt")
         memory = resources.get("residentMemoryBytes")
         cpu = resources.get("cpuUsagePercent")
         interval = resources.get("cpuSampleIntervalMs")
-        if type(sampled) is not int or sampled <= 0 or type(memory) is not int or memory <= 0:
+        if type(sampled) is not int or sampled < 0 or type(memory) is not int or memory <= 0:
             raise RuntimeError("Physical process memory sample is missing or invalid")
         if cpu is not None and (type(cpu) not in {int, float} or not math.isfinite(cpu) or cpu < 0):
             raise RuntimeError("Physical process CPU sample is invalid")
         if interval is not None and (type(interval) is not int or interval < 0):
             raise RuntimeError("Physical process CPU sample interval is invalid")
         if cpu is not None and interval is not None and interval > 0:
-            return {"sampledAtMs": sampled, "residentMemoryBytes": memory,
+            return {"sampledAt": sampled, "residentMemoryBytes": memory,
                     "cpuUsagePercent": cpu, "cpuSampleIntervalMs": interval}
         if time.monotonic() >= deadline:
             raise RuntimeError("Physical process CPU sample did not settle within its bound")
@@ -1175,17 +1180,19 @@ def probe_physical_device(command, payload: dict, *, serial: str, output_root: P
             from .rust_local_ed2k import request_json
             value["phase"] = "verify-fresh-storage-defaults"
             base = f"http://127.0.0.1:{port}"
-            _verify_fresh_storage(request_json(base, "GET", "/api/v1/app/settings", key),
-                                  request_json(base, "GET", "/api/v1/shared-directories", key))
+            _verify_fresh_storage(request_json(base, "GET", "/api/v1/settings", key),
+                                  list(iter_library_roots(lambda path: request_json(base, "GET", "/api/v1" + path, key))))
             value["freshDefaults"] = {"incoming": "canonical", "sharedRoots": "canonical"}
             passed("fresh-storage-defaults-after-start")
         if configured_storage is not None:
             from .rust_local_ed2k import request_json
             value["phase"] = "verify-prepared-storage-after-start"
             try:
-                settings = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/app/settings", key)
-                roots = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/shared-directories", key).get("roots", [])
-                if (settings.get("daemon", {}).get("incomingDir") != configured_storage["incomingDir"]
+                settings = request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1/settings", key)
+                roots = list(iter_library_roots(lambda path: request_json(f"http://127.0.0.1:{port}", "GET", "/api/v1" + path, key)))
+                if (settings["effective"]["storage"]["incomingDirectory"] != configured_storage["incomingDir"]
+                        or settings["saved"]["storage"]["incomingDirectory"]["value"] != configured_storage["incomingDir"]
+                        or settings["application"]["pendingRestart"] or settings["application"]["failed"]
                         or configured_storage["sharedRoot"] not in {root.get("path") for root in roots}):
                     raise RuntimeError("Prepared phone storage settings differ")
             except Exception:
