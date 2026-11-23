@@ -40,7 +40,6 @@ class RustRestFailure(RuntimeError):
         allowed = {"INVALID_ARGUMENT", "NOT_FOUND", "EMULE_ERROR", "INTERNAL_SERVER_ERROR", "UNAUTHORIZED", "FORBIDDEN", "DOWNLOAD_CONFLICT"}
         text = str(value.get("message", "")).lower() if isinstance(value, dict) else ""
         contexts = (("ed2k network is not configured", "ed2k-not-configured"),
-            ("ed2k network is disabled in settings.core", "ed2k-disabled"),
             ("ed2k connect requires at least one configured server", "ed2k-no-server"),
             ("blocked by vpn guard", "vpn-guard-blocked"),
             ("failed to configure the local ed2k client-udp version", "client-udp-version"),
