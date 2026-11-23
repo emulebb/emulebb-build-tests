@@ -143,7 +143,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         _write_transfer_payload=lambda *args, **kwargs: {"sizeBytes": 10, "sha256": "a" * 64},
         _available_unique_port=lambda *args, **kwargs: next(ports),
         _parallel_read=native_owner._parallel_read, _start_parallel_job=start,
-        _attach_failure_diagnostics=lambda error, name, url, log: error.add_note(name),
+        _attach_failure_diagnostics=lambda error, name, url, log, **kwargs: error.add_note(name),
         request_json=request, request_document=remove,
     )
     monkeypatch.setattr(subject, "_native_transfer_harness", lambda: native)
@@ -189,6 +189,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         return subject.run_coupled_reload(
             paths=SimpleNamespace(rust_repo=tmp_path), run_root=tmp_path, profile_dir=profile,
             client=receiver, process=object(), sampler=sample, evidence=evidence,
+            receiver_log_path=tmp_path / "receiver.log",
             reload_args={"label": "onePercentMutation", "timeout_seconds": 60.0},
         )
     if fault:

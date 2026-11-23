@@ -223,11 +223,15 @@ def test_api_key_meets_daemon_production_validation() -> None:
 
 
 def test_failure_diagnostics_survive_profile_cleanup(monkeypatch, tmp_path):
-    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": [{"message": "socket failure"}]})
+    def logs(url, method, path, key):
+        assert key == "caller-diagnostic-key"
+        return {"items": [{"message": "socket failure"}]}
+    monkeypatch.setattr(smoke, "request_json", logs)
     error = RuntimeError("listener failed")
     log = tmp_path / "daemon.log"
     log.write_text("native error context", encoding="utf-8")
-    smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", log)
+    smoke._attach_failure_diagnostics(error, "seeder", "http://127.0.0.1:4711", log,
+                                      api_key="caller-diagnostic-key")
     log.unlink()
     assert "socket failure" in error.__notes__[0]
     assert "native error context" in error.__notes__[1]

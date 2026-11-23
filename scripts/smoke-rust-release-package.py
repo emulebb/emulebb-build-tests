@@ -1091,10 +1091,11 @@ def _smoke_binary(
             time.sleep(1)
 
 
-def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_path: Path) -> None:
+def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_path: Path,
+                                *, api_key: str = API_KEY) -> None:
     """Retain bounded daemon diagnostics without masking the original failure."""
     try:
-        logs = request_json(base_url, "GET", "/api/v1/logs?limit=20", API_KEY)
+        logs = request_json(base_url, "GET", "/api/v1/logs?limit=20", api_key)
         error.add_note(f"{name} REST logs: {json.dumps(logs, ensure_ascii=True)[-12000:]}")
     except Exception as diagnostic_error:
         error.add_note(f"{name} REST diagnostics unavailable: {diagnostic_error}")

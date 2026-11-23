@@ -1274,6 +1274,7 @@ class _MissingHashingOverlap(RuntimeError):
 def run_coupled_reload(
     *, paths: HarnessPaths, run_root: Path, profile_dir: Path, client: RestClient,
     process: subprocess.Popen[str], sampler: ProcessSampler,
+    receiver_log_path: Path,
     reload_args: dict[str, object], evidence: dict[str, object],
 ) -> dict[str, object]:
     """Verify real payload progress during hashing, then restore the job cohort.
@@ -1445,11 +1446,12 @@ def run_coupled_reload(
         evidence["status"] = "passed" if evidence["ok"] else "failed"
     except Exception as error:
         evidence["status"] = "failed"
-        native._attach_failure_diagnostics(error, "coupled-receiver", base_url, run_root / "receiver.log")
+        native._attach_failure_diagnostics(error, "coupled-receiver", base_url, receiver_log_path,
+                                           api_key=API_KEY)
         if source_client is not None:
             native._attach_failure_diagnostics(
                 error, "coupled-source", source_client.base_url.removesuffix("/api/v1"),
-                run_root / "coupled-source.log",
+                run_root / "coupled-source.log", api_key=API_KEY,
             )
         evidence["failureDiagnostics"] = list(getattr(error, "__notes__", ()))
         error.add_note("Coupled transfer evidence: " + json.dumps(evidence, sort_keys=True))
@@ -1487,6 +1489,7 @@ def run_coupled_preflight(paths: HarnessPaths, run_root: Path, evidence: dict[st
             run_coupled_reload(
                 paths=paths, run_root=run_root, profile_dir=profile,
                 client=client, process=process, sampler=sampler, evidence=evidence["negativeControl"],
+                receiver_log_path=run_root / "receiver.log",
                 reload_args={"label": "emptyLibraryPreflight", "disk_counter_key": None,
                              "expected_scanned": 0, "timeout_seconds": 600, "poll_seconds": 0.5},
             )
@@ -3727,6 +3730,7 @@ def run_campaign(
         changed = run_coupled_reload(
             paths=paths, run_root=run_root, profile_dir=profile_dir,
             client=client, process=process, sampler=sampler, evidence=report["coupledTransfer"],
+            receiver_log_path=mutation_log,
             reload_args={"label": "onePercentMutation", "disk_counter_key": target.get("counterKey"),
                          "expected_scanned": spec.file_count, "timeout_seconds": remaining_seconds(),
                          "poll_seconds": args.poll_seconds, "completion_logs": mutation_completion_logs},
