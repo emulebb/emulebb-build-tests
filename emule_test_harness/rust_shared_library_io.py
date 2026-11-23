@@ -55,6 +55,7 @@ OFFERFILES_SCALE_REPORT_SCHEMA = "emulebb.rust-offerfiles-scale.v1"
 OWNER_SCHEMA = "emulebb.rust-shared-library-io-owner.v1"
 FIXTURE_SCHEMA = fixture.FIXTURE_SCHEMA
 API_KEY = "rust-shared-library-io-local-only-key"
+COUPLED_P2P_IP = "127.0.0.1"
 DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_WATCHER_TIMEOUT_SECONDS = 10 * 60
 DEFAULT_WATCHER_POLL_SECONDS = 0.5
@@ -1304,7 +1305,7 @@ def run_coupled_reload(
         payload_path = run_root / "coupled-source-data" / "Foundation.Coupled.Payload.bin"
         payload = native._write_transfer_payload(payload_path, 64 * 1024 * 1024,
                                                  identity=b"foundation-coupled-scan")
-        ip = native._local_p2p_ip()
+        ip = COUPLED_P2P_IP
         ports: set[int] = {20019, 20020}
         source_tcp = native._available_unique_port(ports, host=ip)
         source_udp = native._available_unique_port(ports, host=ip, socket_type=socket.SOCK_DGRAM)
@@ -3644,7 +3645,7 @@ def run_campaign(
         mutation_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         process, client, sampler = start_daemon(
             paths, profile_dir, mutation_log, choose_loopback_port(),
-            p2p_bind_ip=_native_transfer_harness()._local_p2p_ip(),
+            p2p_bind_ip=COUPLED_P2P_IP,
         )
         clients.append(client)
         samplers.append(sampler)

@@ -130,7 +130,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
 
     native = SimpleNamespace(
         _write_transfer_payload=lambda *args, **kwargs: {"sizeBytes": 10, "sha256": "a" * 64},
-        _local_p2p_ip=lambda: "192.0.2.10", _available_unique_port=lambda *args, **kwargs: next(ports),
+        _available_unique_port=lambda *args, **kwargs: next(ports),
         _parallel_read=native_owner._parallel_read, _start_parallel_job=start,
         request_json=request, request_document=remove,
     )
@@ -192,7 +192,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
     assert stopped == [source_process]
     assert evidence["sourceProcess"]["sampleCount"] > 0
     assert source_settings[0]["settings"]["network.kadEnabled"] is False
-    assert source_settings[0]["settings"]["network.p2p.bindIp"] == "192.0.2.10"
+    assert source_settings[0]["settings"]["network.p2p.bindIp"] == "127.0.0.1"
 
 
 def cgroup_files(tmp_path):
