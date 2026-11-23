@@ -1445,6 +1445,13 @@ def run_coupled_reload(
         evidence["status"] = "passed" if evidence["ok"] else "failed"
     except Exception as error:
         evidence["status"] = "failed"
+        native._attach_failure_diagnostics(error, "coupled-receiver", base_url, run_root / "receiver.log")
+        if source_client is not None:
+            native._attach_failure_diagnostics(
+                error, "coupled-source", source_client.base_url.removesuffix("/api/v1"),
+                run_root / "coupled-source.log",
+            )
+        evidence["failureDiagnostics"] = list(getattr(error, "__notes__", ()))
         error.add_note("Coupled transfer evidence: " + json.dumps(evidence, sort_keys=True))
         raise
     finally:

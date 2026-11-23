@@ -143,6 +143,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         _write_transfer_payload=lambda *args, **kwargs: {"sizeBytes": 10, "sha256": "a" * 64},
         _available_unique_port=lambda *args, **kwargs: next(ports),
         _parallel_read=native_owner._parallel_read, _start_parallel_job=start,
+        _attach_failure_diagnostics=lambda error, name, url, log: error.add_note(name),
         request_json=request, request_document=remove,
     )
     monkeypatch.setattr(subject, "_native_transfer_harness", lambda: native)
