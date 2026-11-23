@@ -1429,9 +1429,14 @@ def run_coupled_reload(
                 if error.status != 404 or error.response_error.get("code") != "NOT_FOUND":
                     raise
             else:
+                evidence["retirement"] = {"jobAbsent": False}
                 return None
             file = read(f"/library/files/{file_hash}")
-            return True if file.get("present") is False and not (profile_dir / "incoming" / payload_path.name).exists() else None
+            if type(file.get("present")) is not bool:
+                raise RuntimeError("coupled retirement requires a library presence boolean")
+            evidence["retirement"] = {"jobAbsent": True, "libraryPresent": file["present"],
+                                      "outputExists": (profile_dir / "incoming" / payload_path.name).exists()}
+            return True if not file["present"] and not evidence["retirement"]["outputExists"] else None
 
         rust_local_ed2k.wait_for(retired, timeout_seconds=min(120, remaining()), interval_seconds=0.5,
                                 description="coupled fixture retirement", retry_exceptions=())

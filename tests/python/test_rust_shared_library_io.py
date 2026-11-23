@@ -76,7 +76,7 @@ def test_library_read_qualification_checks_late_pages_and_literal_filters(fault)
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("fault", [None, "activation", "no-hashing", "no-byte-growth", "budget", "scan", "delivery", "cleanup", "baseline", "shutdown"])
+@pytest.mark.parametrize("fault", [None, "activation", "no-hashing", "no-byte-growth", "budget", "scan", "delivery", "cleanup", "library-presence", "library-shape", "baseline", "shutdown"])
 def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_cohort(monkeypatch, tmp_path, fault):
     native_owner = subject._native_transfer_harness()
     state = {"parts": 0, "removed": False}
@@ -124,7 +124,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         if path == "/api/v1/stats":
             return {"downloadResources": resources}
         assert path == f"/api/v1/library/files/{file_hash}"
-        return {"present": False}
+        return {"present": None if fault == "library-shape" else fault == "library-presence"}
 
     def remove(url, method, path, key, body=None, **kwargs):
         assert method == "POST" and path == "/api/v1/downloads/remove"
@@ -196,6 +196,9 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         with pytest.raises(expected_error):
             run()
         assert evidence["status"] == "failed"
+        if fault in {"cleanup", "library-presence"}:
+            assert evidence["retirement"] == {"jobAbsent": True, "libraryPresent": fault == "library-presence",
+                                               "outputExists": fault == "cleanup"}
         if fault in {"no-hashing", "no-byte-growth"}:
             assert evidence["baselineRestored"]["ok"] and evidence["sourceShutdown"]["exitCode"] == 0
             assert evidence["delivery"]["ownership"] == "owned"
@@ -204,6 +207,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         assert evidence["status"] == "passed" and evidence["ok"]
         assert evidence["overlapObservations"] == 1
         assert evidence["delivery"]["verifiedSha256"] == "a" * 64
+        assert evidence["retirement"] == {"jobAbsent": True, "libraryPresent": False, "outputExists": False}
         assert state["removed"] and not incoming.exists()
         assert scans == [("POST", "/library/scan", {})]
         assert started == [job_id]
