@@ -1304,7 +1304,25 @@ def run_coupled_reload(
             read_attempts, path=path,
         )
 
+    def startup_quiescent() -> bool | None:
+        sampler.maybe_sample()
+        with receiver_log_path.open(encoding="utf-8", errors="replace") as log:
+            initialized = any("initial shared-directory reload disabled by daemon settings" in line
+                              for line in log)
+        if not initialized:
+            return None
+        scan = read("/library/scan")
+        progress = compact_progress(scan)
+        ready = (progress.get("running") is False and progress.get("pending") is False
+                 and scan.get("hashingCount") == 0)
+        evidence["startupQuiescence"] = {"initialized": True, "scanQuiescent": ready}
+        return True if ready else None
+
     try:
+        rust_local_ed2k.wait_for(
+            startup_quiescent, timeout_seconds=min(120, remaining()), interval_seconds=0.5,
+            description="coupled receiver startup quiescence", retry_exceptions=(),
+        )
         openapi = rust_openapi_responses.load_openapi_document()
         resource_schema = rust_openapi_responses.openapi_schema_component(openapi, "DownloadResources")
         acknowledgement_schema = rust_openapi_responses.openapi_schema_component(

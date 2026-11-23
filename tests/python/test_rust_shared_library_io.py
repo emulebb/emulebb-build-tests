@@ -87,6 +87,8 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
     source_process = object()
     sample = SimpleNamespace(maybe_sample=lambda **kwargs: None, summary=lambda: {"sampleCount": 4})
     source_client = SimpleNamespace(base_url="http://source/api/v1")
+    (tmp_path / "receiver.log").write_text(
+        "initial shared-directory reload disabled by daemon settings\n", encoding="utf-8")
     receiver = SimpleNamespace(base_url="http://receiver/api/v1",
                                request=lambda method, path, body: scans.append((method, path, body)))
     monkeypatch.setattr(subject.rust_client, "write_rust_profile", lambda *args, **kwargs: source_settings.append(kwargs))
@@ -121,6 +123,8 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
                 raise subject.rust_local_ed2k.RustRestFailure("removed", status=404,
                     detail=json.dumps({"error": {"code": "NOT_FOUND"}}))
             return {"id": job_id, "hash": file_hash, "state": "completed" if state["parts"] >= 3 else "downloading"}
+        if path == "/api/v1/library/scan":
+            return {"reloadProgress": {"running": False, "pending": False}, "hashingCount": 0}
         if path == "/api/v1/stats":
             return {"downloadResources": resources}
         assert path == f"/api/v1/library/files/{file_hash}"
