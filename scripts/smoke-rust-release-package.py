@@ -28,6 +28,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from contextlib import ExitStack, contextmanager
+from collections import deque
 from pathlib import Path, PurePosixPath
 from typing import TextIO
 
@@ -726,15 +727,34 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")
         raise
     admission_samples = samples
+    completion_started = time.monotonic()
+    progress_history = deque(maxlen=8)
+    latest_progress: dict = {}
 
     def completed() -> bool | None:
+        nonlocal latest_progress
         observe_resources()
         rows = {row["id"]: row for row in _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100")}
+        latest_progress = {
+            "seconds": round(time.monotonic() - completion_started, 3),
+            "jobs": [{key: rows.get(job_id, {}).get(key) for key in
+                      ("id", "state", "progress", "waitingReason")} for job_id in jobs],
+        }
+        if not progress_history or latest_progress["seconds"] - progress_history[-1]["seconds"] >= 15:
+            progress_history.append(latest_progress)
         if any(rows.get(job_id, {}).get("state") == "failed" for job_id in jobs):
             raise RuntimeError("A parallel download entered failed state")
         return True if all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs) else None
 
-    wait_for(completed, timeout_seconds=120.0, interval_seconds=0.5, description="parallel package transfers")
+    try:
+        wait_for(completed, timeout_seconds=120.0, interval_seconds=0.5, description="parallel package transfers")
+    except Exception as error:
+        error.add_note("Parallel completion evidence: " + json.dumps({
+            "sampledPeaks": peaks, "resourceSamples": samples,
+            "history": list(progress_history), "latest": latest_progress,
+            "controlAttempts": control_attempts,
+        }, sort_keys=True))
+        raise
     if peaks.get("chargedActive", 0) < 2:
         raise RuntimeError(f"Parallel proof did not observe concurrent charged download owners: samples={samples}, peaks={peaks}")
     deliveries = [_wait_for_download_delivery(leecher_base_url, job_id, file_hash,

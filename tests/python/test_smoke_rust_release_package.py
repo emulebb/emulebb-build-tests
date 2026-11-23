@@ -730,7 +730,8 @@ def test_parallel_source_ownership_drains_every_started_peer(tmp_path, monkeypat
     assert all(log.closed for log in logs)
 
 
-def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(tmp_path, monkeypatch):
+@pytest.mark.parametrize("timeout", [False, True])
+def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(tmp_path, monkeypatch, timeout):
     from emule_test_harness import rust_shared_library_io
     monkeypatch.setattr(smoke, "PARALLEL_DOWNLOAD_COUNT", 3)
     monkeypatch.setattr(smoke, "PARALLEL_PAYLOAD_BYTES", 1024)
@@ -779,10 +780,25 @@ def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(
     monkeypatch.setattr(smoke, "_download_page", page)
     monkeypatch.setattr(smoke, "_start_parallel_job", start)
     monkeypatch.setattr(smoke, "_wait_for_download_delivery", lambda url, job_id, *args, **kwargs: {"id": job_id})
-    result = smoke._parallel_download_jobs(tmp_path, sources=[
+    arguments = dict(sources=[
         {"url": f"http://127.0.0.1:{port}", "port": port, "process": object()} for port in (24001, 24002, 24003)],
         leecher_base_url="http://127.0.0.1:24000", p2p_ip="127.0.0.1", incoming=tmp_path / "incoming",
         leecher_process=object())
+    if timeout:
+        def fail_after_observation(probe, **kwargs):
+            assert probe() is None
+            raise RuntimeError("completion deadline")
+        monkeypatch.setattr(smoke, "wait_for", fail_after_observation)
+        with pytest.raises(RuntimeError, match="completion deadline") as failure:
+            smoke._parallel_download_jobs(tmp_path, **arguments)
+        evidence = json.loads(failure.value.__notes__[0].split(": ", 1)[1])
+        assert evidence["sampledPeaks"]["chargedActive"] == 2
+        assert evidence["resourceSamples"] == 5
+        assert [row["id"] for row in evidence["latest"]["jobs"]] == ["2", "3", "4"]
+        assert all(row["state"] == "downloading" for row in evidence["latest"]["jobs"])
+        assert evidence["history"] == [evidence["latest"]]
+        return
+    result = smoke._parallel_download_jobs(tmp_path, **arguments)
     assert len(page_calls) == 2
     assert result["admissionResourceSamples"] == 4
     assert result["resourceSamples"] == 6
