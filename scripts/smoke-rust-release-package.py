@@ -30,7 +30,7 @@ import zipfile
 from contextlib import ExitStack, contextmanager
 from collections import deque
 from pathlib import Path, PurePosixPath
-from typing import TextIO
+from typing import Any, Callable, TextIO
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -44,6 +44,7 @@ from emule_test_harness.rust_local_ed2k import (  # noqa: E402
     file_sha256,
     publish_shared_tree,
     require_download_id,
+    RustRestFailure,
     wait_for,
 )
 from emule_test_harness.rust_webui_live_proof import run_webui_live_proof  # noqa: E402
@@ -55,6 +56,7 @@ TRANSFER_SIZE_BYTES = 12 * 1024 * 1024
 PARTIAL_DOWNLOAD_LIMIT_BYTES_PER_SECOND = 512 * 1024
 PARALLEL_DOWNLOAD_COUNT = 16
 PARALLEL_PAYLOAD_BYTES = 4 * 1024 * 1024
+PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND = 64 * 1024
 PARALLEL_START_ATTEMPTS = 5
 PANEL_ROUTES = {
     "overview": "/api/v1/status",
@@ -454,16 +456,11 @@ def _request(
                 raise RuntimeError(f"unexpected HTTP {response.status} from {url}")
             return response.read()
     except urllib.error.HTTPError as error:
-        code = None
-        try:
-            document = json.loads(error.read(8192))
-            detail = document.get("error") if isinstance(document, dict) else None
-            if isinstance(detail, dict) and isinstance(detail.get("code"), str):
-                code = detail["code"][:128]
-        except (ValueError, UnicodeError):
-            pass
-        error.add_note(f"{method} {url}: HTTP {error.code}; API error code={code!r}")
-        raise
+        detail = error.read(8192).decode("utf-8", errors="replace")
+        failure = RustRestFailure(f"{method} {url}: HTTP {error.code}", status=error.code, detail=detail)
+        code = failure.response_error.get("code")
+        failure.add_note(f"API error code={code[:128] if isinstance(code, str) else None!r}")
+        raise failure from error
 
 
 def request_document(base_url: str, method: str, path: str, api_key: str, body: dict | None = None,
@@ -660,6 +657,29 @@ def _start_parallel_job(base_url: str, job_id: str, attempts: list[dict]) -> Non
         time.sleep(delay)
 
 
+def _parallel_read(fetch: Callable[[], Any], attempts: list[dict], *, path: str) -> Any:
+    """Record bounded client retries for typed read-admission pressure only."""
+    for attempt in range(1, PARALLEL_START_ATTEMPTS + 1):
+        receipt = {"path": path, "attempt": attempt}
+        attempts.append(receipt)
+        try:
+            value = fetch()
+        except RustRestFailure as error:
+            code = error.response_error.get("code")
+            receipt.update(httpStatus=error.status, errorCode=code[:128] if isinstance(code, str) else None)
+            if error.status != 503 or code != "PERSISTENCE_BUSY" or attempt == PARALLEL_START_ATTEMPTS:
+                raise
+            delay = 0.25 * 2 ** (attempt - 1)
+            receipt["retryDelaySeconds"] = delay
+            time.sleep(delay)
+        except Exception as error:
+            receipt["errorType"] = type(error).__name__
+            raise
+        else:
+            receipt["httpStatus"] = 200
+            return value
+
+
 def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_base_url: str,
                             p2p_ip: str, incoming: Path, leecher_process: subprocess.Popen[str]) -> dict:
     """Observe admission and verify every delivered byte across independent peers."""
@@ -689,7 +709,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         source_settings = request_document(source["url"], "GET", "/api/v1/settings", API_KEY)
         request_document(source["url"], "PATCH", "/api/v1/settings", API_KEY,
                          settings_patch(source_settings, set_values={"transfers": {
-                             "uploadLimitBytesPerSecond": 64 * 1024}}))
+                             "uploadLimitBytesPerSecond": PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND}}))
         created = request_json(leecher_base_url, "POST", "/api/v1/downloads", API_KEY,
                                {"source": {"type": "ed2k-link", "link": ed2k_link_with_source(
                                    detail["ed2kLink"], p2p_ip, source["port"])}, "intent": "stopped"},
@@ -705,12 +725,16 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         sampler.maybe_sample(force=True)
     peaks: dict[str, int] = {}
     samples = 0
+    read_attempts: list[dict] = []
 
     def observe_resources() -> None:
         nonlocal samples
         for sampler in samplers.values():
             sampler.maybe_sample()
-        status = request_json(leecher_base_url, "GET", "/api/v1/status", API_KEY)
+        status = _parallel_read(
+            lambda: request_json(leecher_base_url, "GET", "/api/v1/status", API_KEY),
+            read_attempts, path="/status",
+        )
         _record_download_resources(status["stats"]["downloadResources"], peaks)
         samples += 1
 
@@ -725,6 +749,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
             observe_resources()
     except Exception as error:
         error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")
+        error.add_note(f"Parallel read attempts: {json.dumps(read_attempts)}")
         raise
     admission_samples = samples
     completion_started = time.monotonic()
@@ -734,7 +759,10 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     def completed() -> bool | None:
         nonlocal latest_progress
         observe_resources()
-        rows = {row["id"]: row for row in _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100")}
+        rows = {row["id"]: row for row in _parallel_read(
+            lambda: _download_page(leecher_base_url, "/api/v1/downloads?view=all&limit=100"),
+            read_attempts, path="/downloads?view=all&limit=100",
+        )}
         latest_progress = {
             "seconds": round(time.monotonic() - completion_started, 3),
             "jobs": [{key: rows.get(job_id, {}).get(key) for key in
@@ -746,13 +774,18 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
             raise RuntimeError("A parallel download entered failed state")
         return True if all(rows.get(job_id, {}).get("state") == "completed" for job_id in jobs) else None
 
+    # WHY: admission can reduce overlap. Budget the fixture's paced payloads
+    # even serially; this is a hang guard, not a product response-time promise.
+    completion_timeout = 120.0 + sum(int(payload["sizeBytes"]) for _, payload in jobs.values()) / PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND
     try:
-        wait_for(completed, timeout_seconds=120.0, interval_seconds=0.5, description="parallel package transfers")
+        wait_for(completed, timeout_seconds=completion_timeout, interval_seconds=0.5,
+                 description="parallel package transfers", retry_exceptions=())
     except Exception as error:
         error.add_note("Parallel completion evidence: " + json.dumps({
             "sampledPeaks": peaks, "resourceSamples": samples,
             "history": list(progress_history), "latest": latest_progress,
             "controlAttempts": control_attempts,
+            "readAttempts": read_attempts,
         }, sort_keys=True))
         raise
     if peaks.get("chargedActive", 0) < 2:
@@ -760,12 +793,18 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     deliveries = [_wait_for_download_delivery(leecher_base_url, job_id, file_hash,
                     incoming=incoming, expected_size=int(payload["sizeBytes"]), expected_sha256=str(payload["sha256"]))
                   for job_id, (file_hash, payload) in jobs.items()]
-    counts = request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY)["downloads"]
+    counts = _parallel_read(
+        lambda: request_json(leecher_base_url, "GET", "/api/v1/snapshot", API_KEY),
+        read_attempts, path="/snapshot",
+    )["downloads"]
     if counts != {"unfinished": 0, "completed": baseline["completed"] + PARALLEL_DOWNLOAD_COUNT}:
         raise RuntimeError("Parallel jobs did not remain in completed history")
     return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
             "controlRequests": len(control_attempts), "controlBatchSize": 1,
             "controlRetries": len(control_attempts) - len(jobs), "controlAttempts": control_attempts,
+            "readRequests": len(read_attempts), "readAttempts": read_attempts,
+            "readRetries": sum("retryDelaySeconds" in attempt for attempt in read_attempts),
+            "completionTimeoutSeconds": completion_timeout,
             "deliveries": deliveries, "resourceSamples": samples,
             "admissionResourceSamples": admission_samples, "sampledPeaks": peaks,
             "processes": {name: sampler.summary() for name, sampler in samplers.items()},

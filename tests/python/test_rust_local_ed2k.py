@@ -10,6 +10,34 @@ import pytest
 from emule_test_harness import ed2k_wire, rust_local_ed2k
 
 
+@pytest.mark.parametrize("retry_exceptions", [(), (ValueError,)])
+def test_wait_probe_does_not_hide_an_undeclared_failure(monkeypatch, retry_exceptions):
+    calls, sleeps = [], []
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", sleeps.append)
+    def probe():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("fatal probe")
+        return "unexpected recovery"
+    with pytest.raises(RuntimeError, match="fatal probe"):
+        rust_local_ed2k.wait_for(probe, timeout_seconds=1, interval_seconds=0.1,
+                                description="strict probe", retry_exceptions=retry_exceptions)
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_wait_probe_retries_an_explicitly_declared_failure(monkeypatch):
+    calls, sleeps = [], []
+    monkeypatch.setattr(rust_local_ed2k.time, "sleep", sleeps.append)
+    def probe():
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("transient")
+        return "ready"
+    assert rust_local_ed2k.wait_for(probe, timeout_seconds=1, interval_seconds=0.1,
+                                   description="declared retry", retry_exceptions=(ValueError,)) == "ready"
+    assert len(calls) == 2 and sleeps == [0.1]
+
+
 def test_ed2k_link_with_source_appends_plain_source_hint() -> None:
     link = "ed2k://|file|payload.bin|4096|00112233445566778899aabbccddeeff|/"
 

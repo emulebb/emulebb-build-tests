@@ -32,12 +32,41 @@ def test_http_failure_keeps_status_and_bounded_error_code_without_secrets(monkey
     def fail(*args, **kwargs):
         raise error
     monkeypatch.setattr(smoke.urllib.request, "urlopen", fail)
-    with pytest.raises(smoke.urllib.error.HTTPError) as failure:
+    with pytest.raises(smoke.RustRestFailure) as failure:
         smoke._request("http://127.0.0.1/status", api_key="private-api-key")
-    assert failure.value is error and error.code == 503
+    assert failure.value.status == 503 and failure.value.__cause__ is error
     assert reads == [8192]
-    assert error.__notes__ == [f"GET http://127.0.0.1/status: HTTP 503; API error code={code!r}"]
-    assert "private" not in str(error.__notes__)
+    assert failure.value.response_error.get("code") == code
+    assert failure.value.__notes__ == [f"API error code={code!r}"]
+    assert "private" not in str(failure.value) + str(failure.value.__notes__)
+
+
+@pytest.mark.parametrize("outcome", ["success", "busy-success", "busy-exhausted", "closing", "other-503", "storage", "malformed"])
+def test_parallel_read_retries_only_recorded_typed_admission_pressure(monkeypatch, outcome):
+    attempts, delays, calls = [], [], []
+    monkeypatch.setattr(smoke.time, "sleep", delays.append)
+    def fetch():
+        calls.append(1)
+        if outcome == "success" or outcome == "busy-success" and len(calls) == 2:
+            return {"value": 7}
+        if outcome == "malformed":
+            raise ValueError("invalid response")
+        code = {"closing": "PERSISTENCE_CLOSING", "other-503": "INTERNAL_SERVER_ERROR",
+                "storage": "PERSISTENCE_FAILED"}.get(outcome, "PERSISTENCE_BUSY")
+        raise smoke.RustRestFailure("read failed", status=500 if outcome == "storage" else 503,
+                                    detail=json.dumps({"error": {"code": code}}))
+    if outcome in ("success", "busy-success"):
+        assert smoke._parallel_read(fetch, attempts, path="/status") == {"value": 7}
+        assert attempts[-1]["httpStatus"] == 200
+    else:
+        with pytest.raises(ValueError if outcome == "malformed" else smoke.RustRestFailure):
+            smoke._parallel_read(fetch, attempts, path="/status")
+    expected = 5 if outcome == "busy-exhausted" else 2 if outcome == "busy-success" else 1
+    assert len(calls) == len(attempts) == expected
+    assert [row["attempt"] for row in attempts] == list(range(1, expected + 1))
+    assert all(row["path"] == "/status" for row in attempts)
+    assert delays == [0.25 * 2 ** index for index in range(expected - 1)]
+    assert [row["retryDelaySeconds"] for row in attempts[:-1]] == delays
 
 
 @pytest.mark.parametrize("field", [None, "version", "build", "platform", "channel", "sourceRevision"])
@@ -786,6 +815,7 @@ def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(
         leecher_process=object())
     if timeout:
         def fail_after_observation(probe, **kwargs):
+            assert kwargs["retry_exceptions"] == ()
             assert probe() is None
             raise RuntimeError("completion deadline")
         monkeypatch.setattr(smoke, "wait_for", fail_after_observation)
@@ -803,6 +833,8 @@ def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(
     assert result["admissionResourceSamples"] == 4
     assert result["resourceSamples"] == 6
     assert result["sampledPeaks"]["chargedActive"] == 2
+    assert result["readRetries"] == 0 and result["readRequests"] == 9
+    assert result["completionTimeoutSeconds"] == 120.0 + 3 * 1024 / (64 * 1024)
     assert starts == [("start", "2"), ("start", "3"), ("start", "4")]
     assert len(result["deliveries"]) == 3 and result["controlRetries"] == 0
 

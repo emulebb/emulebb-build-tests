@@ -180,8 +180,9 @@ def wait_for(
     timeout_seconds: float,
     interval_seconds: float,
     description: str,
+    retry_exceptions: tuple[type[Exception], ...] = (Exception,),
 ):
-    """Polls until a probe returns a non-None value."""
+    """Poll until non-None; callers can restrict which probe failures retry."""
 
     deadline = time.time() + timeout_seconds
     last_error = None
@@ -191,6 +192,8 @@ def wait_for(
             if result is not None:
                 return result
         except Exception as exc:  # noqa: BLE001 - diagnostics preserve the last probe failure
+            if not isinstance(exc, retry_exceptions):
+                raise
             last_error = exc
         time.sleep(interval_seconds)
     if last_error is not None:
