@@ -20,6 +20,23 @@ def write(path: Path, text: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize("path", ["/servers/operations/connect", "/servers/{serverId}/operations/connect"])
+@pytest.mark.parametrize("queued", [True, False, None])
+def test_server_connect_acknowledges_acceptance_without_claiming_connectivity(path, queued):
+    payload = {"data": {"connected": False, "connecting": True, "currentServer": None,
+                        "ed2kIdState": "unknown", "serverCount": 1},
+               "meta": {"apiVersion": "v1"}}
+    if queued is not None:
+        payload["data"]["operationQueued"] = queued
+    if queued is True:
+        validate_openapi_operation_response_payload("POST", path, 200, payload)
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_schema_component_payload("ServerStatus", payload["data"])
+    else:
+        with pytest.raises(jsonschema.ValidationError):
+            validate_openapi_operation_response_payload("POST", path, 200, payload)
+
+
 @pytest.mark.parametrize("component,field,nullable", [
     ("EnvelopeMeta", "generatedAt", False), ("DiagnosticBundle", "capturedAt", False),
     ("Server", "hostNameResolvedAt", True), ("KadNode", "hostNameResolvedAt", True),

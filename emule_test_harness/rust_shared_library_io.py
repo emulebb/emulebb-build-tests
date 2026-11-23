@@ -1267,6 +1267,10 @@ def prove_library_reads(
     return {"ok": True, "traversals": traversals}
 
 
+class _MissingHashingOverlap(RuntimeError):
+    """The complete transfer lifecycle passed without concurrent hashing."""
+
+
 def run_coupled_reload(
     *, paths: HarnessPaths, run_root: Path, profile_dir: Path, client: RestClient,
     process: subprocess.Popen[str], sampler: ProcessSampler,
@@ -1302,6 +1306,8 @@ def run_coupled_reload(
     try:
         openapi = rust_openapi_responses.load_openapi_document()
         resource_schema = rust_openapi_responses.openapi_schema_component(openapi, "DownloadResources")
+        acknowledgement_schema = rust_openapi_responses.openapi_schema_component(
+            openapi, "ServerConnectAcknowledgement")
         payload_path = run_root / "coupled-source-data" / "Foundation.Coupled.Payload.bin"
         payload = native._write_transfer_payload(payload_path, 64 * 1024 * 1024,
                                                  identity=b"foundation-coupled-scan")
@@ -1335,9 +1341,8 @@ def run_coupled_reload(
             native.request_json(url, "POST", "/api/v1/servers", API_KEY,
                                 {"address": ip, "port": server_port}, expected_statuses=(201,))
             activated = native.request_json(url, "POST", "/api/v1/servers/operations/connect", API_KEY)
-            evidence["networkActivation"][label] = activated.get("running")
-            if activated.get("running") is not True:
-                raise RuntimeError("coupled peer runtime did not activate")
+            evidence["networkActivation"][label] = activated
+            rust_openapi_responses.validate_openapi_schema(openapi, acknowledgement_schema, activated)
         published = rust_local_ed2k.publish_shared_tree(
             source_client.base_url.removesuffix("/api/v1"), API_KEY,
             root=payload_path.parent, file_name=payload_path.name, timeout_seconds=min(120, remaining()),
@@ -1444,8 +1449,50 @@ def run_coupled_reload(
     evidence["ok"] = evidence["ok"] and evidence["sourceShutdown"].get("exitCode") == 0
     if not evidence["ok"]:
         evidence["status"] = "failed"
+        if evidence["baselineRestored"]["ok"] and evidence["sourceShutdown"].get("exitCode") == 0:
+            raise _MissingHashingOverlap("coupled transfer completed without hashing overlap")
         raise RuntimeError("coupled hashing/transfer overlap or baseline restoration failed")
     return changed
+
+
+def run_coupled_preflight(paths: HarnessPaths, run_root: Path, evidence: dict[str, object]) -> None:
+    """Prove native wiring and strict overlap rejection before preparing the library.
+
+    The receiver has the full retained-job cohort but no populated library. A
+    verified transfer, removal and restored baseline must reach the explicit
+    missing-overlap failure; any earlier failure remains fatal.
+    """
+    run_root.mkdir(parents=True)
+    profile = run_root / "receiver-profile"
+    process = client = sampler = None
+    evidence.update(status="running", negativeControl={})
+    try:
+        process, client, sampler = start_daemon(
+            paths, profile, run_root / "receiver.log", choose_loopback_port(),
+            retained_downloads=RETAINED_DOWNLOAD_EXPECTED["downloadJobs"], p2p_bind_ip=COUPLED_P2P_IP,
+        )
+        try:
+            run_coupled_reload(
+                paths=paths, run_root=run_root, profile_dir=profile,
+                client=client, process=process, sampler=sampler, evidence=evidence["negativeControl"],
+                reload_args={"label": "emptyLibraryPreflight", "disk_counter_key": None,
+                             "expected_scanned": 0, "timeout_seconds": 600, "poll_seconds": 0.5},
+            )
+        except _MissingHashingOverlap:
+            evidence["expectedOverlapRejection"] = True
+        else:
+            raise RuntimeError("empty-library preflight unexpectedly qualified hashing overlap")
+        evidence["status"] = "passed"
+    except BaseException:
+        evidence["status"] = "failed"
+        raise
+    finally:
+        evidence["receiverShutdown"] = stop_daemon(process, client)
+        if sampler is not None:
+            evidence["receiverProcess"] = sampler.summary()
+    if evidence["receiverShutdown"].get("exitCode") != 0:
+        evidence["status"] = "failed"
+        raise RuntimeError("coupled preflight receiver did not stop gracefully")
 
 
 def start_daemon(
@@ -4307,6 +4354,8 @@ def run_container_campaign(args: argparse.Namespace) -> dict[str, object]:
             runs_root=scenario / "runs", reports_root=reports / "campaign",
             staged_executable=executable,
         )
+        result["coupledPreflight"] = {}
+        run_coupled_preflight(paths, native / "preflight", result["coupledPreflight"])
         # Docker's physical backing may be opaque. Retain the actual inventory;
         # this campaign qualifies resource limits and correctness, not SSD speed.
         controller = _load_psutil().Process(os.getpid())

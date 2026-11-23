@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
+import jsonschema
 import pytest
 
 from emule_test_harness import rust_shared_library_io as subject
@@ -109,7 +110,9 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
                 return {"id": "1"}
             if path == "/api/v1/servers/operations/connect":
                 activated.add(url)
-                return {"running": fault != "activation"}
+                return {"operationQueued": fault != "activation", "connected": False,
+                        "connecting": True, "currentServer": None, "ed2kIdState": "unknown",
+                        "serverCount": 1}
             assert path == "/api/v1/downloads" and body["intent"] == "stopped"
             assert url in activated
             return {"id": job_id, "hash": file_hash}
@@ -188,9 +191,14 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
             reload_args={"label": "onePercentMutation", "timeout_seconds": 60.0},
         )
     if fault:
-        with pytest.raises(RuntimeError):
+        expected_error = (jsonschema.ValidationError if fault == "activation" else
+                          subject._MissingHashingOverlap if fault in {"no-hashing", "no-byte-growth"} else RuntimeError)
+        with pytest.raises(expected_error):
             run()
         assert evidence["status"] == "failed"
+        if fault in {"no-hashing", "no-byte-growth"}:
+            assert evidence["baselineRestored"]["ok"] and evidence["sourceShutdown"]["exitCode"] == 0
+            assert evidence["delivery"]["ownership"] == "owned"
     else:
         assert run()["label"] == "onePercentMutation"
         assert evidence["status"] == "passed" and evidence["ok"]
@@ -203,6 +211,43 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
     assert evidence["sourceProcess"]["sampleCount"] > 0
     assert source_settings[0]["settings"]["network.kadEnabled"] is False
     assert source_settings[0]["settings"]["network.p2p.bindIp"] == "127.0.0.1"
+
+
+@pytest.mark.parametrize("fault", [None, "activation", "delivery", "baseline", "source-shutdown", "unexpected-overlap", "receiver-shutdown"])
+def test_coupled_preflight_accepts_only_completed_lifecycle_with_missing_overlap(tmp_path, monkeypatch, fault):
+    process, client = object(), object()
+    sampler = SimpleNamespace(summary=lambda: {"sampleCount": 2})
+    starts, stops = [], []
+
+    def start(*args, **kwargs):
+        starts.append(kwargs)
+        return process, client, sampler
+
+    def coupled(**kwargs):
+        assert kwargs["reload_args"]["expected_scanned"] == 0
+        assert kwargs["run_root"] == tmp_path / "preflight"
+        if fault in {"activation", "delivery", "baseline", "source-shutdown"}:
+            raise RuntimeError(fault)
+        if fault == "unexpected-overlap":
+            return {}
+        raise subject._MissingHashingOverlap("expected negative control")
+
+    monkeypatch.setattr(subject, "start_daemon", start)
+    monkeypatch.setattr(subject, "choose_loopback_port", lambda: 53000)
+    monkeypatch.setattr(subject, "run_coupled_reload", coupled)
+    monkeypatch.setattr(subject, "stop_daemon", lambda *args: stops.append(args) or {
+        "exitCode": 9 if fault == "receiver-shutdown" else 0})
+    evidence = {}
+    if fault:
+        with pytest.raises(RuntimeError):
+            subject.run_coupled_preflight(object(), tmp_path / "preflight", evidence)
+        assert evidence["status"] == "failed"
+    else:
+        subject.run_coupled_preflight(object(), tmp_path / "preflight", evidence)
+        assert evidence["status"] == "passed" and evidence["expectedOverlapRejection"] is True
+    assert starts == [{"retained_downloads": 100_000, "p2p_bind_ip": "127.0.0.1"}]
+    assert stops == [(process, client)]
+    assert evidence["receiverProcess"]["sampleCount"] == 2
 
 
 def cgroup_files(tmp_path):
@@ -1896,7 +1941,7 @@ def test_dynamic_reload_checkpoints_running_progress(
 
 
 @pytest.mark.parametrize("library_files", [50_000, 100_000])
-@pytest.mark.parametrize("fault", ["none", "missing-budget", "wrong-budget", "preparation-oom", "campaign-failure"])
+@pytest.mark.parametrize("fault", ["none", "missing-budget", "wrong-budget", "preflight", "preparation-oom", "campaign-failure"])
 def test_container_campaign_measures_preparation_and_requires_campaign_acceptance(tmp_path, monkeypatch, fault, library_files):
     from emule_test_harness import build_provenance
 
@@ -1953,16 +1998,27 @@ def test_container_campaign_measures_preparation_and_requires_campaign_acceptanc
         return paths.reports_root / "full.json", {"status": "passed" if ok else "failed", "acceptance": {"ok": ok}}
     controller = SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=35_000_000))
     monkeypatch.setattr(subject, "_load_psutil", lambda: SimpleNamespace(Process=lambda _pid: controller))
+    def preflight(paths, run_root, evidence):
+        stages.append("preflight")
+        assert run_root == native / "preflight" and not run_root.is_relative_to(paths.scenario_root)
+        evidence["status"] = "failed" if fault == "preflight" else "passed"
+        if fault == "preflight":
+            raise RuntimeError("preflight failure")
+    monkeypatch.setattr(subject, "run_coupled_preflight", preflight)
     monkeypatch.setattr(subject, "prepare_fixture", prepare)
     monkeypatch.setattr(subject, "run_campaign", campaign)
     if fault in {"missing-budget", "wrong-budget"}:
         with pytest.raises(RuntimeError, match="kernel limits"):
             subject.run_container_campaign(args)
         assert stages == []
+    elif fault == "preflight":
+        with pytest.raises(RuntimeError, match="preflight failure"):
+            subject.run_container_campaign(args)
+        assert stages == ["verify", "extract", "preflight"]
     else:
         result = subject.run_container_campaign(args)
         assert result["status"] == ("passed" if fault == "none" else "failed")
-        assert stages == ["verify", "extract", "prepare", "campaign"]
+        assert stages == ["verify", "extract", "preflight", "prepare", "campaign"]
     retained = json.loads((args.report_root / "container-result.json").read_text())
     assert retained["status"] == ("passed" if fault == "none" else "failed")
     assert retained["acceptance"]["ok"] is (fault == "none")
