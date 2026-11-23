@@ -3899,7 +3899,7 @@ def run_campaign(
                     expected_minimum_long=fixture.baseline_long_path_count(spec),
                 ).values()
             ),
-            "mutationExact": mutation
+            "mutationExact": report["mutation"]
             == {
                 "fileCount": len(mutation_indices(spec)),
                 "totalBytes": expected_mutation_bytes(spec),
