@@ -371,8 +371,8 @@ def _wait_for_download_delivery(
             return None
         try:
             library_file = request_json(base_url, "GET", f"/api/v1/library/files/{expected_hash}", API_KEY)
-        except urllib.error.HTTPError as error:
-            if error.code == 404:
+        except RustRestFailure as error:
+            if error.status == 404:
                 return None
             raise
         delivered_value = delivery.get("path")
@@ -632,10 +632,10 @@ def _parallel_download_proof(
     return result
 
 
-def _start_parallel_job(base_url: str, job_id: str, attempts: list[dict]) -> None:
+def _start_parallel_job(base_url: str, job_id: str, attempts: list[dict], *, api_key: str) -> None:
     """Record bounded caller retries for explicit admission backpressure only."""
     for attempt in range(1, PARALLEL_START_ATTEMPTS + 1):
-        document = request_document(base_url, "POST", "/api/v1/downloads/start", API_KEY,
+        document = request_document(base_url, "POST", "/api/v1/downloads/start", api_key,
                                     {"ids": [job_id]}, expected_statuses=(207,))
         rows = document["data"]
         if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
@@ -745,7 +745,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     try:
         observe_resources()
         for job_id in jobs:
-            _start_parallel_job(leecher_base_url, job_id, control_attempts)
+            _start_parallel_job(leecher_base_url, job_id, control_attempts, api_key=API_KEY)
             observe_resources()
     except Exception as error:
         error.add_note(f"Parallel control attempts: {json.dumps(control_attempts)}")

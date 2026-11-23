@@ -28,6 +28,7 @@ from . import (
     rust_cgroup_budget,
     rust_local_ed2k,
     rust_metadata,
+    rust_openapi_responses,
     rust_rest_conformance,
     rust_rest_contract,
     rust_shared_library_fixture as fixture,
@@ -108,6 +109,12 @@ def _lan_transfer_harness():
 def _lan_kad_harness():
     """Keep LAN swarm dependencies out of the portable library/history campaign."""
     return load_script_module("local_kad_swarm_shared_library_io", "local-kad-swarm.py")
+
+
+@cache
+def _native_transfer_harness():
+    """Reuse native package payload, port and explicit client-admission helpers."""
+    return load_script_module("package_transfer_shared_library_io", "smoke-rust-release-package.py")
 
 
 @dataclass(frozen=True)
@@ -898,6 +905,7 @@ def wait_for_reload(
     timeout_seconds: float,
     poll_seconds: float,
     completion_logs: tuple[Path, dict[Path, int]] | None = None,
+    observe: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Poll one reload to completion while retaining only sanitized counters."""
 
@@ -920,6 +928,8 @@ def wait_for_reload(
             "GET", "/library/scan", timeout_seconds=STATUS_LATENCY_LIMIT_SECONDS
         )
         progress = compact_progress(data)
+        if observe is not None:
+            observe(progress)
         max_active = max(max_active, int(progress.get("activeHashCount") or 0))
         max_disk_active = max(
             max_disk_active,
@@ -1256,9 +1266,177 @@ def prove_library_reads(
     return {"ok": True, "traversals": traversals}
 
 
+def run_coupled_reload(
+    *, paths: HarnessPaths, run_root: Path, profile_dir: Path, client: RestClient,
+    process: subprocess.Popen[str], sampler: ProcessSampler,
+    reload_args: dict[str, object], evidence: dict[str, object],
+) -> dict[str, object]:
+    """Verify real payload progress during hashing, then restore the job cohort.
+
+    Both real daemons inherit the campaign cgroup. The extra client-owned hash
+    remains known after explicit removal; baseline jobs and library copies do not
+    change. Failure evidence is updated in the caller-owned report throughout.
+    """
+    native = _native_transfer_harness()
+    base_url = client.base_url.removesuffix("/api/v1")
+    deadline = time.monotonic() + float(reload_args["timeout_seconds"])
+    source_process = source_client = source_sampler = None
+    read_attempts: list[dict] = []
+    start_attempts: list[dict] = []
+    evidence.update(status="running", readAttempts=read_attempts, startAttempts=start_attempts,
+                    observations=[], overlapObservations=0)
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError("coupled scan/transfer exceeded the campaign deadline")
+        return value
+
+    def read(path: str) -> dict:
+        return native._parallel_read(
+            lambda: native.request_json(base_url, "GET", "/api/v1" + path, API_KEY),
+            read_attempts, path=path,
+        )
+
+    try:
+        openapi = rust_openapi_responses.load_openapi_document()
+        resource_schema = rust_openapi_responses.openapi_schema_component(openapi, "DownloadResources")
+        payload_path = run_root / "coupled-source-data" / "Foundation.Coupled.Payload.bin"
+        payload = native._write_transfer_payload(payload_path, 64 * 1024 * 1024,
+                                                 identity=b"foundation-coupled-scan")
+        ip = native._local_p2p_ip()
+        ports: set[int] = {20019, 20020}
+        source_tcp = native._available_unique_port(ports, host=ip)
+        source_udp = native._available_unique_port(ports, host=ip, socket_type=socket.SOCK_DGRAM)
+        source_rest = choose_loopback_port()
+        source_profile = run_root / "coupled-source-profile"
+        rust_client.write_rust_profile(
+            source_profile, rust_repo=paths.rust_repo, rest_addr="127.0.0.1", rest_port=source_rest,
+            api_key=API_KEY, local_only_discovery=True, replace_servers=True,
+            settings={"network.ed2kEnabled": True, "network.kadEnabled": False,
+                      "network.p2p.bindIp": ip, "network.p2p.tcpPort": source_tcp,
+                      "network.p2p.udpPort": source_udp, "sharing.scanOnStartup": False,
+                      "transfers.uploadLimitBytesPerSecond": 512 * 1024,
+                      "storage.incomingDirectory": str(source_profile / "incoming")},
+        )
+        source_process, source_client, source_sampler = start_configured_daemon(
+            paths, source_profile, run_root / "coupled-source.log",
+            rest_address="127.0.0.1", rest_port=source_rest,
+        )
+        published = rust_local_ed2k.publish_shared_tree(
+            source_client.base_url.removesuffix("/api/v1"), API_KEY,
+            root=payload_path.parent, file_name=payload_path.name, timeout_seconds=min(120, remaining()),
+        )["sharedFiles"]["matched"]
+        file_hash = published["hash"]
+        admission = native.request_json(base_url, "POST", "/api/v1/downloads", API_KEY,
+            {"source": {"type": "ed2k-link", "link": rust_local_ed2k.ed2k_link_with_source(
+                published["ed2kLink"], ip, source_tcp)}, "intent": "stopped"}, expected_statuses=(201,))
+        job_id = rust_local_ed2k.require_download_id(admission, expected_hash=file_hash)
+        evidence.update(jobId=job_id, hash=file_hash, payloadBytes=payload["sizeBytes"],
+                        payloadSha256=payload["sha256"], sourceUploadLimitBytesPerSecond=512 * 1024)
+        native._start_parallel_job(base_url, job_id, start_attempts, api_key=API_KEY)
+        previous_hashing_bytes = None
+        last_print = 0.0
+
+        def observe(progress: dict[str, object]) -> dict[str, object]:
+            nonlocal previous_hashing_bytes, last_print
+            source_sampler.maybe_sample()
+            sampler.maybe_sample()
+            row = read(f"/downloads/{job_id}")
+            totals = native._parallel_read(
+                lambda: rust_local_ed2k.download_part_totals(base_url, API_KEY, job_id),
+                read_attempts, path=f"/downloads/{job_id}/parts",
+            )
+            resources = read("/stats")["downloadResources"]
+            rust_openapi_responses.validate_openapi_schema(openapi, resource_schema, resources)
+            resident = resources["residentMemory"]
+            if (resident["usedBytes"] > resident["limitBytes"]
+                    or resident["limitBytes"] != 128 * 1024 * 1024
+                    or resident["softTargetBytes"] != 64 * 1024 * 1024):
+                raise RuntimeError("coupled transfer exceeded the resident budget contract")
+            observed = {"state": row.get("state"), "waitingReason": row.get("waitingReason"),
+                        "presentBytes": totals["presentBytes"], "verifiedBytes": totals["verifiedBytes"],
+                        "activeHashCount": int(progress.get("activeHashCount") or 0),
+                        "active": resources.get("active"), "preparing": resources.get("preparing"),
+                        "residentMemory": resources.get("residentMemory"),
+                        "concurrency": resources.get("concurrency")}
+            evidence["latest"] = observed
+            if observed["activeHashCount"] > 0:
+                if previous_hashing_bytes is not None and observed["presentBytes"] > previous_hashing_bytes:
+                    evidence["overlapObservations"] += 1
+                previous_hashing_bytes = observed["presentBytes"]
+            if row.get("state") == "failed":
+                raise RuntimeError("coupled payload entered failed state")
+            if time.monotonic() - last_print >= 15:
+                evidence["observations"] = (evidence["observations"] + [observed])[-20:]
+                print("coupledTransfer: " + json.dumps(observed, sort_keys=True), file=sys.stderr, flush=True)
+                last_print = time.monotonic()
+            return observed
+
+        rust_local_ed2k.wait_for(
+            lambda: True if 0 < observe({})["presentBytes"] < payload["sizeBytes"] else None,
+            timeout_seconds=min(120, remaining()), interval_seconds=0.5,
+            description="coupled payload byte progress before scan", retry_exceptions=(),
+        )
+        client.request("POST", "/library/scan", {})
+        changed = wait_for_reload(client=client, process=process, sampler=sampler,
+                                  **{**reload_args, "timeout_seconds": remaining()}, observe=observe)
+        evidence["mutationScan"] = changed
+        rust_local_ed2k.wait_for(
+            lambda: True if observe({})["state"] == "completed" else None,
+            timeout_seconds=min(300, remaining()), interval_seconds=0.5,
+            description="coupled payload completion after scan", retry_exceptions=(),
+        )
+        delivered = rust_local_ed2k.wait_for_download_completed(
+            base_url, API_KEY, job_id, expected_hash=file_hash, expected_size=payload["sizeBytes"],
+            expected_sha256=payload["sha256"], expected_delivery_path=profile_dir / "incoming" / payload_path.name,
+            timeout_seconds=min(300, remaining()),
+        )
+        evidence["delivery"] = {"state": delivered["state"], "ownership": delivered["deliveryOwnership"],
+                                "verifiedSha256": payload["sha256"]}
+        if delivered["deliveryOwnership"] != "owned":
+            raise RuntimeError("coupled fixture output is not owned by its download")
+        removed = native.request_document(base_url, "POST", "/api/v1/downloads/remove", API_KEY,
+                                           {"ids": [job_id], "deleteData": True}, expected_statuses=(207,))
+        outcome = rust_local_ed2k.require_download_batch(removed, job_id)
+        if outcome.get("status") != "accepted" or outcome.get("httpStatus") != 202:
+            raise RuntimeError("coupled fixture removal was not accepted")
+
+        def retired() -> bool | None:
+            try:
+                read(f"/downloads/{job_id}")
+            except rust_local_ed2k.RustRestFailure as error:
+                if error.status != 404 or error.response_error.get("code") != "NOT_FOUND":
+                    raise
+            else:
+                return None
+            file = read(f"/library/files/{file_hash}")
+            return True if file.get("present") is False and not (profile_dir / "incoming" / payload_path.name).exists() else None
+
+        rust_local_ed2k.wait_for(retired, timeout_seconds=min(120, remaining()), interval_seconds=0.5,
+                                description="coupled fixture retirement", retry_exceptions=())
+        evidence["baselineRestored"] = retained_download_observation(client)
+        evidence["ok"] = evidence["overlapObservations"] > 0 and evidence["baselineRestored"]["ok"]
+        evidence["status"] = "passed" if evidence["ok"] else "failed"
+    except Exception as error:
+        evidence["status"] = "failed"
+        error.add_note("Coupled transfer evidence: " + json.dumps(evidence, sort_keys=True))
+        raise
+    finally:
+        evidence["sourceShutdown"] = stop_daemon(source_process, source_client)
+        if source_sampler is not None:
+            evidence["sourceProcess"] = source_sampler.summary()
+    evidence["ok"] = evidence["ok"] and evidence["sourceShutdown"].get("exitCode") == 0
+    if not evidence["ok"]:
+        evidence["status"] = "failed"
+        raise RuntimeError("coupled hashing/transfer overlap or baseline restoration failed")
+    return changed
+
+
 def start_daemon(
     paths: HarnessPaths, profile_dir: Path, log_path: Path, port: int,
     *, retained_downloads: int = 0, trace_metadata: bool = False, heap_profile_dir: Path | None = None,
+    p2p_bind_ip: str | None = None,
 ) -> tuple[subprocess.Popen[str], RestClient, ProcessSampler]:
     rust_client.write_rust_profile(
         profile_dir,
@@ -1273,11 +1451,12 @@ def start_daemon(
             'network.autoConnect': False,
             'network.nat.enabled': False,
             'sharing.scanOnStartup': False,
+            **({'network.p2p.bindIp': p2p_bind_ip} if p2p_bind_ip is not None else {}),
         },
     )
     rust_metadata.edit_app_settings(
         paths.rust_repo, profile_dir / rust_metadata.RUST_PROFILE_METADATA_FILE,
-        {"network.autoConnect": False, "network.ed2kEnabled": False, "network.kadEnabled": False},
+        {"network.autoConnect": False, "network.ed2kEnabled": p2p_bind_ip is not None, "network.kadEnabled": False},
     )
     if retained_downloads:
         rust_metadata.seed_retained_download_scale(
@@ -3464,23 +3643,21 @@ def run_campaign(
         log_paths.append(mutation_log)
         mutation_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
         process, client, sampler = start_daemon(
-            paths, profile_dir, mutation_log, choose_loopback_port()
+            paths, profile_dir, mutation_log, choose_loopback_port(),
+            p2p_bind_ip=_native_transfer_harness()._local_p2p_ip(),
         )
         clients.append(client)
         samplers.append(sampler)
         report["downloadSnapshots"].append(retained_download_observation(client))
-        client.request("POST", "/library/scan", {})
-        changed = wait_for_reload(
-            label="onePercentMutation",
-            client=client,
-            process=process,
-            sampler=sampler,
-            disk_counter_key=target.get("counterKey"),
-            expected_scanned=spec.file_count,
-            timeout_seconds=remaining_seconds(),
-            poll_seconds=args.poll_seconds,
-            completion_logs=mutation_completion_logs,
+        report["coupledTransfer"] = {}
+        changed = run_coupled_reload(
+            paths=paths, run_root=run_root, profile_dir=profile_dir,
+            client=client, process=process, sampler=sampler, evidence=report["coupledTransfer"],
+            reload_args={"label": "onePercentMutation", "disk_counter_key": target.get("counterKey"),
+                         "expected_scanned": spec.file_count, "timeout_seconds": remaining_seconds(),
+                         "poll_seconds": args.poll_seconds, "completion_logs": mutation_completion_logs},
         )
+        report["qualificationScope"]["activePayloadDuringHashing"] = True
         changed["storage"] = profile_storage_snapshot(profile_dir)
         changed["acceptance"] = phase_acceptance(
             changed,
@@ -3571,6 +3748,7 @@ def run_campaign(
         }
         storage_snapshots = [phase["storage"] for phase in report["phases"]] + [warm["storage"], final["storage"]]
         global_checks = {
+            "coupledPayloadDuringHashing": report["coupledTransfer"]["ok"] is True,
             "libraryReadTraversal": report["libraryReads"]["ok"] is True,
             "populatedRootUpdate": report["populatedRootUpdate"]["ok"],
             "optionalRootWatching": report["rootWatchPolicy"] == {"largeRootEnabled": False, "watcherRootEnabled": True},

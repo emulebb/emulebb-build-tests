@@ -74,6 +74,127 @@ def test_library_read_qualification_checks_late_pages_and_literal_filters(fault)
     assert all(query["limit"] == ["200"] and query["view"] == ["shared"] for query in calls)
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("fault", [None, "no-hashing", "no-byte-growth", "budget", "scan", "delivery", "cleanup", "baseline", "shutdown"])
+def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_cohort(monkeypatch, tmp_path, fault):
+    native_owner = subject._native_transfer_harness()
+    state = {"parts": 0, "removed": False}
+    file_hash, job_id = "31" * 16, "100001"
+    profile = tmp_path / "receiver"
+    incoming = profile / "incoming" / "Foundation.Coupled.Payload.bin"
+    started, stopped, scans, source_settings = [], [], [], []
+    source_process = object()
+    sample = SimpleNamespace(maybe_sample=lambda **kwargs: None, summary=lambda: {"sampleCount": 4})
+    source_client = SimpleNamespace(base_url="http://source/api/v1")
+    receiver = SimpleNamespace(base_url="http://receiver/api/v1",
+                               request=lambda method, path, body: scans.append((method, path, body)))
+    monkeypatch.setattr(subject.rust_client, "write_rust_profile", lambda *args, **kwargs: source_settings.append(kwargs))
+    monkeypatch.setattr(subject, "start_configured_daemon", lambda *args, **kwargs: (source_process, source_client, sample))
+    monkeypatch.setattr(subject, "stop_daemon", lambda process, client: stopped.append(process) or {
+        "exitCode": 9 if fault == "shutdown" else 0})
+    monkeypatch.setattr(subject, "retained_download_observation", lambda client: {"ok": fault != "baseline"})
+    monkeypatch.setattr(subject, "choose_loopback_port", lambda: 53002)
+    ports = iter((53000, 53001))
+    resources = {"active": 1, "preparing": 0, "waiting": 100,
+                 "concurrency": {"mode": "automatic", "configuredLimit": None, "target": 16, "burstActive": 0},
+                 "residentMemory": {"usedBytes": 128 * 1024 * 1024 + 1 if fault == "budget" else 4096,
+                                    "softTargetBytes": 64 * 1024 * 1024, "limitBytes": 128 * 1024 * 1024}}
+
+    def request(url, method, path, key, body=None, **kwargs):
+        assert key == subject.API_KEY
+        if method == "POST":
+            assert path == "/api/v1/downloads" and body["intent"] == "stopped"
+            return {"id": job_id, "hash": file_hash}
+        if path == f"/api/v1/downloads/{job_id}":
+            if state["removed"]:
+                raise subject.rust_local_ed2k.RustRestFailure("removed", status=404,
+                    detail=json.dumps({"error": {"code": "NOT_FOUND"}}))
+            return {"id": job_id, "hash": file_hash, "state": "completed" if state["parts"] >= 3 else "downloading"}
+        if path == "/api/v1/stats":
+            return {"downloadResources": resources}
+        assert path == f"/api/v1/library/files/{file_hash}"
+        return {"present": False}
+
+    def remove(url, method, path, key, body=None, **kwargs):
+        assert method == "POST" and path == "/api/v1/downloads/remove"
+        assert key == subject.API_KEY and body == {"ids": [job_id], "deleteData": True}
+        state["removed"] = True
+        if fault != "cleanup":
+            incoming.unlink()
+        return {"data": [{"id": job_id, "status": "accepted", "httpStatus": 202}]}
+
+    def start(url, identity, attempts, *, api_key):
+        assert identity == job_id and api_key == subject.API_KEY
+        started.append(identity)
+        attempts.append({"id": identity, "status": "accepted", "httpStatus": 202})
+
+    native = SimpleNamespace(
+        _write_transfer_payload=lambda *args, **kwargs: {"sizeBytes": 10, "sha256": "a" * 64},
+        _local_p2p_ip=lambda: "192.0.2.10", _available_unique_port=lambda *args, **kwargs: next(ports),
+        _parallel_read=native_owner._parallel_read, _start_parallel_job=start,
+        request_json=request, request_document=remove,
+    )
+    monkeypatch.setattr(subject, "_native_transfer_harness", lambda: native)
+    monkeypatch.setattr(subject.rust_local_ed2k, "publish_shared_tree", lambda *args, **kwargs: {
+        "sharedFiles": {"matched": {"hash": file_hash, "ed2kLink": f"ed2k://|file|x.bin|10|{file_hash}|/"}}})
+
+    def parts(*args):
+        state["parts"] += 1
+        count = state["parts"]
+        present = 1 if fault == "no-byte-growth" and count < 4 else (1, 3, 6, 10)[min(count - 1, 3)]
+        return {"partCount": 1, "presentBytes": present, "verifiedBytes": 10 if present == 10 else 0}
+
+    monkeypatch.setattr(subject.rust_local_ed2k, "download_part_totals", parts)
+    def wait(probe, **kwargs):
+        assert kwargs["retry_exceptions"] == ()
+        value = probe()
+        if value is None:
+            raise RuntimeError("synthetic fixture did not settle")
+        return value
+    monkeypatch.setattr(subject.rust_local_ed2k, "wait_for", wait)
+
+    def reload(**kwargs):
+        if fault == "scan":
+            raise RuntimeError("scan failure")
+        for _ in range(2):
+            kwargs["observe"]({"activeHashCount": 0 if fault == "no-hashing" else 1})
+        return {"label": "onePercentMutation", "maxActiveHashCount": 1}
+    monkeypatch.setattr(subject, "wait_for_reload", reload)
+
+    def deliver(*args, **kwargs):
+        if fault == "delivery":
+            raise RuntimeError("delivery failure")
+        assert kwargs["expected_hash"] == file_hash and kwargs["expected_sha256"] == "a" * 64
+        assert kwargs["expected_delivery_path"] == incoming
+        incoming.parent.mkdir(parents=True)
+        incoming.write_bytes(b"delivered")
+        return {"state": "completed", "deliveryOwnership": "owned"}
+    monkeypatch.setattr(subject.rust_local_ed2k, "wait_for_download_completed", deliver)
+    evidence = {}
+    def run():
+        return subject.run_coupled_reload(
+            paths=SimpleNamespace(rust_repo=tmp_path), run_root=tmp_path, profile_dir=profile,
+            client=receiver, process=object(), sampler=sample, evidence=evidence,
+            reload_args={"label": "onePercentMutation", "timeout_seconds": 60.0},
+        )
+    if fault:
+        with pytest.raises(RuntimeError):
+            run()
+        assert evidence["status"] == "failed"
+    else:
+        assert run()["label"] == "onePercentMutation"
+        assert evidence["status"] == "passed" and evidence["ok"]
+        assert evidence["overlapObservations"] == 1
+        assert evidence["delivery"]["verifiedSha256"] == "a" * 64
+        assert state["removed"] and not incoming.exists()
+        assert scans == [("POST", "/library/scan", {})]
+        assert started == [job_id]
+    assert stopped == [source_process]
+    assert evidence["sourceProcess"]["sampleCount"] > 0
+    assert source_settings[0]["settings"]["network.kadEnabled"] is False
+    assert source_settings[0]["settings"]["network.p2p.bindIp"] == "192.0.2.10"
+
+
 def cgroup_files(tmp_path):
     import os
 
@@ -366,6 +487,7 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
         return {"data": [], "meta": {"total": 100000}}
     monkeypatch.setattr(subject, "disk_io_snapshot", lambda _: {})
     monkeypatch.setattr(subject.time, "sleep", lambda _: None)
+    observed = []
     result = subject.wait_for_reload(
         label="initial", client=SimpleNamespace(request=request),
         process=SimpleNamespace(poll=lambda: None),
@@ -374,6 +496,7 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
         disk_counter_key=None, expected_scanned=100000, timeout_seconds=1,
         poll_seconds=0,
         completion_logs=(tmp_path, offsets),
+        observe=observed.append,
     )
     assert result["progress"]["hashedCount"] == 100000
     assert result["progress"]["reusedCount"] == 0
@@ -381,6 +504,7 @@ def test_reload_keeps_completed_scan_evidence_until_queued_reconciliation_settle
     assert result["settledProgress"]["reusedCount"] == 100000
     assert result["settledProgress"]["running"] is False
     assert result["completionSource"] == "structuredLog"
+    assert [row["running"] for row in observed] == [True, False]
 
 
 @pytest.mark.parametrize("value", [True, -1, "100000", None])

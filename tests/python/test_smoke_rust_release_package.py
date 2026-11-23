@@ -801,7 +801,8 @@ def test_parallel_captures_admission_peak_and_waits_until_every_job_is_complete(
         page_calls.append(True)
         return [{**job, "state": "downloading" if len(page_calls) == 1 else "completed"} for job in sequence]
     starts = []
-    def start(url, job_id, attempts):
+    def start(url, job_id, attempts, *, api_key):
+        assert api_key == smoke.API_KEY
         starts.append(("start", job_id))
         attempts.append({"id": job_id, "attempt": 1, "status": "accepted", "httpStatus": 202})
     monkeypatch.setattr(smoke, "publish_shared_tree", publish)
@@ -844,6 +845,7 @@ def test_parallel_start_retries_only_recorded_admission_backpressure(monkeypatch
     calls, delays, attempts = [], [], []
     def response(url, method, path, key, body, **kwargs):
         calls.append(body)
+        assert key == "fixture-key"
         assert method == "POST" and path == "/api/v1/downloads/start"
         assert kwargs["expected_statuses"] == (207,)
         row = {"id": "7", "status": "accepted", "httpStatus": 202}
@@ -861,10 +863,10 @@ def test_parallel_start_retries_only_recorded_admission_backpressure(monkeypatch
     monkeypatch.setattr(smoke, "request_document", response)
     monkeypatch.setattr(smoke.time, "sleep", delays.append)
     if outcome in ("success", "busy-then-success"):
-        smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts)
+        smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts, api_key="fixture-key")
     else:
         with pytest.raises(RuntimeError, match="did not settle"):
-            smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts)
+            smoke._start_parallel_job("http://127.0.0.1:24000", "7", attempts, api_key="fixture-key")
     expected = 3 if outcome == "busy-then-success" else 5 if outcome == "exhausted" else 1
     assert len(calls) == len(attempts) == expected
     assert all(body == {"ids": ["7"]} for body in calls)
