@@ -243,6 +243,18 @@ def test_failure_diagnostics_preserve_original_error_when_sources_unavailable(mo
     assert all("unavailable" in note for note in error.__notes__)
 
 
+def test_failure_diagnostics_keep_early_cause_and_final_state_with_bounded_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(smoke, "request_json", lambda *args: {"items": []})
+    log = tmp_path / "daemon.log"
+    log.write_text("initial capacity refusal\n" + "a" * 8000 + "discarded middle" +
+                   "b" * 8000 + "\nfinal source state", encoding="utf-8")
+    error = RuntimeError("parallel completion failed")
+    smoke._attach_failure_diagnostics(error, "leecher", "http://127.0.0.1:4711", log)
+    note = error.__notes__[-1]
+    assert "initial capacity refusal" in note and "final source state" in note
+    assert "discarded middle" not in note and len(note) < 12100
+
+
 def test_linux_capability_probe_reports_missing_emulated_socket_option(monkeypatch):
     import errno
 

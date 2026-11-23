@@ -199,7 +199,7 @@ def _start_daemon(binary: Path, profile: Path, log_path: Path) -> tuple[subproce
             [str(binary), "--profile", str(profile)],
             stdout=log,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "RUST_LOG": "warn"},
+            env={**os.environ, "RUST_LOG": "warn,emulebb_core::download_preparation=debug"},
             text=True,
         )
     except Exception:
@@ -1098,7 +1098,10 @@ def _attach_failure_diagnostics(error: Exception, name: str, base_url: str, log_
     except Exception as diagnostic_error:
         error.add_note(f"{name} REST diagnostics unavailable: {diagnostic_error}")
     try:
-        error.add_note(f"{name} process log: {log_path.read_text(encoding='utf-8', errors='replace')[-12000:]}")
+        process_log = log_path.read_text(encoding="utf-8", errors="replace")
+        if len(process_log) > 12000:
+            process_log = process_log[:6000] + "\n... middle omitted ...\n" + process_log[-6000:]
+        error.add_note(f"{name} process log: {process_log}")
     except OSError as diagnostic_error:
         error.add_note(f"{name} process diagnostics unavailable: {diagnostic_error}")
 
