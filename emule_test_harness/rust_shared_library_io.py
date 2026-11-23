@@ -1324,6 +1324,20 @@ def run_coupled_reload(
             paths, source_profile, run_root / "coupled-source.log",
             rest_address="127.0.0.1", rest_port=source_rest,
         )
+        # The existing manual-connect profiles intentionally start no P2P runtime.
+        # Use the public activation path with one uncontactable local server,
+        # matching package smoke without adding a server process or outside route.
+        ports.add(source_rest)
+        server_port = native._available_unique_port(ports, host=ip)
+        evidence["networkActivation"] = {}
+        for label, url in (("source", source_client.base_url.removesuffix("/api/v1")),
+                           ("receiver", base_url)):
+            native.request_json(url, "POST", "/api/v1/servers", API_KEY,
+                                {"address": ip, "port": server_port}, expected_statuses=(201,))
+            activated = native.request_json(url, "POST", "/api/v1/servers/operations/connect", API_KEY)
+            evidence["networkActivation"][label] = activated.get("running")
+            if activated.get("running") is not True:
+                raise RuntimeError("coupled peer runtime did not activate")
         published = rust_local_ed2k.publish_shared_tree(
             source_client.base_url.removesuffix("/api/v1"), API_KEY,
             root=payload_path.parent, file_name=payload_path.name, timeout_seconds=min(120, remaining()),

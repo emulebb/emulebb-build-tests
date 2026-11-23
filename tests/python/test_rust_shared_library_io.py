@@ -75,7 +75,7 @@ def test_library_read_qualification_checks_late_pages_and_literal_filters(fault)
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("fault", [None, "no-hashing", "no-byte-growth", "budget", "scan", "delivery", "cleanup", "baseline", "shutdown"])
+@pytest.mark.parametrize("fault", [None, "activation", "no-hashing", "no-byte-growth", "budget", "scan", "delivery", "cleanup", "baseline", "shutdown"])
 def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_cohort(monkeypatch, tmp_path, fault):
     native_owner = subject._native_transfer_harness()
     state = {"parts": 0, "removed": False}
@@ -94,7 +94,8 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         "exitCode": 9 if fault == "shutdown" else 0})
     monkeypatch.setattr(subject, "retained_download_observation", lambda client: {"ok": fault != "baseline"})
     monkeypatch.setattr(subject, "choose_loopback_port", lambda: 53002)
-    ports = iter((53000, 53001))
+    ports = iter((53000, 53001, 53003))
+    activated = set()
     resources = {"active": 1, "preparing": 0, "waiting": 100,
                  "concurrency": {"mode": "automatic", "configuredLimit": None, "target": 16, "burstActive": 0},
                  "residentMemory": {"usedBytes": 128 * 1024 * 1024 + 1 if fault == "budget" else 4096,
@@ -103,7 +104,14 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
     def request(url, method, path, key, body=None, **kwargs):
         assert key == subject.API_KEY
         if method == "POST":
+            if path == "/api/v1/servers":
+                assert body == {"address": "127.0.0.1", "port": 53003}
+                return {"id": "1"}
+            if path == "/api/v1/servers/operations/connect":
+                activated.add(url)
+                return {"running": fault != "activation"}
             assert path == "/api/v1/downloads" and body["intent"] == "stopped"
+            assert url in activated
             return {"id": job_id, "hash": file_hash}
         if path == f"/api/v1/downloads/{job_id}":
             if state["removed"]:
@@ -135,8 +143,10 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         request_json=request, request_document=remove,
     )
     monkeypatch.setattr(subject, "_native_transfer_harness", lambda: native)
-    monkeypatch.setattr(subject.rust_local_ed2k, "publish_shared_tree", lambda *args, **kwargs: {
-        "sharedFiles": {"matched": {"hash": file_hash, "ed2kLink": f"ed2k://|file|x.bin|10|{file_hash}|/"}}})
+    def publish(url, *args, **kwargs):
+        assert url in activated
+        return {"sharedFiles": {"matched": {"hash": file_hash, "ed2kLink": f"ed2k://|file|x.bin|10|{file_hash}|/"}}}
+    monkeypatch.setattr(subject.rust_local_ed2k, "publish_shared_tree", publish)
 
     def parts(*args):
         state["parts"] += 1
