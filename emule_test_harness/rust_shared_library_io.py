@@ -1276,6 +1276,7 @@ def run_coupled_reload(
     process: subprocess.Popen[str], sampler: ProcessSampler,
     receiver_log_path: Path,
     reload_args: dict[str, object], evidence: dict[str, object],
+    before_scan: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Verify real payload progress during hashing, then restore the job cohort.
 
@@ -1417,6 +1418,10 @@ def run_coupled_reload(
             timeout_seconds=min(120, remaining()), interval_seconds=0.5,
             description="coupled payload byte progress before scan", retry_exceptions=(),
         )
+        if before_scan is not None:
+            before_scan()
+        if "completion_logs" in reload_args:
+            reload_args = {**reload_args, "completion_logs": (profile_dir, reload_log_offsets(profile_dir))}
         client.request("POST", "/library/scan", {})
         changed = wait_for_reload(client=client, process=process, sampler=sampler,
                                   **{**reload_args, "timeout_seconds": remaining()}, observe=observe)
@@ -3731,9 +3736,10 @@ def run_campaign(
         process = None
         client = None
 
-        mutation = mutate_fixture(paths.fixture_root, spec)
-        update_fixture_generation(paths, "mutation-v2")
-        report["mutation"] = mutation
+        def prepare_coupled_mutation() -> None:
+            report["mutation"] = mutate_fixture(paths.fixture_root, spec)
+            update_fixture_generation(paths, "mutation-v2")
+
         mutation_log = run_root / "mutation.log"
         log_paths.append(mutation_log)
         mutation_completion_logs = (profile_dir, reload_log_offsets(profile_dir))
@@ -3749,6 +3755,7 @@ def run_campaign(
             paths=paths, run_root=run_root, profile_dir=profile_dir,
             client=client, process=process, sampler=sampler, evidence=report["coupledTransfer"],
             receiver_log_path=mutation_log,
+            before_scan=prepare_coupled_mutation,
             reload_args={"label": "onePercentMutation", "disk_counter_key": target.get("counterKey"),
                          "expected_scanned": spec.file_count, "timeout_seconds": remaining_seconds(),
                          "poll_seconds": args.poll_seconds, "completion_logs": mutation_completion_logs},

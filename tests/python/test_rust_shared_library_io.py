@@ -83,7 +83,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
     file_hash, job_id = "31" * 16, "100001"
     profile = tmp_path / "receiver"
     incoming = profile / "incoming" / "Foundation.Coupled.Payload.bin"
-    started, stopped, scans, source_settings = [], [], [], []
+    started, stopped, scans, source_settings, mutations = [], [], [], [], []
     source_process = object()
     sample = SimpleNamespace(maybe_sample=lambda **kwargs: None, summary=lambda: {"sampleCount": 4})
     source_client = SimpleNamespace(base_url="http://source/api/v1")
@@ -172,6 +172,7 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
     monkeypatch.setattr(subject.rust_local_ed2k, "wait_for", wait)
 
     def reload(**kwargs):
+        assert mutations == ["after-payload-progress"]
         if fault == "scan":
             raise RuntimeError("scan failure")
         for _ in range(2):
@@ -189,11 +190,16 @@ def test_coupled_reload_requires_byte_growth_during_hashing_and_restores_the_coh
         return {"state": "completed", "deliveryOwnership": "owned"}
     monkeypatch.setattr(subject.rust_local_ed2k, "wait_for_download_completed", deliver)
     evidence = {}
+    def mutate():
+        assert state["parts"] > 0 and started == [job_id]
+        mutations.append("after-payload-progress")
+
     def run():
         return subject.run_coupled_reload(
             paths=SimpleNamespace(rust_repo=tmp_path), run_root=tmp_path, profile_dir=profile,
             client=receiver, process=object(), sampler=sample, evidence=evidence,
             receiver_log_path=tmp_path / "receiver.log",
+            before_scan=mutate,
             reload_args={"label": "onePercentMutation", "timeout_seconds": 60.0},
         )
     if fault:
