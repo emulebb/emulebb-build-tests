@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
 
 
-def test_fast_harness_ci_checks_out_rust_client_for_contract_tests() -> None:
+def test_fast_harness_ci_pins_companions_for_contract_tests() -> None:
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -15,14 +16,13 @@ def test_fast_harness_ci_checks_out_rust_client_for_contract_tests() -> None:
     )
     text = workflow.read_text(encoding="utf-8")
 
-    assert "repository: emulebb/emulebb-rust" in text
-    assert "path: repos/emulebb-rust" in text
-    # The shared fixture writer requires the accepted schema-68 AICH authority
-    # columns. Pin the delivered canonical source, not an older schema snapshot.
     workflow_data = yaml.safe_load(text)
-    checkout = next(step["with"] for step in workflow_data["jobs"]["python-harness"]["steps"]
-                    if step.get("with", {}).get("repository") == "emulebb/emulebb-rust")
-    assert checkout["ref"] == "080a5dea70186da31dab958757b5b8c0fd883f82"
+    steps = workflow_data["jobs"]["python-harness"]["steps"]
+    for repository in ("emulebb-rust", "emulebb-tooling", "emulebb-build"):
+        checkout = next(step["with"] for step in steps
+                        if step.get("with", {}).get("repository") == f"emulebb/{repository}")
+        assert checkout["path"] == f"repos/{repository}"
+        assert re.fullmatch(r"[0-9a-f]{40}", checkout["ref"])
 
 
 def test_fast_harness_ci_checks_out_app_main_for_source_parity() -> None:

@@ -891,7 +891,7 @@ def attach_server_source(
     transfer_rows = {
         "rust": {
             "hash": SERVER_SOURCE_FILE_HASH.upper(),
-            "displayName": SERVER_SOURCE_FILE_NAME,
+            "name": SERVER_SOURCE_FILE_NAME,
             "sizeBytes": SERVER_SOURCE_FILE_SIZE,
             "sources": 1,
         },
@@ -1371,7 +1371,7 @@ def attach_server_udp_source(
     transfer_rows = {
         "rust": {
             "hash": SERVER_SOURCE_FILE_HASH.upper(),
-            "displayName": SERVER_SOURCE_FILE_NAME,
+            "name": SERVER_SOURCE_FILE_NAME,
             "sizeBytes": SERVER_SOURCE_FILE_SIZE,
             "sources": 1,
         },
