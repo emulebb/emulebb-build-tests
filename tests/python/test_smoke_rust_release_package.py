@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import io
 import tarfile
@@ -375,9 +376,12 @@ def test_download_delivery_report_omits_temporary_paths(monkeypatch, tmp_path, o
         "request_json",
         completed_shared_file,
     )
+    # The real Windows library route can retain the native verbatim prefix.
+    library_path = "\\\\?\\" + str(delivered) if os.name == "nt" else str(delivered)
+
     def locations(_base, method, path, _key):
         requests.append((method, path))
-        return {"data": [{"path": str(delivered), "present": True}],
+        return {"data": [{"path": library_path, "present": True}],
                 "meta": {"hasMore": False, "nextCursor": None}}
     monkeypatch.setattr(smoke, "request_document", locations)
 
