@@ -1,9 +1,9 @@
 """The APK transfer fixture admits exact peer bytes and verifies delivered content."""
 from contextlib import contextmanager
+from copy import deepcopy
 import hashlib
 import ipaddress
 import json
-from urllib.parse import unquote
 
 import pytest
 
@@ -62,6 +62,27 @@ def test_completion_projection_rejects_entire_observation_when_sample_order_is_u
     samples = [{"sharedLookup": "missing", "transferPresence": "absent"}] * 2
     samples[position] = invalid
     assert subject.safe_completion_failure({"reason": "deadline-exhausted", "samples": samples}) is None
+
+
+def server_page(rows):
+    return {"data": deepcopy(rows), "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": None}}
+
+
+def new_server(rows, body):
+    assert set(body) == {"address", "port"}
+    assert ipaddress.ip_address(body["address"]).is_loopback and body["address"] != "127.0.0.1"
+    assert body["port"] == 20031
+    row = {**body, "id": str(len(rows) + 1), "name": body["address"],
+           "priority": "normal", "static": False, "enabled": True}
+    rows.append(row)
+    return {"id": row["id"]}
+
+
+def disable_server(rows, route, body, expected_status):
+    assert body == {"enabled": False} and expected_status == 204
+    row = next(row for row in rows if row["id"] == route.rsplit("/", 1)[1])
+    assert ipaddress.ip_address(row["address"]).is_loopback and row["address"] != "127.0.0.1"
+    row["enabled"] = False
 
 
 def fixture(tmp_path, *, identity=IDENTITY):
@@ -242,7 +263,6 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
     "creation-200", "creation-id", "creation-hash", "settings-disconnect", "settings-conflict", "settings-intervening-save"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
-    from copy import deepcopy
     monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
     content = subject.deterministic_payload(0, 256 * 1024, generation="android-apk-" + "a" * 32)
     guest_files = {}
@@ -261,7 +281,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     if failure and (failure.startswith("completion-") or failure == "transient-completion"):
         monkeypatch.setattr(subject.time, "monotonic", lambda: clock[0])
         monkeypatch.setattr(subject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    public_server = {"address": "192.0.2.100", "port": 4661, "name": "Operator server", "enabled": True}
+    public_server = {"id": "1", "address": "192.0.2.100", "port": 4661, "name": "Operator server",
+                     "priority": "normal", "static": False, "enabled": True}
 
     @contextmanager
     def peer(*args, **kwargs):
@@ -284,20 +305,16 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         if route == "/api/v1/library/roots?limit=100":
             return {"data": [{"id": "1", "path": "/operator/Shared", "managed": False}],
                     "meta": {"hasMore": False, "nextCursor": None}}
-        if route == "/api/v1/servers":
-            rows = servers.setdefault(base, [deepcopy(public_server)])
-            if method == "POST":
-                assert ipaddress.ip_address(body["address"]).is_loopback and body["address"] != "127.0.0.1"
-                assert body["port"] == 20031 and body["connect"] is False
-                rows.append({**deepcopy(body), "priority": "normal", "static": False, "enabled": True})
-            return {"items": deepcopy(rows)}
-        if route.startswith("/api/v1/servers/") and method == "DELETE":
-            address, port = unquote(route.rsplit("/", 1)[1]).rsplit(":", 1)
-            assert ipaddress.ip_address(address).is_loopback and port == "20031"
+        if route == "/api/v1/servers?limit=200":
+            return server_page(servers.setdefault(base, [deepcopy(public_server)]))
+        if route == "/api/v1/servers" and method == "POST":
+            assert expected_status == 201
+            return new_server(servers[base], body)
+        if route.startswith("/api/v1/servers/") and method == "PATCH":
+            disable_server(servers[base], route, body, expected_status)
             disabled_servers.append(route)
-            next(row for row in servers[base] if row["address"] == address)["enabled"] = False
         if route.endswith("/operations/connect"):
-            assert "%3A20031/operations/connect" in route and "/127." in route
+            assert route == "/api/v1/servers/2/operations/connect"
             return {"connected": False, "connecting": True, "operationQueued": failure != "listener"}
         if route.startswith("/api/v1/downloads?view="):
             assert method == "GET"
@@ -528,16 +545,16 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
 
 @pytest.mark.parametrize("failure", [None, "peer-connect", "app-create", "app-connect", "existing-app"])
 def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_without_transfer(tmp_path, monkeypatch, failure):
-    from copy import deepcopy
     calls, restarts = [], []
     peer_base, app_base = "http://127.0.0.1:22222", "http://127.0.0.1:12345"
     original = {"effective": {"storage": {"incomingDirectory": "/operator/Incoming"},
                               "network": {"nat": {"enabled": True}}}}
-    servers = {peer_base: [{"address": "127.0.0.1", "port": 20031, "name": "Fresh peer seed",
+    servers = {peer_base: [{"id": "1", "address": "127.0.0.1", "port": 20031, "name": "Fresh peer seed",
                            "priority": "normal", "static": False, "enabled": True}],
-               app_base: [{"address": "192.0.2.100", "port": 4661, "name": "Operator"}]}
+               app_base: [{"id": "1", "address": "192.0.2.100", "port": 4661, "name": "Operator",
+                           "priority": "normal", "static": False, "enabled": True}]}
     if failure == "existing-app":
-        servers[app_base].append({"address": "127.0.0.1", "port": 20031, "name": "Operator loopback",
+        servers[app_base].append({"id": "2", "address": "127.0.0.1", "port": 20031, "name": "Operator loopback",
                                   "priority": "high", "static": True, "enabled": False})
     before = deepcopy(servers)
 
@@ -545,10 +562,9 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
     def peer(*args, **kwargs):
         yield "/unused/owned-peer", 22222
 
-    def request(base, method, route, key, body=None):
+    def request(base, method, route, key, body=None, *, expected_status=None):
         calls.append((base, method, route))
         assert not route.startswith("/api/v1/downloads") or method == "GET"
-        assert method != "PATCH"
         if route == "/api/v1/settings":
             return deepcopy(original)
         if route == "/api/v1/library/roots?limit=100":
@@ -563,16 +579,15 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
                 or (failure == "peer-connect" and base == peer_base and route.endswith("/operations/connect"))):
             raise subject.RustRestFailure("raw-private-path-key-endpoint", status=400,
                 detail=json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": "ED2K network is not configured /private/key"}}))
-        if route == "/api/v1/servers":
-            if method == "POST":
-                servers[base].append({**deepcopy(body), "priority": "normal", "static": False, "enabled": True})
-            return {"items": deepcopy(servers[base])}
+        if route == "/api/v1/servers?limit=200":
+            return server_page(servers[base])
+        if route == "/api/v1/servers" and method == "POST":
+            assert expected_status == 201
+            return new_server(servers[base], body)
         if route.endswith("/operations/connect"):
             return {"operationQueued": True}
-        if method == "DELETE":
-            address, port = unquote(route.rsplit("/", 1)[1]).rsplit(":", 1)
-            assert address != "127.0.0.1" and ipaddress.ip_address(address).is_loopback and port == "20031"
-            next(row for row in servers[base] if row["address"] == address)["enabled"] = False
+        if method == "PATCH":
+            disable_server(servers[base], route, body, expected_status)
         return {}
 
     monkeypatch.setattr(subject, "production_peer", peer)
@@ -604,17 +619,16 @@ def test_listener_only_probe_distinguishes_rpc_rejection_and_existing_row_withou
 
 @pytest.mark.parametrize("collision", [False, True])
 def test_nonce_loopback_endpoint_must_be_absent_from_full_catalog(tmp_path, collision, monkeypatch):
-    from copy import deepcopy
     from types import SimpleNamespace
     monkeypatch.setattr(subject, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
-    rows = [{"address": "127.170.170.171", "port": 20031, "name": "Operator private name",
-             "priority": "high", "static": True, "enabled": False}] if collision else [{"address": "127.0.0.1", "port": "20031"}]
+    rows = [{"id": "1", "address": "127.170.170.171", "port": 20031, "name": "Operator private name",
+             "priority": "high", "static": True, "enabled": False}] if collision else [{"id": "1", "address": "127.0.0.1", "port": "20031"}]
     calls = []
 
     def request(base, method, route, key, body=None):
         calls.append((method, route))
         assert method == "GET", "invalid existing configuration must never be changed or connected"
-        return {"items": deepcopy(rows)}
+        return server_page(rows)
 
     monkeypatch.setattr(subject, "request_json", request)
     campaign = subject._Campaign(tmp_path / "listener-probe.json", {"sourceRevision": IDENTITY["sourceRevision"]}, subject.PREFIX)
@@ -622,39 +636,40 @@ def test_nonce_loopback_endpoint_must_be_absent_from_full_catalog(tmp_path, coll
         with subject.local_listener("http://127.0.0.1:12345", "synthetic", campaign=campaign):
             pytest.fail("unusable existing endpoint must not connect")
     assert campaign.value["phase"] == "app-listener-" + ("allocate-owned-loopback-endpoint" if collision else "server-inventory")
-    assert calls == [("GET", "/api/v1/servers")]
+    assert calls == [("GET", "/api/v1/servers?limit=200")]
     assert "Operator private name" not in (tmp_path / "listener-probe.json").read_text()
 
 
 @pytest.mark.parametrize("fault,code", [(None, None), ("enabled", "owned-disabled-row-missing-or-mutated"),
     ("name", "owned-disabled-row-missing-or-mutated"), ("priority", "owned-disabled-row-missing-or-mutated"),
     ("static", "owned-disabled-row-missing-or-mutated"), ("missing", "owned-disabled-row-missing-or-mutated"),
-    ("ambiguous", "owned-disabled-row-missing-or-mutated"), ("foreign", "preexisting-configuration-changed"),
+    ("ambiguous", "preexisting-configuration-changed"), ("foreign", "preexisting-configuration-changed"),
     ("added", "preexisting-configuration-changed"), ("before-disable", "owned-configuration-mutated-or-missing")])
-def test_listener_delete_is_exact_owned_disabled_tombstone_and_preserves_every_prior_configuration(tmp_path, monkeypatch, fault, code):
-    from copy import deepcopy
-    foreign = {"address": "127.0.0.1", "port": 20031, "name": "Operator private configuration",
+def test_listener_disables_exact_owned_id_and_preserves_every_prior_configuration(tmp_path, monkeypatch, fault, code):
+    foreign = {"id": "1", "address": "127.0.0.1", "port": 20031, "name": "Operator private configuration",
                "priority": "high", "static": True, "enabled": False}
     rows, calls = [deepcopy(foreign)], []
 
-    def request(base, method, route, key, body=None):
+    def request(base, method, route, key, body=None, *, expected_status=None):
         calls.append((method, route))
         if method == "POST" and route == "/api/v1/servers":
-            rows.append({**body, "priority": "normal", "static": False, "enabled": True})
+            assert expected_status == 201
+            return new_server(rows, body)
         if method == "POST" and route.endswith("/operations/connect"):
             if fault == "before-disable":
                 rows[1]["name"] = "Operator changed ownership"
             return {"operationQueued": True}
-        if method == "DELETE":
-            assert "127.0.0.1%3A" not in route
+        if method == "PATCH":
+            assert route == "/api/v1/servers/2"
+            disable_server(rows, route, body, expected_status)
             rows[1]["enabled"] = fault == "enabled"
             if fault in {"name", "priority", "static"}:
                 rows[1][fault] = {"name": "changed", "priority": "high", "static": True}[fault]
             if fault == "missing": rows.pop()
-            if fault == "ambiguous": rows.append(deepcopy(rows[1]))
+            if fault == "ambiguous": rows.append({**rows[1], "id": "3"})
             if fault == "foreign": rows[0]["priority"] = "low"
-            if fault == "added": rows.append({**foreign, "address": "192.0.2.200"})
-        return {"items": deepcopy(rows)}
+            if fault == "added": rows.append({**foreign, "id": "3", "address": "192.0.2.200"})
+        return server_page(rows)
 
     monkeypatch.setattr(subject, "request_json", request)
     campaign = subject._Campaign(tmp_path / "campaign.json", {"sourceRevision": IDENTITY["sourceRevision"]}, subject.PREFIX)
@@ -670,17 +685,16 @@ def test_listener_delete_is_exact_owned_disabled_tombstone_and_preserves_every_p
         assert campaign.value["listenerCleanup"]["app"] == {"status": "passed", "disposition": "owned-endpoint-disabled",
             "ownedRowRetained": True, "preExistingConfigurationPreserved": True}
     if fault == "before-disable":
-        assert not any(method == "DELETE" for method, route in calls)
+        assert not any(method == "PATCH" for method, route in calls)
     assert "Operator private configuration" not in (tmp_path / "campaign.json").read_text()
 
 
-@pytest.mark.parametrize("kind,document", [
-    ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": True, "nextCursor": "next"}}),
-    ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": "next"}}),
-    ("downloads", {"data": [], "meta": {"apiVersion": "v1", "hasMore": False}}),
-    ("downloads", {"items": []}),
+@pytest.mark.parametrize("document", [
+    {"data": [], "meta": {"apiVersion": "v1", "hasMore": True, "nextCursor": "next"}},
+    {"data": [], "meta": {"apiVersion": "v1", "hasMore": False, "nextCursor": "next"}},
+    {"data": [], "meta": {"apiVersion": "v1", "hasMore": False}},
+    {"items": []},
 ])
-def test_initial_inventory_never_treats_a_truncated_or_unknown_page_as_exhaustive(kind, document):
+def test_initial_inventory_never_treats_a_truncated_or_unknown_page_as_exhaustive(document):
     with pytest.raises(RuntimeError, match="complete bounded"):
-        subject._complete_items(document, kind=kind)
-    assert subject._complete_items({"items": []}, kind="servers") == []
+        subject._complete_downloads(document)
