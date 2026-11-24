@@ -138,7 +138,7 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
             page.get_by_role("button", name="Add links", exact=True).click(timeout=timeout)
         created = response.value.json().get("data") if response.value.ok and response.value.status == 201 else None
         candidate_id = created.get("id") if isinstance(created, dict) else None
-        if (posts != [{"source": {"type": "ed2k-link", "link": link}, "intent": "stopped"}]
+        if (posts != [{"source": {"type": "ed2k-link", "link": link}, "intent": "stopped", "redownload": False}]
                 or not isinstance(candidate_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", candidate_id) is None
                 or int(candidate_id) > 9223372036854775807
                 or created.get("hash", "").lower() != file_hash or created.get("sizeBytes") != size_bytes):

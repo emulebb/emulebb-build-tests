@@ -111,7 +111,7 @@ def test_browser_api_key_scripts_use_tab_scoped_storage() -> None:
 
 
 @pytest.mark.parametrize("failure", [None, "automatic", "cancel", "body", "size", "hash", "duplicate", "cleanup", "body-cleanup",
-    "creation-200", "creation-id", "creation-hash"])
+    "creation-200", "creation-id", "creation-hash", "redownload"])
 def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_size(monkeypatch, failure):
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -140,7 +140,8 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             self.observer = None
 
         def post(self):
-            body = {"source": {"type": "ed2k-link", "link": link}, "intent": "stopped"}
+            body = {"source": {"type": "ed2k-link", "link": link}, "intent": "stopped",
+                    "redownload": failure == "redownload"}
             if failure in {"body", "body-cleanup"}:
                 body = {"source": {"type": "ed2k-link"}, "intent": "stopped"}
             self.observer(SimpleNamespace(method="POST", url="http://127.0.0.1:1234/api/v1/downloads",
@@ -224,7 +225,7 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
             "body": "exact requested", "body-cleanup": "exact requested", "size": "not persisted", "hash": "not persisted",
             "duplicate": "automatically changed",
             "cleanup": "cleanup failed", "creation-200": "exact requested",
-            "creation-id": "exact requested", "creation-hash": "exact requested"}[failure]):
+            "creation-id": "exact requested", "creation-hash": "exact requested", "redownload": "exact requested"}[failure]):
             rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
     else:
         result = rust_webui_live_proof.file_link_confirmation(Page(), **kwargs)
@@ -235,11 +236,11 @@ def test_file_link_confirmation_requires_real_request_shape_and_persisted_hash_s
         assert all(result[name] is True for name in FILE_LINK_BROWSER_REQUIRED_CHECKS)
         assert calls == ["Connect", "Cancel links", "Add links", "Cancel links"]
     assert cleanup["status"] == ("failed" if failure in {"automatic", "cancel", "duplicate", "body", "cleanup", "body-cleanup",
-        "creation-200", "creation-id", "creation-hash"} else "passed")
-    if failure in {"automatic", "cancel", "body", "body-cleanup", "creation-200", "creation-id", "creation-hash"}:
+        "creation-200", "creation-id", "creation-hash", "redownload"} else "passed")
+    if failure in {"automatic", "cancel", "body", "body-cleanup", "creation-200", "creation-id", "creation-hash", "redownload"}:
         assert removals == [], "an unreceipted enqueue must not grant deletion authority"
     if failure not in {"automatic", "cancel", "duplicate", "body", "cleanup", "body-cleanup",
-            "creation-200", "creation-id", "creation-hash"}:
+            "creation-200", "creation-id", "creation-hash", "redownload"}:
         assert items == baseline
 
 
