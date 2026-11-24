@@ -765,20 +765,10 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         try:
             request("POST", "/api/v1/downloads", {"source": {"type": "ed2k-link", "link": source_link}, "intent": "stopped"})
         except RustRestFailure as error:
-            conflicts = error.response_error.get("details", {}).get("conflicts")
-            if (error.safe_failure["httpStatus"] != 409 or error.safe_failure["apiCode"] != "DOWNLOAD_CONFLICT"
-                    or not isinstance(conflicts, list) or len(conflicts) != 1 or not isinstance(conflicts[0], dict)):
+            details = error.response_error.get("details")
+            if (error.status != 409 or error.response_error.get("code") != "LOCAL_CONTENT_CHOICE_REQUIRED"
+                    or not isinstance(details, dict) or details.get("availability") != "present"):
                 raise
-            evidence = conflicts[0]
-            if (evidence.get("hash", "").lower() != file_hash or evidence.get("jobId") != download_id
-                    or evidence.get("kind") != "presentLocalFile" or evidence.get("path") != str(path)
-                    or evidence.get("requestedSizeBytes") != len(content)
-                    or evidence.get("recordedSizeBytes") != len(content)
-                    or evidence.get("redownloadAllowed") is not True
-                    or type(evidence.get("firstCompletedAt")) is not int
-                    or type(evidence.get("lastCompletedAt")) is not int
-                    or not 0 <= evidence["firstCompletedAt"] <= evidence["lastCompletedAt"]):
-                raise RuntimeError("APK download conflict did not retain completed local evidence") from None
         else:
             raise RuntimeError("APK completed download duplicate was not rejected")
         if _complete_downloads(request("GET", "/api/v1/downloads?view=unfinished&limit=200")):

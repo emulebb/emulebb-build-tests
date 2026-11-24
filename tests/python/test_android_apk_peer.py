@@ -258,7 +258,7 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 
 
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
-    "history", "duplicate-accepted", "active-row", "preflight-enqueue", "incomplete-inventory",
+    "duplicate-unavailable", "duplicate-accepted", "duplicate-other-conflict", "active-row", "preflight-enqueue", "incomplete-inventory",
     "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion", "unowned",
     "creation-200", "creation-id", "creation-hash", "settings-disconnect", "settings-conflict", "settings-intervening-save"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
@@ -336,13 +336,10 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                 if failure == "duplicate-accepted":
                     return {"id": "12", "hash": "b" * 32, "sizeBytes": len(content)}
                 state["duplicateQueued"] = failure == "preflight-enqueue"
-                conflicts = [{"jobId": "12", "hash": "b" * 32, "kind": "presentLocalFile",
-                    "requestedName": "Android Sample.bin", "requestedSizeBytes": len(content),
-                    "recordedSizeBytes": len(content), "path": state["incoming"] + "/Android Sample_01.bin",
-                    "redownloadAllowed": True, "firstCompletedAt": 1,
-                    "lastCompletedAt": 0 if failure == "history" else 2}]
+                availability = "unavailable" if failure == "duplicate-unavailable" else "present"
+                code = "DOWNLOAD_CONFLICT" if failure == "duplicate-other-conflict" else "LOCAL_CONTENT_CHOICE_REQUIRED"
                 raise subject.RustRestFailure("private conflict details", status=409,
-                    detail=json.dumps({"error": {"code": "DOWNLOAD_CONFLICT", "details": {"conflicts": conflicts}}}))
+                    detail=json.dumps({"error": {"code": code, "details": {"availability": availability}}}))
             assert body["intent"] == "started" and set(body) == {"source", "intent"}
             state["created"] = True
             assert expected_status == 201
@@ -474,7 +471,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                           "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
                           "known-hash": "peer-shared-file-hash", "server-owner": "app-listener-owned-server-disable-precondition",
-                          "restore": "cleanup-restore-original-settings", "history": "verify-completed-download-evidence",
+                          "restore": "cleanup-restore-original-settings", "duplicate-unavailable": "verify-completed-download-evidence",
+                          "duplicate-other-conflict": "verify-completed-download-evidence",
                           "settings-disconnect": "persist-fixture-settings", "settings-conflict": "persist-fixture-settings",
                           "settings-intervening-save": "cleanup-restore-original-settings",
                           "duplicate-accepted": "verify-completed-download-evidence", "active-row": "verify-completed-delivery-metadata",
