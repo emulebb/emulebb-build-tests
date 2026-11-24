@@ -55,7 +55,9 @@ APK_LIFECYCLE_STAGES = frozenset({
     "all-files-restoration-wait-running", "all-files-restoration-authentication",
     "local-network-revocation", "local-network-restoration", "explicit-stop",
     "task-manager-stop", "force-stop", "restart", "local-transfer",
-    "file-link-intents", "screen-off-doze", "case-coverage",
+    "file-link-intents", "file-link-cold-and-pending", "file-link-start-and-receive",
+    "file-link-browser-resolve", "file-link-browser-dispatch", "file-link-browser-return",
+    "file-link-webui-confirmation", "screen-off-doze", "case-coverage",
     "all-files-access", "notification-permission", "android-api", "local-network-permission",
     "battery-exemption", "wake-display", "dismiss-keyguard", "launch-main", "wait-stopped",
     "read-api-key", "validate-api-key",
@@ -739,6 +741,8 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         cases.append({"name": name, "status": "passed"})
 
     def file_link_intents():
+        nonlocal setup_stage
+
         from .rust_local_ed2k import request_json
         from .rust_webui_live_proof import run_file_link_browser_proof
         from .rust_rest_contract import iter_downloads
@@ -785,6 +789,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 not in {APPLICATION_ID + "/.MainActivity", APPLICATION_ID + "/" + APPLICATION_ID + ".MainActivity"}):
             raise RuntimeError("Android does not resolve eD2K file links to the production app")
         case("os-file-link-resolution")
+        setup_stage = "file-link-cold-and-pending"
         shell("am", "force-stop", APPLICATION_ID)
         dispatch(link)
         pending()
@@ -805,6 +810,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
                 raise RuntimeError("APK retained an invalid pending file link")
             assert_listener_stopped()
         case("malformed-and-nonfile-intents-rejected")
+        setup_stage = "file-link-start-and-receive"
         dispatch(link)
         pending()
         click("start_service")
@@ -816,6 +822,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         if download_signature() != baseline:
             raise RuntimeError("APK intent reception silently changed the download jobs")
         case("start-and-repeated-intents-without-enqueue")
+        setup_stage = "file-link-browser-resolve"
         browser = shell("cmd", "package", "resolve-activity", "--brief", "-a", "android.intent.action.VIEW",
                         "-c", "android.intent.category.BROWSABLE", "-d", base + "/")
         component = browser.splitlines()[-1] if browser.splitlines() else ""
@@ -824,6 +831,7 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
         # browser is selected. Its resumed window is not browser-dispatch proof.
         if "/" not in component or package in {APPLICATION_ID, "android", "com.android.intentresolver"}:
             raise RuntimeError("APK file-link proof requires an installed guest default browser")
+        setup_stage = "file-link-browser-dispatch"
         click("open_webui")
         deadline = time.monotonic() + 30
         while True:
@@ -833,10 +841,12 @@ def exercise(command, payload: dict, *, report_dir: Path, soak_seconds: int = 0,
             if time.monotonic() >= deadline:
                 raise RuntimeError("APK did not dispatch the WebUI to the actual guest browser")
             time.sleep(1)
+        setup_stage = "file-link-browser-return"
         reopen()
         if inspect().get("pending_link", {}).get("text") or download_signature() != baseline:
             raise RuntimeError("APK browser dispatch retained its pending link or enqueued it")
         case("native-browser-dispatch-without-enqueue")
+        setup_stage = "file-link-webui-confirmation"
         proof["browser"] = run_file_link_browser_proof(base_url=base, api_key=key, link=link,
             file_hash=file_hash, size_bytes=1, report_path=report_dir / "apk-file-link-browser.json",
             identity=payload["buildIdentity"])

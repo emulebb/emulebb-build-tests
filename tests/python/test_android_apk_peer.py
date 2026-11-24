@@ -258,7 +258,7 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 
 
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
-    "duplicate-unavailable", "duplicate-accepted", "duplicate-other-conflict", "active-row", "preflight-enqueue", "incomplete-inventory",
+    "duplicate-unavailable", "duplicate-accepted", "duplicate-other-conflict", "creation-busy", "creation-committed", "active-row", "preflight-enqueue", "incomplete-inventory",
     "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion", "unowned",
     "creation-200", "creation-id", "creation-hash", "settings-disconnect", "settings-conflict", "settings-intervening-save"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
@@ -341,8 +341,13 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                 raise subject.RustRestFailure("private conflict details", status=409,
                     detail=json.dumps({"error": {"code": code, "details": {"availability": availability}}}))
             assert body["intent"] == "started" and set(body) == {"source", "intent"}
-            state["created"] = True
             assert expected_status == 201
+            state["admissionCalls"] = state.get("admissionCalls", 0) + 1
+            if failure == "creation-committed" or failure == "creation-busy" and state["admissionCalls"] == 1:
+                code = "PERSISTENCE_COMMITTED" if failure == "creation-committed" else "PERSISTENCE_BUSY"
+                raise subject.RustRestFailure("private admission details", status=503,
+                    detail=json.dumps({"error": {"code": code}}))
+            state["created"] = True
             if failure == "creation-200":
                 raise RuntimeError("Rust REST POST /api/v1/downloads returned HTTP 200; expected 201")
             assert state["incoming"] == state["settings"]["storage"]["incomingDirectory"]["value"]
@@ -466,7 +471,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     monkeypatch.setattr(subject, "request_json", request)
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
                      report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
-    if failure and failure not in {"transient-completion", "unowned"}:
+    if failure and failure not in {"transient-completion", "unowned", "creation-busy"}:
         expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
                           "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
@@ -477,12 +482,14 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                           "settings-intervening-save": "cleanup-restore-original-settings",
                           "duplicate-accepted": "verify-completed-download-evidence", "active-row": "verify-completed-delivery-metadata",
                           "preflight-enqueue": "verify-completed-download-evidence", "incomplete-inventory": "admit-prior-downloads-and-roots",
-                          **{name: "enqueue-owned-transfer" for name in ("creation-200", "creation-id", "creation-hash")},
+                          **{name: "enqueue-owned-transfer" for name in ("creation-200", "creation-id", "creation-hash", "creation-committed")},
                           **{name: "await-completed-delivery" for name in ("completion-missing", "completion-mismatch",
                               "completion-lookup", "completion-diagnostics")}}[failure]
         with pytest.raises(subject.CampaignFailure) as failed:
             subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         assert failed.value.failure["phase"] == expected_phase
+        if failure == "creation-committed":
+            assert state["admissionCalls"] == 1
         receipt = json.loads((tmp_path / "transfer-campaign.json").read_text())
         assert receipt["status"] == "failed" and receipt["failure"]["code"] == expected_phase + "-failed"
         if failure in {"creation-200", "creation-id", "creation-hash"}:
@@ -508,6 +515,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
                 assert receipt["failure"]["errorType"] == "RuntimeError" and "rest" not in receipt["failure"]
     else:
         result = subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
+        if failure == "creation-busy":
+            assert state["admissionCalls"] == 2
         assert result["status"] == "passed"
         assert result["downloadId"] == "12"
         assert result["deliveryOwnership"] == ("unowned" if failure == "unowned" else "owned")
