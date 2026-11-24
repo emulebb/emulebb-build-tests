@@ -94,6 +94,11 @@ def _iter_id_resources(fetch_page: Callable[[str], dict[str, Any]], path: str,
             yield row
 
 
+def iter_servers(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Stream the complete server catalog in immutable-ID order."""
+    return _iter_id_resources(fetch_page, "/servers", {"limit": 200}, descending=False)
+
+
 def iter_library_roots(fetch_page: Callable[[str], dict[str, Any]]) -> Iterator[dict[str, Any]]:
     """Stream ID-ordered root pages using an existing authenticated request owner."""
     return _iter_id_resources(fetch_page, "/library/roots", {"limit": 100}, descending=False)
