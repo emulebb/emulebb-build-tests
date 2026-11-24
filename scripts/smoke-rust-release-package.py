@@ -346,6 +346,18 @@ def _verify_cli_identity(binary: Path, expected_identity: dict[str, str]) -> str
     return result.stdout.strip()
 
 
+def _resolved_delivery_path(path: str | Path) -> Path:
+    resolved = Path(path).resolve()
+    # Library locations can preserve the Windows verbatim prefix that the
+    # download detail omits. Compare the same resolved pathname on both routes.
+    drive = resolved.drive
+    if drive.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + str(resolved)[8:])
+    if drive.startswith("\\\\?\\") and len(drive) == 6 and drive.endswith(":"):
+        return Path(str(resolved)[4:])
+    return resolved
+
+
 def _wait_for_download_delivery(
     base_url: str,
     download_id: str,
@@ -357,11 +369,16 @@ def _wait_for_download_delivery(
 ) -> dict[str, object]:
     observations: list[dict[str, object]] = []
 
+    last_observation: dict[str, object] = {}
+
     def probe() -> dict[str, object] | None:
         # Completion remains a durable job; its delivery path and the complete
         # library location must agree on the actual delivered bytes.
         download = request_json(base_url, "GET", f"/api/v1/downloads/{download_id}", API_KEY)
         delivery = download.get("delivery")
+        last_observation.clear()
+        last_observation.update(state=download.get("state"), payloadVerified=download.get("payloadVerified"),
+                                completedAt=download.get("completedAt"), delivery=delivery)
         if (download.get("id") != download_id or download.get("hash") != expected_hash):
             raise RuntimeError("Packaged download identity changed before delivery")
         if (download.get("state") != "completed" or download.get("payloadVerified") is not True
@@ -373,16 +390,18 @@ def _wait_for_download_delivery(
             library_file = request_json(base_url, "GET", f"/api/v1/library/files/{expected_hash}", API_KEY)
         except RustRestFailure as error:
             if error.status == 404:
+                last_observation["libraryFile"] = "missing"
                 return None
             raise
         delivered_value = delivery.get("path")
         if not isinstance(delivered_value, str) or not delivered_value:
             return None
+        delivered_path = _resolved_delivery_path(delivered_value)
         locations = iter_library_locations(
             lambda path: request_document(base_url, "GET", "/api/v1" + path, API_KEY), expected_hash
         )
         registered = any(
-            location["present"] and Path(location["path"]).resolve() == Path(delivered_value).resolve()
+            location["present"] and _resolved_delivery_path(location["path"]) == delivered_path
             for location in locations
         )
         observations.append(
@@ -392,6 +411,7 @@ def _wait_for_download_delivery(
                 "deliveredLocationPresent": registered,
             }
         )
+        last_observation["libraryFile"] = observations[-1]
         if (
             library_file.get("hash") != expected_hash
             or library_file.get("present") is not True
@@ -401,8 +421,9 @@ def _wait_for_download_delivery(
             return None
         delivered = Path(str(delivered_value))
         if not delivered.is_file():
+            last_observation["deliveredFile"] = "missing"
             return None
-        if delivered.resolve().parent != incoming.resolve():
+        if delivered_path.parent != _resolved_delivery_path(incoming):
             raise RuntimeError(f"packaged download was delivered outside the configured incoming directory: {delivered}")
         delivered_sha256 = file_sha256(delivered)
         if delivered.stat().st_size != expected_size or delivered_sha256 != expected_sha256:
@@ -432,7 +453,7 @@ def _wait_for_download_delivery(
             detail = json.dumps(downloads, sort_keys=True)[-16000:]
         except Exception as snapshot_error:
             detail = str(snapshot_error)
-        raise RuntimeError(f"{error}; final download state: {detail}") from error
+        raise RuntimeError(f"{error}; delivery: {last_observation!r}; final download state: {detail}") from error
 
 
 def _request(
