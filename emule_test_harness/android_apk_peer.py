@@ -555,7 +555,16 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
     base = f"http://127.0.0.1:{apk_port}"
     def request(method, route, body=None, *, expected_status=None):
         options = {} if expected_status is None else {"expected_status": expected_status}
-        return request_json(base, method, route, api_key, body, **options)
+        for attempt in range(5):
+            try:
+                return request_json(base, method, route, api_key, body, **options)
+            except RustRestFailure as error:
+                # A typed busy response refused admission. Other 503 responses
+                # can represent a committed mutation and must reach the caller.
+                if (error.status != 503 or error.response_error.get("code") != "PERSISTENCE_BUSY"
+                        or attempt == 4):
+                    raise
+            time.sleep(0.25 * (attempt + 1))
 
     def shell(*args):
         return command(*prefix, "shell", *args)
@@ -663,20 +672,9 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
             with local_listener(peer_base, PEER_KEY, role="peer", campaign=campaign), local_listener(base, api_key, campaign=campaign):
                 campaign.mark("enqueue-owned-transfer")
                 enqueue_attempted = True
-                for attempt in range(5):
-                    try:
-                        created = request("POST", "/api/v1/downloads",
-                            {"source": {"type": "ed2k-link", "link": source_link}, "intent": "started"},
-                            expected_status=201)
-                    except RustRestFailure as error:
-                        # Retry only a typed admission refusal. The other 503
-                        # outcomes may already have modified the catalog.
-                        if (error.status != 503 or error.response_error.get("code") != "PERSISTENCE_BUSY"
-                                or attempt == 4):
-                            raise
-                    else:
-                        break
-                    time.sleep(0.25 * (attempt + 1))
+                created = request("POST", "/api/v1/downloads",
+                    {"source": {"type": "ed2k-link", "link": source_link}, "intent": "started"},
+                    expected_status=201)
                 candidate_id = created.get("id") if isinstance(created, dict) else None
                 if (not isinstance(candidate_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", candidate_id) is None
                         or int(candidate_id) > 9223372036854775807

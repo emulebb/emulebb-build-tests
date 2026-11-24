@@ -259,7 +259,7 @@ def test_peer_failure_cleanup_never_deletes_unadmitted_running_guest(tmp_path, m
 
 @pytest.mark.parametrize("failure", [None, "payload", "occupant", "path", "listener", "restart", "unfinished", "known-hash", "server-owner", "restore",
     "duplicate-unavailable", "duplicate-accepted", "duplicate-other-conflict", "creation-busy", "creation-committed", "active-row", "preflight-enqueue", "incomplete-inventory",
-    "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion", "unowned",
+    "completion-missing", "completion-mismatch", "completion-lookup", "completion-diagnostics", "transient-completion", "completion-busy", "unowned",
     "creation-200", "creation-id", "creation-hash", "settings-disconnect", "settings-conflict", "settings-intervening-save"])
 def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservation(tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
@@ -372,6 +372,9 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
             pytest.fail("known delivered hash must use its exact endpoint, not a first page")
         if route == "/api/v1/library/files/" + "b" * 32:
             shared_reads.append(clock[0])
+            if failure == "completion-busy" and len(shared_reads) == 1:
+                raise subject.RustRestFailure("private admission details", status=503,
+                    detail=json.dumps({"error": {"code": "PERSISTENCE_BUSY"}}))
             if failure == "transient-completion" and len(shared_reads) == 1:
                 raise subject.RustRestFailure("synthetic-private-error", status=404, detail="{}")
             if failure in {"completion-missing", "completion-diagnostics"}:
@@ -471,7 +474,7 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
     monkeypatch.setattr(subject, "request_json", request)
     arguments = dict(apk_port=12345, api_key="synthetic-app-key", adb="adb", child={},
                      report_dir=tmp_path, rust_source=tmp_path, restart_service=restart)
-    if failure and failure not in {"transient-completion", "unowned", "creation-busy"}:
+    if failure and failure not in {"transient-completion", "completion-busy", "unowned", "creation-busy"}:
         expected_phase = {"payload": "verify-delivered-bytes", "occupant": "verify-collision-preserved",
                           "path": "verify-delivered-path-and-size", "listener": "peer-listener-connect-acknowledgement",
                           "restart": "verify-completed-delivery-metadata", "unfinished": "admit-prior-downloads-and-roots",
@@ -517,6 +520,8 @@ def test_real_transfer_verdict_requires_delivered_bytes_and_collision_preservati
         result = subject.transfer_proof(command, {"sourceRevision": IDENTITY["sourceRevision"]}, **arguments)
         if failure == "creation-busy":
             assert state["admissionCalls"] == 2
+        if failure == "completion-busy":
+            assert len(shared_reads) >= 2 and state["admissionCalls"] == 1
         assert result["status"] == "passed"
         assert result["downloadId"] == "12"
         assert result["deliveryOwnership"] == ("unowned" if failure == "unowned" else "owned")
