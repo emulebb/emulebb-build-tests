@@ -35,8 +35,8 @@ def option_value(command: list[str], option: str) -> str | None:
 
 @pytest.mark.native
 @pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
-@pytest.mark.parametrize("verify_browse", [False, True], ids=["transfer", "browse"])
-def test_native_stock_and_amule_transfers(verify_browse: bool) -> None:
+@pytest.mark.parametrize("browse_peer", [None, "stock", "amule"], ids=["transfer", "stock_browse", "amule_browse"])
+def test_native_stock_and_amule_transfers(browse_peer: str | None) -> None:
     """Run only the two independent native client rows under Builder."""
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
@@ -46,10 +46,11 @@ def test_native_stock_and_amule_transfers(verify_browse: bool) -> None:
         "--lan-bind-addr", lan_host,
         "--fixture-size-bytes", str(10 * 1024 * 1024),
         "--transfer-completion-timeout-seconds", "300",
-        "--require-scenario", module.STOCK_EMULE_TRANSFER_SCENARIO_ID,
-        "--require-scenario", module.AMULE_TRANSFER_SCENARIO_ID,
     ]
-    if verify_browse:
+    rows = {"stock": module.STOCK_EMULE_TRANSFER_SCENARIO_ID, "amule": module.AMULE_TRANSFER_SCENARIO_ID}
+    for row in rows.values() if browse_peer is None else (rows[browse_peer],):
+        arguments.extend(["--require-scenario", row])
+    if browse_peer is not None:
         arguments.append("--verify-peer-browse")
     assert module.main(arguments) == 0
 
