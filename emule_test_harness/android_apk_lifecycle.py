@@ -457,6 +457,7 @@ class ProductionUi:
         self.navigation = {}
         self.scroll_bounds = None
         self.navigation_snapshot = {}
+        self.pointer_scroll = None
 
     def shell(self, *args):
         return self.command(*self.prefix, "shell", *args)
@@ -576,6 +577,8 @@ class ProductionUi:
             # Production controls may span several scrollable viewports.
             for direction in (1, -1):
                 lane = 0
+                stalled = 0
+                wheel = False
                 for _ in range(6):
                     self._require_app(nodes)
                     left, top, right, bottom = self.scroll_bounds or (0, 0, width, height)
@@ -587,7 +590,20 @@ class ProductionUi:
                     first, last = (far, near) if direction == 1 else (near, far)
                     x = left + (right - left) * (2, 1, 3)[lane] // 4
                     before = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
-                    self.shell("input", "swipe", str(x), str(first), str(x), str(last), "250")
+                    # WHY: API 37 sometimes delivered no viewport movement from
+                    # any touch lane. Use Android's discrete scroll event once
+                    # two touch gestures stall, within the same attempt budget.
+                    if not wheel and stalled >= 2:
+                        if self.pointer_scroll is None:
+                            self.pointer_scroll = "scroll <x> <y>" in self.shell("input", "help")
+                        wheel = self.pointer_scroll
+                    if wheel:
+                        y = top + span // 2
+                        self.shell("input", "mouse", "scroll", str(x), str(y), "--axis", f"VSCROLL,{-6 * direction}")
+                        gesture = [x, y, x, y]
+                    else:
+                        self.shell("input", "swipe", str(x), str(first), str(x), str(last), "250")
+                        gesture = [x, first, x, last]
                     nodes = self.inspect()
                     after = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
                     moved = before != after
@@ -596,11 +612,13 @@ class ProductionUi:
                     # observed viewport and keep checking the actual controls.
                     if not moved:
                         lane = (lane + 1) % 3
+                        stalled += 1
+                    else:
+                        stalled = 0
                     if self.navigation:
                         prefix = "forward" if direction == 1 else "backward"
                         self.navigation[prefix + "Attempts"] = min(6, self.navigation[prefix + "Attempts"] + 1)
                         self.navigation[prefix + "Progress"] = min(6, self.navigation[prefix + "Progress"] + int(moved))
-                        gesture = [x, first, x, last]
                         if max(gesture) <= 32768:
                             self.navigation["lastGesture"] = gesture
                         if self.scroll_bounds is not None:

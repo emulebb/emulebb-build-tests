@@ -1082,6 +1082,40 @@ def test_start_after_force_stop_uses_another_scroll_lane_when_center_does_not_mo
     assert ui.navigation["forwardProgress"] == 1
 
 
+def test_start_after_stalled_touch_lanes_uses_supported_discrete_scroll():
+    inputs = []
+    reached = False
+
+    def command(*args):
+        nonlocal reached
+        call = args[2:]
+        if call == ("shell", "wm", "size"):
+            return "Physical size: 1080x1920"
+        if call == ("shell", "input", "help"):
+            return "scroll <x> <y> [axis_value] (for pointer-based sources)"
+        if call[:2] == ("shell", "input"):
+            inputs.append(call[2:])
+            reached |= call[2:4] == ("mouse", "scroll")
+        if call[:2] == ("shell", "cat"):
+            start = ('<node package="org.emulebb.android" resource-id="org.emulebb.android:id/start_service" '
+                     'enabled="true" bounds="[200,1000][800,1100]"/>') if reached else ""
+            return ('<hierarchy><node class="android.widget.ScrollView" package="org.emulebb.android" '
+                    'scrollable="true" bounds="[120,0][960,1720]">'
+                    '<node package="org.emulebb.android" resource-id="org.emulebb.android:id/service_status" '
+                    'text="Stopped" enabled="true" bounds="[200,80][800,160]"/>' + start + '</node></hierarchy>')
+        return ""
+
+    ui = subject.ProductionUi(command)
+    ui.click("start_service")
+    assert inputs == [
+        ("swipe", "540", "1290", "540", "430", "250"),
+        ("swipe", "330", "1290", "330", "430", "250"),
+        ("mouse", "scroll", "750", "860", "--axis", "VSCROLL,-6"),
+        ("tap", "500", "1050"),
+    ]
+    assert ui.navigation["forwardProgress"] == 1
+
+
 @pytest.mark.parametrize('focus,expected', [
     ('bind_addr', 'bind_addr'), ('api_key', 'api_key'), ('unknown_private', 'other-owned'),
     ('none', 'none'), ('duplicate', 'ambiguous'),
