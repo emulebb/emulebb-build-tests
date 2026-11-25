@@ -1082,6 +1082,40 @@ def test_start_after_force_stop_uses_another_scroll_lane_when_center_does_not_mo
     assert ui.navigation["forwardProgress"] == 1
 
 
+def test_start_after_stalled_touch_lanes_uses_supported_discrete_scroll():
+    inputs = []
+    reached = False
+
+    def command(*args):
+        nonlocal reached
+        call = args[2:]
+        if call == ("shell", "wm", "size"):
+            return "Physical size: 1080x1920"
+        if call == ("shell", "input", "help"):
+            return "scroll <x> <y> [axis_value] (for pointer-based sources)"
+        if call[:2] == ("shell", "input"):
+            inputs.append(call[2:])
+            reached |= call[2:4] == ("mouse", "scroll")
+        if call[:2] == ("shell", "cat"):
+            start = ('<node package="org.emulebb.android" resource-id="org.emulebb.android:id/start_service" '
+                     'enabled="true" bounds="[200,1000][800,1100]"/>') if reached else ""
+            return ('<hierarchy><node class="android.widget.ScrollView" package="org.emulebb.android" '
+                    'scrollable="true" bounds="[120,0][960,1720]">'
+                    '<node package="org.emulebb.android" resource-id="org.emulebb.android:id/service_status" '
+                    'text="Stopped" enabled="true" bounds="[200,80][800,160]"/>' + start + '</node></hierarchy>')
+        return ""
+
+    ui = subject.ProductionUi(command)
+    ui.click("start_service")
+    assert inputs == [
+        ("swipe", "540", "1290", "540", "430", "250"),
+        ("swipe", "330", "1290", "330", "430", "250"),
+        ("mouse", "scroll", "750", "860", "--axis", "VSCROLL,-6"),
+        ("tap", "500", "1050"),
+    ]
+    assert ui.navigation["forwardProgress"] == 1
+
+
 @pytest.mark.parametrize('focus,expected', [
     ('bind_addr', 'bind_addr'), ('api_key', 'api_key'), ('unknown_private', 'other-owned'),
     ('none', 'none'), ('duplicate', 'ambiguous'),
@@ -1118,6 +1152,40 @@ def test_navigation_failure_classifies_owned_focus_scroll_and_ime_without_text(f
     assert facts['focusedControl'] == expected and facts['scrollable'] is True
     assert facts['imeInputShown'] == expected_ime
     assert private not in json.dumps(facts)
+
+
+@pytest.mark.parametrize("reason,failed_reads,expected_attempts", [
+    ("missing-file", 1, 2),
+    ("missing-file", 3, 3),
+    ("permission-denied", 1, 1),
+])
+def test_browser_return_retries_only_missing_fresh_hierarchy(monkeypatch, reason, failed_reads, expected_attempts):
+    calls = []
+    reads = 0
+    missing = "No such file or directory" if reason == "missing-file" else "Permission denied"
+    sleeps = []
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+
+    def command(*args):
+        nonlocal reads
+        call = args[2:]
+        calls.append(call)
+        if call[:2] == ("shell", "cat"):
+            reads += 1
+            if reads <= failed_reads:
+                raise AdbOperationFailure(call, exit_code=1, stderr=missing)
+            return "<hierarchy/>"
+        return ""
+
+    ui = subject.ProductionUi(command)
+    if failed_reads < expected_attempts:
+        assert ui._hierarchy() == "<hierarchy/>"
+    else:
+        with pytest.raises(AdbOperationFailure, match=reason):
+            ui._hierarchy()
+    assert calls == [("shell", "rm", "-f", ui.path), ("shell", "uiautomator", "dump", ui.path),
+                     ("shell", "cat", ui.path)] * expected_attempts
+    assert sleeps == [0.25] * (expected_attempts - 1)
 
 
 @pytest.mark.parametrize("fault", ["null-root", "idle-timeout", "silent-no-write", "partial-write", "invalidation-failed", None])
