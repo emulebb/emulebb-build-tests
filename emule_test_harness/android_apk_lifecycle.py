@@ -575,18 +575,32 @@ class ProductionUi:
                 continue
             # Production controls may span several scrollable viewports.
             for direction in (1, -1):
+                lane = 0
                 for _ in range(6):
                     self._require_app(nodes)
-                    first, last = (height * 3 // 4, height // 4) if direction == 1 else (height // 4, height * 3 // 4)
+                    left, top, right, bottom = self.scroll_bounds or (0, 0, width, height)
+                    right, bottom = min(right, width), min(bottom, height)
+                    if right - left < 4 or bottom - top < 4:
+                        raise RuntimeError("APK scroll viewport has invalid bounds")
+                    span = bottom - top
+                    near, far = top + span // 4, top + span * 3 // 4
+                    first, last = (far, near) if direction == 1 else (near, far)
+                    x = left + (right - left) * (2, 1, 3)[lane] // 4
                     before = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
-                    self.shell("input", "swipe", str(width // 2), str(first), str(width // 2), str(last), "250")
+                    self.shell("input", "swipe", str(x), str(first), str(x), str(last), "250")
                     nodes = self.inspect()
+                    after = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
+                    moved = before != after
+                    # WHY: API 37 sometimes returned identical owned layouts
+                    # after repeated center swipes. Try another lane within the
+                    # observed viewport and keep checking the actual controls.
+                    if not moved:
+                        lane = (lane + 1) % 3
                     if self.navigation:
                         prefix = "forward" if direction == 1 else "backward"
                         self.navigation[prefix + "Attempts"] = min(6, self.navigation[prefix + "Attempts"] + 1)
-                        after = {(key, tuple(_diagnostic_bounds(node.get("bounds", "")) or [])) for key, node in nodes.items()}
-                        self.navigation[prefix + "Progress"] = min(6, self.navigation[prefix + "Progress"] + int(before != after))
-                        gesture = [width // 2, first, width // 2, last]
+                        self.navigation[prefix + "Progress"] = min(6, self.navigation[prefix + "Progress"] + int(moved))
+                        gesture = [x, first, x, last]
                         if max(gesture) <= 32768:
                             self.navigation["lastGesture"] = gesture
                         if self.scroll_bounds is not None:
