@@ -23,7 +23,6 @@ from emule_test_harness import ed2k_server as ed2k_harness  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
-API_KEY = "multi-client-p2p-matrix-key"
 MFC_ORACLE_TRANSFER_SCENARIO_ID = "rust-downloads-from-mfc-oracle"
 STOCK_EMULE_TRANSFER_SCENARIO_ID = "rust-downloads-from-stock-emule"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "rust-rust-bidirectional-product-integration"
@@ -61,7 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
-    parser.add_argument("--api-key", default=API_KEY)
+    parser.add_argument("--api-key", default=dtt.API_KEY)
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
