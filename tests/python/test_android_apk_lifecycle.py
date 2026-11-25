@@ -1154,6 +1154,40 @@ def test_navigation_failure_classifies_owned_focus_scroll_and_ime_without_text(f
     assert private not in json.dumps(facts)
 
 
+@pytest.mark.parametrize("reason,failed_reads,expected_attempts", [
+    ("missing-file", 1, 2),
+    ("missing-file", 3, 3),
+    ("permission-denied", 1, 1),
+])
+def test_browser_return_retries_only_missing_fresh_hierarchy(monkeypatch, reason, failed_reads, expected_attempts):
+    calls = []
+    reads = 0
+    missing = "No such file or directory" if reason == "missing-file" else "Permission denied"
+    sleeps = []
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+
+    def command(*args):
+        nonlocal reads
+        call = args[2:]
+        calls.append(call)
+        if call[:2] == ("shell", "cat"):
+            reads += 1
+            if reads <= failed_reads:
+                raise AdbOperationFailure(call, exit_code=1, stderr=missing)
+            return "<hierarchy/>"
+        return ""
+
+    ui = subject.ProductionUi(command)
+    if failed_reads < expected_attempts:
+        assert ui._hierarchy() == "<hierarchy/>"
+    else:
+        with pytest.raises(AdbOperationFailure, match=reason):
+            ui._hierarchy()
+    assert calls == [("shell", "rm", "-f", ui.path), ("shell", "uiautomator", "dump", ui.path),
+                     ("shell", "cat", ui.path)] * expected_attempts
+    assert sleeps == [0.25] * (expected_attempts - 1)
+
+
 @pytest.mark.parametrize("fault", ["null-root", "idle-timeout", "silent-no-write", "partial-write", "invalidation-failed", None])
 def test_each_hierarchy_requires_a_fresh_owned_dump_before_controls_can_authorize_a_tap(fault):
     files, calls = {}, []

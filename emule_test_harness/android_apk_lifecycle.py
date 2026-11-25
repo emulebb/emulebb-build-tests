@@ -463,14 +463,24 @@ class ProductionUi:
         return self.command(*self.prefix, "shell", *args)
 
     def _hierarchy(self):
+        from .android_adb_failure import AdbOperationFailure
+
         # WHY: AOSP DumpCommand can return success without writing a hierarchy
-        # after null-root/idle failures. Invalidate only this owned UUID file so
-        # an earlier screen can never authorize a tap on the current screen.
-        self.shell("rm", "-f", self.path)
-        self.shell("uiautomator", "dump", self.path)
-        # This transient hierarchy contains the visible credential. Never copy
-        # it to the host or retain it as a diagnostic artifact.
-        return self.shell("cat", self.path)
+        # during window transitions. Retry the missing owned file only and
+        # invalidate it every time so an old screen cannot authorize a tap.
+        for attempt in range(3):
+            self.shell("rm", "-f", self.path)
+            self.shell("uiautomator", "dump", self.path)
+            try:
+                # The hierarchy can contain the visible credential. Keep it
+                # in memory and out of diagnostic artifacts.
+                return self.shell("cat", self.path)
+            except AdbOperationFailure as error:
+                failure = error.safe_failure
+                if (attempt == 2 or failure["reason"] != "missing-file" or failure["operation"] != "shell-cat"
+                        or not failure["exitCode"]):
+                    raise
+                time.sleep(0.25)
 
     def inspect(self):
         # WHY: retain phase and network wait only from the same bounded UI
