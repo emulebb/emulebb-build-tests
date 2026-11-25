@@ -1040,13 +1040,46 @@ def test_failed_navigation_records_numeric_progress_and_only_unambiguous_ime_vis
     assert facts["control"] == "start_service" and facts["control"] in subject.APK_NAVIGATION_CONTROLS
     assert facts["displayBounds"] == [0, 0, 1080, 1920]
     assert facts["scrollBounds"] == [0, 24, 1080, 1800]
-    assert facts["lastGesture"] == [540, 480, 540, 1440]
+    x = 540 if moves else 810
+    assert facts["lastGesture"] == [x, 468, x, 1356]
     assert {field: facts[field] for field in ("forwardAttempts", "backwardAttempts", "forwardProgress", "backwardProgress")} == {
         "forwardAttempts": 6, "backwardAttempts": 6,
         "forwardProgress": 6 if moves else 0, "backwardProgress": 6 if moves else 0}
     assert facts.get("imeVisible") == ({"true": True, "false": False}.get(ime))
     assert private not in json.dumps(facts)
     assert not any(call[:3] == ("shell", "input", "tap") for call in calls)
+
+
+def test_start_after_force_stop_uses_another_scroll_lane_when_center_does_not_move():
+    gestures = []
+    taps = []
+    reached = False
+
+    def command(*args):
+        nonlocal reached
+        call = args[2:]
+        if call == ("shell", "wm", "size"):
+            return "Physical size: 1080x1920"
+        if call[:3] == ("shell", "input", "swipe"):
+            gesture = tuple(map(int, call[3:7]))
+            gestures.append(gesture)
+            reached = gesture == (330, 1290, 330, 430)
+        if call[:3] == ("shell", "input", "tap"):
+            taps.append(tuple(map(int, call[3:])))
+        if call[:2] == ("shell", "cat"):
+            start = ('<node package="org.emulebb.android" resource-id="org.emulebb.android:id/start_service" '
+                     'enabled="true" bounds="[200,1000][800,1100]"/>') if reached else ""
+            return ('<hierarchy><node class="android.widget.ScrollView" package="org.emulebb.android" '
+                    'scrollable="true" bounds="[120,0][960,1720]">'
+                    '<node package="org.emulebb.android" resource-id="org.emulebb.android:id/service_status" '
+                    'text="Stopped" enabled="true" bounds="[200,80][800,160]"/>' + start + '</node></hierarchy>')
+        return ""
+
+    ui = subject.ProductionUi(command)
+    ui.click("start_service")
+    assert gestures == [(540, 1290, 540, 430), (330, 1290, 330, 430)]
+    assert taps == [(500, 1050)]
+    assert ui.navigation["forwardProgress"] == 1
 
 
 @pytest.mark.parametrize('focus,expected', [
