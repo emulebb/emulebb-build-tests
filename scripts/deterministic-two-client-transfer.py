@@ -2693,6 +2693,101 @@ def observe_native_peer_browse(
             "total": page["total"], "file": matches[0]}
 
 
+def observe_stock_browsing_rust(
+    app, base_url: str, api_key: str, share: Path, *,
+    host: str, port: int, server_control: ed2k_server.Ed2kServerControl,
+) -> dict[str, object]:
+    """Use the native stock source command and look for an unrequested canary."""
+    import win32con
+    import win32gui
+    import win32process
+
+    from emule_test_harness.rust_rest_contract import iter_library_files
+
+    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
+    anchor = share / "RustBrowseAnchor.bin"
+    canary = share / "Canary" / "RustBrowseCanary.bin"
+    write_fixture_file(anchor, 10 * 1024 * 1024, seed=148)
+    write_fixture_file(canary, 4096, seed=149)
+    publication = rust_local_ed2k.publish_shared_tree(base_url, api_key, root=share, file_name=anchor.name)
+    base_link = publication["sharedFiles"]["matched"]["ed2kLink"]
+    # Stock parses sources from the extension after the first slash.
+    link = f"{base_link}|sources,{host}:{port}|/"
+    rows = iter_library_files(
+        lambda path: rust_local_ed2k.request_json(base_url, "GET", "/api/v1" + path, api_key),
+        view="shared", root_id=str(publication["directories"]["id"]), search=canary.name,
+    )
+    expected = rust_local_ed2k.require_library_file(rows, canary.name)
+
+    main = live_common.find_process_main_window(app)
+    pid = live_common.resolve_app_process_id(app)
+    if main is None or pid is None or win32process.GetWindowThreadProcessId(main.handle)[1] != pid:
+        raise RuntimeError("Stock browse requires the isolated client's main window")
+    # Stock's connected LowID source filter rejects its local IP even when
+    # the direct source uses another port. Use the explicit link offline.
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
+    server_control.wait_for_client_absent(CLIENT_IDENTITIES["stock_emule"].nick, 10)
+    # Stock MenuCmds.h and resource.h at ac3d52e. Post the modal command
+    # first so its message loop can accept the link from this process.
+    win32gui.PostMessage(main.handle, win32con.WM_COMMAND, 10247, 0)  # MP_HM_DIRECT_DOWNLOAD
+
+    def direct_download_dialog() -> int | None:
+        dialogs = []
+
+        def visit(hwnd, _):
+            if (win32gui.GetWindow(hwnd, win32con.GW_OWNER) == main.handle
+                    and win32process.GetWindowThreadProcessId(hwnd)[1] == pid
+                    and win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) == "#32770"):
+                dialogs.append(hwnd)
+            return True
+
+        win32gui.EnumWindows(visit, None)
+        return next((hwnd for hwnd in dialogs if win32gui.GetDlgItem(hwnd, 2010)), None)
+
+    dialog = live_common.wait_for(direct_download_dialog, 10, 0.1, "stock Direct Download dialog")
+    edit = win32gui.GetDlgItem(dialog, 2010)  # IDC_ELINK
+    win32gui.SendMessage(edit, win32con.WM_SETTEXT, 0, link)
+    if win32gui.SendMessage(edit, win32con.WM_GETTEXTLENGTH, 0, 0) != len(link):
+        raise RuntimeError("Stock Direct Download did not accept the fixture link")
+    win32gui.PostMessage(win32gui.GetDlgItem(dialog, win32con.IDOK), win32con.BM_CLICK, 0, 0)
+    live_common.wait_for(lambda: not win32gui.IsWindowVisible(dialog), 10, 0.1, "stock link admission")
+    # Stock schedules peer connections only while connected to a network.
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
+    server_control.wait_for_client(CLIENT_IDENTITIES["stock_emule"].nick, 15)
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10211, 0)  # MP_HM_TRANSFER
+    downloads = ui.find_control(main.handle, 2048, "SysListView32")  # IDC_DOWNLOADLIST
+    handle = ui.open_process(pid)
+    try:
+        def find_row(control: int, label: str) -> tuple[int, str] | None:
+            for index in range(ui.get_list_count(control)):
+                text = ui.get_list_item_text(handle, control, index, 0)
+                if text == label:
+                    return index, text
+            return None
+
+        def find_rust_source() -> tuple[int, str] | None:
+            anchor_row = find_row(downloads, anchor.name)
+            if anchor_row is None:
+                return None
+            ui.select_list_row(handle, downloads, anchor_row[0])
+            win32gui.SendMessage(downloads, win32con.WM_KEYDOWN, win32con.VK_ADD, 0)
+            # The Rust HELLO nickname differs from its server nickname.
+            return find_row(downloads, "eMule")
+
+        index, _ = live_common.wait_for(find_rust_source, 30, 0.2, "Rust source row")
+        ui.select_list_row(handle, downloads, index)
+        win32gui.SendMessage(downloads, win32con.WM_COMMAND, 10106, 0)  # MP_SHOWLIST
+        ui.open_search_page(main.handle)
+        results = ui.find_control(main.handle, 2172, "SysListView32")  # IDC_SEARCHLIST
+        index, _ = live_common.wait_for(lambda: find_row(results, canary.name), 30, 0.2, "stock remote canary")
+        row = ui.get_search_result_row(handle, results, index)
+    finally:
+        ui.close_process(handle)
+    if row["hash"] != expected["hash"] or ui.parse_display_size_bytes(row["size"]) != canary.stat().st_size:
+        raise RuntimeError("Stock remote canary differs from the Rust catalog")
+    return {"status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": 4096}
+
+
 def wait_for_transfer(
     base_url: str,
     api_key: str,
@@ -3957,6 +4052,9 @@ def main(argv: list[str] | None = None) -> int:
                 'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA,
                 'network.connections.connectTimeoutSeconds': 10,
                 'network.servers.reconnectIntervalSeconds': 60,
+                **({'transfers.uploadLimitBytesPerSecond': 262_144,
+                    'transfers.upload.sharedFilesVisibility': 'everyone'}
+                   if args.verify_peer_browse and args.client2_identity == "stock_emule" else {}),
             },
         )
         if args.transfer_scenario == SERVER_UDP_METADATA:
@@ -5428,6 +5526,12 @@ def main(argv: list[str] | None = None) -> int:
             report["source_lifecycle"]["completed"] = report["checks"][
                 "client1_transfer_completed_file"
             ]
+        if args.verify_peer_browse and args.client2_identity == "stock_emule":
+            current_phase = "stock_browses_rust_publisher"
+            report["checks"]["stock_browses_rust_publisher"] = observe_stock_browsing_rust(
+                client2_app, base_url, args.api_key, paths.source_artifacts_dir / "rust-browse-share",
+                host=p2p_address, port=ports["client1_tcp"], server_control=server_control,
+            )
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )
