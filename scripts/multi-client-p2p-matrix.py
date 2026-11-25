@@ -431,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
     """Runs the Windows multi-client P2P matrix."""
 
     args = parse_args(argv)
+    selected_optional_ids = set(args.require_scenario or ())
+    run_all_optional = not selected_optional_ids
+    needs_mfc = run_all_optional or MFC_ORACLE_TRANSFER_SCENARIO_ID in selected_optional_ids
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
@@ -440,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=needs_mfc,
     )
     report: dict[str, object] = {
         "suite": SUITE_NAME,
@@ -463,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         mandatory_missing = [
             row.identity.profile_id
             for row in (inventory["emulebb"], inventory["mfc_oracle"])
-            if not row.available
+            if needs_mfc and not row.available
         ]
         if mandatory_missing:
             report["status"] = "failed"
@@ -475,8 +479,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         report["ed2k_server_binary"] = prepare_shared_ed2k_server_binary(paths, args)
-        selected_optional_ids = set(args.require_scenario or ())
-        run_all_optional = not selected_optional_ids
         scenarios = []
         if run_all_optional or MFC_ORACLE_TRANSFER_SCENARIO_ID in selected_optional_ids:
             scenarios.append(run_deterministic_transfer_scenario(paths, args))

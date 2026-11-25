@@ -97,6 +97,20 @@ def test_failed_registered_source_verification_is_an_admission_failure(monkeypat
         rust_client.verified_runtime_stage(source, output)
 
 
+def test_registered_diagnostics_requires_the_verified_inventory(tmp_path):
+    regular = tmp_path / "emulebb-rust.exe"
+    diagnostics = tmp_path / "emulebb-rust-diagnostics.exe"
+    diagnostics.touch()
+    identity = {"executable": str(regular), "files": []}
+    with pytest.raises(RuntimeError, match="verified diagnostics"):
+        rust_client.registered_diagnostics_executable(identity)
+    identity["files"].append({"path": f"bin/{diagnostics.name}"})
+    assert rust_client.registered_diagnostics_executable(identity) == diagnostics
+    diagnostics.unlink()
+    with pytest.raises(RuntimeError, match="verified diagnostics"):
+        rust_client.registered_diagnostics_executable(identity)
+
+
 def load_rust_live_wire_module():
     script_path = Path(__file__).parents[2] / "scripts" / "rust-live-wire-hideme.py"
     spec = importlib.util.spec_from_file_location("rust_live_wire_hideme", script_path)

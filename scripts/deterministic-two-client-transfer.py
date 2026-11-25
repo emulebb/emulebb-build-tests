@@ -54,6 +54,7 @@ from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
     ClientAvailability,
@@ -3303,6 +3304,7 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=args.client2_identity == "mfc_oracle",
     )
     profile_seed_dir = (
         Path(args.profile_seed_dir).resolve()
@@ -3849,10 +3851,14 @@ def main(argv: list[str] | None = None) -> int:
             "pattern": fixture_pattern,
         }
 
-        rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(
-            get_workspace_output_root()
-        )
+        rust_repo = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+        output_root = get_workspace_output_root()
+        runtime_identity = None
+        if rust_repo == resolve_manifest_repo(paths.workspace_root, "emulebb_rust"):
+            rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(output_root)
+        else:
+            runtime_identity = rust_client.verified_runtime_stage(rust_repo, output_root)
+            rust_exe = rust_client.registered_diagnostics_executable(runtime_identity)
         rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
         rust_incoming = rust_profile / "incoming"
         rust_incoming.mkdir(parents=True, exist_ok=True)
@@ -4167,7 +4173,9 @@ def main(argv: list[str] | None = None) -> int:
                 "app_exe": str(rust_exe),
                 "app_sha256": file_sha256(rust_exe),
                 "source_repo": str(rust_repo),
-                "source_revision": git_head_revision(rust_repo),
+                "source_revision": (runtime_identity["source"]["revision"]
+                                    if runtime_identity else git_head_revision(rust_repo)),
+                **({"runtime_stage_receipt": runtime_identity["receipt"]} if runtime_identity else {}),
                 "settings": str(rust_profile / rust_client.RUST_PROFILE_SETTINGS_FILE),
                 "metadata": str(rust_profile / rust_client.RUST_PROFILE_METADATA_FILE),
                 "diagnostics_dir": str(rust_diagnostics_dir),

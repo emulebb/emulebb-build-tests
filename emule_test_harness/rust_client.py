@@ -85,6 +85,16 @@ def verified_runtime_stage(rust_repo: Path, output_root: Path) -> dict:
     return data
 
 
+def registered_diagnostics_executable(identity: dict) -> Path:
+    """Select the diagnostics companion from the verified runtime inventory."""
+    regular = Path(identity["executable"])
+    name = regular.stem + "-diagnostics" + regular.suffix
+    executable = regular.with_name(name)
+    if not any(item["path"] == f"bin/{name}" for item in identity["files"]) or not executable.is_file():
+        raise RuntimeError("Registered runtime stage is missing its verified diagnostics executable")
+    return executable
+
+
 def write_private_text(path: Path, contents: str) -> None:
     """Write credential-bearing text with owner-only POSIX permissions."""
 
