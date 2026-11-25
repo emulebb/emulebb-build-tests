@@ -281,6 +281,15 @@ class Ed2kFilePeerObserver:
             raise ValueError("Peer returned an invalid filename answer")
         return reply.opcode == 0x59
 
+    def file_status_available(self, file_hash: str) -> bool:
+        """Use the stock status request to get an explicit no-file response."""
+        value = parse_file_hash(file_hash)
+        self.client.send(0x4F, value)
+        reply = self._reply(value, {0x50, 0x48})
+        if reply.opcode == 0x50 and len(reply.payload) < 18:
+            raise ValueError("Peer returned a truncated file status")
+        return reply.opcode == 0x50
+
     def start_upload(self, file_hash: str) -> bool:
         """Require an upload grant or an explicit file refusal on this connection."""
         value = parse_file_hash(file_hash)

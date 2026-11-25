@@ -295,6 +295,18 @@ def test_diagnostic_bundle_contract_body_uses_minimum_bounded_capture() -> None:
     }
 
 
+def test_rust_download_source_browse_probe_round_trips_its_path() -> None:
+    module = rust_rest_conformance.load_rest_smoke_module()
+    operation = "getDownloadSourceBrowse"
+    path = "/downloads/{id}/sources/{clientId}/operations/browse/{searchId}"
+
+    concrete = module.concrete_contract_path(path, operation)
+
+    assert concrete.endswith("/operations/browse/123")
+    assert module.normalize_contract_path_for_openapi(concrete) == path
+    assert module.REST_CONTRACT_EXPECTED_ERROR_STATUSES[operation] == (404,)
+
+
 def test_library_point_probes_have_valid_bodies_and_require_missing_hash_response() -> None:
     tooling = resolve_selected_workspace_repo(Path(__file__).parents[2], "emulebb-tooling")
     module = rust_rest_conformance.load_rest_smoke_module(

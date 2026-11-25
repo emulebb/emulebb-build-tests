@@ -65,6 +65,7 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         path = path.replace(f"/results/{RUST_MISSING_DOWNLOAD_ID}", "/results/{resultId}")
         path = path.replace(f"/library/roots/{RUST_MISSING_DOWNLOAD_ID}", "/library/roots/{id}")
         path = path.replace(f"/library/tags/{RUST_MISSING_TAG_NAME}", "/library/tags/{tagName}")
+        path = path.replace("/operations/browse/123", "/operations/browse/{searchId}")
         path = path.replace(f"/library/ignores/defaults/{smoke.REST_CONTRACT_IGNORE_RULE_KEY}",
                             "/library/ignores/defaults/{ruleKey}")
         return normalize_path(path.replace(f"/categories/{RUST_MISSING_CATEGORY_NAME}",
@@ -123,6 +124,7 @@ def load_rest_smoke_module(openapi_path: Path | None = None) -> Any:
         **{name: (404,) for name in (
             "getDownload", "patchDownload", "listDownloadParts", "listDownloadComments",
             "listDownloadSources", "getDownloadSource", "browseDownloadSource",
+            "getDownloadSourceBrowse",
             "addDownloadSourceFriend", "removeDownloadSourceFriend", "removeDownloadSource",
             "banDownloadSource", "unbanDownloadSource",
         )},

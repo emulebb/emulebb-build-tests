@@ -196,6 +196,7 @@ def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_
         SimpleNamespace(marker=0xe3, opcode=0x55, payload=b""),
         SimpleNamespace(marker=0xe3, opcode=0x46, payload=value + struct.pack("<II", 0, 4) + b"data"),
         SimpleNamespace(marker=0xe3, opcode=0x48, payload=value),
+        SimpleNamespace(marker=0xe3, opcode=0x48, payload=value),
     ]
     class Client:
         def __init__(self, *args, **kwargs):
@@ -213,7 +214,8 @@ def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_
         assert peer.start_upload(FILE_HASH)
         assert peer.request_range(FILE_HASH, 0, 4) == b"data"
         assert peer.request_range(FILE_HASH, 4, 8) is None
-        assert [opcode for opcode, _ in peer.client.sent] == [1, 0x58, 0x54, 0x47, 0x47]
+        assert not peer.file_status_available(FILE_HASH)
+        assert [opcode for opcode, _ in peer.client.sent] == [1, 0x58, 0x54, 0x47, 0x47, 0x4F]
         assert peer.client.sent[3][1] == value + struct.pack("<6I", 0, 0, 0, 4, 0, 0)
         with pytest.raises(ValueError, match="bounded"):
             peer.request_range(FILE_HASH, 0, 184_321)
