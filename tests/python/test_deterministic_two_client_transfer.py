@@ -32,6 +32,35 @@ def load_suite_module():
     return module
 
 
+def test_observe_native_peer_browse_matches_endpoint_and_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_suite_module()
+    endpoint = {"address": "192.0.2.10", "port": 4662, "viewSharedFiles": True, "clientId": "actual"}
+    fixture = {"fileHash": "22" * 16, "displayName": "fixture.bin", "sizeBytes": 10, "directory": None}
+    replies = iter([
+        [{**endpoint, "port": 4663, "clientId": "other"}, endpoint],
+        {"searchId": "7"},
+        {"searchId": "7", "status": "complete", "total": 1, "files": [fixture]},
+    ])
+    calls = []
+
+    def request(_base_url, path, *, method="GET", **_kwargs):
+        calls.append((method, path))
+        return {"status": 200, "raw_json": {"data": next(replies), "meta": {}}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", request)
+    report = module.observe_native_peer_browse(
+        "http://test", "fixture", "1", host="192.0.2.10", port=4662,
+        file_hash=fixture["fileHash"], name=fixture["displayName"], size=10,
+    )
+    path = "/api/v1/downloads/1/sources"
+    assert calls == [
+        ("GET", path),
+        ("POST", f"{path}/actual/operations/browse"),
+        ("GET", f"{path}/actual/operations/browse/7?limit=200"),
+    ]
+    assert report["file"] == fixture
+
+
 def test_transfer_diagnostics_preserves_retired_hashset_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -35,19 +35,23 @@ def option_value(command: list[str], option: str) -> str | None:
 
 @pytest.mark.native
 @pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
-def test_native_stock_and_amule_transfers() -> None:
+@pytest.mark.parametrize("verify_browse", [False, True], ids=["transfer", "browse"])
+def test_native_stock_and_amule_transfers(verify_browse: bool) -> None:
     """Run only the two independent native client rows under Builder."""
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
         pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
     module = load_suite_module()
-    result = module.main([
+    arguments = [
         "--lan-bind-addr", lan_host,
         "--fixture-size-bytes", str(10 * 1024 * 1024),
+        "--transfer-completion-timeout-seconds", "300",
         "--require-scenario", module.STOCK_EMULE_TRANSFER_SCENARIO_ID,
         "--require-scenario", module.AMULE_TRANSFER_SCENARIO_ID,
-    ])
-    assert result == 0
+    ]
+    if verify_browse:
+        arguments.append("--verify-peer-browse")
+    assert module.main(arguments) == 0
 
 
 def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:

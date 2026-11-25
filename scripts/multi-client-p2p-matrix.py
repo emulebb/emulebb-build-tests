@@ -72,6 +72,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
+    parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")
@@ -249,6 +250,8 @@ def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_exe
 
     scenario_artifacts = paths.source_artifacts_dir / "e4"
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    if args.verify_peer_browse:
+        command.append("--verify-peer-browse")
     command.extend(
         [
             "--client2-app-exe",
@@ -276,6 +279,8 @@ def run_amule_transfer_scenario(
 
     scenario_artifacts = paths.source_artifacts_dir / "a7"
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    if args.verify_peer_browse:
+        command.append("--verify-peer-browse")
     command.extend(
         [
             "--client2-app-exe",
@@ -432,7 +437,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     selected_optional_ids = set(args.require_scenario or ())
     run_all_optional = not selected_optional_ids
-    needs_mfc = run_all_optional or MFC_ORACLE_TRANSFER_SCENARIO_ID in selected_optional_ids
+    independent_rows = {STOCK_EMULE_TRANSFER_SCENARIO_ID, AMULE_TRANSFER_SCENARIO_ID}
+    needs_mfc = run_all_optional or not selected_optional_ids <= independent_rows
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,

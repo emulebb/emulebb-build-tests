@@ -8,7 +8,8 @@ import pytest
 from emule_test_harness import amule_client
 
 
-def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path) -> None:
+@pytest.mark.parametrize("allow_browse", [False, True])
+def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path, allow_browse: bool) -> None:
     config_dir = tmp_path / "profile" / "config"
     incoming_dir = tmp_path / "profile" / "incoming"
     temp_dir = tmp_path / "profile" / "temp"
@@ -24,6 +25,7 @@ def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path) -> No
         udp_port=4672,
         ec_port=4712,
         ec_password="secret",
+        allow_peer_browse=allow_browse,
     )
 
     text = (config_dir / "amule.conf").read_text(encoding="utf-8")
@@ -31,6 +33,9 @@ def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path) -> No
     assert "Address=\n" in text
     assert "ConnectToKad=0" in text
     assert "ConnectToED2K=1" in text
+    assert "NewVersionCheck=0" in text
+    assert f"SeeShare={0 if allow_browse else 2}" in text
+    assert f"MaxUpload={1024 if allow_browse else 0}" in text
     assert "ECAddress=127.0.0.1" in text
     assert "ECPort=4712" in text
     assert f"ECPassword={hashlib.md5(b'secret', usedforsecurity=False).hexdigest()}" in text

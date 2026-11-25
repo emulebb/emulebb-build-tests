@@ -245,6 +245,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--fixture-size-bytes", type=int)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
+    parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -273,6 +274,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
 
+    if args.verify_peer_browse and (
+        args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
+    ):
+        raise ValueError("Peer browse requires the stock eMule or aMule full-link transfer.")
     if args.verify_offerfiles_v1_stock_fallback:
         if args.client2_identity not in {"stock_emule", "amule"}:
             raise ValueError(
@@ -2643,6 +2648,51 @@ def wait_for_download_sources(base_url: str, api_key: str, *, download_id: str,
     return live_common.wait_for(resolve, timeout_seconds, 0.25, f"Rust download {download_id} source")
 
 
+def observe_native_peer_browse(
+    base_url: str, api_key: str, download_id: str, *,
+    host: str, port: int, file_hash: str, name: str, size: int,
+) -> dict[str, object]:
+    """Browse the connected native publisher and match the fixture in its catalog."""
+    sources = f"/api/v1/downloads/{download_id}/sources"
+
+    def eligible_source() -> dict[str, object] | None:
+        result = rest_smoke.http_request(base_url, sources, api_key=api_key)
+        return next((row for row in rows_from_result(result)
+                     if isinstance(row, dict) and row.get("address") == host
+                     and row.get("port") == port and row.get("viewSharedFiles") is True
+                     and isinstance(row.get("clientId"), str) and row["clientId"]), None)
+
+    source = live_common.wait_for(eligible_source, 30, 0.1, "native browse-capable source")
+    path = f"{sources}/{source['clientId']}/operations/browse"
+    started = response_payload(rest_smoke.http_request(base_url, path, method="POST", api_key=api_key), 200)
+    search_id = started.get("searchId") if isinstance(started, dict) else None
+    if not isinstance(search_id, str) or not search_id.isascii() or not search_id.isdecimal():
+        raise RuntimeError("Rust did not return a peer browse identifier")
+
+    def completed_page() -> dict[str, object] | None:
+        result = rest_smoke.http_request(base_url, f"{path}/{search_id}?limit=200", api_key=api_key)
+        page = response_payload(result, 200)
+        if not isinstance(page, dict) or page.get("searchId") != search_id:
+            raise RuntimeError("Peer browse page has a different request identity")
+        return None if page.get("status") == "pending" else page
+
+    page = live_common.wait_for(completed_page, 30, 0.1, "completed native peer browse")
+    if page.get("status") != "complete":
+        raise RuntimeError(f"Native peer browse ended with status {page.get('status')!r}")
+    files = page.get("files")
+    if not isinstance(files, list):
+        raise RuntimeError("Native peer browse did not return a file list")
+    matches = [
+        row for row in files
+        if isinstance(row, dict)
+        and (row.get("fileHash"), row.get("displayName"), row.get("sizeBytes")) == (file_hash, name, size)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("Native peer browse did not list exactly one matching fixture")
+    return {"status": page["status"], "searchId": search_id, "userHash": source.get("userHash"),
+            "total": page["total"], "file": matches[0]}
+
+
 def wait_for_transfer(
     base_url: str,
     api_key: str,
@@ -3304,7 +3354,7 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
-        require_app_exe=args.client2_identity == "mfc_oracle",
+        require_app_exe=args.client2_identity not in {"stock_emule", "amule"},
     )
     profile_seed_dir = (
         Path(args.profile_seed_dir).resolve()
@@ -3993,6 +4043,7 @@ def main(argv: list[str] | None = None) -> int:
                 udp_port=ports["client2_udp"],
                 ec_port=ports["client2_ec"],
                 ec_password=args.api_key,
+                allow_peer_browse=args.verify_peer_browse,
             )
         else:
             configure_client_profile(
@@ -4037,6 +4088,10 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
             )
+            if args.verify_peer_browse:
+                live_common.apply_emule_preferences(
+                    Path(client2["config_dir"]), (("SeeShare", "0"), ("MaxUpload", "1024")),
+                )
             if args.transfer_scenario == DIRECT_CALLBACK:
                 # MFC treats a private-only Kad routing table as LAN mode, where
                 # stock deliberately reports TCP-open and rejects direct callbacks.
@@ -5350,6 +5405,13 @@ def main(argv: list[str] | None = None) -> int:
         admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
         download_id = admission["jobId"]
         report["checks"]["client1_transfer_add"] = admission
+        if args.verify_peer_browse:
+            current_phase = "rust_browses_native_publisher"
+            report["checks"]["rust_browses_native_publisher"] = observe_native_peer_browse(
+                base_url, args.api_key, download_id, host=p2p_address, port=ports["client2_tcp"],
+                file_hash=transfer_hash, name=fixture_file.name, size=int(link_info["size"]),
+            )
+            current_phase = "complete_transfer"
         report["checks"]["client1_transfer_completed_file"] = (
             rust_local_ed2k.wait_for_download_completed(
                 base_url,

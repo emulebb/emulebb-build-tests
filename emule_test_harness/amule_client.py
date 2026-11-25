@@ -40,6 +40,7 @@ def configure_profile(
     udp_port: int,
     ec_port: int,
     ec_password: str,
+    allow_peer_browse: bool = False,
 ) -> None:
     """Writes the minimal deterministic profile consumed by official `amuled`."""
 
@@ -48,7 +49,7 @@ def configure_profile(
     password_hash = _ec_password_digest(ec_password)
     config = f"""[eMule]
 Nick={nick}
-MaxUpload=0
+MaxUpload={1024 if allow_peer_browse else 0}
 MaxDownload=0
 Port={tcp_port}
 UDPPort={udp_port}
@@ -76,6 +77,8 @@ ParanoidFiltering=0
 IPFilterAutoLoad=0
 IPFilterSystem=0
 AutoRescanSharedDirs=0
+NewVersionCheck=0
+SeeShare={0 if allow_peer_browse else 2}
 [ExternalConnect]
 AcceptExternalConnections=1
 RequireEncryption=0
