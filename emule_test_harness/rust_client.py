@@ -14,6 +14,7 @@ from pathlib import Path
 from . import kad_nodes
 from .paths import get_required_emule_workspace_root, get_workspace_output_root
 from . import rust_metadata
+from .workspace_layout import resolve_selected_workspace_repo
 
 CARGO_TARGET_DIR_ENV = "CARGO_TARGET_DIR"
 RUST_PROFILE_SETTINGS_FILE = "emulebb-rust-settings.toml"
@@ -52,8 +53,8 @@ def staged_executable(output_root: Path) -> Path:
     return output_root / "tools" / "emulebb-rust" / "bin" / f"emulebb-rust{suffix}"
 
 
-def verified_runtime_stage(rust_repo: Path, output_root: Path) -> dict:
-    """Admit a registered source's complete runtime bundle through its persisted owner."""
+def verified_runtime_stage(rust_repo: Path, output_root: Path, *, diagnostics: bool = False) -> dict:
+    """Admit the registered executable flavor through its persisted owner."""
     workspace = get_required_emule_workspace_root()
     source = rust_repo.resolve()
     boundary = workspace / "workspaces" / "agents"
@@ -62,10 +63,17 @@ def verified_runtime_stage(rust_repo: Path, output_root: Path) -> dict:
     parts = source.relative_to(boundary).parts
     if len(parts) != 2 or parts[1] != "emulebb-rust":
         raise RuntimeError("Registered runtime source must identify the Rust checkout root")
-    completed = subprocess.run(
-        [sys.executable, "-B", str(source / "tools/fresh_rust_build.py"), "--verify-stage"],
-        cwd=source, env=os.environ.copy(), capture_output=True, text=True,
-    )
+    command = [sys.executable, "-B"]
+    if diagnostics:
+        owner = resolve_selected_workspace_repo(Path(__file__).resolve().parents[1], "emulebb-build")
+        command.extend([
+            "-m", "emule_workspace", "rust-runtime-stage", "verify",
+            "--rust-repo", str(source), "--workstream", parts[0], "--flavor", "diagnostics",
+        ])
+    else:
+        owner = source
+        command.extend([str(source / "tools/fresh_rust_build.py"), "--verify-stage"])
+    completed = subprocess.run(command, cwd=owner, env=os.environ.copy(), capture_output=True, text=True)
     if completed.returncode:
         raise RuntimeError(f"Registered runtime admission failed: {completed.stderr[-4096:].strip()}")
     data = json.loads(completed.stdout)
@@ -75,7 +83,9 @@ def verified_runtime_stage(rust_repo: Path, output_root: Path) -> dict:
     if not isinstance(target, str) or re.fullmatch(r"[A-Za-z0-9_-]+", target) is None:
         raise RuntimeError("Registered runtime owner returned an invalid target identity")
     root = output_root / "tools" / "workstreams" / parts[0] / "emulebb-rust" / target
-    name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
+    name = "emulebb-rust-diagnostics" if diagnostics else "emulebb-rust"
+    if os.name == "nt":
+        name += ".exe"
     expected = root / "bin" / name
     if (data.get("schema") != "emulebb.rust-runtime-stage/1" or data.get("workstream") != parts[0]
             or data.get("source", {}).get("path") != str(source)
@@ -83,16 +93,6 @@ def verified_runtime_stage(rust_repo: Path, output_root: Path) -> dict:
             or data.get("receipt") != str(root / "stage.json") or not expected.is_file()):
         raise RuntimeError("Registered runtime identity does not match its source and owned stage")
     return data
-
-
-def registered_diagnostics_executable(identity: dict) -> Path:
-    """Select the diagnostics companion from the verified runtime inventory."""
-    regular = Path(identity["executable"])
-    name = regular.stem + "-diagnostics" + regular.suffix
-    executable = regular.with_name(name)
-    if not any(item["path"] == f"bin/{name}" for item in identity["files"]) or not executable.is_file():
-        raise RuntimeError("Registered runtime stage is missing its verified diagnostics executable")
-    return executable
 
 
 def write_private_text(path: Path, contents: str) -> None:

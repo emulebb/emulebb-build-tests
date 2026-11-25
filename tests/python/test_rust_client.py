@@ -53,12 +53,15 @@ def test_container_profile_preparation_propagates_failure_without_retry() -> Non
     assert options == {"env": environment, "timeout": 120}
 
 
-def test_registered_stage_admission_uses_persisted_source_verifier(monkeypatch, tmp_path):
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_registered_stage_admission_uses_persisted_source_verifier(monkeypatch, tmp_path, diagnostics):
     workspace, output = tmp_path / "workspace", tmp_path / "output"
     source = workspace / "workspaces/agents/sample/emulebb-rust"
     source.mkdir(parents=True)
     root = output / "tools/workstreams/sample/emulebb-rust/x86_64-pc-windows-msvc"
-    name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
+    name = "emulebb-rust-diagnostics" if diagnostics else "emulebb-rust"
+    if os.name == "nt":
+        name += ".exe"
     executable = root / "bin" / name
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"source-bound fixture")
@@ -72,17 +75,26 @@ def test_registered_stage_admission_uses_persisted_source_verifier(monkeypatch, 
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(identity), stderr="")
 
     monkeypatch.setattr(rust_client, "get_required_emule_workspace_root", lambda: workspace)
+    builder = workspace / "workspaces/agents/sample/emulebb-build"
+    monkeypatch.setattr(rust_client, "resolve_selected_workspace_repo", lambda _caller, _name: builder)
     monkeypatch.setattr(rust_client.subprocess, "run", verify)
-    assert rust_client.verified_runtime_stage(source, output) == identity
+    assert rust_client.verified_runtime_stage(source, output, diagnostics=diagnostics) == identity
     command, arguments = calls[0]
-    assert command[-2:] == [str(source / "tools/fresh_rust_build.py"), "--verify-stage"]
-    assert arguments["cwd"] == source
+    if diagnostics:
+        assert command[2:] == [
+            "-m", "emule_workspace", "rust-runtime-stage", "verify",
+            "--rust-repo", str(source), "--workstream", "sample", "--flavor", "diagnostics",
+        ]
+        assert arguments["cwd"] == builder
+    else:
+        assert command[-2:] == [str(source / "tools/fresh_rust_build.py"), "--verify-stage"]
+        assert arguments["cwd"] == source
     for field, value in (("workstream", "other"), ("executable", str(output / "arbitrary.exe")),
                          ("target", "../../operator")):
         original = identity[field]
         identity[field] = value
         with pytest.raises(RuntimeError, match="runtime"):
-            rust_client.verified_runtime_stage(source, output)
+            rust_client.verified_runtime_stage(source, output, diagnostics=diagnostics)
         identity[field] = original
 
 
@@ -95,20 +107,6 @@ def test_failed_registered_source_verification_is_an_admission_failure(monkeypat
                         subprocess.CompletedProcess(args[0], 1, stdout="", stderr="source receipt differs"))
     with pytest.raises(RuntimeError, match="source receipt differs"):
         rust_client.verified_runtime_stage(source, output)
-
-
-def test_registered_diagnostics_requires_the_verified_inventory(tmp_path):
-    regular = tmp_path / "emulebb-rust.exe"
-    diagnostics = tmp_path / "emulebb-rust-diagnostics.exe"
-    diagnostics.touch()
-    identity = {"executable": str(regular), "files": []}
-    with pytest.raises(RuntimeError, match="verified diagnostics"):
-        rust_client.registered_diagnostics_executable(identity)
-    identity["files"].append({"path": f"bin/{diagnostics.name}"})
-    assert rust_client.registered_diagnostics_executable(identity) == diagnostics
-    diagnostics.unlink()
-    with pytest.raises(RuntimeError, match="verified diagnostics"):
-        rust_client.registered_diagnostics_executable(identity)
 
 
 def load_rust_live_wire_module():

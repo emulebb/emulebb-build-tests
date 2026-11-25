@@ -3907,8 +3907,8 @@ def main(argv: list[str] | None = None) -> int:
         if rust_repo == resolve_manifest_repo(paths.workspace_root, "emulebb_rust"):
             rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(output_root)
         else:
-            runtime_identity = rust_client.verified_runtime_stage(rust_repo, output_root)
-            rust_exe = rust_client.registered_diagnostics_executable(runtime_identity)
+            runtime_identity = rust_client.verified_runtime_stage(rust_repo, output_root, diagnostics=True)
+            rust_exe = Path(runtime_identity["executable"])
         rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
         rust_incoming = rust_profile / "incoming"
         rust_incoming.mkdir(parents=True, exist_ok=True)
