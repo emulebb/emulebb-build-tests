@@ -701,6 +701,31 @@ def _parallel_read(fetch: Callable[[], Any], attempts: list[dict], *, path: str)
             return value
 
 
+def _create_parallel_job(base_url: str, body: dict, *, file_hash: str, attempts: list[dict]) -> str:
+    """Retry only explicit persistence pressure for the same download identity."""
+    for attempt in range(1, PARALLEL_START_ATTEMPTS + 1):
+        receipt = {"hash": file_hash, "attempt": attempt}
+        attempts.append(receipt)
+        try:
+            # A busy response during projection can follow durable admission.
+            # Only a retry can observe the existing job for this same request.
+            created = request_json(base_url, "POST", "/api/v1/downloads", API_KEY, body,
+                                   expected_statuses=(201,) if attempt == 1 else (200, 201))
+            job_id = require_download_id(created, expected_hash=file_hash)
+        except RustRestFailure as error:
+            code = error.response_error.get("code")
+            receipt.update(httpStatus=error.status, errorCode=code[:128] if isinstance(code, str) else None)
+            if error.status != 503 or code != "PERSISTENCE_BUSY" or attempt == PARALLEL_START_ATTEMPTS:
+                error.add_note(f"Parallel create attempts: {json.dumps(attempts)}")
+                raise
+            delay = 0.25 * 2 ** (attempt - 1)
+            receipt["retryDelaySeconds"] = delay
+            time.sleep(delay)
+        else:
+            receipt["id"] = job_id
+            return job_id
+
+
 def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_base_url: str,
                             p2p_ip: str, incoming: Path, leecher_process: subprocess.Popen[str]) -> dict:
     """Observe admission and verify every delivered byte across independent peers."""
@@ -715,6 +740,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     if baseline["unfinished"] != 0:
         raise RuntimeError("Parallel proof requires the preceding transfer to be complete")
     jobs, hashes = {}, set()
+    create_attempts: list[dict] = []
     for index, source in enumerate(sources):
         name = f"Parallel-{index:02d}.bin"
         path = temp_root / "parallel-shared" / f"source-{index:02d}" / name
@@ -731,11 +757,10 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
         request_document(source["url"], "PATCH", "/api/v1/settings", API_KEY,
                          settings_patch(source_settings, set_values={"transfers": {
                              "uploadLimitBytesPerSecond": PARALLEL_UPLOAD_LIMIT_BYTES_PER_SECOND}}))
-        created = request_json(leecher_base_url, "POST", "/api/v1/downloads", API_KEY,
-                               {"source": {"type": "ed2k-link", "link": ed2k_link_with_source(
-                                   detail["ed2kLink"], p2p_ip, source["port"])}, "intent": "stopped"},
-                               expected_statuses=(201,))
-        job_id = require_download_id(created, expected_hash=file_hash)
+        body = {"source": {"type": "ed2k-link", "link": ed2k_link_with_source(
+            detail["ed2kLink"], p2p_ip, source["port"])}, "intent": "stopped"}
+        job_id = _create_parallel_job(leecher_base_url, body, file_hash=file_hash,
+                                      attempts=create_attempts)
         jobs[job_id] = (file_hash, payload)
     if len(jobs) != PARALLEL_DOWNLOAD_COUNT or len(hashes) != PARALLEL_DOWNLOAD_COUNT:
         raise RuntimeError("Parallel admission did not produce distinct jobs and hashes")
@@ -822,6 +847,7 @@ def _parallel_download_jobs(temp_root: Path, *, sources: list[dict], leecher_bas
     if counts != {"unfinished": 0, "completed": baseline["completed"] + PARALLEL_DOWNLOAD_COUNT}:
         raise RuntimeError("Parallel jobs did not remain in completed history")
     return {"status": "passed", "jobs": len(jobs), "sourcePeers": len(sources), "payloadBytesEach": PARALLEL_PAYLOAD_BYTES,
+            "createAttempts": create_attempts,
             "controlRequests": len(control_attempts), "controlBatchSize": 1,
             "controlRetries": len(control_attempts) - len(jobs), "controlAttempts": control_attempts,
             "readRequests": len(read_attempts), "readAttempts": read_attempts,
