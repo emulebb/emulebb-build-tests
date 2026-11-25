@@ -70,6 +70,43 @@ def test_parallel_read_retries_only_recorded_typed_admission_pressure(monkeypatc
     assert [row["retryDelaySeconds"] for row in attempts[:-1]] == delays
 
 
+@pytest.mark.parametrize("outcome,expected_calls", [
+    ("success", 1), ("busy-success", 2), ("busy-exhausted", 5),
+    ("commit-unknown", 1), ("storage", 1), ("wrong-hash", 1),
+])
+def test_parallel_create_retries_only_busy_for_the_same_download(monkeypatch, outcome, expected_calls):
+    attempts, delays, calls = [], [], []
+    file_hash = "a" * 32
+    body = {"source": {"type": "ed2k-link", "link": f"ed2k://|file|test.bin|1024|{file_hash}|/"},
+            "intent": "stopped"}
+    monkeypatch.setattr(smoke.time, "sleep", delays.append)
+
+    def request(base_url, method, path, key, request_body, *, expected_statuses):
+        assert (method, path, key) == ("POST", "/api/v1/downloads", smoke.API_KEY)
+        assert request_body == body
+        calls.append(expected_statuses)
+        if outcome == "wrong-hash":
+            return {"id": "7", "hash": "b" * 32}
+        if outcome == "success" or outcome == "busy-success" and len(calls) == 2:
+            return {"id": "7", "hash": file_hash}
+        code = {"commit-unknown": "PERSISTENCE_UNAVAILABLE", "storage": "PERSISTENCE_FAILED"}.get(
+            outcome, "PERSISTENCE_BUSY")
+        raise smoke.RustRestFailure("create failed", status=500 if outcome == "storage" else 503,
+                                    detail=json.dumps({"error": {"code": code}}))
+
+    monkeypatch.setattr(smoke, "request_json", request)
+    if outcome in ("success", "busy-success"):
+        assert smoke._create_parallel_job("http://127.0.0.1", body, file_hash=file_hash, attempts=attempts) == "7"
+        assert attempts[-1]["id"] == "7"
+    else:
+        with pytest.raises(RuntimeError if outcome == "wrong-hash" else smoke.RustRestFailure):
+            smoke._create_parallel_job("http://127.0.0.1", body, file_hash=file_hash, attempts=attempts)
+    assert calls == [(201,)] + [(200, 201)] * (expected_calls - 1)
+    assert [receipt["attempt"] for receipt in attempts] == list(range(1, expected_calls + 1))
+    assert all(receipt["hash"] == file_hash for receipt in attempts)
+    assert delays == [0.25 * 2 ** index for index in range(expected_calls - 1)]
+
+
 @pytest.mark.parametrize("field", [None, "version", "build", "platform", "channel", "sourceRevision"])
 def test_explicit_build_identity_rejects_mismatched_runtime_and_cli(monkeypatch, field):
     expected = {"version": "0.1.0-beta.2", "build": "release", "platform": "x64",
