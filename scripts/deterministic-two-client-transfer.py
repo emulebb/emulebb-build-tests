@@ -2792,7 +2792,10 @@ def observe_native_peer_browse(
         raise RuntimeError("Rust did not return a peer browse identifier")
 
     def fetch_page(offset: int) -> dict[str, object]:
-        result = rest_smoke.http_request(base_url, f"{path}/{search_id}?limit=200&offset={offset}", api_key=api_key)
+        query = "limit=200"
+        if offset:
+            query += f"&offset={offset}"
+        result = rest_smoke.http_request(base_url, f"{path}/{search_id}?{query}", api_key=api_key)
         page = response_payload(result, 200)
         if not isinstance(page, dict) or page.get("searchId") != search_id:
             raise RuntimeError("Peer browse page has a different request identity")
