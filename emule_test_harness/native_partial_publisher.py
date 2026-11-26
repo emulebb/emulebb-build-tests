@@ -44,6 +44,9 @@ class PartialPublisher:
         self.file_hash, self._hashset = _fixture_hashes()
         self._covered = bytearray(PART_SIZE - 2 if part_index == 0 else 2)
         self._sent = 0
+        self._connections = 0
+        self._opcodes: dict[str, int] = {}
+        self._last_error: str | None = None
         self._changed = threading.Condition()
         self._release = threading.Event()
         self._stop = threading.Event()
@@ -68,7 +71,10 @@ class PartialPublisher:
         with self._changed:
             self._changed.wait_for(lambda: self._sent >= count or self._stop.is_set(), timeout_seconds)
             if self._sent < count:
-                raise TimeoutError(f"partial publisher sent {self._sent} of {count} distinct bytes")
+                raise TimeoutError(
+                    f"partial publisher sent {self._sent} of {count} distinct bytes "
+                    f"(connections={self._connections}, frames={self._opcodes}, last_error={self._last_error})"
+                )
 
     def release_threshold_byte(self, timeout_seconds: float) -> None:
         """Authorize the tail's second byte on a matching live reservation and await its send."""
@@ -120,11 +126,14 @@ class PartialPublisher:
                         if self._stop.is_set():
                             return
                         self._active = stream
+                        self._connections += 1
                     try:
                         stream.settimeout(2)
                         self._session(stream)
-                    except (OSError, wire.Ed2kWireError):
-                        pass  # Discard this connection and its reservations on EOF or a bad frame.
+                    except (OSError, wire.Ed2kWireError) as error:
+                        with self._changed:
+                            if not self._stop.is_set():
+                                self._last_error = str(error)
                     finally:
                         with self._changed:
                             self._active = None
@@ -149,13 +158,16 @@ class PartialPublisher:
                 continue
             header = wire._recv_exact(stream, 6)
             size = int.from_bytes(header[1:5], "little")
-            if header[0] != wire.PROTO_EDONKEY or not 1 <= size <= 65_536:
-                return
             opcode = header[5]
+            trace_key = f"{header[0]:02x}/{opcode:02x}"
+            with self._changed:
+                self._opcodes[trace_key] = self._opcodes.get(trace_key, 0) + 1
+            if header[0] != wire.PROTO_EDONKEY or not 1 <= size <= 65_536:
+                raise wire.Ed2kWireError(f"Unexpected peer frame {trace_key} length {size}")
             payload = wire._recv_exact(stream, size - 1)
             if not greeted:
                 if opcode != OP_HELLO or len(payload) < 33 or payload[0] != 16:
-                    return
+                    raise wire.Ed2kWireError("Partial publisher expected a stock-shaped peer HELLO")
                 stream.sendall(encode_hello_answer(
                     user_hash=b"partial-test" + self._address.packed,
                     client_id=int.from_bytes(self._address.packed, "little"), tcp_port=self.tcp_port,
