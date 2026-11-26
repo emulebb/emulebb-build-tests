@@ -1158,7 +1158,9 @@ def test_require_known_met_fixture_rejects_missing_row(
         )
 
 
-def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
+def test_env_ed2k_server_exe_override_uses_shared_harness_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ed2k_harness.ED2K_SERVER_EXE_ENV, "C:/tools/inherited-ed2k-server")
+    assert ed2k_harness.env_ed2k_server_exe_override() == "C:/tools/inherited-ed2k-server"
     assert ed2k_harness.env_ed2k_server_exe_override({}) is None
     assert (
         ed2k_harness.env_ed2k_server_exe_override(

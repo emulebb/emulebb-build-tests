@@ -100,7 +100,7 @@ class Ed2kServerControl(Protocol):
 def env_ed2k_server_exe_override(env: dict[str, str] | None = None) -> str | None:
     """Returns the explicit staged Rust server executable override."""
 
-    value = (env or os.environ).get(ED2K_SERVER_EXE_ENV, "").strip()
+    value = (os.environ if env is None else env).get(ED2K_SERVER_EXE_ENV, "").strip()
     return value or None
 
 
