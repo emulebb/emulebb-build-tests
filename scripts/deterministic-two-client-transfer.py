@@ -251,6 +251,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixture-size-bytes", type=int)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-peer-browse", action="store_true")
+    parser.add_argument("--verify-native-large-file-status", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
     parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
@@ -288,6 +289,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Native browse buckets require --verify-peer-browse.")
     if args.native_browse_buckets and args.verify_source_lifecycle:
         raise ValueError("Run server source lifecycle separately from native catalog browsing.")
+    if args.verify_native_large_file_status and (
+        args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
+    ):
+        raise ValueError("Native standalone status requires a stock or aMule full-link transfer.")
     if args.verify_peer_browse and (
         args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
     ):
@@ -2942,26 +2947,24 @@ def stock_client_id_after(log: Path, previous: os.stat_result) -> int | None:
     return int(client_ids[-1]) if client_ids else None
 
 
-def observe_stock_browsing_rust(
-    app, base_url: str, api_key: str, fixture: ReverseBrowseFixture, *,
-    server_control: ed2k_server.Ed2kServerControl, stock_log_dir: Path,
-) -> dict[str, object]:
-    """Use the native stock source command and look for an unrequested canary."""
-    import win32con
-    import win32gui
+def stock_process_main_window(app):
+    """Resolve and verify the main window of this isolated stock process."""
     import win32process
-
-    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
-    anchor_name, link, expected = fixture.anchor_name, fixture.source_link, fixture.canary
 
     main = live_common.find_process_main_window(app)
     pid = live_common.resolve_app_process_id(app)
     if main is None or pid is None or win32process.GetWindowThreadProcessId(main.handle)[1] != pid:
-        raise RuntimeError("Stock browse requires the isolated client's main window")
-    # Stock's connected LowID source filter rejects its local IP even when
-    # the direct source uses another port. Use the explicit link offline.
-    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
-    server_control.wait_for_client_absent(CLIENT_IDENTITIES["stock_emule"].nick, 10)
+        raise RuntimeError("Stock command requires the isolated client's main window")
+    return main, pid
+
+
+def submit_stock_download_link(app, link: str) -> None:
+    """Admit a link in the specified stock process through its Direct Download dialog."""
+    import win32con
+    import win32gui
+    import win32process
+
+    main, pid = stock_process_main_window(app)
     # Stock MenuCmds.h and resource.h at ac3d52e. Post the modal command
     # first so its message loop can accept the link from this process.
     win32gui.PostMessage(main.handle, win32con.WM_COMMAND, 10247, 0)  # MP_HM_DIRECT_DOWNLOAD
@@ -2986,6 +2989,25 @@ def observe_stock_browsing_rust(
         raise RuntimeError("Stock Direct Download did not accept the fixture link")
     win32gui.PostMessage(win32gui.GetDlgItem(dialog, win32con.IDOK), win32con.BM_CLICK, 0, 0)
     live_common.wait_for(lambda: not win32gui.IsWindowVisible(dialog), 10, 0.1, "stock link admission")
+
+
+def observe_stock_browsing_rust(
+    app, base_url: str, api_key: str, fixture: ReverseBrowseFixture, *,
+    server_control: ed2k_server.Ed2kServerControl, stock_log_dir: Path,
+) -> dict[str, object]:
+    """Use the native stock source command and look for an unrequested canary."""
+    import win32con
+    import win32gui
+
+    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
+    anchor_name, link, expected = fixture.anchor_name, fixture.source_link, fixture.canary
+
+    main, pid = stock_process_main_window(app)
+    # Stock's connected LowID source filter rejects its local IP even when
+    # the direct source uses another port. Use the explicit link offline.
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
+    server_control.wait_for_client_absent(CLIENT_IDENTITIES["stock_emule"].nick, 10)
+    submit_stock_download_link(app, link)
     # Stock schedules peer connections only while connected to a network.
     stock_log = stock_log_dir / "eMule.log"
     previous_log = stock_log.stat()
@@ -5906,6 +5928,20 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["native_reverse_browse_transfer_progress"] = require_native_browse_transfer_progress(
                 rust_diagnostics_dir, process_id=client1_process.pid,
                 peer=None, file_hash=reverse_browse.anchor_hash, upload=True,
+            )
+        if args.verify_native_large_file_status:
+            from emule_test_harness import native_large_file_status
+
+            current_phase = "native_standalone_large_file_status"
+            if args.client2_identity == "stock_emule":
+                for link in native_large_file_status.source_less_links():
+                    submit_stock_download_link(client2_app, link)
+            else:
+                for link in native_large_file_status.source_less_links():
+                    amule_client.run_command(client2_control_exe, ec_port=ports["client2_ec"],
+                                             ec_password=args.api_key, command=f"add {link}")
+            report["checks"]["native_standalone_large_file_status"] = native_large_file_status.observe(
+                args.client2_identity, p2p_address, ports["client2_tcp"], Path(client2["temp_dir"]),
             )
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key

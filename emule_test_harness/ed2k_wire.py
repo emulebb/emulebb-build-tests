@@ -239,6 +239,16 @@ def _u32_tag(tag_id: int, value: int) -> bytes:
     return bytes([TAG_SHORT_NAME | TAGTYPE_UINT32, tag_id]) + struct.pack("<I", value)
 
 
+def peer_hello_payload(
+    user_hash: bytes, client_id: int, tcp_port: int, numeric_tags: tuple[tuple[int, int], ...] = (),
+) -> bytes:
+    """Encode a peer HELLO with classic single-byte tag names and no server endpoint."""
+    if len(user_hash) != 16:
+        raise ValueError("Peer HELLO requires a 16-byte user hash")
+    tags = b"".join(struct.pack("<BHBI", TAGTYPE_UINT32, 1, tag_id, value) for tag_id, value in numeric_tags)
+    return b"\x10" + user_hash + struct.pack("<IHI", client_id, tcp_port, len(numeric_tags)) + tags + bytes(6)
+
+
 def encode_login_request(
     *,
     user_hash: bytes,

@@ -152,13 +152,7 @@ def encode_hello_request(
     user_hash = _hash16(user_hash, "user_hash")
     client_id = _u32(client_id, "client_id")
     tcp_port = _port(tcp_port, "tcp_port")
-    payload = (
-        bytes((HASH_BYTES,))
-        + user_hash
-        + struct.pack("<IH", client_id, tcp_port)
-        + struct.pack("<I", 0)  # tag count
-        + struct.pack("<IH", 0, 0)  # server IPv4 and port
-    )
+    payload = ed2k_wire.peer_hello_payload(user_hash, client_id, tcp_port)
     return ed2k_wire.encode_frame(OP_HELLO, payload)
 
 

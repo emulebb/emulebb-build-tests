@@ -16,6 +16,32 @@ from emule_test_harness import ed2k_wire
 from emule_test_harness import rust_ed2k
 
 
+def test_native_large_file_status_boundary() -> None:
+    from emule_test_harness import native_large_file_status as probe
+
+    digest = bytes(range(16))
+    nofile = ed2k_wire.Ed2kFrame(0xE3, 0x48, digest)
+    # Both sizes declare 442 parts. The exact multiple permits a virtual EOF bit.
+    bitmap = struct.pack("<H", 442) + bytes(56)
+    status = ed2k_wire.Ed2kFrame(0xE3, 0x50, digest + bitmap)
+    eof = ed2k_wire.Ed2kFrame(0xE3, 0x50, digest + bitmap[:-1] + b"\x02")
+    for identity in ("stock_emule", "amule"):
+        for capable in (False, True):
+            assert probe.classify_status(eof, digest, probe.LEGACY_MAX,
+                                         identity=identity, capable=capable) == "empty-part-map"
+            missing = identity == "stock_emule" and not capable
+            assert probe.classify_status(nofile if missing else status, digest, probe.LEGACY_MAX + 1,
+                                         identity=identity, capable=capable) == (
+                "no-file" if missing else "empty-part-map"
+            )
+    for payload in (bytes(16) + bitmap, digest + bitmap[:-1], digest + b"\x00\x00", eof.payload):
+        with pytest.raises(ValueError):
+            probe.classify_status(ed2k_wire.Ed2kFrame(0xE3, 0x50, payload), digest,
+                                  probe.LEGACY_MAX + 1, identity="amule", capable=False)
+    with pytest.raises(ValueError):
+        probe.classify_status(status, digest, probe.LEGACY_MAX + 1, identity="stock_emule", capable=False)
+
+
 def load_suite_module():
     """Loads the hyphenated deterministic transfer script for unit tests."""
 

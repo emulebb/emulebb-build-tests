@@ -34,6 +34,19 @@ def option_value(command: list[str], option: str) -> str | None:
 
 
 @pytest.mark.native
+@pytest.mark.skipif(sys.platform != "win32", reason="The staged native clients require Windows")
+@pytest.mark.parametrize("scenario", ["rust-downloads-from-stock-emule", "rust-downloads-from-amule-stable"])
+def test_native_standalone_large_file_status(scenario: str) -> None:
+    host = os.environ.get("X_LOCAL_IP")
+    if not host:
+        pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
+    assert load_suite_module().main([
+        "--lan-bind-addr", host, "--require-scenario", scenario, "--verify-native-large-file-status",
+        "--fixture-size-bytes", str(10 * 1024 * 1024), "--transfer-completion-timeout-seconds", "300",
+    ]) == 0
+
+
+@pytest.mark.native
 @pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
 @pytest.mark.parametrize(
     ("browse_peer", "fixture_size"),
