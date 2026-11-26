@@ -63,6 +63,33 @@ def test_native_stock_and_amule_transfers(browse_peer: str | None, fixture_size:
     assert module.main(arguments) == 0
 
 
+@pytest.mark.native
+@pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
+@pytest.mark.parametrize(
+    ("peer", "buckets"),
+    [
+        pytest.param("stock", 2, id="stock_paged_browse"),
+        pytest.param("amule", 2, id="amule_paged_browse"),
+        pytest.param("stock", 271, id="stock_100k_browse"),
+        pytest.param("amule", 271, id="amule_100k_browse"),
+    ],
+)
+def test_native_publisher_browse_catalog(peer: str, buckets: int) -> None:
+    lan_host = os.environ.get("X_LOCAL_IP")
+    if not lan_host:
+        pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
+    module = load_suite_module()
+    scenario = module.STOCK_EMULE_TRANSFER_SCENARIO_ID if peer == "stock" else module.AMULE_TRANSFER_SCENARIO_ID
+    assert module.main([
+        "--lan-bind-addr", lan_host,
+        "--fixture-size-bytes", str(32 * 1024 * 1024),
+        "--transfer-completion-timeout-seconds", "300",
+        "--require-scenario", scenario,
+        "--verify-peer-browse",
+        "--native-browse-buckets", str(buckets),
+    ]) == 0
+
+
 def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
     module = load_suite_module()
     inventory = {

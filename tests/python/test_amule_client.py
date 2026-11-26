@@ -88,3 +88,14 @@ def test_file_link_encodes_name_and_uppercases_hash() -> None:
     assert amule_client.file_link("fixture with spaces.bin", 123, "ab" * 16) == (
         "ed2k://|file|fixture%20with%20spaces.bin|123|ABABABABABABABABABABABABABABABAB|/"
     )
+
+
+def test_shared_file_count_accepts_prefixed_amulecmd_statistics(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run_command(_exe, *, ec_port, ec_password, command):
+        assert command == "Statistics"
+        return " >  Shared Files\n >   Number of Shared Files: 100000\n"
+
+    monkeypatch.setattr(amule_client, "run_command", run_command)
+    amule_client.wait_for_shared_file_count(
+        Path("amulecmd"), ec_port=4712, ec_password="fixture", expected=100_000, timeout_seconds=1,
+    )

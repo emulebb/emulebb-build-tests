@@ -77,6 +77,9 @@ SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
 DEFAULT_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
+NATIVE_BROWSE_MAX_BUCKETS = 271
+NATIVE_BROWSE_FILES_PER_BUCKET = 369
+NATIVE_BROWSE_READY_SECONDS = 900
 DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
@@ -248,6 +251,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixture-size-bytes", type=int)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-peer-browse", action="store_true")
+    parser.add_argument("--native-browse-buckets", type=int, default=0)
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -276,6 +280,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
 
+    if not 0 <= args.native_browse_buckets <= NATIVE_BROWSE_MAX_BUCKETS:
+        raise ValueError("Native browse accepts at most 271 fixture buckets.")
+    if args.native_browse_buckets and not args.verify_peer_browse:
+        raise ValueError("Native browse buckets require --verify-peer-browse.")
     if args.verify_peer_browse and (
         args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
     ):
@@ -2652,9 +2660,107 @@ def wait_for_download_sources(base_url: str, api_key: str, *, download_id: str,
     return live_common.wait_for(resolve, timeout_seconds, 0.25, f"Rust download {download_id} source")
 
 
+def native_browse_catalog(root: Path, buckets: int) -> tuple[list[Path], dict[str, tuple[int, str, str]]]:
+    """Create named, independently hashed files and return their leaf directories."""
+    from emule_test_harness.scripted_actions import file_digests
+
+    generator = load_script_module("native_peer_browse_fixture", "create-long-paths-tree.py")
+    generator.build_shared_directory_browse_stress(
+        root,
+        bucket_count=buckets,
+        files_per_bucket=NATIVE_BROWSE_FILES_PER_BUCKET,
+        min_file_count=buckets * NATIVE_BROWSE_FILES_PER_BUCKET,
+    )
+    leaves = set()
+    expected = {}
+    for path in root.glob("group_*/bucket_*/*.bin"):
+        size, digest, _ = file_digests(path)
+        leaves.add(path.parent)
+        expected[path.name] = (size, digest, path.parent.name)
+    if len(expected) != buckets * NATIVE_BROWSE_FILES_PER_BUCKET:
+        raise RuntimeError("Native browse fixture did not produce the requested unique names")
+    return sorted(leaves), expected
+
+
+def wait_for_stock_browse_catalog(app, expected_count: int) -> None:
+    """Observe the stock global share count after its hashing queue drains."""
+    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
+
+    def ready() -> bool:
+        main = live_common.find_process_main_window(app)
+        if main is None:
+            return False
+        # Stock resource.h IDC_TRAFFIC_TEXT and SharedFilesCtrl.cpp ShowFilesCount.
+        count = ui.find_control(main.handle, 2069, "Static")
+        return app.window(handle=count).window_text().rstrip().endswith(f"({expected_count})")
+
+    live_common.wait_for(ready, NATIVE_BROWSE_READY_SECONDS, 1, "stock shared catalog ready")
+
+
+def verify_native_browse_catalog(fetch, first_page, expected) -> None:
+    """Compare the complete, paged native listing against the on-disk fixture."""
+    total = len(expected)
+    remaining = expected.copy()
+    offset, page = 0, first_page
+    while offset < total:
+        files = page.get("files")
+        if (page.get("status") != "complete" or page.get("total") != total
+                or page.get("offset") != offset or not isinstance(files, list) or not files):
+            raise RuntimeError(f"Invalid native browse page at {offset} for {total} files")
+        for row in files:
+            name = row.get("displayName")
+            directory = row.get("directory") or ""
+            leaf = directory.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+            actual = (row.get("sizeBytes"), row.get("fileHash"), leaf)
+            if actual != remaining.pop(name, None):
+                raise RuntimeError(f"Unexpected, duplicate or mismatched native browse row {name!r}: {actual!r}")
+        offset += len(files)
+        if offset < total:
+            page = fetch(offset)
+    if remaining:
+        raise RuntimeError(f"Native browse omitted {len(remaining)} catalog entries")
+
+
+def require_native_browse_transfer_progress(
+    diagnostics: Path, *, process_id: int, peer: str, file_hash: str,
+) -> dict[str, object]:
+    """Require accepted transfer payload between directory requests and replies."""
+    from datetime import datetime
+
+    from emule_test_harness.diag_event_runs import load_diag_event_segment, select_latest_diag_run
+
+    paths = select_latest_diag_run(diagnostics.glob("*.jsonl"), client="rust", process_id=process_id)
+    browse_start = browse_end = None
+    covered_bytes = files_at_last_reply = 0
+    for path in paths:
+        for event in load_diag_event_segment(path, allow_incomplete_tail=True):
+            keys, body = event.get("keys", {}), event.get("body", {})
+            if keys.get("peer") != peer or body.get("flow") != "native_download":
+                continue
+            operation, outcome = body.get("opcodeName"), body.get("outcome")
+            if operation == "OP_ASKSHAREDDIRS" and outcome == "send_succeeded":
+                if browse_start is not None:
+                    raise RuntimeError("More than one native browse start on the download")
+                browse_start = event
+            elif browse_start is not None and outcome == "accepted":
+                if operation == "OP_SENDINGPART" and keys.get("fileHash") == file_hash:
+                    covered_bytes += body["payloadLen"] - 24
+                elif operation == "OP_ASKSHAREDFILESDIRANS":
+                    browse_end, files_at_last_reply = event, covered_bytes
+    if browse_start is None or browse_end is None or files_at_last_reply <= 0:
+        raise RuntimeError("No accepted file bytes between native directory browse start and last reply")
+    return {
+        "firstSequence": browse_start["seq"],
+        "lastSequence": browse_end["seq"],
+        "payloadBytesDuringBrowse": files_at_last_reply,
+        "elapsedSeconds": (datetime.fromisoformat(browse_end["ts"]) - datetime.fromisoformat(browse_start["ts"])).total_seconds(),
+    }
+
+
 def observe_native_peer_browse(
     base_url: str, api_key: str, download_id: str, *,
     host: str, port: int, file_hash: str, name: str, size: int,
+    expected_catalog: dict[str, tuple[int, str, str]] | None = None,
 ) -> dict[str, object]:
     """Browse the connected native publisher and match the fixture in its catalog."""
     sources = f"/api/v1/downloads/{download_id}/sources"
@@ -2673,19 +2779,31 @@ def observe_native_peer_browse(
     if not isinstance(search_id, str) or not search_id.isascii() or not search_id.isdecimal():
         raise RuntimeError("Rust did not return a peer browse identifier")
 
-    def completed_page() -> dict[str, object] | None:
-        result = rest_smoke.http_request(base_url, f"{path}/{search_id}?limit=200", api_key=api_key)
+    def fetch_page(offset: int) -> dict[str, object]:
+        result = rest_smoke.http_request(base_url, f"{path}/{search_id}?limit=200&offset={offset}", api_key=api_key)
         page = response_payload(result, 200)
         if not isinstance(page, dict) or page.get("searchId") != search_id:
             raise RuntimeError("Peer browse page has a different request identity")
+        return page
+
+    def completed_page() -> dict[str, object] | None:
+        page = fetch_page(0)
         return None if page.get("status") == "pending" else page
 
-    page = live_common.wait_for(completed_page, 30, 0.1, "completed native peer browse")
+    started_at = time.monotonic()
+    page = live_common.wait_for(
+        completed_page, 120 if expected_catalog is not None else 30, 0.1, "completed native peer browse",
+    )
     if page.get("status") != "complete":
         raise RuntimeError(f"Native peer browse ended with status {page.get('status')!r}")
     files = page.get("files")
     if not isinstance(files, list):
         raise RuntimeError("Native peer browse did not return a file list")
+    if expected_catalog is not None:
+        verify_native_browse_catalog(fetch_page, page, expected_catalog)
+        return {"status": page["status"], "searchId": search_id, "userHash": source.get("userHash"),
+                "total": page["total"], "verifiedCatalog": True,
+                "elapsedSecondsIncludingPaging": round(time.monotonic() - started_at, 3)}
     matches = [
         row for row in files
         if isinstance(row, dict)
@@ -4011,6 +4129,16 @@ def main(argv: list[str] | None = None) -> int:
             "sha256": fixture_sha256,
             "pattern": fixture_pattern,
         }
+        browse_leaves, browse_catalog = [], None
+        if args.native_browse_buckets:
+            current_phase = "generate_native_browse_catalog"
+            browse_leaves, browse_catalog = native_browse_catalog(
+                fixture_dir / "catalog", args.native_browse_buckets,
+            )
+            report["fixture"]["nativeBrowse"] = {
+                "leafDirectories": len(browse_leaves),
+                "shareCount": len(browse_catalog) + 1,
+            }
 
         rust_repo = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
         output_root = get_workspace_output_root()
@@ -4163,6 +4291,7 @@ def main(argv: list[str] | None = None) -> int:
                 ec_port=ports["client2_ec"],
                 ec_password=args.api_key,
                 allow_peer_browse=args.verify_peer_browse,
+                additional_shared_dirs=tuple(browse_leaves),
             )
         else:
             configure_client_profile(
@@ -4283,7 +4412,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
                 Path(client2["config_dir"]) / "shareddir.dat",
-                [live_common.win_path(fixture_dir, trailing_slash=True)],
+                [live_common.win_path(path, trailing_slash=True) for path in (fixture_dir, *browse_leaves)],
             )
         client2_server_met = Path(client2["config_dir"]) / "server.met"
         if (
@@ -4392,6 +4521,9 @@ def main(argv: list[str] | None = None) -> int:
                     "Could not resolve the launched client2 process identity."
                 )
         if args.client2_identity == "stock_emule":
+            if browse_catalog is not None:
+                current_phase = "stock_native_browse_catalog_ready"
+                wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
             current_phase = "client2_stock_source_lifecycle"
             client2_app, exported_link, stock_lifecycle = recycle_stock_publisher(
                 app=client2_app,
@@ -5520,6 +5652,16 @@ def main(argv: list[str] | None = None) -> int:
                 "connectOptions": source_connect_options,
             },
         }
+        if browse_catalog is not None:
+            current_phase = "native_browse_catalog_ready"
+            if args.client2_identity == "stock_emule":
+                wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
+            else:
+                amule_client.wait_for_shared_file_count(
+                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                    expected=len(browse_catalog) + 1, timeout_seconds=NATIVE_BROWSE_READY_SECONDS,
+                )
+            browse_catalog[fixture_file.name] = (int(link_info["size"]), transfer_hash, fixture_dir.name)
         current_phase = "add_transfer"
         admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
         download_id = admission["jobId"]
@@ -5529,6 +5671,7 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["rust_browses_native_publisher"] = observe_native_peer_browse(
                 base_url, args.api_key, download_id, host=p2p_address, port=ports["client2_tcp"],
                 file_hash=transfer_hash, name=fixture_file.name, size=int(link_info["size"]),
+                expected_catalog=browse_catalog,
             )
             current_phase = "complete_transfer"
         report["checks"]["client1_transfer_completed_file"] = (
@@ -5547,6 +5690,12 @@ def main(argv: list[str] | None = None) -> int:
             report["source_lifecycle"]["completed"] = report["checks"][
                 "client1_transfer_completed_file"
             ]
+        if browse_catalog is not None:
+            current_phase = "prove_transfer_progress_during_native_browse"
+            report["checks"]["native_browse_transfer_progress"] = require_native_browse_transfer_progress(
+                rust_diagnostics_dir, process_id=client1_process.pid,
+                peer=f"{p2p_address}:{ports['client2_tcp']}", file_hash=transfer_hash,
+            )
         if args.verify_peer_browse and args.client2_identity == "stock_emule":
             current_phase = "stock_browses_rust_publisher"
             report["checks"]["stock_browses_rust_publisher"] = observe_stock_browsing_rust(

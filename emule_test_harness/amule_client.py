@@ -41,6 +41,7 @@ def configure_profile(
     ec_port: int,
     ec_password: str,
     allow_peer_browse: bool = False,
+    additional_shared_dirs: tuple[Path, ...] = (),
 ) -> None:
     """Writes the minimal deterministic profile consumed by official `amuled`."""
 
@@ -100,7 +101,7 @@ CryptoPaddingLenght=254
     (config_dir / "amule.conf").write_text(config, encoding="utf-8", newline="\n")
     # The monolithic 3.0.1 reference blocks startup on an unseen version.
     (config_dir / "lastversion").write_text("3.0.1\n", encoding="utf-8")
-    shared_path = f"{shared_dir.resolve()}\n"
+    shared_path = "".join(f"{path.resolve()}\n" for path in (shared_dir, *additional_shared_dirs))
     for name in ("shareddir.dat", "shareddir-explicit.dat"):
         (config_dir / name).write_text(shared_path, encoding="utf-8", newline="\n")
     (config_dir / "shareddir-recursive.dat").write_text("", encoding="utf-8")
@@ -238,6 +239,26 @@ def wait_for_shared_file_hash(
             observations.append({"type": type(exc).__name__, "message": str(exc), "observed_at": round(time.time(), 3)})
         time.sleep(1.0)
     raise RuntimeError(f"Timed out waiting for aMule shared file {file_name!r}. Observations: {observations[-20:]!r}")
+
+
+def wait_for_shared_file_count(
+    control_exe: Path, *, ec_port: int, ec_password: str, expected: int, timeout_seconds: float,
+) -> None:
+    """Wait for the native Statistics count without transferring the complete EC list."""
+    deadline = time.monotonic() + timeout_seconds
+    observed = None
+    while time.monotonic() < deadline:
+        output = run_command(
+            control_exe, ec_port=ec_port, ec_password=ec_password, command="Statistics",
+        )
+        match = re.search(r"^[ \t]*(?:>[ \t]*)?Number of Shared Files:[ \t]*(\d+)[ \t]*$", output, re.MULTILINE)
+        if match is None:
+            raise RuntimeError("aMule Statistics did not report its shared-file count")
+        observed = int(match.group(1))
+        if observed == expected:
+            return
+        time.sleep(1)
+    raise RuntimeError(f"Timed out waiting for {expected} aMule shared files, last count {observed}")
 
 
 def shutdown_daemon(
