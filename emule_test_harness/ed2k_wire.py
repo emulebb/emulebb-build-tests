@@ -90,6 +90,7 @@ IPV6_SOURCE_SENTINEL = 0xFFFF_FFFF
 COMPLETE_FILE_ID = 0xFBFB_FBFB
 COMPLETE_FILE_PORT = 0xFBFB
 MAX_FRAME_BYTES = 8_000_000
+LEGACY_FILE_SIZE_MAX = 4_290_048_000
 MAX_PART_REQUEST_BYTES = 3 * 180 * 1024  # stock AddReqBlock: three EMBLOCKSIZE blocks
 
 SEARCH_PARAM_BOOLEAN = 0x00
@@ -496,11 +497,7 @@ def encode_server_udp_source_v2_request(
             or not 1 <= file_size <= 0xFFFF_FFFF_FFFF_FFFF
         ):
             raise ValueError("each GLOBGETSOURCES2 file size must fit in a nonzero u64")
-        payload.extend(file_hash)
-        if file_size > 0xFFFF_FFFF:
-            payload.extend(struct.pack("<IQ", 0, file_size))
-        else:
-            payload.extend(struct.pack("<I", file_size))
+        payload.extend(encode_source_request(file_hash, file_size))
     return bytes([PROTO_EDONKEY, OP_GLOBGETSOURCES2]) + bytes(payload)
 
 
@@ -533,11 +530,13 @@ def decode_server_udp_source_v2_request(datagram: bytes) -> dict[str, object]:
                 )
             file_size = struct.unpack_from("<Q", payload, offset)[0]
             offset += 8
-            if file_size <= 0xFFFF_FFFF:
+            if file_size <= LEGACY_FILE_SIZE_MAX:
                 raise Ed2kWireError(
-                    "GLOBGETSOURCES2 large-file marker requires a size above u32."
+                    "GLOBGETSOURCES2 large-file marker requires a size above the legacy limit."
                 )
         else:
+            if file_size32 > LEGACY_FILE_SIZE_MAX:
+                raise Ed2kWireError("GLOBGETSOURCES2 size above the legacy limit requires the large-file marker.")
             file_size = file_size32
         targets.append(
             {
@@ -799,7 +798,7 @@ def encode_source_request(file_hash: bytes, size: int) -> bytes:
         raise ValueError("file_hash must be 16 bytes")
     if size < 0 or size > 0xFFFF_FFFF_FFFF_FFFF:
         raise ValueError("size must fit in u64")
-    if size <= 0xFFFF_FFFF:
+    if size <= LEGACY_FILE_SIZE_MAX:
         return file_hash + struct.pack("<I", size)
     return file_hash + struct.pack("<I", 0) + struct.pack("<Q", size)
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from emule_test_harness import ed2k_file_observer, ed2k_wire, emule_met_dump, rust_local_ed2k
 
 PART_SIZE = 9_728_000
-LEGACY_MAX = 4_290_048_000
+LEGACY_MAX = ed2k_wire.LEGACY_FILE_SIZE_MAX
 JOBS = (
     ("LegacyLimit.bin", LEGACY_MAX, bytes.fromhex("4ed0cda3d30f49b9a215edc044bc6e28")),
     ("AboveLegacyLimit.bin", LEGACY_MAX + 1, bytes.fromhex("30ac14adc2d14c71a71468527608a022")),

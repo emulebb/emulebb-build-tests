@@ -288,8 +288,10 @@ def test_server_udp_source_v1_request_codec_rejects_malformed_datagrams() -> Non
 def test_server_udp_source_v2_request_codec_preserves_normal_and_large_sizes() -> None:
     normal_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
     large_hash = bytes.fromhex("FFEEDDCCBBAA99887766554433221100")
-    normal_size = 913_101_138
-    large_size = 0x1_0000_0001
+    normal_size = 4_290_048_000
+    large_size = 4_290_048_001
+    assert ed2k_wire.encode_source_request(normal_hash, normal_size) == normal_hash + struct.pack("<I", normal_size)
+    assert ed2k_wire.encode_source_request(large_hash, large_size) == large_hash + struct.pack("<IQ", 0, large_size)
 
     datagram = ed2k_wire.encode_server_udp_source_v2_request(
         [(normal_hash, normal_size), (large_hash, large_size)]
@@ -347,9 +349,13 @@ def test_server_udp_source_v2_request_codec_rejects_noncanonical_datagrams() -> 
         ed2k_wire.decode_server_udp_source_v2_request(
             b"\xe3\x94" + file_hash + struct.pack("<I", 0)
         )
-    with pytest.raises(ed2k_wire.Ed2kWireError, match="size above u32"):
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="requires a size above the legacy limit"):
         ed2k_wire.decode_server_udp_source_v2_request(
-            b"\xe3\x94" + file_hash + struct.pack("<IQ", 0, 123)
+            b"\xe3\x94" + file_hash + struct.pack("<IQ", 0, 4_290_048_000)
+        )
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="requires the large-file marker"):
+        ed2k_wire.decode_server_udp_source_v2_request(
+            b"\xe3\x94" + file_hash + struct.pack("<I", 4_290_048_001)
         )
 
 
