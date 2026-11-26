@@ -24,7 +24,9 @@ def test_solicited_sx2_fixture_matches_the_original_file_and_server(requested_ha
     fixture, client = socket.socketpair()
     with fixture, client:
         client.settimeout(2)
-        client.sendall(hello + probe + request)
+        pipelined_hashset_request = b"\xe3\x11\x00\x00\x00\x51" + file_hash
+        client.sendall(hello + probe + request + pipelined_hashset_request)
+        client.shutdown(socket.SHUT_WR)
         options = dict(
             seed=("192.0.2.8", 4663), seed_user_hash=b"s" * 16, file_hash=file_hash,
             file_name="fixture.bin",
@@ -49,6 +51,7 @@ def test_solicited_sx2_fixture_matches_the_original_file_and_server(requested_ha
         assert ed2k_wire._recv_exact(client, len(expected_probe)) == expected_probe
         assert ed2k_wire._recv_exact(client, len(expected_answer)) == expected_answer
         assert receipt["answer"]["payloadHex"] == expected_answer[6:].hex()
+        assert receipt["trailingBytesDrained"] == len(pipelined_hashset_request)
 
 
 @pytest.mark.unit

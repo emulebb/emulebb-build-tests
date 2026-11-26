@@ -1040,18 +1040,23 @@ def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp
     ("amule", ["rust-downloads-from-amule-stable"]),
     ("both", ["rust-downloads-from-stock-emule", "rust-downloads-from-amule-stable"]),
 ])
-def test_multi_client_native_sx2_selects_requested_scenarios(tmp_path: Path, monkeypatch, selection, scenarios) -> None:
+@pytest.mark.parametrize(("case", "matrix_flag"), (
+    ("sx2", "--verify-native-sx2-callback"), ("size-boundary", "--verify-native-size-boundary"),
+))
+def test_multi_client_native_case_selects_requested_scenarios(
+    tmp_path: Path, monkeypatch, selection, scenarios, case, matrix_flag,
+) -> None:
     commands = []
     monkeypatch.setattr(live_e2e_suite, "run_suite_command", lambda command: commands.append(command) or 0)
-    options = [] if selection is None else ["--multi-client-native-sx2", selection]
+    options = [] if selection is None else [f"--multi-client-native-{case}", selection]
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args("--suite", "multi-client-p2p-matrix", *options),
         FakeHarnessCliCommon(tmp_path),
     )
     command, = commands
     assert script_name(command) == "multi-client-p2p-matrix.py"
-    assert summary["multi_client_p2p_matrix"]["native_sx2"] == selection
-    assert ("--verify-native-sx2-callback" in command) == (selection is not None)
+    assert summary["multi_client_p2p_matrix"][f"native_{case.replace('-', '_')}"] == selection
+    assert (matrix_flag in command) == (selection is not None)
     assert option_values(command, "--require-scenario") == scenarios
 
 

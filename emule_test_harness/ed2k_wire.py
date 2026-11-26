@@ -363,10 +363,26 @@ def serve_solicited_sx2_low_id(
             raise Ed2kWireError("SX2 fixture expected an optionless v4 request for the original file")
         reply = Ed2kFrame(PROTO_EMULE, OP_ANSWERSOURCES2, answer)
         stream.sendall(struct.pack("<BIB", reply.marker, len(answer) + 1, reply.opcode) + answer)
+        # The active download can pipeline a hashset request after SX2. Closing
+        # a Windows socket with unread data can reset the connection and lose
+        # our answer, so flush the send side and drain the bounded receive tail.
+        stream.shutdown(socket.SHUT_WR)
+        drain_until = min(deadline, time.monotonic() + 1.0)
+        drained = 0
+        while time.monotonic() < drain_until:
+            stream.settimeout(max(0.001, drain_until - time.monotonic()))
+            try:
+                pending = stream.recv(4096)
+            except (TimeoutError, ConnectionResetError):
+                break
+            if not pending:
+                break
+            drained += len(pending)
         return {
             "greeting": greeting.evidence("rx"),
             "request": request.evidence("rx"),
             "answer": reply.evidence("tx"),
+            "trailingBytesDrained": drained,
         }
     raise TimeoutError("SX2 fixture did not receive a matching request before its deadline")
 

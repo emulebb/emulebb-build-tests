@@ -56,6 +56,30 @@ def test_native_sx2_callback_receipt_requires_original_file_on_native_connection
             module.require_native_sx2_callback_transfer(tmp_path, **options)
 
 
+@pytest.mark.parametrize("notification_port", [4663, 4664])
+def test_native_sx2_callback_notification_matches_exact_login_and_endpoint(notification_port: int) -> None:
+    module = load_suite_module()
+    target = bytes(range(16))
+    login = ed2k_wire.encode_frame(
+        0x01, ed2k_wire.encode_login_request(user_hash=target, tcp_port=4665, nickname="native"),
+    )
+    assignment = ed2k_wire.encode_frame(0x40, struct.pack("<II", 2, 0x100))
+    expected = bytes.fromhex("c63364f1") + struct.pack("<H", 4663)
+    reply = ed2k_wire.encode_frame(0x35, expected[:4] + struct.pack("<H", notification_port))
+    follow = (
+        "Follow: tcp,raw\nFilter: tcp.stream eq 1\n"
+        "Node 0: 192.0.2.8:61222\nNode 1: 192.0.2.9:4661\n"
+        f"{login[:9].hex()}\n{login[9:].hex()}\n\t{assignment.hex()}\n\t{reply.hex()}\n"
+    )
+    options = dict(server="192.0.2.9:4661", target_hash=target, target_id=2, expected_callback=expected)
+    if notification_port == 4663:
+        receipt = module.native_sx2_callback_notification(follow, **options)
+        assert receipt["notification"]["payloadHex"] == expected.hex()
+    else:
+        with pytest.raises(RuntimeError, match="expected server callback notification"):
+            module.native_sx2_callback_notification(follow, **options)
+
+
 def test_native_large_file_status_boundary() -> None:
     from emule_test_harness import native_large_file_status as probe
 

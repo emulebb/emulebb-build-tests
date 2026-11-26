@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -55,6 +56,7 @@ from emule_test_harness import scripted_ed2k_udp_source  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
+from emule_test_harness import native_windows_network  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo  # noqa: E402
@@ -96,6 +98,7 @@ HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_CALLBACK_REPLY = "server-callback-reply"
 NATIVE_SX2_CALLBACK = "native-sx2-callback"
+NATIVE_SERVER_SIZE_BOUNDARY = "native-server-size-boundary"
 NATIVE_SX2_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
 DIRECT_CALLBACK = "direct-callback"
 BUDDY_CALLBACK = "buddy-callback"
@@ -170,6 +173,7 @@ TRANSFER_SCENARIOS = (
     SERVER_LOGIN_REQUEST,
     SERVER_CALLBACK_REPLY,
     NATIVE_SX2_CALLBACK,
+    NATIVE_SERVER_SIZE_BOUNDARY,
     DIRECT_CALLBACK,
     BUDDY_CALLBACK,
     RELAYED_REASK,
@@ -291,10 +295,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
 
-    if args.transfer_scenario == NATIVE_SX2_CALLBACK and (
+    if args.transfer_scenario in {NATIVE_SX2_CALLBACK, NATIVE_SERVER_SIZE_BOUNDARY} and (
         args.client2_identity not in {"stock_emule", "amule"} or args.verify_source_lifecycle
     ):
-        raise ValueError("The native SX2 callback requires stock eMule or aMule with an isolated server index.")
+        raise ValueError("The selected native protocol case requires a separate stock eMule or aMule profile.")
 
     browse_bucket_counts = (args.native_browse_buckets, args.native_reverse_browse_buckets)
     if any(not 0 <= count <= NATIVE_BROWSE_MAX_BUCKETS for count in browse_bucket_counts):
@@ -2797,6 +2801,61 @@ def require_native_sx2_callback_transfer(
     }
 
 
+def native_sx2_callback_notification(
+    follow_output: str, *, server: str, target_hash: bytes, target_id: int, expected_callback: bytes,
+) -> dict[str, object] | None:
+    """Identify the native login and exact callback reply on one reassembled TCP stream."""
+    nodes = {}
+    senders = (bytearray(), bytearray())
+    for line in follow_output.splitlines():
+        node = re.fullmatch(r"Node ([01]): (.+)", line)
+        if node is not None:
+            nodes[node[2]] = int(node[1])
+            continue
+        if re.fullmatch(r"\s*[0-9a-fA-F]+", line):
+            senders[int(line[0].isspace())].extend(bytes.fromhex(line))
+    if server not in nodes:
+        return None
+
+    def frames(data: bytearray):
+        offset = 0
+        while len(data) - offset >= 6:
+            size = int.from_bytes(data[offset + 1 : offset + 5], "little") + 5
+            if size < 6 or offset + size > len(data):
+                raise ed2k_wire.Ed2kWireError("Callback capture has an incomplete TCP frame")
+            yield ed2k_wire.decode_frame_bytes(bytes(data[offset : offset + size]))
+            offset += size
+
+    server_side = nodes[server]
+    login = next(frames(senders[1 - server_side]), None)
+    if login is None or login.opcode != ed2k_wire.OP_LOGINREQUEST or login.payload[:16] != target_hash:
+        return None
+    assignment = None
+    for frame in frames(senders[server_side]):
+        if frame.opcode == ed2k_wire.OP_IDCHANGE and frame.payload[:4] == struct.pack("<I", target_id):
+            assignment = frame
+        if frame.opcode == ed2k_wire.OP_CALLBACKREQUESTED and frame.payload == expected_callback and assignment:
+            return {"login": login.evidence("tx"), "assignment": assignment.evidence("rx"), "notification": frame.evidence("rx")}
+    raise RuntimeError("The captured native login did not receive the expected server callback notification")
+
+
+def capture_native_sx2_callback(
+    capture_path: Path, *, server: str, target_hash: bytes, target_id: int, requester: tuple[str, int],
+) -> dict[str, object]:
+    """Require the matching 0x35 on the native target's own server connection."""
+    tshark = ("tshark", "-n", "-r", str(capture_path))
+    stream_ids = native_windows_network.run_checked((*tshark, "-T", "fields", "-e", "tcp.stream")).stdout.splitlines()
+    expected_callback = ipaddress.IPv4Address(requester[0]).packed + struct.pack("<H", requester[1])
+    for stream_id in sorted({value for value in stream_ids if value.isascii() and value.isdecimal()}, key=int):
+        follow = native_windows_network.run_checked((*tshark, "-q", "-z", f"follow,tcp,raw,{stream_id}")).stdout
+        evidence = native_sx2_callback_notification(
+            follow, server=server, target_hash=target_hash, target_id=target_id, expected_callback=expected_callback,
+        )
+        if evidence is not None:
+            return {**evidence, "tcpStream": int(stream_id), "capture": str(capture_path)}
+    raise RuntimeError("No TCP capture stream matched the selected native callback target login")
+
+
 def verify_native_browse_catalog(fetch, first_page, expected) -> None:
     """Compare the complete, paged native listing against the on-disk fixture."""
     total = len(expected)
@@ -3595,6 +3654,111 @@ def prepare_amule_profile(
     return profile
 
 
+def native_network_user_hash(config_dir: Path, identity: str) -> bytes:
+    digest = mfc_profile_import.read_preferences_dat_user_hash(config_dir / "preferences.dat")
+    if identity == "amule":
+        # Fresh aMule profiles can persist their generated bytes before setting its eMule marker.
+        return digest[:5] + b"\x0e" + digest[6:14] + b"\x6f" + digest[15:]
+    return digest
+
+
+def observe_native_server_size_boundary(
+    paths, args: argparse.Namespace, profile_seed_dir: Path, bind_address: str,
+    results: dict[str, object],
+) -> None:
+    """Capture native TCP and UDP requests and offers from two fresh capability profiles."""
+    from emule_test_harness import native_large_file_status
+
+    native = resolve_client2_availability(
+        paths.workspace_root, args.configuration, args.client2_app_exe,
+        args.client2_identity, args.client2_control_exe,
+    )
+    if native.executable is None or (args.client2_identity == "amule" and native.control_executable is None):
+        raise RuntimeError(f"Could not resolve the native boundary oracle: {native.reason}")
+    results["native_oracle"] = native.as_report()
+    source_flags = scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES
+    sized_flags = source_flags | scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES2
+    large_flag = scripted_ed2k_udp_source.SERVER_UDP_FLAG_LARGEFILES
+    port_choices = choose_distinct_ports(bind_address)
+    used = set(port_choices.values())
+    for capable in (False, True):
+        case = "large-files" if capable else "legacy"
+        root = paths.source_artifacts_dir / case
+        profile_id = f"{native.identity.profile_id}-{case}"
+        if args.client2_identity == "amule":
+            profile = prepare_amule_profile(root, profile_id)
+        else:
+            profile = live_common.prepare_scenario_profile(profile_seed_dir, root, [], profile_id)
+        config_dir = Path(profile["config_dir"])
+        temp_dir = Path(profile["temp_dir"])
+        fixtures = native_large_file_status.seed_offer_partials(temp_dir)
+        jobs = tuple((row["name"], row["sizeBytes"], bytes.fromhex(row["fileHash"])) for row in fixtures)
+        case_result: dict[str, object] = {"seededPartialFiles": fixtures}
+        results[case] = case_result
+        with ExitStack() as owned:
+            anchor_port = choose_server_port_block(bind_address, used)
+            listener = owned.enter_context(socket.create_server((bind_address, anchor_port)))
+            listener.settimeout(args.server_connect_timeout_seconds)
+            entries = [{
+                "address": bind_address, "port": anchor_port, "name": f"{case}-tcp-anchor",
+                "priority": SERVER_PRIORITY_HIGH,
+            }]
+            probes = {}
+            if not capable:
+                # Native global walks skip the active TCP server. Each UDP flag
+                # combination therefore gets a separate run-owned server entry.
+                for label, flags in (
+                    ("legacy-sized", sized_flags),
+                    ("large-sized", sized_flags | large_flag),
+                    ("large-hash-only", source_flags | large_flag),
+                ):
+                    udp_target = choose_server_port_block(bind_address, used)
+                    probe = scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer.for_legacy_size_boundary(
+                        bind_host=bind_address, server_tcp_port=udp_target, udp_flags=flags,
+                        transcript_path=root / f"{label}-udp.jsonl", jobs=jobs,
+                    )
+                    probe.start()
+                    owned.callback(probe.stop)
+                    probes[label] = probe
+                    entries.append({
+                        "address": bind_address, "port": udp_target, "name": label,
+                        "priority": SERVER_PRIORITY_LOW, "udp_flags": flags,
+                    })
+            write_server_met_entries(config_dir / "server.met", entries)
+            if args.client2_identity == "amule":
+                amule_client.configure_profile(
+                    config_dir=config_dir, incoming_dir=Path(profile["incoming_dir"]), temp_dir=temp_dir,
+                    shared_dir=root / "empty-share", nick=native.identity.nick,
+                    tcp_port=port_choices["client2_tcp"], udp_port=port_choices["client2_udp"],
+                    ec_port=port_choices["client2_ec"], ec_password=args.api_key,
+                    bind_address=bind_address, create_sparse_files=False,
+                )
+                app = amule_client.launch_daemon(native.executable, config_dir)
+                owned.callback(
+                    amule_client.shutdown_daemon, app, native.control_executable,
+                    ec_port=port_choices["client2_ec"], ec_password=args.api_key,
+                )
+            else:
+                configure_client_profile(
+                    config_dir=config_dir, app_exe=native.executable, nick=native.identity.nick,
+                    tcp_port=port_choices["client2_tcp"], udp_port=port_choices["client2_udp"],
+                    ed2k_enabled=True, autoconnect=True, p2p_bind_addr=bind_address,
+                    crypt_layer_supported=False, crypt_layer_requested=False, crypt_layer_required=False,
+                )
+                app = live_common.launch_app(native.executable, Path(profile["profile_base"]), minimized_to_tray=True)
+                owned.callback(live_common.close_app_cleanly, app)
+            stream, _ = listener.accept()
+            owned.enter_context(stream)
+            case_result["tcp"] = native_large_file_status.observe_tcp_source_requests(
+                stream, capable=capable, expected_user_hash=native_network_user_hash(config_dir, args.client2_identity),
+                timeout_seconds=args.server_connect_timeout_seconds, jobs=jobs, require_partial_offers=True,
+            )
+            case_result["udp"] = {
+                label: probe.wait_for_boundary_requests(args.server_connect_timeout_seconds)
+                for label, probe in probes.items()
+            }
+
+
 def observe_amule_publisher(
     *,
     control_exe: Path,
@@ -3876,6 +4040,7 @@ def main(argv: list[str] | None = None) -> int:
     test_high_id_pool: LanIpPool | None = None
     test_high_id_address: str | None = None
     native_sx2_callback = args.transfer_scenario == NATIVE_SX2_CALLBACK
+    native_sx2_capture: native_windows_network.ManagedDumpcapCapture | None = None
     native_target_bind_address = ""
     verify_amule_browse = args.verify_peer_browse and args.client2_identity == "amule"
     # The baseline checks both directions. Each scale input selects its publisher.
@@ -3890,6 +4055,11 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
+        if args.transfer_scenario == NATIVE_SERVER_SIZE_BOUNDARY:
+            current_phase = "native_server_size_boundary"
+            observe_native_server_size_boundary(paths, args, profile_seed_dir, p2p_address, report["checks"])
+            report["status"] = "passed"
+            return 0
         if args.transfer_scenario == RELAYED_REASK or verify_amule_browse or native_sx2_callback:
             if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
                 raise ValueError(
@@ -4759,6 +4929,16 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         current_phase = "launch_client2"
+        if native_sx2_callback:
+            capture_interface = native_windows_network.resolve_capture_interface(
+                native_windows_network.discover_capture_interfaces(),
+                native_windows_network.resolve_windows_adapter_hints(native_target_bind_address),
+            )
+            native_sx2_capture = native_windows_network.ManagedDumpcapCapture(
+                output_path=paths.source_artifacts_dir / "native-sx2-server.pcapng",
+                capture_filter=f"host {server_address} and tcp port {ports['ed2k_tcp']}",
+                interface=capture_interface, maximum_size_kib=1024,
+            ).start()
         if args.client2_identity == "amule":
             client2_app = amule_client.launch_daemon(
                 client2_app_exe, Path(client2["config_dir"])
@@ -5974,12 +6154,7 @@ def main(argv: list[str] | None = None) -> int:
             target_login, target_id = live_common.wait_for(
                 native_low_id_assignment, 15.0, 0.25, "server-recorded native LowID assignment",
             )
-            target_user_hash = mfc_profile_import.read_preferences_dat_user_hash(
-                Path(client2["config_dir"]) / "preferences.dat",
-            )
-            if args.client2_identity == "amule":
-                # Fresh aMule profiles can persist the generated bytes before setting its eMule marker.
-                target_user_hash = target_user_hash[:5] + b"\x0e" + target_user_hash[6:14] + b"\x6f" + target_user_hash[15:]
+            target_user_hash = native_network_user_hash(Path(client2["config_dir"]), args.client2_identity)
             seed_host = test_high_id_pool.acquire(1)[0]
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as seed_listener:
                 seed_listener.bind((seed_host, 0))
@@ -6043,6 +6218,12 @@ def main(argv: list[str] | None = None) -> int:
                 target_id=target_id,
                 target_hash=target_user_hash,
                 file_hash=bytes.fromhex(transfer_hash),
+            )
+            network_capture = native_sx2_capture.stop()
+            report["checks"]["native_sx2_callback_notification"] = capture_native_sx2_callback(
+                network_capture.output_path, server=f"{server_address}:{ports['ed2k_tcp']}",
+                target_hash=target_user_hash, target_id=target_id,
+                requester=(p2p_address, ports["client1_tcp"]),
             )
         if args.verify_source_lifecycle:
             report["source_lifecycle"]["completed"] = report["checks"][
@@ -6314,6 +6495,12 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     finally:
         close_results: dict[str, object] = {}
+        if native_sx2_capture is not None and native_sx2_capture.is_running:
+            try:
+                native_sx2_capture.stop()
+                close_results["native_sx2_capture"] = {"ok": True}
+            except Exception as exc:
+                close_results["native_sx2_capture"] = {"ok": False, "message": str(exc)}
         if udp_source_fixture is not None:
             try:
                 udp_source_fixture.stop()

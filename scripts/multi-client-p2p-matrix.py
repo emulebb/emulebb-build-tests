@@ -75,7 +75,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--verify-native-large-file-status", action="store_true")
     parser.add_argument("--verify-native-partial-threshold", action="store_true")
-    parser.add_argument("--verify-native-sx2-callback", action="store_true")
+    native_protocol_cases = parser.add_mutually_exclusive_group()
+    native_protocol_cases.add_argument("--verify-native-sx2-callback", action="store_true")
+    native_protocol_cases.add_argument("--verify-native-size-boundary", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
     parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--ed2k-server-repo")
@@ -269,6 +271,8 @@ def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_exe
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
     if args.verify_native_sx2_callback:
         command.extend(["--transfer-scenario", dtt.NATIVE_SX2_CALLBACK])
+    if args.verify_native_size_boundary:
+        command.extend(["--transfer-scenario", dtt.NATIVE_SERVER_SIZE_BOUNDARY])
     if args.verify_native_large_file_status:
         command.append("--verify-native-large-file-status")
     if args.verify_native_partial_threshold:
@@ -308,6 +312,8 @@ def run_amule_transfer_scenario(
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
     if args.verify_native_sx2_callback:
         command.extend(["--transfer-scenario", dtt.NATIVE_SX2_CALLBACK])
+    if args.verify_native_size_boundary:
+        command.extend(["--transfer-scenario", dtt.NATIVE_SERVER_SIZE_BOUNDARY])
     if args.verify_native_large_file_status:
         command.append("--verify-native-large-file-status")
     if args.verify_native_partial_threshold:
