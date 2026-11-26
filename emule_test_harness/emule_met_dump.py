@@ -225,6 +225,32 @@ def dump_file(path: Path, *, summary: bool = False, strict: bool = False) -> dic
         }
 
 
+def part_file_gaps(record: dict[str, Any]) -> list[tuple[int, int]]:
+    """Return the validated half-open missing ranges from a native part.met record."""
+    size = record["fields"].get("sizeBytes")
+    if type(size) is not int or size <= 0:
+        raise MetParseError("Part-file gap ranges need a positive file size")
+    endpoints: dict[str, dict[str, int]] = {"\x09": {}, "\x0a": {}}
+    for tag in record["tags"]:
+        name = tag["name"]
+        if not isinstance(name, str) or name[:1] not in endpoints:
+            continue
+        marker, index, value = name[0], name[1:], tag.get("value")
+        if not index.isascii() or not index.isdecimal() or index in endpoints[marker] or type(value) is not int:
+            raise MetParseError("Invalid or duplicate part-file gap tag")
+        endpoints[marker][index] = value
+    starts, ends = endpoints["\x09"], endpoints["\x0a"]
+    if starts.keys() != ends.keys():
+        raise MetParseError("Part-file gap is missing an endpoint")
+    ranges = sorted((start, ends[index]) for index, start in starts.items())
+    previous_end = 0
+    for start, end in ranges:
+        if not previous_end <= start < end <= size:
+            raise MetParseError("Part-file gaps overlap or fall outside the file")
+        previous_end = end
+    return ranges
+
+
 def write_dump_json(dump: dict[str, Any], output: Path | None) -> Path | None:
     """Writes a dump to output or stdout. Returns the written path, if any."""
 

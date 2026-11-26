@@ -58,6 +58,8 @@ def observe(identity: str, host: str, port: int, temp_dir: Path) -> dict[str, ob
                 fields = record["fields"]
                 key = (fields.get("fileName"), fields.get("sizeBytes"), record.get("ed2kHash"))
                 if key in expected:
+                    if emule_met_dump.part_file_gaps(record) != [(0, key[1])]:
+                        raise RuntimeError("Source-less native status jobs must have a full-file gap")
                     part_lengths[key[0]] = path.with_suffix("").stat().st_size
         if len(part_lengths) != len(expected):
             return None
