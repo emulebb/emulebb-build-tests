@@ -34,6 +34,7 @@ def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path, allow
     assert "ConnectToKad=0" in text
     assert "ConnectToED2K=1" in text
     assert "NewVersionCheck=0" in text
+    assert (config_dir / "lastversion").read_text(encoding="utf-8").splitlines() == ["3.0.1"]
     assert f"SeeShare={0 if allow_browse else 2}" in text
     assert f"MaxUpload={1024 if allow_browse else 0}" in text
     assert "ECAddress=127.0.0.1" in text

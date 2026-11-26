@@ -1624,8 +1624,12 @@ def test_resolve_managed_server_p2p_bind_address_preserves_local_or_explicit_bin
     )
 
 
-def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
-    monkeypatch,
+@pytest.mark.parametrize(("amule_source_link", "network", "expected_alias"), [
+    (False, "192.0.2.0/24", "192.0.2.241"),
+    (True, "198.51.100.0/24", "198.51.100.241"),
+])
+def test_provision_windows_high_id_address_uses_wsl_route_alias(
+    monkeypatch, amule_source_link, network, expected_alias,
 ) -> None:
     module = load_suite_module()
     constructed: list[dict[str, object]] = []
@@ -1636,7 +1640,7 @@ def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
 
         def acquire(self, count: int) -> list[str]:
             assert count == 1
-            return ["192.0.2.241"]
+            return [expected_alias]
 
     monkeypatch.setattr(
         module.ed2k_server,
@@ -1645,16 +1649,16 @@ def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
     )
     monkeypatch.setattr(module, "LanIpPool", FakePool)
 
-    pool, address, route = module.provision_relayed_reask_high_id_address()
+    pool, address, route = module.provision_windows_high_id_address(amule_source_link=amule_source_link)
 
     assert isinstance(pool, FakePool)
-    assert address == "192.0.2.241"
+    assert address == expected_alias
     assert route == "172.20.16.1"
     assert constructed == [
         {
             "address": "172.20.16.1",
             "prefix_length": 32,
-            "candidate_network": "192.0.2.0/24",
+            "candidate_network": network,
             "first_octet4": 241,
             "last_octet4": 250,
         }

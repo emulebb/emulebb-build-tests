@@ -49,6 +49,7 @@ def configure_profile(
     password_hash = _ec_password_digest(ec_password)
     config = f"""[eMule]
 Nick={nick}
+Language=en_US
 MaxUpload={1024 if allow_peer_browse else 0}
 MaxDownload=0
 Port={tcp_port}
@@ -97,6 +98,8 @@ IsClientCryptLayerRequired=0
 CryptoPaddingLenght=254
 """
     (config_dir / "amule.conf").write_text(config, encoding="utf-8", newline="\n")
+    # The monolithic 3.0.1 reference blocks startup on an unseen version.
+    (config_dir / "lastversion").write_text("3.0.1\n", encoding="utf-8")
     shared_path = f"{shared_dir.resolve()}\n"
     for name in ("shareddir.dat", "shareddir-explicit.dat"):
         (config_dir / name).write_text(shared_path, encoding="utf-8", newline="\n")

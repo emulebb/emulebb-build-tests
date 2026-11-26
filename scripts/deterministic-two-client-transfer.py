@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
+from dataclasses import replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -92,6 +93,7 @@ DIRECT_CALLBACK = "direct-callback"
 BUDDY_CALLBACK = "buddy-callback"
 RELAYED_REASK = "relayed-reask"
 RELAYED_REASK_HIGH_ID_NETWORK = "192.0.2.0/24"
+AMULE_BROWSE_HIGH_ID_NETWORK = "198.51.100.0/24"
 RELAYED_REASK_HIGH_ID_FIRST_OCTET4 = 241
 RELAYED_REASK_HIGH_ID_LAST_OCTET4 = 250
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
@@ -2188,14 +2190,16 @@ def resolve_managed_server_p2p_bind_address(
     )
 
 
-def provision_relayed_reask_high_id_address() -> tuple[LanIpPool, str, str]:
-    """Provisions one TEST-NET address on the Windows side of the WSL route."""
-
+def provision_windows_high_id_address(*, amule_source_link: bool = False) -> tuple[LanIpPool, str, str]:
+    """Provisions one temporary address on the Windows side of the WSL route."""
     _, windows_route_address = ed2k_server.resolve_managed_server_windows_route()
+    # aMule filters TEST-NET-1 in source links and allows TEST-NET-2
+    # for test peers. eD2K-server rejects RFC1918 hairpin addresses.
+    candidate_network = AMULE_BROWSE_HIGH_ID_NETWORK if amule_source_link else RELAYED_REASK_HIGH_ID_NETWORK
     pool = LanIpPool(
         windows_route_address,
         prefix_length=32,
-        candidate_network=RELAYED_REASK_HIGH_ID_NETWORK,
+        candidate_network=candidate_network,
         first_octet4=RELAYED_REASK_HIGH_ID_FIRST_OCTET4,
         last_octet4=RELAYED_REASK_HIGH_ID_LAST_OCTET4,
     )
@@ -2693,22 +2697,16 @@ def observe_native_peer_browse(
             "total": page["total"], "file": matches[0]}
 
 
-def observe_stock_browsing_rust(
-    app, base_url: str, api_key: str, share: Path, *,
-    host: str, port: int, server_control: ed2k_server.Ed2kServerControl,
-) -> dict[str, object]:
-    """Use the native stock source command and look for an unrequested canary."""
-    import win32con
-    import win32gui
-    import win32process
-
+def publish_reverse_browse_fixture(
+    base_url: str, api_key: str, share: Path, *, host: str, port: int, canary_size: int = 4096,
+) -> tuple[str, str, dict[str, object]]:
+    """Publish an anchor with a direct link and a separate unrequested canary."""
     from emule_test_harness.rust_rest_contract import iter_library_files
 
-    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
     anchor = share / "RustBrowseAnchor.bin"
     canary = share / "Canary" / "RustBrowseCanary.bin"
     write_fixture_file(anchor, 10 * 1024 * 1024, seed=148)
-    write_fixture_file(canary, 4096, seed=149)
+    write_fixture_file(canary, canary_size, seed=149)
     publication = rust_local_ed2k.publish_shared_tree(base_url, api_key, root=share, file_name=anchor.name)
     base_link = publication["sharedFiles"]["matched"]["ed2kLink"]
     # Stock parses sources from the extension after the first slash.
@@ -2718,6 +2716,20 @@ def observe_stock_browsing_rust(
         view="shared", root_id=str(publication["directories"]["id"]), search=canary.name,
     )
     expected = rust_local_ed2k.require_library_file(rows, canary.name)
+    return anchor.name, link, expected
+
+
+def observe_stock_browsing_rust(
+    app, base_url: str, api_key: str, share: Path, *,
+    host: str, port: int, server_control: ed2k_server.Ed2kServerControl,
+) -> dict[str, object]:
+    """Use the native stock source command and look for an unrequested canary."""
+    import win32con
+    import win32gui
+    import win32process
+
+    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
+    anchor_name, link, expected = publish_reverse_browse_fixture(base_url, api_key, share, host=host, port=port)
 
     main = live_common.find_process_main_window(app)
     pid = live_common.resolve_app_process_id(app)
@@ -2766,7 +2778,7 @@ def observe_stock_browsing_rust(
             return None
 
         def find_rust_source() -> tuple[int, str] | None:
-            anchor_row = find_row(downloads, anchor.name)
+            anchor_row = find_row(downloads, anchor_name)
             if anchor_row is None:
                 return None
             ui.select_list_row(handle, downloads, anchor_row[0])
@@ -2779,13 +2791,16 @@ def observe_stock_browsing_rust(
         win32gui.SendMessage(downloads, win32con.WM_COMMAND, 10106, 0)  # MP_SHOWLIST
         ui.open_search_page(main.handle)
         results = ui.find_control(main.handle, 2172, "SysListView32")  # IDC_SEARCHLIST
-        index, _ = live_common.wait_for(lambda: find_row(results, canary.name), 30, 0.2, "stock remote canary")
+        index, _ = live_common.wait_for(
+            lambda: find_row(results, expected["displayName"]), 30, 0.2, "stock remote canary",
+        )
         row = ui.get_search_result_row(handle, results, index)
     finally:
         ui.close_process(handle)
-    if row["hash"] != expected["hash"] or ui.parse_display_size_bytes(row["size"]) != canary.stat().st_size:
+    size = ui.parse_display_size_bytes(row["size"])
+    if row["hash"] != expected["hash"] or size != expected["sizeBytes"]:
         raise RuntimeError("Stock remote canary differs from the Rust catalog")
-    return {"status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": 4096}
+    return {"status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": size}
 
 
 def wait_for_transfer(
@@ -3514,8 +3529,9 @@ def main(argv: list[str] | None = None) -> int:
     server_tcp_metadata_evidence: dict[str, object] | None = None
     server_udp_metadata_evidence: dict[str, object] | None = None
     server_udp_source_evidence: dict[str, object] | None = None
-    relayed_reask_high_id_pool: LanIpPool | None = None
-    relayed_reask_high_id_address: str | None = None
+    test_high_id_pool: LanIpPool | None = None
+    test_high_id_address: str | None = None
+    verify_amule_browse = args.verify_peer_browse and args.client2_identity == "amule"
     current_phase = "initializing"
 
     try:
@@ -3523,19 +3539,19 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
-        if args.transfer_scenario == RELAYED_REASK:
+        if args.transfer_scenario == RELAYED_REASK or verify_amule_browse:
             if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
                 raise ValueError(
-                    "relayed-reask owns its deterministic HighID address; "
+                    "This scenario owns its deterministic HighID address; "
                     "do not pass a P2P bind override"
                 )
-            current_phase = "provision_relayed_reask_high_id_address"
+            current_phase = "provision_test_high_id_address"
             (
-                relayed_reask_high_id_pool,
-                relayed_reask_high_id_address,
+                test_high_id_pool,
+                test_high_id_address,
                 windows_route_address,
-            ) = provision_relayed_reask_high_id_address()
-            p2p_address = relayed_reask_high_id_address
+            ) = provision_windows_high_id_address(amule_source_link=verify_amule_browse)
+            p2p_address = test_high_id_address
         server_connect_address = resolve_ed2k_server_connect_address(
             args.ed2k_server_connect_address
         )
@@ -3556,10 +3572,10 @@ def main(argv: list[str] | None = None) -> int:
             "ed2k_server_connect_address": server_connect_address,
             "ports": ports,
         }
-        if relayed_reask_high_id_address is not None:
+        if test_high_id_address is not None:
             report["network"]["high_id_authority"] = {
                 "mode": "upstream-server-identity-probe",
-                "address": relayed_reask_high_id_address,
+                "address": test_high_id_address,
                 "interfaceAddress": windows_route_address,
                 "candidateNetwork": RELAYED_REASK_HIGH_ID_NETWORK,
                 "ephemeral": True,
@@ -3587,13 +3603,13 @@ def main(argv: list[str] | None = None) -> int:
             server_udp=(
                 protocol_case.server_udp if protocol_case is not None else True
             ),
-            advertised_address_override=relayed_reask_high_id_address,
-            hairpin_lan_clients=relayed_reask_high_id_address is not None,
+            advertised_address_override=test_high_id_address,
+            hairpin_lan_clients=test_high_id_address is not None,
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
         server_address = server_launch.ed2k_host
-        if relayed_reask_high_id_address is None:
+        if test_high_id_address is None:
             p2p_address = resolve_managed_server_p2p_bind_address(
                 current_address=p2p_address,
                 server_address=server_address,
@@ -4052,9 +4068,9 @@ def main(argv: list[str] | None = None) -> int:
                 'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA,
                 'network.connections.connectTimeoutSeconds': 10,
                 'network.servers.reconnectIntervalSeconds': 60,
-                **({'transfers.uploadLimitBytesPerSecond': 262_144,
+                **({'transfers.uploadLimitBytesPerSecond': 65_536 if verify_amule_browse else 262_144,
                     'transfers.upload.sharedFilesVisibility': 'everyone'}
-                   if args.verify_peer_browse and args.client2_identity == "stock_emule" else {}),
+                   if args.verify_peer_browse else {}),
             },
         )
         if args.transfer_scenario == SERVER_UDP_METADATA:
@@ -4130,6 +4146,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"Client2 {client2_availability.identity.product} control was not found: "
                 f"{client2_availability.reason}."
             )
+        if verify_amule_browse:
+            client2_app_exe = client2_app_exe.with_name("amule.exe")
+            if not client2_app_exe.is_file():
+                raise RuntimeError("The staged monolithic aMule GUI is required for native browse")
+            client2_availability = replace(client2_availability, executable=client2_app_exe)
         if args.client2_identity == "amule":
             amule_client.configure_profile(
                 config_dir=Path(client2["config_dir"]),
@@ -5532,6 +5553,46 @@ def main(argv: list[str] | None = None) -> int:
                 client2_app, base_url, args.api_key, paths.source_artifacts_dir / "rust-browse-share",
                 host=p2p_address, port=ports["client1_tcp"], server_control=server_control,
             )
+        elif verify_amule_browse:
+            from emule_test_harness.amule_browse_ui import browse_rust_shares
+            from emule_test_harness.emule_met_dump import dump_file
+
+            current_phase = "amule_browses_rust_publisher"
+            if report["checks"]["client1_server_client"].get("high_id") is not True:
+                raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
+            browse_share = paths.source_artifacts_dir / "rust-browse-share"
+            anchor, link, canary = publish_reverse_browse_fixture(
+                base_url, args.api_key, browse_share,
+                host=p2p_address, port=ports["client1_tcp"], canary_size=137,
+            )
+            amule_client.run_command(
+                client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                command=f"add {link}",
+            )
+            canary_name = canary["displayName"]
+            amule_temp = Path(client2["temp_dir"])
+            before_browse = set(amule_temp.glob("*.part.met"))
+            browse = browse_rust_shares(
+                process_id=client2_app.pid, peer_name="eMule", anchor_name=anchor, file_name=canary_name,
+            )
+            current_phase = "amule_verifies_native_browse_result"
+
+            def browse_metadata():
+                for path in sorted(set(amule_temp.glob("*.part.met")) - before_browse):
+                    part = dump_file(path, summary=True)
+                    for record in part.get("records", []):
+                        fields = record["fields"]
+                        if fields.get("fileName") != canary_name:
+                            continue
+                        size, digest = fields.get("sizeBytes"), record["ed2kHash"]
+                        if size != canary["sizeBytes"] or digest != canary["hash"].lower():
+                            raise RuntimeError("aMule browse canary size or eD2K hash differs from the Rust catalog")
+                        return {"displayName": canary_name, "sizeBytes": size, "fileHash": digest,
+                                "oracleMetadata": path.name}
+                return None
+
+            browse.update(live_common.wait_for(browse_metadata, 15, 0.25, "aMule native browse canary metadata"))
+            report["checks"]["amule_browses_rust_publisher"] = browse
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )
@@ -5808,11 +5869,15 @@ def main(argv: list[str] | None = None) -> int:
                 }
         ed2k_server.stop_process(metadata_server_process)
         ed2k_server.stop_process(server_process)
-        if relayed_reask_high_id_pool is not None:
-            relayed_reask_high_id_pool.release()
-            close_results["relayed_reask_high_id_address"] = {
+        if test_high_id_pool is not None:
+            test_high_id_pool.release()
+            cleanup_key = (
+                "relayed_reask_high_id_address" if args.transfer_scenario == RELAYED_REASK
+                else "amule_browse_high_id_address"
+            )
+            close_results[cleanup_key] = {
                 "ok": True,
-                "address": relayed_reask_high_id_address,
+                "address": test_high_id_address,
             }
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
