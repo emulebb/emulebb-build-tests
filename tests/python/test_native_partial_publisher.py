@@ -82,3 +82,35 @@ def test_stop_with_incomplete_hello():
             source.stop()
     finally:
         source.stop()
+
+
+
+def test_native_progress_uses_written_payload_when_part_met_lags(tmp_path, monkeypatch):
+    from emule_test_harness import native_partial_threshold as threshold
+
+    source = PartialPublisher("127.0.0.1", 0, 0)
+    metadata_path = tmp_path / "001.part.met"
+    metadata_path.touch()
+    payload_path = metadata_path.with_suffix("")
+    payload_path.write_bytes(b"A" * (PART_SIZE - 2) + bytes(2) + b"B")
+    record = {
+        "ed2kHash": source.file_hash.hex(),
+        "fields": {"sizeBytes": source.file_size},
+        "tags": [
+            {"name": "\x09" "0", "value": 0},
+            {"name": "\x0a" "0", "value": source.file_size},
+        ],
+    }
+    monkeypatch.setattr(threshold.emule_met_dump, "dump_file", lambda *_a, **_kw: {"records": [record]})
+
+    state = threshold.wait_for_native_progress(
+        tmp_path, source.file_hash, source.file_size, (PART_SIZE - 2, 1),
+        accept_written_payload=True,
+    )
+
+    assert state == {
+        "partBytes": (PART_SIZE - 2, 1),
+        "receivedBytes": PART_SIZE - 1,
+        "gaps": [(PART_SIZE - 2, PART_SIZE), (PART_SIZE + 1, source.file_size)],
+        "evidence": "part-file-payload",
+    }

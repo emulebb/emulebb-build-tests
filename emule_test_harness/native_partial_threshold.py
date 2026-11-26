@@ -8,9 +8,14 @@ from . import ed2k_file_observer, emule_met_dump, rust_local_ed2k
 from .native_partial_publisher import PART_SIZE, PartialPublisher
 
 
-def wait_for_native_progress(temp_dir: Path, file_hash: bytes, size: int, expected: tuple[int, int]) -> dict:
+def wait_for_native_progress(
+    temp_dir: Path, file_hash: bytes, size: int, expected: tuple[int, int], *,
+    accept_written_payload: bool = False,
+) -> dict:
     """Match persisted native gap accounting for both incomplete parts."""
     parts = ((0, PART_SIZE), (PART_SIZE, size))
+    head, tail = expected
+    payload = b"A" * head + bytes(PART_SIZE - head) + b"B" * tail if accept_written_payload else None
 
     def observe():
         for path in temp_dir.glob("*.part.met"):
@@ -25,9 +30,23 @@ def wait_for_native_progress(temp_dir: Path, file_hash: bytes, size: int, expect
                     for start, end in parts
                 )
                 if received == expected:
-                    return {"partBytes": received, "receivedBytes": sum(received), "gaps": gaps}
+                    return {"partBytes": received, "receivedBytes": sum(received), "gaps": gaps,
+                            "evidence": "part-met"}
                 if any(count > target for count, target in zip(received, expected)):
                     raise RuntimeError("Native partial job received bytes beyond the staged boundary")
+                if payload is not None:
+                    # Frozen aMule can flush payload before its gap tags are saved.
+                    # The two source ranges use nonzero bytes; untouched holes read as zero.
+                    part_path = path.with_suffix("")
+                    if part_path.stat().st_size == len(payload):
+                        with part_path.open("rb") as stream:
+                            written = stream.read(len(payload) + 1)
+                        if written == payload:
+                            return {
+                                "partBytes": expected, "receivedBytes": sum(expected),
+                                "gaps": [(head, PART_SIZE), (PART_SIZE + tail, size)],
+                                "evidence": "part-file-payload",
+                            }
         return None
 
     return rust_local_ed2k.wait_for(
@@ -86,11 +105,17 @@ def observe_threshold(
         head.wait_for_sent(PART_SIZE - 2, 100)
         submit_link(f"{link}|sources,{aliases[1]}:{tail.tcp_port}|/")
         tail.wait_for_sent(1, 55)
-        below = wait_for_native_progress(temp_dir, head.file_hash, head.file_size, (PART_SIZE - 2, 1))
+        below = wait_for_native_progress(
+            temp_dir, head.file_hash, head.file_size, (PART_SIZE - 2, 1),
+            accept_written_payload=identity == "amule",
+        )
         below.update(observe_metadata(identity, host, port, head, reached=False))
         tail.release_threshold_byte(8)
         tail.wait_for_sent(2, 15)
-        reached = wait_for_native_progress(temp_dir, head.file_hash, head.file_size, (PART_SIZE - 2, 2))
+        reached = wait_for_native_progress(
+            temp_dir, head.file_hash, head.file_size, (PART_SIZE - 2, 2),
+            accept_written_payload=identity == "amule",
+        )
         reached.update(observe_metadata(identity, host, port, head, reached=True))
         return {"nativeClient": identity, "fileHash": head.file_hash.hex(), "below": below, "reached": reached}
     finally:
