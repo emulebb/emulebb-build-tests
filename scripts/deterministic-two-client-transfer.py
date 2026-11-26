@@ -2886,7 +2886,18 @@ def publish_reverse_browse_fixture(
     if expected_count is not None:
         def full_catalog():
             page = rust_local_ed2k.request_json(base_url, "GET", count_route, api_key)
-            return page.get("meta", {}).get("total") == expected_count
+            if page.get("meta", {}).get("total") != expected_count:
+                return False
+            # The library count can see committed memberships before the peer
+            # serving catalog has been rebuilt. Wait for both observations.
+            scan = rust_local_ed2k.request_json(base_url, "GET", "/api/v1/library/scan", api_key)
+            progress = scan.get("reloadProgress") or {}
+            return (
+                scan.get("hashingCount") == 0
+                and progress.get("phase") == "idle"
+                and progress.get("running") is False
+                and progress.get("pending") is False
+            )
 
         live_common.wait_for(full_catalog, NATIVE_BROWSE_READY_SECONDS, 1, "Rust reverse browse catalog ready")
     anchor_row = publication["sharedFiles"]["matched"]

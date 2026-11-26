@@ -66,8 +66,28 @@ def test_reverse_browse_catalog_includes_the_already_shared_transfer(tmp_path: P
 
     module = load_suite_module()
     share = tmp_path / "reverse-share"
-    counts = iter([1, 370])
-    monkeypatch.setattr(module.rust_local_ed2k, "request_json", lambda *_args: {"meta": {"total": next(counts)}})
+    counts = iter([1, 370, 370, 370])
+    idle = {"phase": "idle", "running": False, "pending": False}
+    scans = iter([
+        {**idle, "running": True},
+        {**idle, "pending": True},
+        idle,
+    ])
+
+    def request(_url, method, route, _key):
+        assert method == "GET"
+        if route == "/api/v1/library/scan":
+            return {"hashingCount": 0, "reloadProgress": next(scans)}
+        assert route == "/api/v1/library/files?view=shared&limit=1&countTotal=true"
+        return {"meta": {"total": next(counts)}}
+
+    def wait(predicate, _timeout, _interval, _description):
+        assert predicate() is False
+        assert predicate() is False
+        assert predicate() is True
+
+    monkeypatch.setattr(module.rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(module.live_common, "wait_for", wait)
     monkeypatch.setattr(module.rust_local_ed2k, "publish_shared_tree", lambda *_args, **_kwargs: {
         "directories": {"id": "test"},
         "sharedFiles": {"matched": {"hash": "12" * 16, "ed2kLink": "ed2k://|file|anchor|10|" + "12" * 16 + "|/"}},
