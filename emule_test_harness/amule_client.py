@@ -283,17 +283,21 @@ def shutdown_daemon(
 
     if process.poll() is not None:
         return {"already_exited": True, "return_code": process.returncode}
-    output = run_command(control_exe, ec_port=ec_port, ec_password=ec_password, command="shutdown")
     try:
+        output = run_command(control_exe, ec_port=ec_port, ec_password=ec_password, command="shutdown")
         return_code = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        try:
-            return_code = process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait(timeout=5.0)
-        raise RuntimeError(f"aMule did not exit after EC shutdown; forced return code {return_code}")
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        return_code = process.poll()
+        if return_code is None:
+            process.terminate()
+            try:
+                return_code = process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                return_code = process.wait(timeout=5.0)
+        raise RuntimeError(
+            f"aMule EC shutdown ended with {type(error).__name__}; final return code {return_code}"
+        ) from None
     return {"already_exited": False, "return_code": return_code, "output": output}
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -107,3 +108,18 @@ def test_shared_file_count_accepts_prefixed_amulecmd_statistics_after_timeout(mo
     amule_client.wait_for_shared_file_count(
         Path("amulecmd"), ec_port=4712, ec_password="fixture", expected=100_000, timeout_seconds=1,
     )
+
+
+def test_shutdown_falls_back_when_the_ec_command_itself_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    command = Mock(side_effect=subprocess.TimeoutExpired("amulecmd", 15))
+    monkeypatch.setattr(amule_client, "run_command", command)
+    process = Mock()
+    process.poll.return_value = None
+    process.wait.return_value = -15
+
+    with pytest.raises(RuntimeError, match="EC shutdown ended with TimeoutExpired"):
+        amule_client.shutdown_daemon(process, Path("amulecmd"), ec_port=4712, ec_password="fixture")
+
+    process.terminate.assert_called_once_with()
+    process.wait.assert_called_once_with(timeout=5.0)
+    process.kill.assert_not_called()
