@@ -18,6 +18,9 @@ def _open_source(stack, host, part):
     hello = peer.receive()
     assert hello.opcode == 0x4C
     assert struct.unpack_from("<H", hello.payload, 20) == (source.tcp_port,)
+    stream = peer._require_socket()
+    stream.sendall(b"\xc5\x01\x00\x00\x00\x97")
+    assert peer.receive() == wire.Ed2kFrame(0xC5, 0x98, socket.inet_aton(stream.getsockname()[0]))
     peer.send(0x58, source.file_hash)
     name = source.file_name.encode("ascii")
     assert peer.receive().payload == source.file_hash + struct.pack("<H", len(name)) + name

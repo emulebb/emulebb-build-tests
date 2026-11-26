@@ -21,6 +21,7 @@ OP_SETREQFILEID, OP_FILESTATUS = 0x4F, 0x50
 OP_HASHSETREQUEST, OP_HASHSETANSWER = 0x51, 0x52
 OP_STARTUPLOADREQ, OP_ACCEPTUPLOADREQ, OP_CANCELTRANSFER = 0x54, 0x55, 0x56
 OP_REQUESTFILENAME, OP_REQFILENAMEANSWER = 0x58, 0x59
+OP_PUBLICIP_REQ, OP_PUBLICIP_ANSWER = 0x97, 0x98
 
 
 @cache
@@ -162,9 +163,15 @@ class PartialPublisher:
             trace_key = f"{header[0]:02x}/{opcode:02x}"
             with self._changed:
                 self._opcodes[trace_key] = self._opcodes.get(trace_key, 0) + 1
-            if header[0] != wire.PROTO_EDONKEY or not 1 <= size <= 65_536:
+            if header[0] not in (wire.PROTO_EDONKEY, wire.PROTO_EMULE) or not 1 <= size <= 65_536:
                 raise wire.Ed2kWireError(f"Unexpected peer frame {trace_key} length {size}")
             payload = wire._recv_exact(stream, size - 1)
+            if header[0] == wire.PROTO_EMULE:
+                if not greeted or opcode != OP_PUBLICIP_REQ or payload:
+                    raise wire.Ed2kWireError(f"Unexpected peer extension {trace_key}")
+                observed = socket.inet_aton(stream.getpeername()[0])
+                stream.sendall(struct.pack("<BIB", wire.PROTO_EMULE, 5, OP_PUBLICIP_ANSWER) + observed)
+                continue
             if not greeted:
                 if opcode != OP_HELLO or len(payload) < 33 or payload[0] != 16:
                     raise wire.Ed2kWireError("Partial publisher expected a stock-shaped peer HELLO")
