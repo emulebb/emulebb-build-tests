@@ -105,6 +105,7 @@ def test_build_server_config_writes_private_minimal_toml(tmp_path: Path) -> None
     assert config["limits"]["getsources_cache_secs"] == 1
     assert "soft_limit_files = 100000" in text
     assert "hard_limit_files = 200001" in text
+    assert "hash_filter = []" in text
     assert "getsources_cache_secs = 1" in text
     assert "private_highid_probe" not in config["network"]
     assert "private_highid_probe" not in text
@@ -575,6 +576,15 @@ def test_rust_server_launches_wsl_with_selected_connect_address(
 
     monkeypatch.setattr(rust_ed2k, "_is_windows_host", lambda: True)
     monkeypatch.setattr(rust_ed2k, "wsl_ipv4_address", lambda _distribution=None: "172.20.0.2")
+    fixture_path = (tmp_path / "run" / "unindexed-fixture-hashes.txt").resolve()
+    expected_hash_filter_path = "/mnt/c/harness/run/unindexed-fixture-hashes.txt"
+
+    def translate_hash_filter(path: Path, distribution: str | None) -> str:
+        assert path == fixture_path
+        assert path.read_bytes() == b"00112233445566778899aabbccddeeff\n"
+        return expected_hash_filter_path
+
+    monkeypatch.setattr(rust_ed2k, "wsl_path", translate_hash_filter)
     monkeypatch.setattr(rust_ed2k, "prepare_server_binary", lambda *_args, **_kwargs: binary)
     monkeypatch.setattr(rust_ed2k, "start_server", lambda *_args, **_kwargs: process)
     monkeypatch.setattr(
@@ -592,6 +602,7 @@ def test_rust_server_launches_wsl_with_selected_connect_address(
         admin_address="192.0.2.10",
         ed2k_address="192.0.2.10",
         windows_client_address=windows_client_address,
+        unindexed_fixture_hashes=("00112233445566778899AABBCCDDEEFF",),
     )
 
     assert launch.ed2k_host == expected_client_address
@@ -599,6 +610,9 @@ def test_rust_server_launches_wsl_with_selected_connect_address(
     assert launch.admin_base_url == "http://127.0.0.1:8080"
     assert launch.config["network"]["listen_ip"] == "0.0.0.0"
     assert launch.config["server"]["this_ip"] == "172.20.0.2"
+    assert launch.config["content_filter"]["hash_banlist"] == []
+    assert launch.config["content_filter"]["hash_filter"] == [expected_hash_filter_path]
+    assert f'hash_filter = ["{expected_hash_filter_path}"]' in launch.config_path.read_text(encoding="utf-8")
     assert isinstance(rust_ed2k.create_server_control(launch.admin_base_url, "unused"), rust_ed2k.RustEd2kServerControl)
 
 

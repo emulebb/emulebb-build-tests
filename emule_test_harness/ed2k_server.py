@@ -154,6 +154,7 @@ def launch_ed2k_server(
     packet_trace: bool = False,
     advertised_address_override: str | None = None,
     hairpin_lan_clients: bool = False,
+    unindexed_fixture_hashes: tuple[str, ...] = (),
     health_timeout_seconds: float = 30.0,
 ) -> Ed2kServerLaunch:
     """Launches the managed Rust ED2K server for a local suite."""
@@ -180,6 +181,7 @@ def launch_ed2k_server(
         packet_trace=packet_trace,
         advertised_address_override=advertised_address_override,
         hairpin_lan_clients=hairpin_lan_clients,
+        unindexed_fixture_hashes=unindexed_fixture_hashes,
         health_timeout_seconds=health_timeout_seconds,
     )
 
