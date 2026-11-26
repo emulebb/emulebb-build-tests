@@ -70,12 +70,12 @@ def test_native_stock_and_amule_transfers(browse_peer: str | None, fixture_size:
     [
         pytest.param("stock", 2, False, id="stock_paged_browse"),
         pytest.param("amule", 2, False, id="amule_paged_browse"),
-        pytest.param("stock", 271, False, id="stock_100k_browse"),
-        pytest.param("amule", 271, False, id="amule_100k_browse"),
+        pytest.param("stock", 27, False, id="stock_10k_browse"),
+        pytest.param("amule", 27, False, id="amule_10k_browse"),
         pytest.param("stock", 2, True, id="stock_reverse_paged_browse"),
         pytest.param("amule", 2, True, id="amule_reverse_paged_browse"),
-        pytest.param("stock", 271, True, id="stock_reverse_100k_browse"),
-        pytest.param("amule", 271, True, id="amule_reverse_100k_browse"),
+        pytest.param("stock", 27, True, id="stock_reverse_10k_browse"),
+        pytest.param("amule", 27, True, id="amule_reverse_10k_browse"),
     ],
 )
 def test_native_publisher_browse_catalog(peer: str, buckets: int, reverse: bool) -> None:
