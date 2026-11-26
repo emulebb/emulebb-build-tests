@@ -58,6 +58,7 @@ from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
 from emule_test_harness.workspace_layout import resolve_selected_workspace_repo  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
+    STOCK_EMULE_LOG_FILENAME,
     ClientAvailability,
     git_head_revision,
     resolve_amule_stable_client,
@@ -3009,7 +3010,7 @@ def observe_stock_browsing_rust(
     server_control.wait_for_client_absent(CLIENT_IDENTITIES["stock_emule"].nick, 10)
     submit_stock_download_link(app, link)
     # Stock schedules peer connections only while connected to a network.
-    stock_log = stock_log_dir / "eMule.log"
+    stock_log = stock_log_dir / STOCK_EMULE_LOG_FILENAME
     previous_log = stock_log.stat()
     win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
     server_control.wait_for_client(CLIENT_IDENTITIES["stock_emule"].nick, 15)

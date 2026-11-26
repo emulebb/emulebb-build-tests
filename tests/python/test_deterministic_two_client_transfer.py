@@ -155,7 +155,7 @@ def test_reverse_browse_reads_active_anchor_session_bytes(monkeypatch: pytest.Mo
 
 def test_stock_login_wait_ignores_pre_reconnect_id_and_handles_rotation(tmp_path: Path) -> None:
     module = load_suite_module()
-    log = tmp_path / "eMule.log"
+    log = tmp_path / "stock-fixture.log"
     log.write_text("26/11/2026 10:47:01: New client ID is 4\n", encoding="utf-16")
     previous = log.stat()
     assert module.stock_client_id_after(log, previous) is None

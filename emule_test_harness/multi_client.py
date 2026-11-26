@@ -19,6 +19,8 @@ CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
 CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 CLIENT07_AMULE = "cl-amule-007"
 
+STOCK_EMULE_LOG_FILENAME = "eMule.log"
+
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
 NICK_CLIENT02_MFC_ORACLE = "cl-mfc-oracle-002"
 NICK_CLIENT03_EMULEAI = "cl-emuleai-003"
