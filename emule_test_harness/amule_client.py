@@ -43,6 +43,7 @@ def configure_profile(
     allow_peer_browse: bool = False,
     additional_shared_dirs: tuple[Path, ...] = (),
     create_sparse_files: bool = True,
+    flush_partial_fixture: bool = False,
 ) -> None:
     """Writes the minimal deterministic profile consumed by official `amuled`."""
 
@@ -73,6 +74,7 @@ TempDir={_config_path(temp_dir)}
 IncomingDir={_config_path(incoming_dir)}
 CheckDiskspace=0
 CreateSparseFiles={int(create_sparse_files)}
+FileBufferSizePref={0 if flush_partial_fixture else 16}
 FirstRunWizardDone=1
 GeoIPEnabled=0
 GeoIPAutoUpdate=0
