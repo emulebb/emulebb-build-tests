@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -159,7 +161,31 @@ def prepare_server_binary(
         repo_override=repo_override,
         exe_override=effective_override,
     )
+    if effective_override and server_exe.parent.name == "bin":
+        receipt_path = server_exe.parent.parent / "build-receipt.json"
+        if receipt_path.is_file():
+            build["source_build"] = verify_upstream_server_stage(server_exe, receipt_path)
     return RustEd2kServerBinary(server_exe=server_exe, build=build)
+
+
+def verify_upstream_server_stage(server_exe: Path, receipt_path: Path) -> dict[str, object]:
+    """Verify the exact executable bytes associated with an upstream Builder stage."""
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema") != "emulebb.ed2k-server-upstream-build/1"
+        or receipt.get("binary") != "bin/ed2k-server"
+        or receipt_path.parent / "bin" / "ed2k-server" != server_exe
+        or receipt.get("target") != "x86_64-unknown-linux-gnu"
+        or any(not re.fullmatch(r"[0-9a-f]{40}", str(receipt.get(field, "")))
+               for field in ("sourceRevision", "upstreamTip", "builderRevision"))
+    ):
+        raise RuntimeError(f"Invalid upstream ed2k-server build receipt: {receipt_path}")
+    with server_exe.open("rb") as binary:
+        digest = hashlib.file_digest(binary, "sha256").hexdigest()
+    if digest != receipt.get("sha256"):
+        raise RuntimeError(f"Upstream ed2k-server binary digest differs from its build receipt: {server_exe}")
+    return receipt
 
 
 def _wsl_command(distribution: str | None, *arguments: str) -> list[str]:
@@ -389,6 +415,7 @@ def build_server_config(
     get_sources_cache_seconds: int = 1,
     server_name: str = "emulebb-local-e2e",
     hairpin_lan_clients: bool = False,
+    hash_filter_path: str | None = None,
 ) -> dict[str, object]:
     """Writes a minimal private Rust server configuration for local harness runs."""
 
@@ -402,6 +429,7 @@ def build_server_config(
         raise ValueError("hard_limit_files must be non-negative.")
     if not 1 <= get_sources_cache_seconds <= 600:
         raise ValueError("get_sources_cache_seconds must be between 1 and 600.")
+    hash_filter_paths = [hash_filter_path] if hash_filter_path else []
     config: dict[str, object] = {
         "server": {
             "name": server_name,
@@ -425,7 +453,7 @@ def build_server_config(
         },
         "content_filter": {
             "hash_banlist": [],
-            "hash_filter": [],
+            "hash_filter": hash_filter_paths,
             "publisher_count_window_seconds": 86400,
         },
         "welcome": {
@@ -474,7 +502,7 @@ def build_server_config(
         "",
         "[content_filter]",
         "hash_banlist = []",
-        "hash_filter = []",
+        f"hash_filter = [{', '.join(map(_toml_string, hash_filter_paths))}]",
         "publisher_count_window_seconds = 86400",
         "",
         "[welcome]",
@@ -793,9 +821,10 @@ def launch_server(
     packet_trace: bool = False,
     advertised_address_override: str | None = None,
     hairpin_lan_clients: bool = False,
+    unindexed_fixture_hashes: tuple[str, ...] = (),
     health_timeout_seconds: float = 30.0,
 ) -> RustEd2kServerLaunch:
-    """Launches the upstream-aligned Linux Rust server."""
+    """Launches the upstream-aligned server with optional fixture hashes hidden from its index."""
 
     del admin_secret, admin_address
     if fixture_files:
@@ -810,6 +839,8 @@ def launch_server(
         raise UnsupportedEd2kServerCapability("Rust ed2k-server always enables its protocol UDP sockets.")
     if not ed2k_address:
         raise ValueError("ed2k_address must identify the client-side harness interface.")
+    if any(not re.fullmatch(r"[0-9a-fA-F]{32}", file_hash) for file_hash in unindexed_fixture_hashes):
+        raise ValueError("Unindexed fixture hashes must be 32 hexadecimal characters.")
 
     binary = prepare_server_binary(
         workspace_root,
@@ -817,7 +848,8 @@ def launch_server(
         exe_override=exe_override,
     )
     distribution = os.environ.get(RUST_ED2K_WSL_DISTRIBUTION_ENV, "").strip() or None
-    if _is_windows_host():
+    windows_host = _is_windows_host()
+    if windows_host:
         wsl_address = wsl_ipv4_address(distribution)
         advertised_address = str(advertised_address_override or wsl_address).strip()
         listen_address = "0.0.0.0"
@@ -830,6 +862,15 @@ def launch_server(
     config_path = server_dir / "config.toml"
     log_path = server_dir / "server.log"
     pid_path = server_dir / "server.pid"
+    hash_filter_path = None
+    if unindexed_fixture_hashes:
+        fixture_path = (server_dir / "unindexed-fixture-hashes.txt").resolve()
+        fixture_path.write_text(
+            "".join(f"{file_hash.lower()}\n" for file_hash in unindexed_fixture_hashes),
+            encoding="ascii",
+            newline="\n",
+        )
+        hash_filter_path = wsl_path(fixture_path, distribution) if windows_host else str(fixture_path)
     config = build_server_config(
         config_path,
         ed2k_port=ed2k_port,
@@ -842,6 +883,7 @@ def launch_server(
         hard_limit_files=hard_limit_files,
         get_sources_cache_seconds=1,
         hairpin_lan_clients=hairpin_lan_clients,
+        hash_filter_path=hash_filter_path,
     )
     process = start_server(
         binary.server_exe,

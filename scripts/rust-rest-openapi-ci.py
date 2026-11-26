@@ -861,7 +861,8 @@ def run_category_persistence_phase(*, executable: Path, rust_repo: Path, root: P
             # Demand must still checkpoint without fabricating serving authority.
             if peer.request_range(only_hash, 0, 10) is not None:
                 raise RuntimeError("Unavailable content gained payload authority from demand")
-            if peer.filename_available(duplicate_hash) or peer.request_range(duplicate_hash, 0, 10) is not None:
+            # An unavailable file gets no standalone filename reply in stock.
+            if peer.file_status_available(duplicate_hash) or peer.request_range(duplicate_hash, 0, 10) is not None:
                 raise RuntimeError("Restarted disabled hash accepted a new peer request")
             if upload_timestamps(duplicate_hash)[1] != first_timestamps[1]:
                 raise RuntimeError("A refused post-restart request changed last actual upload time")

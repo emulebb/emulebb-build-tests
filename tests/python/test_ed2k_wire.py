@@ -1,11 +1,94 @@
 from __future__ import annotations
 
+import socket
 import struct
 import zlib
 
 import pytest
 
 from emule_test_harness import ed2k_wire
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("requested_hash", [b"f" * 16, b"x" * 16])
+def test_solicited_sx2_fixture_matches_the_original_file_and_server(requested_hash: bytes) -> None:
+    file_hash = b"f" * 16
+    hello = b"\xe3\x22\x00\x00\x00\x01\x10" + b"p" * 16 + bytes(16)
+    probe = b"\xe3\x11\x00\x00\x00\x58" + file_hash + b"\xe3\x11\x00\x00\x00\x4f" + file_hash
+    request = b"\xc5\x14\x00\x00\x00\x83\x04\x00\x00" + requested_hash
+    expected_answer = (
+        b"\xc5\x31\x00\x00\x00\x84\x04" + file_hash
+        + bytes.fromhex("0100 34120000 3812 c0000209 3512")
+        + b"t" * 16 + b"\x00"
+    )
+    fixture, client = socket.socketpair()
+    with fixture, client:
+        client.settimeout(2)
+        pipelined_hashset_request = b"\xe3\x11\x00\x00\x00\x51" + file_hash
+        client.sendall(hello + probe + request + pipelined_hashset_request)
+        client.shutdown(socket.SHUT_WR)
+        options = dict(
+            seed=("192.0.2.8", 4663), seed_user_hash=b"s" * 16, file_hash=file_hash,
+            file_name="fixture.bin",
+            target_id=0x1234, target_port=4664, target_user_hash=b"t" * 16,
+            server=("192.0.2.9", 4661), timeout_seconds=2,
+        )
+        if requested_hash != file_hash:
+            with pytest.raises(ed2k_wire.Ed2kWireError, match="original file"):
+                ed2k_wire.serve_solicited_sx2_low_id(fixture, **options)
+            return
+
+        receipt = ed2k_wire.serve_solicited_sx2_low_id(fixture, **options)
+        expected_hello = (
+            b"\xe3\x29\x00\x00\x00\x4c" + b"s" * 16
+            + bytes.fromhex("c0000208 3712 01000000 030100fe00040000 000000000000")
+        )
+        assert ed2k_wire._recv_exact(client, len(expected_hello)) == expected_hello
+        expected_probe = (
+            b"\xe3\x1e\x00\x00\x00\x59" + file_hash + b"\x0b\x00fixture.bin"
+            + b"\xe3\x13\x00\x00\x00\x50" + file_hash + b"\x00\x00"
+        )
+        assert ed2k_wire._recv_exact(client, len(expected_probe)) == expected_probe
+        assert ed2k_wire._recv_exact(client, len(expected_answer)) == expected_answer
+        assert receipt["answer"]["payloadHex"] == expected_answer[6:].hex()
+        assert receipt["trailingBytesDrained"] == len(pipelined_hashset_request)
+
+
+@pytest.mark.unit
+def test_native_requested_parts_preserve_the_one_byte_progress_boundary() -> None:
+    digest = bytes(range(16))
+    part_size = 9_728_000
+    # Leave two bytes missing from the first part. The first byte of the
+    # second part brings progress to PARTSIZE-1; its next byte reaches PARTSIZE.
+    offsets = struct.pack("<6I", 0, part_size, 0, 1, part_size + 2, 0)
+    frame = ed2k_wire.Ed2kFrame(0xE3, 0x47, digest + offsets)
+    first, second = ed2k_wire.decode_requested_parts(frame, file_hash=digest, file_size=2 * part_size - 1)
+    assert (first.start, first.end, second.start, second.end) == (0, 1, part_size, part_size + 2)
+    for start, value in ((part_size, b"a"), (part_size + 1, b"b")):
+        assert second.sending_part(start, value) == (
+            b"\xe3\x1a\x00\x00\x00\x46" + digest + struct.pack("<II", start, start + 1) + value
+        )
+    for start, value in ((part_size - 1, b"a"), (part_size + 1, b"ab"), (part_size, b"")):
+        with pytest.raises(ValueError):
+            second.sending_part(start, value)
+
+
+@pytest.mark.unit
+def test_native_requested_parts_bound_each_slot_and_match_the_offered_file() -> None:
+    digest = bytes(range(16))
+    maximum = ed2k_wire.MAX_PART_REQUEST_BYTES
+    size = maximum + 9
+    for bad_start, bad_end in ((0, maximum + 1), (size - 1, size + 1), (9, 8)):
+        payload = digest + struct.pack("<6I", bad_start, 1, size - 1, bad_end, maximum + 1, size)
+        frame = ed2k_wire.Ed2kFrame(0xE3, 0x47, payload)
+        slots = ed2k_wire.decode_requested_parts(frame, file_hash=digest, file_size=size)
+        assert [(slot.start, slot.end) for slot in slots] == [(1, maximum + 1), (size - 1, size)]
+        with pytest.raises(ValueError):
+            slots[-1].sending_part(size - 1, b"ab")
+    for payload in (digest + bytes(23), digest + bytes(25), bytes(40)):
+        with pytest.raises(ed2k_wire.Ed2kWireError):
+            ed2k_wire.decode_requested_parts(ed2k_wire.Ed2kFrame(0xE3, 0x47, payload),
+                                             file_hash=digest, file_size=size)
 
 
 @pytest.mark.unit
@@ -251,8 +334,10 @@ def test_server_udp_source_v1_request_codec_rejects_malformed_datagrams() -> Non
 def test_server_udp_source_v2_request_codec_preserves_normal_and_large_sizes() -> None:
     normal_hash = bytes.fromhex("00112233445566778899AABBCCDDEEFF")
     large_hash = bytes.fromhex("FFEEDDCCBBAA99887766554433221100")
-    normal_size = 913_101_138
-    large_size = 0x1_0000_0001
+    normal_size = 4_290_048_000
+    large_size = 4_290_048_001
+    assert ed2k_wire.encode_source_request(normal_hash, normal_size) == normal_hash + struct.pack("<I", normal_size)
+    assert ed2k_wire.encode_source_request(large_hash, large_size) == large_hash + struct.pack("<IQ", 0, large_size)
 
     datagram = ed2k_wire.encode_server_udp_source_v2_request(
         [(normal_hash, normal_size), (large_hash, large_size)]
@@ -310,9 +395,13 @@ def test_server_udp_source_v2_request_codec_rejects_noncanonical_datagrams() -> 
         ed2k_wire.decode_server_udp_source_v2_request(
             b"\xe3\x94" + file_hash + struct.pack("<I", 0)
         )
-    with pytest.raises(ed2k_wire.Ed2kWireError, match="size above u32"):
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="requires a size above the legacy limit"):
         ed2k_wire.decode_server_udp_source_v2_request(
-            b"\xe3\x94" + file_hash + struct.pack("<IQ", 0, 123)
+            b"\xe3\x94" + file_hash + struct.pack("<IQ", 0, 4_290_048_000)
+        )
+    with pytest.raises(ed2k_wire.Ed2kWireError, match="requires the large-file marker"):
+        ed2k_wire.decode_server_udp_source_v2_request(
+            b"\xe3\x94" + file_hash + struct.pack("<I", 4_290_048_001)
         )
 
 

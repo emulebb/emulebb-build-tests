@@ -238,6 +238,21 @@ class Ed2kFileObserver:
         )
 
 
+def observe_filename_before_status(
+    peer: ed2k_wire.Ed2kWireClient, file_hash: bytes,
+) -> tuple[ed2k_wire.Ed2kFrame | None, ed2k_wire.Ed2kFrame]:
+    """Use an ordered file-status reply to observe a possibly silent filename request."""
+    peer.send(0x58, file_hash)
+    peer.send(0x4F, file_hash)
+    first = peer.receive_until({0x48, 0x50, 0x59})
+    filename = first if first.opcode != 0x50 else None
+    status = first if filename is None else peer.receive_until({0x50})
+    for frame in (first, status):
+        if frame.marker != ed2k_wire.PROTO_EDONKEY or frame.payload[:16] != file_hash:
+            raise ValueError("Peer metadata response has a different protocol or hash")
+    return filename, status
+
+
 class Ed2kFilePeerObserver:
     """Observe sharing on one persistent peer connection using the wire client."""
 
@@ -280,6 +295,15 @@ class Ed2kFilePeerObserver:
         if reply.opcode == 0x59 and (len(reply.payload) < 18 or len(reply.payload) != 18 + struct.unpack_from("<H", reply.payload, 16)[0]):
             raise ValueError("Peer returned an invalid filename answer")
         return reply.opcode == 0x59
+
+    def file_status_available(self, file_hash: str) -> bool:
+        """Use the stock status request to get an explicit no-file response."""
+        value = parse_file_hash(file_hash)
+        self.client.send(0x4F, value)
+        reply = self._reply(value, {0x50, 0x48})
+        if reply.opcode == 0x50 and len(reply.payload) < 18:
+            raise ValueError("Peer returned a truncated file status")
+        return reply.opcode == 0x50
 
     def start_upload(self, file_hash: str) -> bool:
         """Require an upload grant or an explicit file refusal on this connection."""

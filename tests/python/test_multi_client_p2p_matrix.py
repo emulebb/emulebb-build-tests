@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,85 @@ def option_value(command: list[str], option: str) -> str | None:
         return None
     index = command.index(option)
     return command[index + 1] if index + 1 < len(command) else None
+
+
+@pytest.mark.native
+@pytest.mark.skipif(sys.platform != "win32", reason="The staged native clients require Windows")
+@pytest.mark.parametrize("scenario", ["rust-downloads-from-stock-emule", "rust-downloads-from-amule-stable"])
+@pytest.mark.parametrize(
+    "check",
+    ["--verify-native-large-file-status", "--verify-native-partial-threshold"],
+    ids=["standalone_large_file_status", "partial_metadata_threshold"],
+)
+def test_native_file_metadata(scenario: str, check: str) -> None:
+    host = os.environ.get("X_LOCAL_IP")
+    if not host:
+        pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
+    assert load_suite_module().main([
+        "--lan-bind-addr", host, "--require-scenario", scenario, check,
+        "--fixture-size-bytes", str(10 * 1024 * 1024), "--transfer-completion-timeout-seconds", "300",
+    ]) == 0
+
+
+@pytest.mark.native
+@pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
+@pytest.mark.parametrize(
+    ("browse_peer", "fixture_size"),
+    [
+        pytest.param(None, 10 * 1024 * 1024, id="transfer"),
+        pytest.param("stock", 10 * 1024 * 1024, id="stock_browse"),
+        pytest.param("amule", 10 * 1024 * 1024, id="amule_browse"),
+        pytest.param(None, 8 * 9_728_000, id="exact_eight_parts"),
+    ],
+)
+def test_native_stock_and_amule_transfers(browse_peer: str | None, fixture_size: int) -> None:
+    """Run only the two independent native client rows under Builder."""
+    lan_host = os.environ.get("X_LOCAL_IP")
+    if not lan_host:
+        pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
+    module = load_suite_module()
+    arguments = [
+        "--lan-bind-addr", lan_host,
+        "--fixture-size-bytes", str(fixture_size),
+        "--transfer-completion-timeout-seconds", "300",
+    ]
+    rows = {"stock": module.STOCK_EMULE_TRANSFER_SCENARIO_ID, "amule": module.AMULE_TRANSFER_SCENARIO_ID}
+    for row in rows.values() if browse_peer is None else (rows[browse_peer],):
+        arguments.extend(["--require-scenario", row])
+    if browse_peer is not None:
+        arguments.append("--verify-peer-browse")
+    assert module.main(arguments) == 0
+
+
+@pytest.mark.native
+@pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
+@pytest.mark.parametrize(
+    ("peer", "buckets", "reverse"),
+    [
+        pytest.param("stock", 2, False, id="stock_paged_browse"),
+        pytest.param("amule", 2, False, id="amule_paged_browse"),
+        pytest.param("stock", 27, False, id="stock_10k_browse"),
+        pytest.param("amule", 27, False, id="amule_10k_browse"),
+        pytest.param("stock", 2, True, id="stock_reverse_paged_browse"),
+        pytest.param("amule", 2, True, id="amule_reverse_paged_browse"),
+        pytest.param("stock", 27, True, id="stock_reverse_10k_browse"),
+        pytest.param("amule", 27, True, id="amule_reverse_10k_browse"),
+    ],
+)
+def test_native_publisher_browse_catalog(peer: str, buckets: int, reverse: bool) -> None:
+    lan_host = os.environ.get("X_LOCAL_IP")
+    if not lan_host:
+        pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
+    module = load_suite_module()
+    scenario = module.STOCK_EMULE_TRANSFER_SCENARIO_ID if peer == "stock" else module.AMULE_TRANSFER_SCENARIO_ID
+    assert module.main([
+        "--lan-bind-addr", lan_host,
+        "--fixture-size-bytes", str(32 * 1024 * 1024),
+        "--transfer-completion-timeout-seconds", "300",
+        "--require-scenario", scenario,
+        "--verify-peer-browse",
+        "--native-reverse-browse-buckets" if reverse else "--native-browse-buckets", str(buckets),
+    ]) == 0
 
 
 def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:

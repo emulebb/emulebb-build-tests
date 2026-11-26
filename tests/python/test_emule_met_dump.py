@@ -105,6 +105,9 @@ def test_dump_known2_truncation_is_reported_without_strict(tmp_path: Path) -> No
 
 
 def test_dump_part_met_extracts_download_fields(tmp_path: Path) -> None:
+    def gap_tag(name: bytes, offset: int) -> bytes:
+        return struct.pack("<BH", emule_met_dump.TAGTYPE_UINT32, len(name)) + name + struct.pack("<I", offset)
+
     part_met = tmp_path / "001.part.met"
     tags = [
         _tag_string(emule_met_dump.FT_FILENAME, "Alpha Payload.bin"),
@@ -112,6 +115,10 @@ def test_dump_part_met_extracts_download_fields(tmp_path: Path) -> None:
         _tag_string(emule_met_dump.FT_PARTFILENAME, "001.part"),
         _tag_uint32(emule_met_dump.FT_STATUS, 1),
         _tag_uint32(emule_met_dump.FT_CATEGORY, 2),
+        gap_tag(b"\x09" b"0", 5),
+        gap_tag(b"\x0a" b"0", 20),
+        gap_tag(b"\x09" b"1", 90),
+        gap_tag(b"\x0a" b"1", 99),
     ]
     part_met.write_bytes(
         bytes([emule_met_dump.PARTFILE_VERSION])
@@ -132,6 +139,7 @@ def test_dump_part_met_extracts_download_fields(tmp_path: Path) -> None:
     assert record["fields"]["sizeBytes"] == 99
     assert record["fields"]["status"] == 1
     assert record["fields"]["category"] == 2
+    assert emule_met_dump.part_file_gaps(record) == [(5, 20), (90, 99)]
 
 
 def test_dump_canceled_preferences_and_statistics_dat(tmp_path: Path) -> None:

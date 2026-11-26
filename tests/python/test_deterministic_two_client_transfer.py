@@ -16,6 +16,100 @@ from emule_test_harness import ed2k_wire
 from emule_test_harness import rust_ed2k
 
 
+@pytest.mark.parametrize("startup_endpoint", ["192.0.2.7:61001", "192.0.2.8:61002"])
+def test_native_sx2_callback_receipt_requires_original_file_on_native_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_endpoint: str,
+) -> None:
+    module = load_suite_module()
+    target_hash, file_hash = bytes(range(16)), b"f" * 16
+    server = "192.0.2.5:4661"
+    callback = {
+        "flow": "server", "remote_addr": server, "direction": "send", "protocol_marker": 0xE3,
+        "opcode": 0x1C, "payload_hex": "34120000", "trace_key": "server:01", "event_seq": 1, "send_attempt_id": 3,
+    }
+    hello = {
+        "flow": "listener", "direction": "recv", "protocol_marker": 0xE3, "opcode": 0x01,
+        "payload_hex": "10" + target_hash.hex(), "remote_addr": "192.0.2.7:61001",
+        "trace_key": "listener:target", "event_seq": 2,
+    }
+    startup = {
+        "flow": "source_probe", "direction": "send", "remote_addr": startup_endpoint, "event_seq": 3,
+        "file_hash": file_hash.hex(), "peer_hash": target_hash.hex(), "phase": "file_request", "trace_key": "probe:target",
+    }
+    source_reply = {
+        "flow": "server", "direction": "recv", "trace_key": "server:01", "opcode": 0x42,
+        "payload_hex": file_hash.hex() + "00", "event_seq": 0, "remote_addr": server,
+    }
+    send_outcome = {
+        "family": "ed2k_tcp", "event": "send_outcome",
+        "body": {"traceKey": "server:01", "sendAttemptId": 3, "outcome": "send_succeeded"},
+    }
+    capture = SimpleNamespace(records=[send_outcome], selected_segments=[tmp_path / "rust.ndjson"])
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", lambda *args, **kwargs: capture)
+    monkeypatch.setattr(module, "ed2k_tcp_packet_views", lambda records: [source_reply, callback, hello, startup])
+    options = dict(process_id=7, server=server, target_id=0x1234, target_hash=target_hash, file_hash=file_hash)
+    if startup_endpoint == hello["remote_addr"]:
+        evidence = module.require_native_sx2_callback_transfer(tmp_path, **options)
+        assert evidence["originalFileStartup"] == startup
+    else:
+        with pytest.raises(RuntimeError, match="original download"):
+            module.require_native_sx2_callback_transfer(tmp_path, **options)
+
+
+@pytest.mark.parametrize("notification_port", [4663, 4664])
+def test_native_sx2_callback_notification_matches_exact_login_and_endpoint(notification_port: int) -> None:
+    module = load_suite_module()
+    target = bytes(range(16))
+    login = ed2k_wire.encode_frame(
+        0x01, ed2k_wire.encode_login_request(user_hash=target, tcp_port=4665, nickname="native"),
+    )
+    assignment = ed2k_wire.encode_frame(0x40, struct.pack("<II", 2, 0x100))
+    expected = bytes.fromhex("c63364f1") + struct.pack("<H", 4663)
+    reply = ed2k_wire.encode_frame(0x35, expected[:4] + struct.pack("<H", notification_port))
+    follow = (
+        "Follow: tcp,raw\nFilter: tcp.stream eq 1\n"
+        "Node 0: 192.0.2.8:61222\nNode 1: 192.0.2.9:4661\n"
+        f"{login[:9].hex()}\n{login[9:].hex()}\n\t{assignment.hex()}\n\t{reply.hex()}\n"
+    )
+    options = dict(server="192.0.2.9:4661", target_hash=target, target_id=2, expected_callback=expected)
+    rejected_obfuscation_attempt = (
+        "Node 0: 192.0.2.8:61221\nNode 1: 192.0.2.9:4661\n" + "a351b65d15eb5ab6" * 8
+    )
+    assert module.native_sx2_callback_notification(rejected_obfuscation_attempt, **options) is None
+    if notification_port == 4663:
+        receipt = module.native_sx2_callback_notification(follow, **options)
+        assert receipt["notification"]["payloadHex"] == expected.hex()
+    else:
+        with pytest.raises(RuntimeError, match="expected server callback notification"):
+            module.native_sx2_callback_notification(follow, **options)
+
+
+def test_native_large_file_status_boundary() -> None:
+    from emule_test_harness import native_large_file_status as probe
+
+    digest = bytes(range(16))
+    nofile = ed2k_wire.Ed2kFrame(0xE3, 0x48, digest)
+    # Both sizes declare 442 parts. The exact multiple permits a virtual EOF bit.
+    bitmap = struct.pack("<H", 442) + bytes(56)
+    status = ed2k_wire.Ed2kFrame(0xE3, 0x50, digest + bitmap)
+    eof = ed2k_wire.Ed2kFrame(0xE3, 0x50, digest + bitmap[:-1] + b"\x02")
+    for identity in ("stock_emule", "amule"):
+        for capable in (False, True):
+            assert probe.classify_status(eof, digest, probe.LEGACY_MAX,
+                                         identity=identity, capable=capable) == "empty-part-map"
+            missing = identity == "stock_emule" and not capable
+            assert probe.classify_status(nofile if missing else status, digest, probe.LEGACY_MAX + 1,
+                                         identity=identity, capable=capable) == (
+                "no-file" if missing else "empty-part-map"
+            )
+    for payload in (bytes(16) + bitmap, digest + bitmap[:-1], digest + b"\x00\x00", eof.payload):
+        with pytest.raises(ValueError):
+            probe.classify_status(ed2k_wire.Ed2kFrame(0xE3, 0x50, payload), digest,
+                                  probe.LEGACY_MAX + 1, identity="amule", capable=False)
+    with pytest.raises(ValueError):
+        probe.classify_status(status, digest, probe.LEGACY_MAX + 1, identity="stock_emule", capable=False)
+
+
 def load_suite_module():
     """Loads the hyphenated deterministic transfer script for unit tests."""
 
@@ -30,6 +124,117 @@ def load_suite_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_observe_native_peer_browse_matches_endpoint_and_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_suite_module()
+    endpoint = {"address": "192.0.2.10", "port": 4662, "viewSharedFiles": True, "clientId": "actual"}
+    fixture = {"fileHash": "22" * 16, "displayName": "fixture.bin", "sizeBytes": 10, "directory": None}
+    replies = iter([
+        [{**endpoint, "port": 4663, "clientId": "other"}, endpoint],
+        {"searchId": "7"},
+        {"searchId": "7", "status": "complete", "total": 1, "files": [fixture]},
+    ])
+    calls = []
+
+    def request(_base_url, path, *, method="GET", **_kwargs):
+        calls.append((method, path))
+        return {"status": 200, "raw_json": {"data": next(replies), "meta": {}}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", request)
+    report = module.observe_native_peer_browse(
+        "http://test", "fixture", "1", host="192.0.2.10", port=4662,
+        file_hash=fixture["fileHash"], name=fixture["displayName"], size=10,
+    )
+    path = "/api/v1/downloads/1/sources"
+    assert calls == [
+        ("GET", path),
+        ("POST", f"{path}/actual/operations/browse"),
+        ("GET", f"{path}/actual/operations/browse/7?limit=200"),
+    ]
+    assert report["file"] == fixture
+
+
+def test_reverse_browse_catalog_includes_the_already_shared_transfer(tmp_path: Path, monkeypatch) -> None:
+    from emule_test_harness import rust_rest_contract
+
+    module = load_suite_module()
+    share = tmp_path / "reverse-share"
+    counts = iter([1, 370, 370, 370])
+    idle = {"phase": "idle", "running": False, "pending": False}
+    scans = iter([
+        {**idle, "running": True},
+        {**idle, "pending": True},
+        idle,
+    ])
+
+    def request(_url, method, route, _key):
+        assert method == "GET"
+        if route == "/api/v1/library/scan":
+            return {"hashingCount": 0, "reloadProgress": next(scans)}
+        assert route == "/api/v1/library/files?view=shared&limit=1&countTotal=true"
+        return {"meta": {"total": next(counts)}}
+
+    def wait(predicate, _timeout, _interval, _description):
+        assert predicate() is False
+        assert predicate() is False
+        assert predicate() is True
+
+    monkeypatch.setattr(module.rust_local_ed2k, "request_json", request)
+    monkeypatch.setattr(module.live_common, "wait_for", wait)
+    monkeypatch.setattr(module.rust_local_ed2k, "publish_shared_tree", lambda *_args, **_kwargs: {
+        "directories": {"id": "test"},
+        "sharedFiles": {"matched": {"hash": "12" * 16, "ed2kLink": "ed2k://|file|anchor|10|" + "12" * 16 + "|/"}},
+    })
+    canary_name = "000000RustBrowseCanary.bin"
+    monkeypatch.setattr(rust_rest_contract, "iter_library_files", lambda *_args, **_kwargs: iter([
+        {"displayName": canary_name, "sizeBytes": 4096, "hash": "13" * 16},
+    ]))
+
+    fixture = module.publish_reverse_browse_fixture("http://test", "fixture", share, host="192.0.2.10", port=4662, buckets=1)
+
+    assert fixture.expected_count == 370
+    assert len(list(share.rglob("*.bin"))) == 369
+    assert (share / "Canary" / canary_name).stat().st_size == 4096
+    assert fixture.anchor_sha256 == module.file_sha256(share / fixture.anchor_name)
+
+
+def test_reverse_browse_reads_active_anchor_session_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_suite_module()
+    anchor_hash = "12" * 16
+    ready_row = {"requestedFileHash": anchor_hash, "uploadState": "uploading", "sessionUploadedBytes": 4096}
+    responses = iter([
+        [{**ready_row, "uploadState": "queued"}, {**ready_row, "requestedFileHash": "13" * 16}],
+        [ready_row],
+    ])
+
+    def request(_url, route, **_kwargs):
+        assert route == "/api/v1/uploads"
+        return {"status": 200, "raw_json": {"data": next(responses), "meta": {"apiVersion": "v1"}}}
+
+    def wait(predicate, _timeout, _interval, _description):
+        assert predicate() is False
+        assert predicate() is True
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", request)
+    monkeypatch.setattr(module.live_common, "wait_for", wait)
+    module.wait_for_reverse_browse_upload("http://test", "fixture", anchor_hash)
+
+
+def test_stock_login_wait_ignores_pre_reconnect_id_and_handles_rotation(tmp_path: Path) -> None:
+    module = load_suite_module()
+    log = tmp_path / "stock-fixture.log"
+    log.write_text("26/11/2026 10:47:01: New client ID is 4\n", encoding="utf-16")
+    previous = log.stat()
+    assert module.stock_client_id_after(log, previous) is None
+
+    with log.open("ab") as stream:
+        stream.write("26/11/2026 10:48:59: New client ID is 6\r\n".encode("utf-16-le"))
+    assert module.stock_client_id_after(log, previous) == 6
+
+    log.rename(tmp_path / "rotated.log")
+    log.write_text("26/11/2026 10:48:59: New client ID is 7\n", encoding="utf-16")
+    assert module.stock_client_id_after(log, previous) == 7
 
 
 def test_transfer_diagnostics_preserves_retired_hashset_provenance(
@@ -1021,7 +1226,9 @@ def test_require_known_met_fixture_rejects_missing_row(
         )
 
 
-def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
+def test_env_ed2k_server_exe_override_uses_shared_harness_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ed2k_harness.ED2K_SERVER_EXE_ENV, "C:/tools/inherited-ed2k-server")
+    assert ed2k_harness.env_ed2k_server_exe_override() == "C:/tools/inherited-ed2k-server"
     assert ed2k_harness.env_ed2k_server_exe_override({}) is None
     assert (
         ed2k_harness.env_ed2k_server_exe_override(
@@ -1595,8 +1802,12 @@ def test_resolve_managed_server_p2p_bind_address_preserves_local_or_explicit_bin
     )
 
 
-def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
-    monkeypatch,
+@pytest.mark.parametrize(("amule_source_link", "network", "expected_alias"), [
+    (False, "192.0.2.0/24", "192.0.2.241"),
+    (True, "198.51.100.0/24", "198.51.100.241"),
+])
+def test_provision_windows_high_id_address_uses_wsl_route_alias(
+    monkeypatch, amule_source_link, network, expected_alias,
 ) -> None:
     module = load_suite_module()
     constructed: list[dict[str, object]] = []
@@ -1607,7 +1818,7 @@ def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
 
         def acquire(self, count: int) -> list[str]:
             assert count == 1
-            return ["192.0.2.241"]
+            return [expected_alias]
 
     monkeypatch.setattr(
         module.ed2k_server,
@@ -1616,16 +1827,16 @@ def test_provision_relayed_reask_high_id_address_uses_wsl_route_alias(
     )
     monkeypatch.setattr(module, "LanIpPool", FakePool)
 
-    pool, address, route = module.provision_relayed_reask_high_id_address()
+    pool, address, route = module.provision_windows_high_id_address(amule_source_link=amule_source_link)
 
     assert isinstance(pool, FakePool)
-    assert address == "192.0.2.241"
+    assert address == expected_alias
     assert route == "172.20.16.1"
     assert constructed == [
         {
             "address": "172.20.16.1",
             "prefix_length": 32,
-            "candidate_network": "192.0.2.0/24",
+            "candidate_network": network,
             "first_octet4": 241,
             "last_octet4": 250,
         }
@@ -1671,6 +1882,7 @@ def test_write_server_met_entries_preserves_anchor_then_low_priority_target(
                 "name": "stale-target",
                 "description": "stale-before-udp-metadata",
                 "priority": module.SERVER_PRIORITY_LOW,
+                "udp_flags": 0x0121,
             },
         ],
     )
@@ -1681,6 +1893,7 @@ def test_write_server_met_entries_preserves_anchor_then_low_priority_target(
     assert b"anchor" in data
     assert b"stale-target" in data
     assert b"stale-before-udp-metadata" in data
+    assert data.endswith(bytes.fromhex("03 01 00 92 21 01 00 00"))
 
 
 def test_deterministic_transfer_uses_canonical_server_facade() -> None:
@@ -1699,7 +1912,7 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "windows_client_address=server_connect_address" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
-    assert script_text.count("p2p_bind_addr=p2p_address") == 1
+    assert script_text.count("p2p_bind_addr=native_target_bind_address or p2p_address") == 1
     assert "'network.p2p.bindIp': p2p_address" in script_text
     assert "rust_client.start_rust_client_executable(" in script_text
     assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text

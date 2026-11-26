@@ -1034,6 +1034,49 @@ def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp
     assert "--require-optional-clients" in commands[0]
 
 
+@pytest.mark.parametrize(("selection", "scenarios"), [
+    (None, []),
+    ("stock", ["rust-downloads-from-stock-emule"]),
+    ("amule", ["rust-downloads-from-amule-stable"]),
+    ("both", ["rust-downloads-from-stock-emule", "rust-downloads-from-amule-stable"]),
+])
+@pytest.mark.parametrize(("case", "matrix_flag"), (
+    ("sx2", "--verify-native-sx2-callback"), ("size-boundary", "--verify-native-size-boundary"),
+))
+def test_multi_client_native_case_selects_requested_scenarios(
+    tmp_path: Path, monkeypatch, selection, scenarios, case, matrix_flag,
+) -> None:
+    commands = []
+    monkeypatch.setattr(live_e2e_suite, "run_suite_command", lambda command: commands.append(command) or 0)
+    options = [] if selection is None else [f"--multi-client-native-{case}", selection]
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args("--suite", "multi-client-p2p-matrix", *options),
+        FakeHarnessCliCommon(tmp_path),
+    )
+    command, = commands
+    assert script_name(command) == "multi-client-p2p-matrix.py"
+    assert summary["multi_client_p2p_matrix"][f"native_{case.replace('-', '_')}"] == selection
+    assert (matrix_flag in command) == (selection is not None)
+    assert option_values(command, "--require-scenario") == scenarios
+
+
+@pytest.mark.parametrize("selection", [None, "amule"])
+def test_native_sx2_owns_its_bind_addresses(tmp_path: Path, selection: str | None) -> None:
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("multi-client-p2p-matrix"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="Test Ethernet",
+        p2p_bind_interface_address="192.0.2.5",
+        multi_client_native_sx2=selection,
+    )
+    assert ("--p2p-bind-interface-name" in command) == (selection is None)
+    assert ("--p2p-bind-interface-address" in command) == (selection is None)
+
+
 def test_multi_client_required_profile_enables_required_optional_clients(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

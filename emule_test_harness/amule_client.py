@@ -40,6 +40,11 @@ def configure_profile(
     udp_port: int,
     ec_port: int,
     ec_password: str,
+    allow_peer_browse: bool = False,
+    additional_shared_dirs: tuple[Path, ...] = (),
+    create_sparse_files: bool = True,
+    flush_partial_fixture: bool = False,
+    bind_address: str = "",
 ) -> None:
     """Writes the minimal deterministic profile consumed by official `amuled`."""
 
@@ -48,12 +53,13 @@ def configure_profile(
     password_hash = _ec_password_digest(ec_password)
     config = f"""[eMule]
 Nick={nick}
-MaxUpload=0
+Language=en_US
+MaxUpload={1024 if allow_peer_browse else 0}
 MaxDownload=0
 Port={tcp_port}
 UDPPort={udp_port}
 UDPEnable=1
-Address=
+Address={bind_address}
 NetworkInterface=
 Autoconnect=1
 Reconnect=0
@@ -68,6 +74,8 @@ ConnectToED2K=1
 TempDir={_config_path(temp_dir)}
 IncomingDir={_config_path(incoming_dir)}
 CheckDiskspace=0
+CreateSparseFiles={int(create_sparse_files)}
+FileBufferSizePref={0 if flush_partial_fixture else 16}
 FirstRunWizardDone=1
 GeoIPEnabled=0
 GeoIPAutoUpdate=0
@@ -76,6 +84,8 @@ ParanoidFiltering=0
 IPFilterAutoLoad=0
 IPFilterSystem=0
 AutoRescanSharedDirs=0
+NewVersionCheck=0
+SeeShare={0 if allow_peer_browse else 2}
 [ExternalConnect]
 AcceptExternalConnections=1
 RequireEncryption=0
@@ -94,7 +104,9 @@ IsClientCryptLayerRequired=0
 CryptoPaddingLenght=254
 """
     (config_dir / "amule.conf").write_text(config, encoding="utf-8", newline="\n")
-    shared_path = f"{shared_dir.resolve()}\n"
+    # The monolithic 3.0.1 reference blocks startup on an unseen version.
+    (config_dir / "lastversion").write_text("3.0.1\n", encoding="utf-8")
+    shared_path = "".join(f"{path.resolve()}\n" for path in (shared_dir, *additional_shared_dirs))
     for name in ("shareddir.dat", "shareddir-explicit.dat"):
         (config_dir / name).write_text(shared_path, encoding="utf-8", newline="\n")
     (config_dir / "shareddir-recursive.dat").write_text("", encoding="utf-8")
@@ -234,6 +246,36 @@ def wait_for_shared_file_hash(
     raise RuntimeError(f"Timed out waiting for aMule shared file {file_name!r}. Observations: {observations[-20:]!r}")
 
 
+def wait_for_shared_file_count(
+    control_exe: Path, *, ec_port: int, ec_password: str, expected: int, timeout_seconds: float,
+) -> None:
+    """Wait for the native Statistics count without transferring the complete EC list."""
+    deadline = time.monotonic() + timeout_seconds
+    observed = None
+    last_error = None
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            output = run_command(
+                control_exe, ec_port=ec_port, ec_password=ec_password, command="Statistics",
+                timeout_seconds=min(60, remaining),
+            )
+        except (RuntimeError, subprocess.TimeoutExpired) as error:
+            last_error = type(error).__name__
+        else:
+            match = re.search(r"^[ \t]*(?:>[ \t]*)?Number of Shared Files:[ \t]*(\d+)[ \t]*$", output, re.MULTILINE)
+            if match is None:
+                last_error = "Statistics omitted its shared-file count"
+            else:
+                observed = int(match.group(1))
+                last_error = None
+                if observed == expected:
+                    return
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+    raise RuntimeError(
+        f"Timed out waiting for {expected} aMule shared files, last count {observed}, last EC error {last_error}"
+    )
+
+
 def shutdown_daemon(
     process: subprocess.Popen,
     control_exe: Path,
@@ -246,17 +288,21 @@ def shutdown_daemon(
 
     if process.poll() is not None:
         return {"already_exited": True, "return_code": process.returncode}
-    output = run_command(control_exe, ec_port=ec_port, ec_password=ec_password, command="shutdown")
     try:
+        output = run_command(control_exe, ec_port=ec_port, ec_password=ec_password, command="shutdown")
         return_code = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        try:
-            return_code = process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait(timeout=5.0)
-        raise RuntimeError(f"aMule did not exit after EC shutdown; forced return code {return_code}")
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        return_code = process.poll()
+        if return_code is None:
+            process.terminate()
+            try:
+                return_code = process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                return_code = process.wait(timeout=5.0)
+        raise RuntimeError(
+            f"aMule EC shutdown ended with {type(error).__name__}; final return code {return_code}"
+        ) from None
     return {"already_exited": False, "return_code": return_code, "output": output}
 
 

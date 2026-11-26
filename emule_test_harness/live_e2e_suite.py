@@ -1056,6 +1056,8 @@ def build_suite_command(
     vpn_guard_scenario: str = "success",
     vpn_guard_expected_startup_block: bool = False,
     multi_client_require_optional_clients: bool = False,
+    multi_client_native_sx2: str | None = None,
+    multi_client_native_size_boundary: str | None = None,
     p2p_bind_interface_name: str = "hide.me",
     p2p_bind_interface_address: str | None = None,
     godzilla_visible_ui: bool = False,
@@ -1267,6 +1269,13 @@ def build_suite_command(
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
     if spec.name == "multi-client-p2p-matrix" and multi_client_require_optional_clients:
         command.append("--require-optional-clients")
+    native_matrix_selection = multi_client_native_sx2 or multi_client_native_size_boundary
+    if spec.name == "multi-client-p2p-matrix" and native_matrix_selection is not None:
+        command.append("--verify-native-sx2-callback" if multi_client_native_sx2 else "--verify-native-size-boundary")
+        if native_matrix_selection in {"stock", "both"}:
+            command.extend(["--require-scenario", "rust-downloads-from-stock-emule"])
+        if native_matrix_selection in {"amule", "both"}:
+            command.extend(["--require-scenario", "rust-downloads-from-amule-stable"])
     if spec.name == "deterministic-two-client-transfer":
         command.extend(["--protocol-case", "obfuscated-preferred"])
     if spec.name in ED2K_SERVER_EXE_SUITE_NAMES and ed2k_server_exe is not None:
@@ -1286,6 +1295,7 @@ def build_suite_command(
         }
         and p2p_bind_interface_name
         and p2p_bind_interface_name != "hide.me"
+        and not (spec.name == "multi-client-p2p-matrix" and multi_client_native_sx2)
     ):
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if (
@@ -1301,6 +1311,7 @@ def build_suite_command(
         }
         and p2p_bind_interface_address
         and not (spec.name == "godzilla-local-swarm" and godzilla_p2p_bind_interface_address)
+        and not (spec.name == "multi-client-p2p-matrix" and multi_client_native_sx2)
     ):
         command.extend(["--p2p-bind-interface-address", p2p_bind_interface_address])
     if spec.name == "godzilla-local-swarm":
@@ -2017,6 +2028,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vpn-guard-scenario", choices=["off", "success", "not-allowlisted", "vpn-off"], default="success")
     parser.add_argument("--vpn-guard-expected-startup-block", action="store_true")
     parser.add_argument("--multi-client-require-optional-clients", action="store_true")
+    native_matrix_cases = parser.add_mutually_exclusive_group()
+    native_matrix_cases.add_argument("--multi-client-native-sx2", choices=("stock", "amule", "both"))
+    native_matrix_cases.add_argument("--multi-client-native-size-boundary", choices=("stock", "amule", "both"))
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--emule-connection-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
@@ -2449,6 +2463,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         },
         "multi_client_p2p_matrix": {
             "require_optional_clients": bool(args.multi_client_require_optional_clients),
+            "native_sx2": args.multi_client_native_sx2,
+            "native_size_boundary": args.multi_client_native_size_boundary,
         },
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
@@ -2657,6 +2673,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             vpn_guard_scenario=args.vpn_guard_scenario,
             vpn_guard_expected_startup_block=args.vpn_guard_expected_startup_block,
             multi_client_require_optional_clients=args.multi_client_require_optional_clients,
+            multi_client_native_sx2=args.multi_client_native_sx2,
+            multi_client_native_size_boundary=args.multi_client_native_size_boundary,
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             p2p_bind_interface_address=child_p2p_bind_interface_address,
             godzilla_visible_ui=args.godzilla_visible_ui,

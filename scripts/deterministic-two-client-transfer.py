@@ -16,6 +16,8 @@ import sys
 import time
 import urllib.error
 import urllib.parse
+from contextlib import ExitStack
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +32,7 @@ from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import buddy_callback_diagnostic_evidence  # noqa: E402
 from emule_test_harness import buddy_callback_probe  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness.diag_event_diff import ed2k_tcp_packet_views  # noqa: E402
 from emule_test_harness import direct_callback_diagnostic_evidence  # noqa: E402
 from emule_test_harness import direct_callback_probe  # noqa: E402
 from emule_test_harness import docker_ed2k_source_publisher  # noqa: E402
@@ -43,6 +46,7 @@ from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import server_login_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_callback_diagnostic_evidence  # noqa: E402
+from emule_test_harness.server_failure_accounting import ANSI_ESCAPE_RE  # noqa: E402
 from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
@@ -52,10 +56,13 @@ from emule_test_harness import scripted_ed2k_udp_source  # noqa: E402
 from emule_test_harness import transfer_diagnostic_evidence  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness.lan_ip_pool import LanIpPool  # noqa: E402
+from emule_test_harness import native_windows_network  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
+from emule_test_harness.workspace_layout import resolve_selected_workspace_repo  # noqa: E402
 from emule_test_harness.multi_client import (  # noqa: E402
     CLIENT_IDENTITIES,
+    STOCK_EMULE_LOG_FILENAME,
     ClientAvailability,
     git_head_revision,
     resolve_amule_stable_client,
@@ -75,6 +82,9 @@ SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
 DEFAULT_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
+NATIVE_BROWSE_MAX_BUCKETS = 271
+NATIVE_BROWSE_FILES_PER_BUCKET = 369
+NATIVE_BROWSE_READY_SECONDS = 900
 DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
@@ -87,10 +97,14 @@ FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_CALLBACK_REPLY = "server-callback-reply"
+NATIVE_SX2_CALLBACK = "native-sx2-callback"
+NATIVE_SERVER_SIZE_BOUNDARY = "native-server-size-boundary"
+NATIVE_SX2_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
 DIRECT_CALLBACK = "direct-callback"
 BUDDY_CALLBACK = "buddy-callback"
 RELAYED_REASK = "relayed-reask"
 RELAYED_REASK_HIGH_ID_NETWORK = "192.0.2.0/24"
+AMULE_BROWSE_HIGH_ID_NETWORK = "198.51.100.0/24"
 RELAYED_REASK_HIGH_ID_FIRST_OCTET4 = 241
 RELAYED_REASK_HIGH_ID_LAST_OCTET4 = 250
 SERVER_KEYWORD_SEARCH = "server-keyword-search"
@@ -158,6 +172,8 @@ TRANSFER_SCENARIOS = (
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
     SERVER_CALLBACK_REPLY,
+    NATIVE_SX2_CALLBACK,
+    NATIVE_SERVER_SIZE_BOUNDARY,
     DIRECT_CALLBACK,
     BUDDY_CALLBACK,
     RELAYED_REASK,
@@ -176,6 +192,7 @@ TAGTYPE_UINT32 = 0x03
 ST_SERVERNAME = 0x01
 ST_DESCRIPTION = 0x0B
 ST_PREFERENCE = 0x0E
+ST_UDPFLAGS = 0x92
 SERVER_PRIORITY_NORMAL = 0
 SERVER_PRIORITY_HIGH = 1
 SERVER_PRIORITY_LOW = 2
@@ -244,13 +261,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--fixture-size-bytes", type=int)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
+    parser.add_argument("--verify-peer-browse", action="store_true")
+    parser.add_argument("--verify-native-large-file-status", action="store_true")
+    parser.add_argument("--verify-native-partial-threshold", action="store_true")
+    parser.add_argument("--native-browse-buckets", type=int, default=0)
+    parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     args = parser.parse_args(argv)
     if args.fixture_size_bytes is None:
         args.fixture_size_bytes = (
-            DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+            NATIVE_SX2_FIXTURE_SIZE_BYTES if args.transfer_scenario == NATIVE_SX2_CALLBACK
+            else DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
             if args.transfer_scenario
             in {
                 SERVER_LOGIN_REQUEST,
@@ -272,6 +295,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
 
+    if args.transfer_scenario in {NATIVE_SX2_CALLBACK, NATIVE_SERVER_SIZE_BOUNDARY} and (
+        args.client2_identity not in {"stock_emule", "amule"} or args.verify_source_lifecycle
+    ):
+        raise ValueError("The selected native protocol case requires a separate stock eMule or aMule profile.")
+
+    browse_bucket_counts = (args.native_browse_buckets, args.native_reverse_browse_buckets)
+    if any(not 0 <= count <= NATIVE_BROWSE_MAX_BUCKETS for count in browse_bucket_counts):
+        raise ValueError("Native browse accepts at most 271 fixture buckets.")
+    if any(browse_bucket_counts) and not args.verify_peer_browse:
+        raise ValueError("Native browse buckets require --verify-peer-browse.")
+    if args.native_browse_buckets and args.verify_source_lifecycle:
+        raise ValueError("Run server source lifecycle separately from native catalog browsing.")
+    if (args.verify_native_large_file_status or args.verify_native_partial_threshold) and (
+        args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
+    ):
+        raise ValueError("Native file metadata checks require a stock or aMule full-link transfer.")
+    if args.verify_peer_browse and (
+        args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
+    ):
+        raise ValueError("Peer browse requires the stock eMule or aMule full-link transfer.")
     if args.verify_offerfiles_v1_stock_fallback:
         if args.client2_identity not in {"stock_emule", "amule"}:
             raise ValueError(
@@ -1544,6 +1587,8 @@ def write_server_met_entries(path: Path, entries: list[dict[str, object]]) -> No
             ),
             build_old_ed2k_u32_tag(ST_PREFERENCE, priority),
         ]
+        if "udp_flags" in entry:
+            tags.append(build_old_ed2k_u32_tag(ST_UDPFLAGS, int(entry["udp_flags"])))
         payload.extend(ipaddress.IPv4Address(address).packed)
         payload.extend(struct.pack("<HI", port, len(tags)))
         for tag in tags:
@@ -2182,14 +2227,16 @@ def resolve_managed_server_p2p_bind_address(
     )
 
 
-def provision_relayed_reask_high_id_address() -> tuple[LanIpPool, str, str]:
-    """Provisions one TEST-NET address on the Windows side of the WSL route."""
-
+def provision_windows_high_id_address(*, amule_source_link: bool = False) -> tuple[LanIpPool, str, str]:
+    """Provisions one temporary address on the Windows side of the WSL route."""
     _, windows_route_address = ed2k_server.resolve_managed_server_windows_route()
+    # aMule filters TEST-NET-1 in source links and allows TEST-NET-2
+    # for test peers. eD2K-server rejects RFC1918 hairpin addresses.
+    candidate_network = AMULE_BROWSE_HIGH_ID_NETWORK if amule_source_link else RELAYED_REASK_HIGH_ID_NETWORK
     pool = LanIpPool(
         windows_route_address,
         prefix_length=32,
-        candidate_network=RELAYED_REASK_HIGH_ID_NETWORK,
+        candidate_network=candidate_network,
         first_octet4=RELAYED_REASK_HIGH_ID_FIRST_OCTET4,
         last_octet4=RELAYED_REASK_HIGH_ID_LAST_OCTET4,
     )
@@ -2642,6 +2689,527 @@ def wait_for_download_sources(base_url: str, api_key: str, *, download_id: str,
     return live_common.wait_for(resolve, timeout_seconds, 0.25, f"Rust download {download_id} source")
 
 
+def native_browse_catalog(root: Path, buckets: int) -> tuple[list[Path], dict[str, tuple[int, str, str]]]:
+    """Create named, independently hashed files and return their leaf directories."""
+    from emule_test_harness.scripted_actions import file_digests
+
+    generator = load_script_module("native_peer_browse_fixture", "create-long-paths-tree.py")
+    generator.build_shared_directory_browse_stress(
+        root,
+        bucket_count=buckets,
+        files_per_bucket=NATIVE_BROWSE_FILES_PER_BUCKET,
+        min_file_count=buckets * NATIVE_BROWSE_FILES_PER_BUCKET,
+    )
+    leaves = set()
+    expected = {}
+    for path in root.glob("group_*/bucket_*/*.bin"):
+        size, digest, _ = file_digests(path)
+        leaves.add(path.parent)
+        expected[path.name] = (size, digest, path.parent.name)
+    if len(expected) != buckets * NATIVE_BROWSE_FILES_PER_BUCKET:
+        raise RuntimeError("Native browse fixture did not produce the requested unique names")
+    return sorted(leaves), expected
+
+
+def wait_for_stock_browse_catalog(app, expected_count: int) -> None:
+    """Observe the stock global share count after its hashing queue drains."""
+    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
+
+    def ready() -> bool:
+        main = live_common.find_process_main_window(app)
+        if main is None:
+            return False
+        # Stock resource.h IDC_TRAFFIC_TEXT and SharedFilesCtrl.cpp ShowFilesCount.
+        count = ui.find_control(main.handle, 2069, "Static")
+        return app.window(handle=count).window_text().rstrip().endswith(f"({expected_count})")
+
+    live_common.wait_for(ready, NATIVE_BROWSE_READY_SECONDS, 1, "stock shared catalog ready")
+
+
+def native_browse_fixture_link(fixture: Path, expected_sha256: str) -> str:
+    """Build the direct-link identity independently of the server's offer quota."""
+    from emule_test_harness.scripted_actions import file_digests
+
+    size, file_hash, sha256 = file_digests(fixture)
+    if sha256 != expected_sha256:
+        raise RuntimeError("Native browse transfer fixture changed after generation")
+    return amule_client.file_link(fixture.name, size, file_hash)
+
+
+def require_native_sx2_callback_transfer(
+    rust_diagnostics_dir: Path,
+    *,
+    process_id: int,
+    server: str,
+    target_id: int,
+    target_hash: bytes,
+    file_hash: bytes,
+) -> dict[str, object]:
+    """Correlate the server request, the native inbound HELLO, and original download startup."""
+    capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir, side="rust", process_id=process_id, allow_incomplete_active_tail=True,
+    )
+    packets = ed2k_tcp_packet_views(capture.records)
+    callback_id = struct.pack("<I", target_id).hex()
+    callbacks = [
+        packet for packet in packets
+        if packet["flow"] == "server" and packet["remote_addr"] == server
+        and packet["direction"] == "send" and packet["protocol_marker"] == ed2k_wire.PROTO_EDONKEY
+        and packet["opcode"] == ed2k_wire.OP_CALLBACKREQUEST and packet["payload_hex"] == callback_id
+    ]
+    native_hellos = [
+        packet for packet in packets
+        if packet["flow"] == "listener" and packet["direction"] == "recv"
+        and packet["protocol_marker"] == ed2k_wire.PROTO_EDONKEY and packet["opcode"] == ed2k_wire.OP_HELLO
+        and packet["payload_hex"].startswith("10" + target_hash.hex())
+    ]
+    if len(callbacks) != 1 or len(native_hellos) != 1:
+        raise RuntimeError(
+            f"Expected one eD2K callback and matching native HELLO; found {len(callbacks)} and {len(native_hellos)}"
+        )
+    callback, hello = callbacks[0], native_hellos[0]
+    send_outcomes = [
+        record for record in capture.records
+        if record.get("family") == "ed2k_tcp" and record.get("event") == "send_outcome"
+        and record["body"].get("traceKey") == callback["trace_key"]
+        and record["body"].get("sendAttemptId") == callback.get("send_attempt_id")
+        and record["body"].get("outcome") == "send_succeeded"
+    ]
+    by_file = [
+        packet for packet in packets
+        if packet["remote_addr"] == hello["remote_addr"] and packet["direction"] == "send"
+        and packet["flow"] == "source_probe" and packet["phase"] == "file_request"
+        and str(packet["peer_hash"] or "").lower() == target_hash.hex()
+        and packet["event_seq"] > hello["event_seq"]
+        and str(packet["file_hash"] or "").lower() == file_hash.hex()
+    ]
+    if len(send_outcomes) != 1 or callback["event_seq"] >= hello["event_seq"] or not by_file:
+        raise RuntimeError("Native callback did not causally start the original download on its inbound connection")
+    empty_server_sources = [
+        packet for packet in packets
+        if packet["trace_key"] == callback["trace_key"] and packet["direction"] == "recv"
+        and packet["opcode"] == ed2k_wire.OP_FOUNDSOURCES and packet["payload_hex"] == file_hash.hex() + "00"
+        and packet["event_seq"] < callback["event_seq"]
+    ]
+    if not empty_server_sources:
+        raise RuntimeError("The same Rust server connection did not prove an empty source lookup")
+    return {
+        "callbackRequest": callback, "nativeHello": hello, "originalFileStartup": by_file[0],
+        "callbackSendOutcome": send_outcomes[0],
+        "emptyServerSourceReplies": empty_server_sources,
+        "diagnosticSegments": [str(path) for path in capture.selected_segments],
+    }
+
+
+def native_sx2_callback_notification(
+    follow_output: str, *, server: str, target_hash: bytes, target_id: int, expected_callback: bytes,
+) -> dict[str, object] | None:
+    """Identify the native login and exact callback reply on one reassembled TCP stream."""
+    nodes = {}
+    senders = (bytearray(), bytearray())
+    for line in follow_output.splitlines():
+        node = re.fullmatch(r"Node ([01]): (.+)", line)
+        if node is not None:
+            nodes[node[2]] = int(node[1])
+            continue
+        if re.fullmatch(r"\s*[0-9a-fA-F]+", line):
+            senders[int(line[0].isspace())].extend(bytes.fromhex(line))
+    if server not in nodes:
+        return None
+
+    def frames(data: bytearray):
+        offset = 0
+        while len(data) - offset >= 6:
+            size = int.from_bytes(data[offset + 1 : offset + 5], "little") + 5
+            if size < 6 or offset + size > len(data):
+                raise ed2k_wire.Ed2kWireError("Callback capture has an incomplete TCP frame")
+            yield ed2k_wire.decode_frame_bytes(bytes(data[offset : offset + size]))
+            offset += size
+
+    server_side = nodes[server]
+    client_data = senders[1 - server_side]
+    if (
+        len(client_data) < 22 or client_data[0] != ed2k_wire.PROTO_EDONKEY
+        or client_data[5] != ed2k_wire.OP_LOGINREQUEST or client_data[6:22] != target_hash
+    ):
+        return None
+    login = next(frames(client_data))
+    assignment = None
+    for frame in frames(senders[server_side]):
+        if frame.opcode == ed2k_wire.OP_IDCHANGE and frame.payload[:4] == struct.pack("<I", target_id):
+            assignment = frame
+        if frame.opcode == ed2k_wire.OP_CALLBACKREQUESTED and frame.payload == expected_callback and assignment:
+            return {"login": login.evidence("tx"), "assignment": assignment.evidence("rx"), "notification": frame.evidence("rx")}
+    raise RuntimeError("The captured native login did not receive the expected server callback notification")
+
+
+def capture_native_sx2_callback(
+    capture_path: Path, *, server: str, target_hash: bytes, target_id: int, requester: tuple[str, int],
+) -> dict[str, object]:
+    """Require the matching 0x35 on the native target's own server connection."""
+    tshark = ("tshark", "-n", "-r", str(capture_path))
+    stream_ids = native_windows_network.run_checked((*tshark, "-T", "fields", "-e", "tcp.stream")).stdout.splitlines()
+    expected_callback = ipaddress.IPv4Address(requester[0]).packed + struct.pack("<H", requester[1])
+    for stream_id in sorted({value for value in stream_ids if value.isascii() and value.isdecimal()}, key=int):
+        follow = native_windows_network.run_checked((*tshark, "-q", "-z", f"follow,tcp,raw,{stream_id}")).stdout
+        evidence = native_sx2_callback_notification(
+            follow, server=server, target_hash=target_hash, target_id=target_id, expected_callback=expected_callback,
+        )
+        if evidence is not None:
+            return {**evidence, "tcpStream": int(stream_id), "capture": str(capture_path)}
+    raise RuntimeError("No TCP capture stream matched the selected native callback target login")
+
+
+def verify_native_browse_catalog(fetch, first_page, expected) -> None:
+    """Compare the complete, paged native listing against the on-disk fixture."""
+    total = len(expected)
+    remaining = expected.copy()
+    offset, page = 0, first_page
+    while offset < total:
+        files = page.get("files")
+        if (page.get("status") != "complete" or page.get("total") != total
+                or page.get("offset") != offset or not isinstance(files, list) or not files):
+            raise RuntimeError(f"Invalid native browse page at {offset} for {total} files")
+        for row in files:
+            name = row.get("displayName")
+            directory = row.get("directory") or ""
+            leaf = directory.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+            actual = (row.get("sizeBytes"), row.get("fileHash"), leaf)
+            if actual != remaining.pop(name, None):
+                raise RuntimeError(f"Unexpected, duplicate or mismatched native browse row {name!r}: {actual!r}")
+        offset += len(files)
+        if offset < total:
+            page = fetch(offset)
+    if remaining:
+        raise RuntimeError(f"Native browse omitted {len(remaining)} catalog entries")
+
+
+def require_native_browse_transfer_progress(
+    diagnostics: Path, *, process_id: int, peer: str | None, file_hash: str, upload: bool = False,
+) -> dict[str, object]:
+    """Require accepted transfer payload between directory requests and replies."""
+    from datetime import datetime
+
+    from emule_test_harness.diag_event_runs import load_diag_event_segment, select_latest_diag_run
+
+    paths = select_latest_diag_run(diagnostics.glob("*.jsonl"), client="rust", process_id=process_id)
+    flow = "listener" if upload else "native_download"
+    request_outcome, reply_outcome = ("accepted", "send_succeeded") if upload else ("send_succeeded", "accepted")
+    browse_start = browse_end = None
+    covered_bytes = files_at_last_reply = 0
+    for path in paths:
+        for event in load_diag_event_segment(path, allow_incomplete_tail=True):
+            keys, body = event.get("keys", {}), event.get("body", {})
+            if body.get("flow") != flow or (peer is not None and keys.get("peer") != peer):
+                continue
+            operation, outcome = body.get("opcodeName"), body.get("outcome")
+            if operation == "OP_ASKSHAREDDIRS" and outcome == request_outcome:
+                if browse_start is not None:
+                    raise RuntimeError("More than one native browse start on the download")
+                browse_start = event
+                peer = keys["peer"]
+            elif browse_start is not None and outcome == reply_outcome:
+                if operation == "OP_SENDINGPART" and keys.get("fileHash") == file_hash:
+                    covered_bytes += body["payloadLen"] - 24
+                elif operation == "OP_ASKSHAREDFILESDIRANS":
+                    browse_end, files_at_last_reply = event, covered_bytes
+    if browse_start is None or browse_end is None or files_at_last_reply <= 0:
+        raise RuntimeError("No accepted file bytes between native directory browse start and last reply")
+    return {
+        "firstSequence": browse_start["seq"],
+        "lastSequence": browse_end["seq"],
+        "payloadBytesDuringBrowse": files_at_last_reply,
+        "elapsedSeconds": (datetime.fromisoformat(browse_end["ts"]) - datetime.fromisoformat(browse_start["ts"])).total_seconds(),
+    }
+
+
+def observe_native_peer_browse(
+    base_url: str, api_key: str, download_id: str, *,
+    host: str, port: int, file_hash: str, name: str, size: int,
+    expected_catalog: dict[str, tuple[int, str, str]] | None = None,
+) -> dict[str, object]:
+    """Browse the connected native publisher and match the fixture in its catalog."""
+    sources = f"/api/v1/downloads/{download_id}/sources"
+
+    def eligible_source() -> dict[str, object] | None:
+        result = rest_smoke.http_request(base_url, sources, api_key=api_key)
+        return next((row for row in rows_from_result(result)
+                     if isinstance(row, dict) and row.get("address") == host
+                     and row.get("port") == port and row.get("viewSharedFiles") is True
+                     and isinstance(row.get("clientId"), str) and row["clientId"]), None)
+
+    source = live_common.wait_for(eligible_source, 30, 0.1, "native browse-capable source")
+    path = f"{sources}/{source['clientId']}/operations/browse"
+    started = response_payload(rest_smoke.http_request(base_url, path, method="POST", api_key=api_key), 200)
+    search_id = started.get("searchId") if isinstance(started, dict) else None
+    if not isinstance(search_id, str) or not search_id.isascii() or not search_id.isdecimal():
+        raise RuntimeError("Rust did not return a peer browse identifier")
+
+    def fetch_page(offset: int) -> dict[str, object]:
+        query = "limit=200"
+        if offset:
+            query += f"&offset={offset}"
+        result = rest_smoke.http_request(base_url, f"{path}/{search_id}?{query}", api_key=api_key)
+        page = response_payload(result, 200)
+        if not isinstance(page, dict) or page.get("searchId") != search_id:
+            raise RuntimeError("Peer browse page has a different request identity")
+        return page
+
+    def completed_page() -> dict[str, object] | None:
+        page = fetch_page(0)
+        return None if page.get("status") == "pending" else page
+
+    started_at = time.monotonic()
+    page = live_common.wait_for(
+        completed_page, 120 if expected_catalog is not None else 30, 0.1, "completed native peer browse",
+    )
+    if page.get("status") != "complete":
+        raise RuntimeError(f"Native peer browse ended with status {page.get('status')!r}")
+    files = page.get("files")
+    if not isinstance(files, list):
+        raise RuntimeError("Native peer browse did not return a file list")
+    if expected_catalog is not None:
+        verify_native_browse_catalog(fetch_page, page, expected_catalog)
+        return {"status": page["status"], "searchId": search_id, "userHash": source.get("userHash"),
+                "total": page["total"], "verifiedCatalog": True,
+                "elapsedSecondsIncludingPaging": round(time.monotonic() - started_at, 3)}
+    matches = [
+        row for row in files
+        if isinstance(row, dict)
+        and (row.get("fileHash"), row.get("displayName"), row.get("sizeBytes")) == (file_hash, name, size)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("Native peer browse did not list exactly one matching fixture")
+    return {"status": page["status"], "searchId": search_id, "userHash": source.get("userHash"),
+            "total": page["total"], "file": matches[0]}
+
+
+@dataclass(frozen=True)
+class ReverseBrowseFixture:
+    anchor_name: str
+    anchor_hash: str
+    anchor_sha256: str
+    anchor_size: int
+    source_link: str
+    canary: dict[str, object]
+    expected_count: int | None
+
+
+def publish_reverse_browse_fixture(
+    base_url: str, api_key: str, share: Path, *, host: str, port: int,
+    canary_size: int = 4096, buckets: int = 0,
+) -> ReverseBrowseFixture:
+    """Publish an anchor with a direct link and a separate unrequested canary."""
+    from emule_test_harness.rust_rest_contract import iter_library_files
+
+    anchor = share / "RustBrowseAnchor.bin"
+    canary = share / "Canary" / ("000000RustBrowseCanary.bin" if buckets else "RustBrowseCanary.bin")
+    expected_count = None
+    if buckets:
+        count_route = "/api/v1/library/files?view=shared&limit=1&countTotal=true"
+        before = rust_local_ed2k.request_json(base_url, "GET", count_route, api_key).get("meta", {}).get("total")
+        if type(before) is not int or before not in (0, 1):
+            raise RuntimeError("Unexpected existing share count in the isolated reverse-browse profile")
+        generator = load_script_module("native_peer_browse_fixture", "create-long-paths-tree.py")
+        catalog = share / "catalog"
+        generated_count = buckets * NATIVE_BROWSE_FILES_PER_BUCKET
+        generator.build_shared_directory_browse_stress(
+            catalog, bucket_count=buckets, files_per_bucket=NATIVE_BROWSE_FILES_PER_BUCKET,
+            min_file_count=generated_count,
+        )
+        # Reserve one generated entry for the canary, then add the transfer anchor.
+        canary.parent.mkdir(parents=True)
+        first_bucket = catalog / "group_000_browse buckets" / "bucket_00000"
+        (first_bucket / generator.make_browse_stress_file_name(0, 0)).rename(canary)
+        if before:
+            # Rust also shares the fresh file completed by the forward transfer.
+            (first_bucket / generator.make_browse_stress_file_name(0, 1)).unlink()
+        expected_count = generated_count + 1
+    anchor_sha256 = write_fixture_file(anchor, 10 * 1024 * 1024, seed=148)
+    write_fixture_file(canary, canary_size, seed=149)
+    publication = rust_local_ed2k.publish_shared_tree(
+        base_url, api_key, root=share, file_name=anchor.name,
+        timeout_seconds=NATIVE_BROWSE_READY_SECONDS if buckets else 60,
+    )
+    root_id = str(publication["directories"]["id"])
+    if expected_count is not None:
+        def full_catalog():
+            page = rust_local_ed2k.request_json(base_url, "GET", count_route, api_key)
+            if page.get("meta", {}).get("total") != expected_count:
+                return False
+            # The library count can see committed memberships before the peer
+            # serving catalog has been rebuilt. Wait for both observations.
+            scan = rust_local_ed2k.request_json(base_url, "GET", "/api/v1/library/scan", api_key)
+            progress = scan.get("reloadProgress") or {}
+            return (
+                scan.get("hashingCount") == 0
+                and progress.get("phase") == "idle"
+                and progress.get("running") is False
+                and progress.get("pending") is False
+            )
+
+        live_common.wait_for(full_catalog, NATIVE_BROWSE_READY_SECONDS, 1, "Rust reverse browse catalog ready")
+    anchor_row = publication["sharedFiles"]["matched"]
+    # Stock parses sources from the extension after the first slash.
+    link = f"{anchor_row['ed2kLink']}|sources,{host}:{port}|/"
+    rows = iter_library_files(
+        lambda path: rust_local_ed2k.request_json(base_url, "GET", "/api/v1" + path, api_key),
+        view="shared", root_id=root_id, search=canary.name,
+    )
+    expected = rust_local_ed2k.require_library_file(rows, canary.name)
+    return ReverseBrowseFixture(
+        anchor.name, str(anchor_row["hash"]), anchor_sha256, anchor.stat().st_size,
+        link, expected, expected_count,
+    )
+
+
+def wait_for_reverse_browse_upload(base_url: str, api_key: str, file_hash: str) -> None:
+    """Start the native browse after Rust has already served part of the anchor."""
+    def active_anchor():
+        rows = rows_from_result(rest_smoke.http_request(base_url, "/api/v1/uploads", api_key=api_key))
+        return any(
+            isinstance(row, dict)
+            and row.get("requestedFileHash") == file_hash
+            and row.get("uploadState") == "uploading"
+            and row.get("sessionUploadedBytes", 0) > 0
+            for row in rows
+        )
+
+    live_common.wait_for(active_anchor, 45, 0.1, "active Rust reverse-browse anchor upload")
+
+
+def stock_client_id_after(log: Path, previous: os.stat_result) -> int | None:
+    """Read a stock OP_IDCHANGE acknowledgement written after a reconnect."""
+    with log.open("rb") as stream:
+        current = os.fstat(stream.fileno())
+        same_file = (current.st_dev, current.st_ino) == (previous.st_dev, previous.st_ino)
+        offset = previous.st_size if same_file and current.st_size >= previous.st_size else 0
+        offset = max(offset, current.st_size - 128 * 1024)
+        stream.seek(offset + offset % 2)
+        tail = stream.read(128 * 1024).decode("utf-16-le", errors="replace")
+    client_ids = re.findall(r"New client ID is ([1-9][0-9]*)\s*$", tail, flags=re.MULTILINE)
+    return int(client_ids[-1]) if client_ids else None
+
+
+def stock_process_main_window(app):
+    """Resolve and verify the main window of this isolated stock process."""
+    import win32process
+
+    main = live_common.find_process_main_window(app)
+    pid = live_common.resolve_app_process_id(app)
+    if main is None or pid is None or win32process.GetWindowThreadProcessId(main.handle)[1] != pid:
+        raise RuntimeError("Stock command requires the isolated client's main window")
+    return main, pid
+
+
+def submit_stock_download_link(app, link: str) -> None:
+    """Admit a link in the specified stock process through its Direct Download dialog."""
+    import win32con
+    import win32gui
+    import win32process
+
+    main, pid = stock_process_main_window(app)
+    # Stock MenuCmds.h and resource.h at ac3d52e. Post the modal command
+    # first so its message loop can accept the link from this process.
+    win32gui.PostMessage(main.handle, win32con.WM_COMMAND, 10247, 0)  # MP_HM_DIRECT_DOWNLOAD
+
+    def direct_download_dialog() -> int | None:
+        dialogs = []
+
+        def visit(hwnd, _):
+            if (win32gui.GetWindow(hwnd, win32con.GW_OWNER) == main.handle
+                    and win32process.GetWindowThreadProcessId(hwnd)[1] == pid
+                    and win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) == "#32770"):
+                dialogs.append(hwnd)
+            return True
+
+        win32gui.EnumWindows(visit, None)
+        return next((hwnd for hwnd in dialogs if win32gui.GetDlgItem(hwnd, 2010)), None)
+
+    dialog = live_common.wait_for(direct_download_dialog, 10, 0.1, "stock Direct Download dialog")
+    edit = win32gui.GetDlgItem(dialog, 2010)  # IDC_ELINK
+    win32gui.SendMessage(edit, win32con.WM_SETTEXT, 0, link)
+    if win32gui.SendMessage(edit, win32con.WM_GETTEXTLENGTH, 0, 0) != len(link):
+        raise RuntimeError("Stock Direct Download did not accept the fixture link")
+    win32gui.PostMessage(win32gui.GetDlgItem(dialog, win32con.IDOK), win32con.BM_CLICK, 0, 0)
+    live_common.wait_for(lambda: not win32gui.IsWindowVisible(dialog), 10, 0.1, "stock link admission")
+
+
+def observe_stock_browsing_rust(
+    app, base_url: str, api_key: str, fixture: ReverseBrowseFixture, *,
+    server_control: ed2k_server.Ed2kServerControl, stock_log_dir: Path,
+) -> dict[str, object]:
+    """Use the native stock source command and look for an unrequested canary."""
+    import win32con
+    import win32gui
+
+    ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
+    anchor_name, link, expected = fixture.anchor_name, fixture.source_link, fixture.canary
+
+    main, pid = stock_process_main_window(app)
+    # Stock's connected LowID source filter rejects its local IP even when
+    # the direct source uses another port. Use the explicit link offline.
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
+    server_control.wait_for_client_absent(CLIENT_IDENTITIES["stock_emule"].nick, 10)
+    submit_stock_download_link(app, link)
+    # Stock schedules peer connections only while connected to a network.
+    stock_log = stock_log_dir / STOCK_EMULE_LOG_FILENAME
+    previous_log = stock_log.stat()
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
+    server_control.wait_for_client(CLIENT_IDENTITIES["stock_emule"].nick, 15)
+    client_id = live_common.wait_for(
+        lambda: stock_client_id_after(stock_log, previous_log), 120, 0.2, "stock processed server login",
+    )
+    win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10211, 0)  # MP_HM_TRANSFER
+    downloads = ui.find_control(main.handle, 2048, "SysListView32")  # IDC_DOWNLOADLIST
+    handle = ui.open_process(pid)
+    try:
+        def find_row(control: int, label: str) -> tuple[int, str] | None:
+            for index in range(ui.get_list_count(control)):
+                text = ui.get_list_item_text(handle, control, index, 0)
+                if text == label:
+                    return index, text
+            return None
+
+        def find_rust_source() -> tuple[int, str] | None:
+            anchor_row = find_row(downloads, anchor_name)
+            if anchor_row is None:
+                return None
+            ui.select_list_row(handle, downloads, anchor_row[0])
+            win32gui.SendMessage(downloads, win32con.WM_KEYDOWN, win32con.VK_ADD, 0)
+            # The Rust HELLO nickname differs from its server nickname.
+            return find_row(downloads, "eMule")
+
+        index, _ = live_common.wait_for(find_rust_source, 30, 0.2, "Rust source row")
+        ui.select_list_row(handle, downloads, index)
+        if fixture.expected_count is not None:
+            wait_for_reverse_browse_upload(base_url, api_key, fixture.anchor_hash)
+        win32gui.SendMessage(downloads, win32con.WM_COMMAND, 10106, 0)  # MP_SHOWLIST
+        ui.open_search_page(main.handle)
+        results = ui.find_control(main.handle, 2172, "SysListView32")  # IDC_SEARCHLIST
+        result_count = None
+        if fixture.expected_count is not None:
+            def complete_stock_count():
+                count = ui.get_list_count(results)
+                return count if count == fixture.expected_count else None
+
+            result_count = live_common.wait_for(complete_stock_count, 300, 0.2, "complete stock peer result count")
+        index, _ = live_common.wait_for(
+            lambda: find_row(results, expected["displayName"]), 30, 0.2, "stock remote canary",
+        )
+        row = ui.get_search_result_row(handle, results, index)
+    finally:
+        ui.close_process(handle)
+    size = ui.parse_display_size_bytes(row["size"])
+    if row["hash"] != expected["hash"] or size != expected["sizeBytes"]:
+        raise RuntimeError("Stock remote canary differs from the Rust catalog")
+    return {
+        "status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": size,
+        "nativeServerClientId": client_id,
+        **({"resultCount": result_count} if result_count is not None else {}),
+    }
+
+
 def wait_for_transfer(
     base_url: str,
     api_key: str,
@@ -3090,6 +3658,111 @@ def prepare_amule_profile(
     return profile
 
 
+def native_network_user_hash(config_dir: Path, identity: str) -> bytes:
+    digest = mfc_profile_import.read_preferences_dat_user_hash(config_dir / "preferences.dat")
+    if identity == "amule":
+        # Fresh aMule profiles can persist their generated bytes before setting its eMule marker.
+        return digest[:5] + b"\x0e" + digest[6:14] + b"\x6f" + digest[15:]
+    return digest
+
+
+def observe_native_server_size_boundary(
+    paths, args: argparse.Namespace, profile_seed_dir: Path, bind_address: str,
+    results: dict[str, object],
+) -> None:
+    """Capture native TCP and UDP requests and offers from two fresh capability profiles."""
+    from emule_test_harness import native_large_file_status
+
+    native = resolve_client2_availability(
+        paths.workspace_root, args.configuration, args.client2_app_exe,
+        args.client2_identity, args.client2_control_exe,
+    )
+    if native.executable is None or (args.client2_identity == "amule" and native.control_executable is None):
+        raise RuntimeError(f"Could not resolve the native boundary oracle: {native.reason}")
+    results["native_oracle"] = native.as_report()
+    source_flags = scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES
+    sized_flags = source_flags | scripted_ed2k_udp_source.SERVER_UDP_FLAG_EXT_GETSOURCES2
+    large_flag = scripted_ed2k_udp_source.SERVER_UDP_FLAG_LARGEFILES
+    port_choices = choose_distinct_ports(bind_address)
+    used = set(port_choices.values())
+    for capable in (False, True):
+        case = "large-files" if capable else "legacy"
+        root = paths.source_artifacts_dir / case
+        profile_id = f"{native.identity.profile_id}-{case}"
+        if args.client2_identity == "amule":
+            profile = prepare_amule_profile(root, profile_id)
+        else:
+            profile = live_common.prepare_scenario_profile(profile_seed_dir, root, [], profile_id)
+        config_dir = Path(profile["config_dir"])
+        temp_dir = Path(profile["temp_dir"])
+        fixtures = native_large_file_status.seed_offer_partials(temp_dir)
+        jobs = tuple((row["name"], row["sizeBytes"], bytes.fromhex(row["fileHash"])) for row in fixtures)
+        case_result: dict[str, object] = {"seededPartialFiles": fixtures}
+        results[case] = case_result
+        with ExitStack() as owned:
+            anchor_port = choose_server_port_block(bind_address, used)
+            listener = owned.enter_context(socket.create_server((bind_address, anchor_port)))
+            listener.settimeout(args.server_connect_timeout_seconds)
+            entries = [{
+                "address": bind_address, "port": anchor_port, "name": f"{case}-tcp-anchor",
+                "priority": SERVER_PRIORITY_HIGH,
+            }]
+            probes = {}
+            if not capable:
+                # Native global walks skip the active TCP server. Each UDP flag
+                # combination therefore gets a separate run-owned server entry.
+                for label, flags in (
+                    ("legacy-sized", sized_flags),
+                    ("large-sized", sized_flags | large_flag),
+                    ("large-hash-only", source_flags | large_flag),
+                ):
+                    udp_target = choose_server_port_block(bind_address, used)
+                    probe = scripted_ed2k_udp_source.ScriptedEd2kUdpSourceServer.for_legacy_size_boundary(
+                        bind_host=bind_address, server_tcp_port=udp_target, udp_flags=flags,
+                        transcript_path=root / f"{label}-udp.jsonl", jobs=jobs,
+                    )
+                    probe.start()
+                    owned.callback(probe.stop)
+                    probes[label] = probe
+                    entries.append({
+                        "address": bind_address, "port": udp_target, "name": label,
+                        "priority": SERVER_PRIORITY_LOW, "udp_flags": flags,
+                    })
+            write_server_met_entries(config_dir / "server.met", entries)
+            if args.client2_identity == "amule":
+                amule_client.configure_profile(
+                    config_dir=config_dir, incoming_dir=Path(profile["incoming_dir"]), temp_dir=temp_dir,
+                    shared_dir=root / "empty-share", nick=native.identity.nick,
+                    tcp_port=port_choices["client2_tcp"], udp_port=port_choices["client2_udp"],
+                    ec_port=port_choices["client2_ec"], ec_password=args.api_key,
+                    bind_address=bind_address, create_sparse_files=False,
+                )
+                app = amule_client.launch_daemon(native.executable, config_dir)
+                owned.callback(
+                    amule_client.shutdown_daemon, app, native.control_executable,
+                    ec_port=port_choices["client2_ec"], ec_password=args.api_key,
+                )
+            else:
+                configure_client_profile(
+                    config_dir=config_dir, app_exe=native.executable, nick=native.identity.nick,
+                    tcp_port=port_choices["client2_tcp"], udp_port=port_choices["client2_udp"],
+                    ed2k_enabled=True, autoconnect=True, p2p_bind_addr=bind_address,
+                    crypt_layer_supported=False, crypt_layer_requested=False, crypt_layer_required=False,
+                )
+                app = live_common.launch_app(native.executable, Path(profile["profile_base"]), minimized_to_tray=True)
+                owned.callback(live_common.close_app_cleanly, app)
+            stream, _ = listener.accept()
+            owned.enter_context(stream)
+            case_result["tcp"] = native_large_file_status.observe_tcp_source_requests(
+                stream, capable=capable, expected_user_hash=native_network_user_hash(config_dir, args.client2_identity),
+                timeout_seconds=args.server_connect_timeout_seconds, jobs=jobs, require_partial_offers=True,
+            )
+            case_result["udp"] = {
+                label: probe.wait_for_boundary_requests(args.server_connect_timeout_seconds)
+                for label, probe in probes.items()
+            }
+
+
 def observe_amule_publisher(
     *,
     control_exe: Path,
@@ -3303,6 +3976,7 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=args.client2_identity not in {"stock_emule", "amule"},
     )
     profile_seed_dir = (
         Path(args.profile_seed_dir).resolve()
@@ -3367,8 +4041,17 @@ def main(argv: list[str] | None = None) -> int:
     server_tcp_metadata_evidence: dict[str, object] | None = None
     server_udp_metadata_evidence: dict[str, object] | None = None
     server_udp_source_evidence: dict[str, object] | None = None
-    relayed_reask_high_id_pool: LanIpPool | None = None
-    relayed_reask_high_id_address: str | None = None
+    test_high_id_pool: LanIpPool | None = None
+    test_high_id_address: str | None = None
+    native_sx2_callback = args.transfer_scenario == NATIVE_SX2_CALLBACK
+    native_sx2_capture: native_windows_network.ManagedDumpcapCapture | None = None
+    native_target_bind_address = ""
+    verify_amule_browse = args.verify_peer_browse and args.client2_identity == "amule"
+    # The baseline checks both directions. Each scale input selects its publisher.
+    forward_scale = args.native_browse_buckets > 0
+    reverse_scale = args.native_reverse_browse_buckets > 0
+    verify_forward_browse = args.verify_peer_browse and (forward_scale or not reverse_scale)
+    verify_reverse_browse = args.verify_peer_browse and (reverse_scale or not forward_scale)
     current_phase = "initializing"
 
     try:
@@ -3376,19 +4059,29 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
-        if args.transfer_scenario == RELAYED_REASK:
+        if args.transfer_scenario == NATIVE_SERVER_SIZE_BOUNDARY:
+            current_phase = "native_server_size_boundary"
+            observe_native_server_size_boundary(paths, args, profile_seed_dir, p2p_address, report["checks"])
+            report["status"] = "passed"
+            return 0
+        if args.transfer_scenario == RELAYED_REASK or verify_amule_browse or native_sx2_callback:
             if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
                 raise ValueError(
-                    "relayed-reask owns its deterministic HighID address; "
+                    "This scenario owns its deterministic HighID address; "
                     "do not pass a P2P bind override"
                 )
-            current_phase = "provision_relayed_reask_high_id_address"
+            current_phase = "provision_test_high_id_address"
             (
-                relayed_reask_high_id_pool,
-                relayed_reask_high_id_address,
+                test_high_id_pool,
+                test_high_id_address,
                 windows_route_address,
-            ) = provision_relayed_reask_high_id_address()
-            p2p_address = relayed_reask_high_id_address
+            ) = provision_windows_high_id_address(
+                amule_source_link=verify_amule_browse or native_sx2_callback,
+            )
+            p2p_address = test_high_id_address
+            if native_sx2_callback:
+                # The server's public alias leads exclusively to the Rust listener.
+                native_target_bind_address = windows_route_address
         server_connect_address = resolve_ed2k_server_connect_address(
             args.ed2k_server_connect_address
         )
@@ -3409,14 +4102,63 @@ def main(argv: list[str] | None = None) -> int:
             "ed2k_server_connect_address": server_connect_address,
             "ports": ports,
         }
-        if relayed_reask_high_id_address is not None:
+        if test_high_id_address is not None:
             report["network"]["high_id_authority"] = {
                 "mode": "upstream-server-identity-probe",
-                "address": relayed_reask_high_id_address,
+                "address": test_high_id_address,
                 "interfaceAddress": windows_route_address,
                 "candidateNetwork": RELAYED_REASK_HIGH_ID_NETWORK,
                 "ephemeral": True,
             }
+
+        fixture_dir = paths.source_artifacts_dir / "client2-shared"
+        fixture_name = (
+            "deterministic-transfer-Unicode-é-漢.bin"
+            if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
+            else "deterministicserverlogin-fixture.bin"
+            if args.transfer_scenario == SERVER_LOGIN_REQUEST
+            else "deterministicservercallback-transfer.bin"
+            if args.transfer_scenario == SERVER_CALLBACK_REPLY
+            else "deterministic-native-sx2-transfer.bin"
+            if native_sx2_callback
+            else "deterministicdirectcallback-transfer.bin"
+            if args.transfer_scenario == DIRECT_CALLBACK
+            else "deterministicbuddycallback-transfer.bin"
+            if args.transfer_scenario == BUDDY_CALLBACK
+            else "deterministicserversearch-transfer.bin"
+            if args.transfer_scenario in SERVER_SEARCH_VARIANTS
+            else "deterministicserversource-transfer.bin"
+            if args.transfer_scenario == SERVER_TCP_SOURCE
+            else "deterministicservertcpmetadata-transfer.bin"
+            if args.transfer_scenario == SERVER_TCP_METADATA
+            else "deterministicserverudpmetadata-transfer.bin"
+            if args.transfer_scenario == SERVER_UDP_METADATA
+            else f"deterministicserverudpsourcev{udp_source_request_version}-transfer.bin"
+            if udp_source_request_version is not None
+            else "deterministic-two-client-transfer.bin"
+        )
+        fixture_file = fixture_dir / fixture_name
+        fixture_pattern = (
+            protocol_case.fixture_pattern
+            if protocol_case is not None
+            else ed2k_protocol_cases.LOW_COMPRESSIBILITY
+        )
+        fixture_sha256 = ed2k_protocol_cases.write_fixture(
+            fixture_file,
+            args.fixture_size_bytes,
+            fixture_pattern,
+        )
+        report["fixture"] = {
+            "path": str(fixture_file),
+            "name": fixture_file.name,
+            "size": args.fixture_size_bytes,
+            "sha256": fixture_sha256,
+            "pattern": fixture_pattern,
+        }
+        native_sx2_link = native_browse_fixture_link(fixture_file, fixture_sha256) if native_sx2_callback else None
+        unindexed_fixture_hashes = (
+            (str(parse_ed2k_file_link(native_sx2_link)["hash"]),) if native_sx2_link is not None else ()
+        )
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
@@ -3434,19 +4176,20 @@ def main(argv: list[str] | None = None) -> int:
             protocol_obfuscation=(
                 protocol_case.server_protocol_obfuscation
                 if protocol_case is not None
-                else True
+                else not native_sx2_callback
             ),
             offerfiles_v1=args.verify_offerfiles_v1_stock_fallback,
             server_udp=(
                 protocol_case.server_udp if protocol_case is not None else True
             ),
-            advertised_address_override=relayed_reask_high_id_address,
-            hairpin_lan_clients=relayed_reask_high_id_address is not None,
+            advertised_address_override=test_high_id_address,
+            hairpin_lan_clients=test_high_id_address is not None,
+            unindexed_fixture_hashes=unindexed_fixture_hashes,
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
         server_address = server_launch.ed2k_host
-        if relayed_reask_high_id_address is None:
+        if test_high_id_address is None:
             p2p_address = resolve_managed_server_p2p_bind_address(
                 current_address=p2p_address,
                 server_address=server_address,
@@ -3465,6 +4208,8 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["p2p_bind_interface_address"] = p2p_address
         report["network"]["ed2k_server_connect_address"] = server_address
         report["network"]["ed2k_server_address"] = server_address
+        if native_sx2_callback:
+            report["network"]["native_low_id_bind_address"] = native_target_bind_address
 
         if args.transfer_scenario == DIRECT_CALLBACK:
             rust_isolated_kad_seed = kad_nodes.BootstrapContact(
@@ -3806,53 +4551,25 @@ def main(argv: list[str] | None = None) -> int:
                 "publication": source_publication,
             }
 
-        fixture_dir = paths.source_artifacts_dir / "client2-shared"
-        fixture_name = (
-            "deterministic-transfer-Unicode-é-漢.bin"
-            if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
-            else "deterministicserverlogin-fixture.bin"
-            if args.transfer_scenario == SERVER_LOGIN_REQUEST
-            else "deterministicservercallback-transfer.bin"
-            if args.transfer_scenario == SERVER_CALLBACK_REPLY
-            else "deterministicdirectcallback-transfer.bin"
-            if args.transfer_scenario == DIRECT_CALLBACK
-            else "deterministicbuddycallback-transfer.bin"
-            if args.transfer_scenario == BUDDY_CALLBACK
-            else "deterministicserversearch-transfer.bin"
-            if args.transfer_scenario in SERVER_SEARCH_VARIANTS
-            else "deterministicserversource-transfer.bin"
-            if args.transfer_scenario == SERVER_TCP_SOURCE
-            else "deterministicservertcpmetadata-transfer.bin"
-            if args.transfer_scenario == SERVER_TCP_METADATA
-            else "deterministicserverudpmetadata-transfer.bin"
-            if args.transfer_scenario == SERVER_UDP_METADATA
-            else f"deterministicserverudpsourcev{udp_source_request_version}-transfer.bin"
-            if udp_source_request_version is not None
-            else "deterministic-two-client-transfer.bin"
-        )
-        fixture_file = fixture_dir / fixture_name
-        fixture_pattern = (
-            protocol_case.fixture_pattern
-            if protocol_case is not None
-            else ed2k_protocol_cases.LOW_COMPRESSIBILITY
-        )
-        fixture_sha256 = ed2k_protocol_cases.write_fixture(
-            fixture_file,
-            args.fixture_size_bytes,
-            fixture_pattern,
-        )
-        report["fixture"] = {
-            "path": str(fixture_file),
-            "name": fixture_file.name,
-            "size": args.fixture_size_bytes,
-            "sha256": fixture_sha256,
-            "pattern": fixture_pattern,
-        }
+        browse_leaves, browse_catalog = [], None
+        if args.native_browse_buckets:
+            current_phase = "generate_native_browse_catalog"
+            browse_leaves, browse_catalog = native_browse_catalog(
+                fixture_dir / "catalog", args.native_browse_buckets,
+            )
+            report["fixture"]["nativeBrowse"] = {
+                "leafDirectories": len(browse_leaves),
+                "shareCount": len(browse_catalog) + 1,
+            }
 
-        rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
-        rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(
-            get_workspace_output_root()
-        )
+        rust_repo = resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+        output_root = get_workspace_output_root()
+        runtime_identity = None
+        if rust_repo == resolve_manifest_repo(paths.workspace_root, "emulebb_rust"):
+            rust_exe = converged_live_wire.resolve_rust_diagnostics_exe(output_root)
+        else:
+            runtime_identity = rust_client.verified_runtime_stage(rust_repo, output_root, diagnostics=True)
+            rust_exe = Path(runtime_identity["executable"])
         rust_profile = paths.source_artifacts_dir / "profiles" / CLIENT01.profile_id
         rust_incoming = rust_profile / "incoming"
         rust_incoming.mkdir(parents=True, exist_ok=True)
@@ -3897,10 +4614,15 @@ def main(argv: list[str] | None = None) -> int:
                 'network.p2p.tcpPort': ports['client1_tcp'],
                 'network.nickname': CLIENT01.nick,
                 'network.p2p.udpPort': ports['client1_udp'],
-                'security.obfuscationEnabled': protocol_case.client_crypt_supported if protocol_case is not None else True,
+                'security.obfuscationEnabled': (
+                    protocol_case.client_crypt_supported if protocol_case is not None else not native_sx2_callback
+                ),
                 'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA,
                 'network.connections.connectTimeoutSeconds': 10,
                 'network.servers.reconnectIntervalSeconds': 60,
+                **({'transfers.uploadLimitBytesPerSecond': 65_536 if verify_amule_browse else 262_144,
+                    'transfers.upload.sharedFilesVisibility': 'everyone'}
+                   if args.verify_peer_browse else {}),
             },
         )
         if args.transfer_scenario == SERVER_UDP_METADATA:
@@ -3976,6 +4698,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"Client2 {client2_availability.identity.product} control was not found: "
                 f"{client2_availability.reason}."
             )
+        # Publication uses the official daemon. Only the requester test needs wx controls.
+        if verify_amule_browse and verify_reverse_browse:
+            client2_app_exe = client2_app_exe.with_name("amule.exe")
+            if not client2_app_exe.is_file():
+                raise RuntimeError("The staged monolithic aMule GUI is required for native requester browse")
+            client2_availability = replace(client2_availability, executable=client2_app_exe)
         if args.client2_identity == "amule":
             amule_client.configure_profile(
                 config_dir=Path(client2["config_dir"]),
@@ -3987,6 +4715,11 @@ def main(argv: list[str] | None = None) -> int:
                 udp_port=ports["client2_udp"],
                 ec_port=ports["client2_ec"],
                 ec_password=args.api_key,
+                allow_peer_browse=args.verify_peer_browse,
+                additional_shared_dirs=tuple(browse_leaves),
+                create_sparse_files=not (args.verify_native_large_file_status or args.verify_native_partial_threshold),
+                flush_partial_fixture=args.verify_native_partial_threshold,
+                bind_address=native_target_bind_address,
             )
         else:
             configure_client_profile(
@@ -4004,7 +4737,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.client2_identity == "mfc_oracle"
                 ),
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
-                p2p_bind_addr=p2p_address,
+                p2p_bind_addr=native_target_bind_address or p2p_address,
                 network_kademlia=(
                     args.transfer_scenario
                     in {DIRECT_CALLBACK, BUDDY_CALLBACK, RELAYED_REASK}
@@ -4031,6 +4764,10 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 add_servers_from_server=(args.transfer_scenario == SERVER_TCP_METADATA),
             )
+            if args.verify_peer_browse:
+                live_common.apply_emule_preferences(
+                    Path(client2["config_dir"]), (("SeeShare", "0"), ("MaxUpload", "1024")),
+                )
             if args.transfer_scenario == DIRECT_CALLBACK:
                 # MFC treats a private-only Kad routing table as LAN mode, where
                 # stock deliberately reports TCP-open and rejects direct callbacks.
@@ -4103,7 +4840,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.client2_identity == "stock_emule":
             live_common.write_shared_directories_file(
                 Path(client2["config_dir"]) / "shareddir.dat",
-                [live_common.win_path(fixture_dir, trailing_slash=True)],
+                [live_common.win_path(path, trailing_slash=True) for path in (fixture_dir, *browse_leaves)],
             )
         client2_server_met = Path(client2["config_dir"]) / "server.met"
         if (
@@ -4167,7 +4904,9 @@ def main(argv: list[str] | None = None) -> int:
                 "app_exe": str(rust_exe),
                 "app_sha256": file_sha256(rust_exe),
                 "source_repo": str(rust_repo),
-                "source_revision": git_head_revision(rust_repo),
+                "source_revision": (runtime_identity["source"]["revision"]
+                                    if runtime_identity else git_head_revision(rust_repo)),
+                **({"runtime_stage_receipt": runtime_identity["receipt"]} if runtime_identity else {}),
                 "settings": str(rust_profile / rust_client.RUST_PROFILE_SETTINGS_FILE),
                 "metadata": str(rust_profile / rust_client.RUST_PROFILE_METADATA_FILE),
                 "diagnostics_dir": str(rust_diagnostics_dir),
@@ -4194,6 +4933,16 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         current_phase = "launch_client2"
+        if native_sx2_callback:
+            capture_interface = native_windows_network.resolve_capture_interface(
+                native_windows_network.discover_capture_interfaces(),
+                native_windows_network.resolve_windows_adapter_hints(native_target_bind_address),
+            )
+            native_sx2_capture = native_windows_network.ManagedDumpcapCapture(
+                output_path=paths.source_artifacts_dir / "native-sx2-server.pcapng",
+                capture_filter=f"host {server_address} and tcp port {ports['ed2k_tcp']}",
+                interface=capture_interface, maximum_size_kib=1024,
+            ).start()
         if args.client2_identity == "amule":
             client2_app = amule_client.launch_daemon(
                 client2_app_exe, Path(client2["config_dir"])
@@ -4209,7 +4958,61 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(
                     "Could not resolve the launched client2 process identity."
                 )
-        if args.client2_identity == "stock_emule":
+        if native_sx2_callback:
+            if native_sx2_link is None:
+                raise RuntimeError("Native SX2 callback file link was not initialized")
+            current_phase = "native_sx2_low_id_login"
+            connected = server_control.wait_for_client(
+                client2_identity.nick, args.server_connect_timeout_seconds,
+            )
+            if connected.get("high_id") is not False:
+                raise RuntimeError(f"Expected the native publisher to have LowID: {connected!r}")
+            if args.client2_identity == "amule":
+                amule_client.wait_for_shared_file_count(
+                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                    expected=1, timeout_seconds=args.server_publish_timeout_seconds,
+                )
+            else:
+                wait_for_stock_browse_catalog(client2_app, 1)
+            exported_link = native_sx2_link
+            link_info = parse_ed2k_file_link(exported_link)
+            transfer_hash = str(link_info["hash"])
+            isolated = file_observer.observe(transfer_hash, int(link_info["size"]))
+            if isolated["indexed"] or isolated["sources"] != 0:
+                raise RuntimeError("The native SX2 fixture unexpectedly appeared in server search or sources")
+            report["checks"]["native_sx2_server_isolation"] = isolated
+            report["checks"]["client2_server_client"] = connected
+            report["checks"]["client2_shared_file_link"] = {
+                "adapter": "unindexed-native-publisher", "link": exported_link, "parsed": link_info,
+            }
+        elif browse_catalog is not None:
+            current_phase = "native_browse_catalog_ready"
+            if args.client2_identity == "stock_emule":
+                wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
+            # aMule opens EC before startup and server negotiation finish.
+            # Wait for registration before reading its live share statistics.
+            connected = server_control.wait_for_client(
+                client2_identity.nick, args.server_publish_timeout_seconds,
+            )
+            if args.client2_identity == "amule":
+                amule_client.wait_for_shared_file_count(
+                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                    expected=len(browse_catalog) + 1, timeout_seconds=NATIVE_BROWSE_READY_SECONDS,
+                )
+            exported_link = native_browse_fixture_link(fixture_file, fixture_sha256)
+            link_info = parse_ed2k_file_link(exported_link)
+            transfer_hash = str(link_info["hash"])
+            browse_catalog[fixture_file.name] = (int(link_info["size"]), transfer_hash, fixture_dir.name)
+            # The scale case uses the local peer catalog and a direct-source transfer.
+            # A server offering a subset of the library need not index the transfer fixture.
+            report["network"]["client2_server_observed_address"] = connected.get("ip")
+            report["checks"]["client2_server_client"] = connected
+            report["checks"]["client2_shared_file_link"] = {
+                "adapter": "independently-hashed-direct-source-fixture",
+                "link": exported_link,
+                "parsed": link_info,
+            }
+        elif args.client2_identity == "stock_emule":
             current_phase = "client2_stock_source_lifecycle"
             client2_app, exported_link, stock_lifecycle = recycle_stock_publisher(
                 app=client2_app,
@@ -5339,9 +6142,64 @@ def main(argv: list[str] | None = None) -> int:
             },
         }
         current_phase = "add_transfer"
-        admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
+        if native_sx2_callback:
+            if report["checks"]["client1_server_client"].get("high_id") is not True:
+                raise RuntimeError("Native SX2 callback requires a server-verified Rust HighID")
+            def native_low_id_assignment() -> tuple[str, int] | None:
+                log = server_launch.log_path.read_text(encoding="utf-8", errors="replace")
+                for line in reversed(ANSI_ESCAPE_RE.sub("", log).splitlines()):
+                    if "client logged in" not in line or f"nick={client2_identity.nick} " not in line:
+                        continue
+                    match = re.search(r"\bid=(\d+) high_id=false\b", line)
+                    if match is not None:
+                        return line, int(match.group(1))
+                return None
+
+            target_login, target_id = live_common.wait_for(
+                native_low_id_assignment, 15.0, 0.25, "server-recorded native LowID assignment",
+            )
+            target_user_hash = native_network_user_hash(Path(client2["config_dir"]), args.client2_identity)
+            seed_host = test_high_id_pool.acquire(1)[0]
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as seed_listener:
+                seed_listener.bind((seed_host, 0))
+                seed_listener.listen(1)
+                seed_listener.settimeout(30)
+                seed_port = seed_listener.getsockname()[1]
+                seed_link = rust_local_ed2k.ed2k_link_with_source(exported_link, seed_host, seed_port)
+                report["checks"]["client1_transfer_stimulus"].update({
+                    "mode": "solicited-sx2-low-id", "transferLink": seed_link,
+                    "source": {"host": seed_host, "port": seed_port},
+                })
+                admission = add_download(base_url, args.api_key, seed_link, transfer_hash)
+                current_phase = "native_sx2_solicitation"
+                stream, _ = seed_listener.accept()
+                with stream:
+                    current_phase = "native_sx2_seed_session"
+                    receipt = ed2k_wire.serve_solicited_sx2_low_id(
+                        stream,
+                        seed=(seed_host, seed_port), seed_user_hash=bytes.fromhex("FC18432949914E25BCF165525D104F70"),
+                        file_hash=bytes.fromhex(transfer_hash), file_name=fixture_file.name,
+                        target_id=target_id, target_port=ports["client2_tcp"],
+                        target_user_hash=target_user_hash, server=(server_address, ports["ed2k_tcp"]),
+                        timeout_seconds=10,
+                    )
+            report["checks"]["native_sx2_solicitation"] = {
+                "serverLogin": target_login, "targetUserHash": target_user_hash.hex(),
+                "targetId": target_id, "serverIndexMissing": True, "peerFrames": receipt,
+            }
+            current_phase = "complete_native_sx2_callback_transfer"
+        else:
+            admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
         download_id = admission["jobId"]
         report["checks"]["client1_transfer_add"] = admission
+        if verify_forward_browse:
+            current_phase = "rust_browses_native_publisher"
+            report["checks"]["rust_browses_native_publisher"] = observe_native_peer_browse(
+                base_url, args.api_key, download_id, host=p2p_address, port=ports["client2_tcp"],
+                file_hash=transfer_hash, name=fixture_file.name, size=int(link_info["size"]),
+                expected_catalog=browse_catalog,
+            )
+            current_phase = "complete_transfer"
         report["checks"]["client1_transfer_completed_file"] = (
             rust_local_ed2k.wait_for_download_completed(
                 base_url,
@@ -5351,13 +6209,141 @@ def main(argv: list[str] | None = None) -> int:
                 expected_size=int(link_info["size"]),
                 expected_sha256=fixture_sha256,
                 expected_delivery_path=rust_incoming / fixture_file.name,
-                timeout_seconds=args.transfer_completion_timeout_seconds,
+                timeout_seconds=min(args.transfer_completion_timeout_seconds, 180.0)
+                if native_sx2_callback else args.transfer_completion_timeout_seconds,
             )
         )
+        if native_sx2_callback:
+            current_phase = "verify_native_sx2_callback_transfer"
+            report["checks"]["native_sx2_callback_transfer"] = require_native_sx2_callback_transfer(
+                rust_diagnostics_dir,
+                process_id=client1_process.pid,
+                server=f"{server_address}:{ports['ed2k_tcp']}",
+                target_id=target_id,
+                target_hash=target_user_hash,
+                file_hash=bytes.fromhex(transfer_hash),
+            )
+            network_capture = native_sx2_capture.stop()
+            report["checks"]["native_sx2_callback_notification"] = capture_native_sx2_callback(
+                network_capture.output_path, server=f"{server_address}:{ports['ed2k_tcp']}",
+                target_hash=target_user_hash, target_id=target_id,
+                requester=(p2p_address, ports["client1_tcp"]),
+            )
         if args.verify_source_lifecycle:
             report["source_lifecycle"]["completed"] = report["checks"][
                 "client1_transfer_completed_file"
             ]
+        if browse_catalog is not None:
+            current_phase = "prove_transfer_progress_during_native_browse"
+            report["checks"]["native_browse_transfer_progress"] = require_native_browse_transfer_progress(
+                rust_diagnostics_dir, process_id=client1_process.pid,
+                peer=f"{p2p_address}:{ports['client2_tcp']}", file_hash=transfer_hash,
+            )
+        reverse_browse = None
+        if verify_reverse_browse:
+            current_phase = "publish_rust_reverse_browse_fixture"
+            if verify_amule_browse and report["checks"]["client1_server_client"].get("high_id") is not True:
+                raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
+            reverse_browse = publish_reverse_browse_fixture(
+                base_url, args.api_key, paths.source_artifacts_dir / "rust-browse-share",
+                host=p2p_address, port=ports["client1_tcp"], canary_size=137 if verify_amule_browse else 4096,
+                buckets=args.native_reverse_browse_buckets,
+            )
+            reverse_destination = Path(client2["incoming_dir"]) / reverse_browse.anchor_name
+            if reverse_destination.exists():
+                raise RuntimeError("Native incoming directory already contains the browse anchor")
+        if reverse_browse is not None and args.client2_identity == "stock_emule":
+            current_phase = "stock_browses_rust_publisher"
+            report["checks"]["stock_browses_rust_publisher"] = observe_stock_browsing_rust(
+                client2_app, base_url, args.api_key, reverse_browse, server_control=server_control,
+                stock_log_dir=Path(client2["log_dir"]),
+            )
+        elif reverse_browse is not None:
+            from emule_test_harness.amule_browse_ui import browse_rust_shares
+            from emule_test_harness.emule_met_dump import dump_file
+
+            current_phase = "amule_browses_rust_publisher"
+            amule_client.run_command(
+                client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                command=f"add {reverse_browse.source_link}",
+            )
+            if reverse_browse.expected_count is not None:
+                wait_for_reverse_browse_upload(base_url, args.api_key, reverse_browse.anchor_hash)
+            canary = reverse_browse.canary
+            canary_name = canary["displayName"]
+            amule_temp = Path(client2["temp_dir"])
+            before_browse = set(amule_temp.glob("*.part.met"))
+            browse = browse_rust_shares(
+                process_id=client2_app.pid, peer_name="eMule", anchor_name=reverse_browse.anchor_name,
+                file_name=canary_name, expected_count=reverse_browse.expected_count,
+                timeout_seconds=300 if reverse_browse.expected_count is not None else 90,
+            )
+            current_phase = "amule_verifies_native_browse_result"
+
+            def browse_metadata():
+                for path in sorted(set(amule_temp.glob("*.part.met")) - before_browse):
+                    part = dump_file(path, summary=True)
+                    for record in part.get("records", []):
+                        fields = record["fields"]
+                        if fields.get("fileName") != canary_name:
+                            continue
+                        size, digest = fields.get("sizeBytes"), record["ed2kHash"]
+                        if size != canary["sizeBytes"] or digest != canary["hash"].lower():
+                            raise RuntimeError("aMule browse canary size or eD2K hash differs from the Rust catalog")
+                        return {"displayName": canary_name, "sizeBytes": size, "fileHash": digest,
+                                "oracleMetadata": path.name}
+                return None
+
+            browse.update(live_common.wait_for(browse_metadata, 15, 0.25, "aMule native browse canary metadata"))
+            report["checks"]["amule_browses_rust_publisher"] = browse
+        if reverse_browse is not None and reverse_browse.expected_count is not None:
+            current_phase = "verify_native_reverse_browse_transfer"
+            report["checks"]["native_reverse_browse_completed_anchor"] = wait_for_completed_file(
+                reverse_destination, expected_size=reverse_browse.anchor_size,
+                expected_sha256=reverse_browse.anchor_sha256,
+                timeout_seconds=args.transfer_completion_timeout_seconds,
+            )
+            report["checks"]["native_reverse_browse_transfer_progress"] = require_native_browse_transfer_progress(
+                rust_diagnostics_dir, process_id=client1_process.pid,
+                peer=None, file_hash=reverse_browse.anchor_hash, upload=True,
+            )
+        if args.verify_native_large_file_status:
+            from emule_test_harness import native_large_file_status
+
+            current_phase = "native_standalone_large_file_status"
+            if args.client2_identity == "stock_emule":
+                for link in native_large_file_status.source_less_links():
+                    submit_stock_download_link(client2_app, link)
+            else:
+                for link in native_large_file_status.source_less_links():
+                    amule_client.run_command(client2_control_exe, ec_port=ports["client2_ec"],
+                                             ec_password=args.api_key, command=f"add {link}")
+            report["checks"]["native_standalone_large_file_status"] = native_large_file_status.observe(
+                args.client2_identity, p2p_address, ports["client2_tcp"], Path(client2["temp_dir"]),
+            )
+        if args.verify_native_partial_threshold:
+            from emule_test_harness.native_partial_threshold import observe_threshold
+
+            def submit_partial_link(link: str) -> None:
+                if args.client2_identity == "stock_emule":
+                    submit_stock_download_link(client2_app, link)
+                else:
+                    amule_client.run_command(
+                        client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                        command=f"add {link}",
+                    )
+
+            current_phase = "native_partial_metadata_threshold"
+            _, route_address = ed2k_server.resolve_managed_server_windows_route()
+            with LanIpPool(
+                route_address, prefix_length=32, candidate_network=AMULE_BROWSE_HIGH_ID_NETWORK,
+                first_octet4=RELAYED_REASK_HIGH_ID_FIRST_OCTET4, last_octet4=RELAYED_REASK_HIGH_ID_LAST_OCTET4,
+            ) as source_pool:
+                first, second = source_pool.acquire(2)
+                report["checks"]["native_partial_metadata_threshold"] = observe_threshold(
+                    identity=args.client2_identity, host=p2p_address, port=ports["client2_tcp"],
+                    temp_dir=Path(client2["temp_dir"]), aliases=(first, second), submit_link=submit_partial_link,
+                )
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )
@@ -5513,6 +6499,12 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     finally:
         close_results: dict[str, object] = {}
+        if native_sx2_capture is not None and native_sx2_capture.is_running:
+            try:
+                native_sx2_capture.stop()
+                close_results["native_sx2_capture"] = {"ok": True}
+            except Exception as exc:
+                close_results["native_sx2_capture"] = {"ok": False, "message": str(exc)}
         if udp_source_fixture is not None:
             try:
                 udp_source_fixture.stop()
@@ -5634,11 +6626,16 @@ def main(argv: list[str] | None = None) -> int:
                 }
         ed2k_server.stop_process(metadata_server_process)
         ed2k_server.stop_process(server_process)
-        if relayed_reask_high_id_pool is not None:
-            relayed_reask_high_id_pool.release()
-            close_results["relayed_reask_high_id_address"] = {
+        if test_high_id_pool is not None:
+            test_high_id_pool.release()
+            cleanup_key = (
+                "relayed_reask_high_id_address" if args.transfer_scenario == RELAYED_REASK
+                else "native_sx2_high_id_address" if native_sx2_callback
+                else "amule_browse_high_id_address"
+            )
+            close_results[cleanup_key] = {
                 "ok": True,
-                "address": relayed_reask_high_id_address,
+                "address": test_high_id_address,
             }
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")

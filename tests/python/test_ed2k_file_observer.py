@@ -186,6 +186,30 @@ def test_parse_file_hash_rejects_non_exact_values(value: str) -> None:
         observer.parse_file_hash(value)
 
 
+@pytest.mark.parametrize("filename_opcode", [None, 0x48, 0x59])
+def test_file_status_orders_the_optional_filename_reply(filename_opcode):
+    digest = bytes.fromhex(FILE_HASH)
+    status = ed2k_wire.Ed2kFrame(0xE3, 0x50, digest + b"\x02\x00\x00")
+    filename = ed2k_wire.Ed2kFrame(0xE3, filename_opcode, digest) if filename_opcode else None
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+            self.replies = iter([filename, status] if filename else [status])
+
+        def send(self, opcode, payload):
+            self.sent.append((opcode, payload))
+
+        def receive_until(self, opcodes):
+            reply = next(self.replies)
+            assert reply.opcode in opcodes
+            return reply
+
+    peer = Client()
+    assert observer.observe_filename_before_status(peer, digest) == (filename, status)
+    assert peer.sent == [(0x58, digest), (0x4F, digest)]
+
+
 def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_refusal(monkeypatch):
     import struct
     from types import SimpleNamespace
@@ -195,6 +219,7 @@ def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_
         SimpleNamespace(marker=0xe3, opcode=0x59, payload=value + struct.pack("<H", 10) + b"Sample.bin"),
         SimpleNamespace(marker=0xe3, opcode=0x55, payload=b""),
         SimpleNamespace(marker=0xe3, opcode=0x46, payload=value + struct.pack("<II", 0, 4) + b"data"),
+        SimpleNamespace(marker=0xe3, opcode=0x48, payload=value),
         SimpleNamespace(marker=0xe3, opcode=0x48, payload=value),
     ]
     class Client:
@@ -213,7 +238,8 @@ def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_
         assert peer.start_upload(FILE_HASH)
         assert peer.request_range(FILE_HASH, 0, 4) == b"data"
         assert peer.request_range(FILE_HASH, 4, 8) is None
-        assert [opcode for opcode, _ in peer.client.sent] == [1, 0x58, 0x54, 0x47, 0x47]
+        assert not peer.file_status_available(FILE_HASH)
+        assert [opcode for opcode, _ in peer.client.sent] == [1, 0x58, 0x54, 0x47, 0x47, 0x4F]
         assert peer.client.sent[3][1] == value + struct.pack("<6I", 0, 0, 0, 4, 0, 0)
         with pytest.raises(ValueError, match="bounded"):
             peer.request_range(FILE_HASH, 0, 184_321)
