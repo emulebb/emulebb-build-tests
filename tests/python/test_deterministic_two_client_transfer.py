@@ -72,6 +72,10 @@ def test_native_sx2_callback_notification_matches_exact_login_and_endpoint(notif
         f"{login[:9].hex()}\n{login[9:].hex()}\n\t{assignment.hex()}\n\t{reply.hex()}\n"
     )
     options = dict(server="192.0.2.9:4661", target_hash=target, target_id=2, expected_callback=expected)
+    rejected_obfuscation_attempt = (
+        "Node 0: 192.0.2.8:61221\nNode 1: 192.0.2.9:4661\n" + "a351b65d15eb5ab6" * 8
+    )
+    assert module.native_sx2_callback_notification(rejected_obfuscation_attempt, **options) is None
     if notification_port == 4663:
         receipt = module.native_sx2_callback_notification(follow, **options)
         assert receipt["notification"]["payloadHex"] == expected.hex()

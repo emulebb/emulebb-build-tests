@@ -2827,9 +2827,13 @@ def native_sx2_callback_notification(
             offset += size
 
     server_side = nodes[server]
-    login = next(frames(senders[1 - server_side]), None)
-    if login is None or login.opcode != ed2k_wire.OP_LOGINREQUEST or login.payload[:16] != target_hash:
+    client_data = senders[1 - server_side]
+    if (
+        len(client_data) < 22 or client_data[0] != ed2k_wire.PROTO_EDONKEY
+        or client_data[5] != ed2k_wire.OP_LOGINREQUEST or client_data[6:22] != target_hash
+    ):
         return None
+    login = next(frames(client_data))
     assignment = None
     for frame in frames(senders[server_side]):
         if frame.opcode == ed2k_wire.OP_IDCHANGE and frame.payload[:4] == struct.pack("<I", target_id):
