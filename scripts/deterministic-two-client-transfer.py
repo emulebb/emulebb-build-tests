@@ -4539,11 +4539,12 @@ def main(argv: list[str] | None = None) -> int:
             current_phase = "native_browse_catalog_ready"
             if args.client2_identity == "stock_emule":
                 wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
-            else:
-                amule_client.wait_for_control(
-                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
-                    timeout_seconds=args.rest_ready_timeout_seconds,
-                )
+            # aMule opens EC before startup and server negotiation finish.
+            # Wait for registration before reading its live share statistics.
+            connected = server_control.wait_for_client(
+                client2_identity.nick, args.server_publish_timeout_seconds,
+            )
+            if args.client2_identity == "amule":
                 amule_client.wait_for_shared_file_count(
                     client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
                     expected=len(browse_catalog) + 1, timeout_seconds=NATIVE_BROWSE_READY_SECONDS,
@@ -4554,9 +4555,6 @@ def main(argv: list[str] | None = None) -> int:
             browse_catalog[fixture_file.name] = (int(link_info["size"]), transfer_hash, fixture_dir.name)
             # The scale case uses the local peer catalog and a direct-source transfer.
             # A server offering a subset of the library need not index the transfer fixture.
-            connected = server_control.wait_for_client(
-                client2_identity.nick, args.server_connect_timeout_seconds,
-            )
             report["network"]["client2_server_observed_address"] = connected.get("ip")
             report["checks"]["client2_server_client"] = connected
             report["checks"]["client2_shared_file_link"] = {
