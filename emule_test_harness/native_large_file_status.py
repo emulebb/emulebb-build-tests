@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from emule_test_harness import ed2k_wire, emule_met_dump, rust_local_ed2k
+from emule_test_harness import ed2k_file_observer, ed2k_wire, emule_met_dump, rust_local_ed2k
 
 PART_SIZE = 9_728_000
 LEGACY_MAX = 4_290_048_000
@@ -82,13 +82,26 @@ def observe(identity: str, host: str, port: int, temp_dir: Path) -> dict[str, ob
         with ed2k_wire.Ed2kWireClient(host, port, peer_protocol=True) as peer:
             peer.send(HELLO, hello)
             peer.receive_until({HELLOANSWER})
-            for _, size, digest in JOBS:
-                peer.send(SETREQFILEID, digest)
-                reply = peer.receive_until({FILESTATUS, NOFILE})
+            for name, size, digest in JOBS:
+                filename_reply = None
+                if capable:
+                    filename_reply, reply = ed2k_file_observer.observe_filename_before_status(peer, digest)
+                    if identity == "stock_emule":
+                        if filename_reply is not None:
+                            raise ValueError("Stock answered a filename request for an empty part file")
+                    else:
+                        filename = name.encode("ascii")
+                        filename_payload = digest + len(filename).to_bytes(2, "little") + filename
+                        if filename_reply is None or filename_reply.opcode != 0x59 or filename_reply.payload != filename_payload:
+                            raise ValueError("aMule did not return the empty part file's filename")
+                else:
+                    peer.send(SETREQFILEID, digest)
+                    reply = peer.receive_until({FILESTATUS, NOFILE})
                 outcome = classify_status(reply, digest, size, identity=identity, capable=capable)
                 results.append({
                     "sizeBytes": size, "fileHash": digest.hex(), "status": outcome,
                     "replyOpcode": reply.opcode, "replyPayload": reply.payload.hex(),
+                    **({"filenameReplyOpcode": filename_reply.opcode if filename_reply else None} if capable else {}),
                 })
         sessions.append({"supportsLargeFiles": capable, "helloPayload": hello.hex(), "requests": results})
     return {"nativeClient": identity, "partFileLengths": part_lengths, "sessions": sessions}

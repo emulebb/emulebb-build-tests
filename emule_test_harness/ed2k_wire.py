@@ -29,6 +29,8 @@ OP_IDCHANGE = 0x40
 OP_SERVERIDENT = 0x41
 OP_FOUNDSOURCES = 0x42
 OP_FOUNDSOURCES_OBFU = 0x44
+OP_SENDINGPART = 0x46
+OP_REQUESTPARTS = 0x47
 OP_GLOBGETSOURCES2 = 0x94
 OP_GLOBSERVSTATREQ = 0x96
 OP_GLOBSERVSTATRES = 0x97
@@ -88,6 +90,7 @@ IPV6_SOURCE_SENTINEL = 0xFFFF_FFFF
 COMPLETE_FILE_ID = 0xFBFB_FBFB
 COMPLETE_FILE_PORT = 0xFBFB
 MAX_FRAME_BYTES = 8_000_000
+MAX_PART_REQUEST_BYTES = 3 * 180 * 1024  # stock AddReqBlock: three EMBLOCKSIZE blocks
 
 SEARCH_PARAM_BOOLEAN = 0x00
 SEARCH_PARAM_STRING = 0x01
@@ -191,6 +194,38 @@ def encode_frame(opcode: int, payload: bytes = b"") -> bytes:
         + struct.pack("<I", len(payload) + 1)
         + bytes([opcode])
         + payload
+    )
+
+
+@dataclass(frozen=True)
+class RequestedPart:
+    """One native OP_REQUESTPARTS slot, with an exclusive end offset."""
+
+    file_hash: bytes
+    start: int
+    end: int
+
+    def sending_part(self, start: int, data: bytes) -> bytes:
+        """Frame a nonempty uncompressed fragment wholly inside this reservation."""
+        end = start + len(data)
+        if not self.start <= start < end <= self.end:
+            raise ValueError("OP_SENDINGPART fragment is outside its requested range")
+        return encode_frame(OP_SENDINGPART, self.file_hash + struct.pack("<II", start, end) + data)
+
+
+def decode_requested_parts(frame: Ed2kFrame, *, file_hash: bytes, file_size: int) -> tuple[RequestedPart, ...]:
+    """Read the three 32-bit slots for one offered file, ignoring unusable slots independently."""
+    if len(file_hash) != 16 or file_size <= 0:
+        raise ValueError("Expected a 16-byte file hash and a positive file size")
+    if frame.marker != PROTO_EDONKEY or frame.opcode != OP_REQUESTPARTS or len(frame.payload) != 40:
+        raise Ed2kWireError("Expected a 40-byte eD2K OP_REQUESTPARTS payload")
+    if frame.payload[:16] != file_hash:
+        raise Ed2kWireError("OP_REQUESTPARTS names a different file")
+    offsets = struct.unpack_from("<6I", frame.payload, 16)
+    return tuple(
+        RequestedPart(file_hash, start, end)
+        for start, end in zip(offsets[:3], offsets[3:])
+        if start < end <= file_size and end - start <= MAX_PART_REQUEST_BYTES
     )
 
 

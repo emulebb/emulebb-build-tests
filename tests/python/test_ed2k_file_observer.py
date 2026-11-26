@@ -186,6 +186,30 @@ def test_parse_file_hash_rejects_non_exact_values(value: str) -> None:
         observer.parse_file_hash(value)
 
 
+@pytest.mark.parametrize("filename_opcode", [None, 0x48, 0x59])
+def test_file_status_orders_the_optional_filename_reply(filename_opcode):
+    digest = bytes.fromhex(FILE_HASH)
+    status = ed2k_wire.Ed2kFrame(0xE3, 0x50, digest + b"\x02\x00\x00")
+    filename = ed2k_wire.Ed2kFrame(0xE3, filename_opcode, digest) if filename_opcode else None
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+            self.replies = iter([filename, status] if filename else [status])
+
+        def send(self, opcode, payload):
+            self.sent.append((opcode, payload))
+
+        def receive_until(self, opcodes):
+            reply = next(self.replies)
+            assert reply.opcode in opcodes
+            return reply
+
+    peer = Client()
+    assert observer.observe_filename_before_status(peer, digest) == (filename, status)
+    assert peer.sent == [(0x58, digest), (0x4F, digest)]
+
+
 def test_peer_observer_reuses_transport_and_distinguishes_payload_from_explicit_refusal(monkeypatch):
     import struct
     from types import SimpleNamespace

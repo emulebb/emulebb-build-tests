@@ -9,6 +9,43 @@ from emule_test_harness import ed2k_wire
 
 
 @pytest.mark.unit
+def test_native_requested_parts_preserve_the_one_byte_progress_boundary() -> None:
+    digest = bytes(range(16))
+    part_size = 9_728_000
+    # Leave two bytes missing from the first part. The first byte of the
+    # second part brings progress to PARTSIZE-1; its next byte reaches PARTSIZE.
+    offsets = struct.pack("<6I", 0, part_size, 0, 1, part_size + 2, 0)
+    frame = ed2k_wire.Ed2kFrame(0xE3, 0x47, digest + offsets)
+    first, second = ed2k_wire.decode_requested_parts(frame, file_hash=digest, file_size=2 * part_size - 1)
+    assert (first.start, first.end, second.start, second.end) == (0, 1, part_size, part_size + 2)
+    for start, value in ((part_size, b"a"), (part_size + 1, b"b")):
+        assert second.sending_part(start, value) == (
+            b"\xe3\x1a\x00\x00\x00\x46" + digest + struct.pack("<II", start, start + 1) + value
+        )
+    for start, value in ((part_size - 1, b"a"), (part_size + 1, b"ab"), (part_size, b"")):
+        with pytest.raises(ValueError):
+            second.sending_part(start, value)
+
+
+@pytest.mark.unit
+def test_native_requested_parts_bound_each_slot_and_match_the_offered_file() -> None:
+    digest = bytes(range(16))
+    maximum = ed2k_wire.MAX_PART_REQUEST_BYTES
+    size = maximum + 9
+    for bad_start, bad_end in ((0, maximum + 1), (size - 1, size + 1), (9, 8)):
+        payload = digest + struct.pack("<6I", bad_start, 1, size - 1, bad_end, maximum + 1, size)
+        frame = ed2k_wire.Ed2kFrame(0xE3, 0x47, payload)
+        slots = ed2k_wire.decode_requested_parts(frame, file_hash=digest, file_size=size)
+        assert [(slot.start, slot.end) for slot in slots] == [(1, maximum + 1), (size - 1, size)]
+        with pytest.raises(ValueError):
+            slots[-1].sending_part(size - 1, b"ab")
+    for payload in (digest + bytes(23), digest + bytes(25), bytes(40)):
+        with pytest.raises(ed2k_wire.Ed2kWireError):
+            ed2k_wire.decode_requested_parts(ed2k_wire.Ed2kFrame(0xE3, 0x47, payload),
+                                             file_hash=digest, file_size=size)
+
+
+@pytest.mark.unit
 def test_server_search_request_codec_preserves_keyword_wire_shape() -> None:
     assert ed2k_wire.encode_search_request("fixture") == b"\x01\x07\x00fixture"
 
