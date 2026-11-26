@@ -2907,7 +2907,13 @@ def wait_for_reverse_browse_upload(base_url: str, api_key: str, file_hash: str) 
     """Start the native browse after Rust has already served part of the anchor."""
     def active_anchor():
         rows = rows_from_result(rest_smoke.http_request(base_url, "/api/v1/uploads", api_key=api_key))
-        return any(row.get("requestedFileHash") == file_hash and row.get("uploadedBytes", 0) > 0 for row in rows)
+        return any(
+            isinstance(row, dict)
+            and row.get("requestedFileHash") == file_hash
+            and row.get("uploadState") == "uploading"
+            and row.get("sessionUploadedBytes", 0) > 0
+            for row in rows
+        )
 
     live_common.wait_for(active_anchor, 45, 0.1, "active Rust reverse-browse anchor upload")
 

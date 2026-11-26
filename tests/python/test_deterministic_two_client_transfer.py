@@ -85,6 +85,28 @@ def test_reverse_browse_catalog_includes_the_already_shared_transfer(tmp_path: P
     assert fixture.anchor_sha256 == module.file_sha256(share / fixture.anchor_name)
 
 
+def test_reverse_browse_reads_active_anchor_session_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_suite_module()
+    anchor_hash = "12" * 16
+    ready_row = {"requestedFileHash": anchor_hash, "uploadState": "uploading", "sessionUploadedBytes": 4096}
+    responses = iter([
+        [{**ready_row, "uploadState": "queued"}, {**ready_row, "requestedFileHash": "13" * 16}],
+        [ready_row],
+    ])
+
+    def request(_url, route, **_kwargs):
+        assert route == "/api/v1/uploads"
+        return {"status": 200, "raw_json": {"data": next(responses), "meta": {"apiVersion": "v1"}}}
+
+    def wait(predicate, _timeout, _interval, _description):
+        assert predicate() is False
+        assert predicate() is True
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", request)
+    monkeypatch.setattr(module.live_common, "wait_for", wait)
+    module.wait_for_reverse_browse_upload("http://test", "fixture", anchor_hash)
+
+
 def test_stock_login_wait_ignores_pre_reconnect_id_and_handles_rotation(tmp_path: Path) -> None:
     module = load_suite_module()
     log = tmp_path / "eMule.log"
