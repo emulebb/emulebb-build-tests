@@ -284,6 +284,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Native browse accepts at most 271 fixture buckets.")
     if args.native_browse_buckets and not args.verify_peer_browse:
         raise ValueError("Native browse buckets require --verify-peer-browse.")
+    if args.native_browse_buckets and args.verify_source_lifecycle:
+        raise ValueError("Run server source lifecycle separately from native catalog browsing.")
     if args.verify_peer_browse and (
         args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
     ):
@@ -2697,6 +2699,16 @@ def wait_for_stock_browse_catalog(app, expected_count: int) -> None:
     live_common.wait_for(ready, NATIVE_BROWSE_READY_SECONDS, 1, "stock shared catalog ready")
 
 
+def native_browse_fixture_link(fixture: Path, expected_sha256: str) -> str:
+    """Build the direct-link identity independently of the server's offer quota."""
+    from emule_test_harness.scripted_actions import file_digests
+
+    size, file_hash, sha256 = file_digests(fixture)
+    if sha256 != expected_sha256:
+        raise RuntimeError("Native browse transfer fixture changed after generation")
+    return amule_client.file_link(fixture.name, size, file_hash)
+
+
 def verify_native_browse_catalog(fetch, first_page, expected) -> None:
     """Compare the complete, paged native listing against the on-disk fixture."""
     total = len(expected)
@@ -4520,10 +4532,36 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(
                     "Could not resolve the launched client2 process identity."
                 )
-        if args.client2_identity == "stock_emule":
-            if browse_catalog is not None:
-                current_phase = "stock_native_browse_catalog_ready"
+        if browse_catalog is not None:
+            current_phase = "native_browse_catalog_ready"
+            if args.client2_identity == "stock_emule":
                 wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
+            else:
+                amule_client.wait_for_control(
+                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                    timeout_seconds=args.rest_ready_timeout_seconds,
+                )
+                amule_client.wait_for_shared_file_count(
+                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                    expected=len(browse_catalog) + 1, timeout_seconds=NATIVE_BROWSE_READY_SECONDS,
+                )
+            exported_link = native_browse_fixture_link(fixture_file, fixture_sha256)
+            link_info = parse_ed2k_file_link(exported_link)
+            transfer_hash = str(link_info["hash"])
+            browse_catalog[fixture_file.name] = (int(link_info["size"]), transfer_hash, fixture_dir.name)
+            # The scale case uses the local peer catalog and a direct-source transfer.
+            # A server offering a subset of the library need not index the transfer fixture.
+            connected = server_control.wait_for_client(
+                client2_identity.nick, args.server_connect_timeout_seconds,
+            )
+            report["network"]["client2_server_observed_address"] = connected.get("ip")
+            report["checks"]["client2_server_client"] = connected
+            report["checks"]["client2_shared_file_link"] = {
+                "adapter": "independently-hashed-direct-source-fixture",
+                "link": exported_link,
+                "parsed": link_info,
+            }
+        elif args.client2_identity == "stock_emule":
             current_phase = "client2_stock_source_lifecycle"
             client2_app, exported_link, stock_lifecycle = recycle_stock_publisher(
                 app=client2_app,
@@ -5652,16 +5690,6 @@ def main(argv: list[str] | None = None) -> int:
                 "connectOptions": source_connect_options,
             },
         }
-        if browse_catalog is not None:
-            current_phase = "native_browse_catalog_ready"
-            if args.client2_identity == "stock_emule":
-                wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
-            else:
-                amule_client.wait_for_shared_file_count(
-                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
-                    expected=len(browse_catalog) + 1, timeout_seconds=NATIVE_BROWSE_READY_SECONDS,
-                )
-            browse_catalog[fixture_file.name] = (int(link_info["size"]), transfer_hash, fixture_dir.name)
         current_phase = "add_transfer"
         admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
         download_id = admission["jobId"]

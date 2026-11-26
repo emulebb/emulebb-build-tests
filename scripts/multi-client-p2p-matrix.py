@@ -93,6 +93,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--native-browse-buckets must be between 0 and 271")
     if args.native_browse_buckets and not args.verify_peer_browse:
         parser.error("--native-browse-buckets requires --verify-peer-browse")
+    if args.native_browse_buckets and args.verify_source_lifecycle:
+        parser.error("Run server source lifecycle separately from native catalog browsing")
     return args
 
 
