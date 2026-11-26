@@ -1,11 +1,54 @@
 from __future__ import annotations
 
+import socket
 import struct
 import zlib
 
 import pytest
 
 from emule_test_harness import ed2k_wire
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("requested_hash", [b"f" * 16, b"x" * 16])
+def test_solicited_sx2_fixture_matches_the_original_file_and_server(requested_hash: bytes) -> None:
+    file_hash = b"f" * 16
+    hello = b"\xe3\x22\x00\x00\x00\x01\x10" + b"p" * 16 + bytes(16)
+    probe = b"\xe3\x11\x00\x00\x00\x58" + file_hash + b"\xe3\x11\x00\x00\x00\x4f" + file_hash
+    request = b"\xc5\x14\x00\x00\x00\x83\x04\x00\x00" + requested_hash
+    expected_answer = (
+        b"\xc5\x31\x00\x00\x00\x84\x04" + file_hash
+        + bytes.fromhex("0100 34120000 3812 c0000209 3512")
+        + b"t" * 16 + b"\x00"
+    )
+    fixture, client = socket.socketpair()
+    with fixture, client:
+        client.settimeout(2)
+        client.sendall(hello + probe + request)
+        options = dict(
+            seed=("192.0.2.8", 4663), seed_user_hash=b"s" * 16, file_hash=file_hash,
+            file_name="fixture.bin",
+            target_id=0x1234, target_port=4664, target_user_hash=b"t" * 16,
+            server=("192.0.2.9", 4661), timeout_seconds=2,
+        )
+        if requested_hash != file_hash:
+            with pytest.raises(ed2k_wire.Ed2kWireError, match="original file"):
+                ed2k_wire.serve_solicited_sx2_low_id(fixture, **options)
+            return
+
+        receipt = ed2k_wire.serve_solicited_sx2_low_id(fixture, **options)
+        expected_hello = (
+            b"\xe3\x29\x00\x00\x00\x4c" + b"s" * 16
+            + bytes.fromhex("c0000208 3712 01000000 030100fe00040000 000000000000")
+        )
+        assert ed2k_wire._recv_exact(client, len(expected_hello)) == expected_hello
+        expected_probe = (
+            b"\xe3\x1e\x00\x00\x00\x59" + file_hash + b"\x0b\x00fixture.bin"
+            + b"\xe3\x13\x00\x00\x00\x50" + file_hash + b"\x00\x00"
+        )
+        assert ed2k_wire._recv_exact(client, len(expected_probe)) == expected_probe
+        assert ed2k_wire._recv_exact(client, len(expected_answer)) == expected_answer
+        assert receipt["answer"]["payloadHex"] == expected_answer[6:].hex()
 
 
 @pytest.mark.unit

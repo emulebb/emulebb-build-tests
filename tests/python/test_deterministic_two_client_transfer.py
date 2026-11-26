@@ -16,6 +16,46 @@ from emule_test_harness import ed2k_wire
 from emule_test_harness import rust_ed2k
 
 
+@pytest.mark.parametrize("startup_endpoint", ["192.0.2.7:61001", "192.0.2.8:61002"])
+def test_native_sx2_callback_receipt_requires_original_file_on_native_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_endpoint: str,
+) -> None:
+    module = load_suite_module()
+    target_hash, file_hash = bytes(range(16)), b"f" * 16
+    server = "192.0.2.5:4661"
+    callback = {
+        "flow": "server", "remote_addr": server, "direction": "send", "protocol_marker": 0xE3,
+        "opcode": 0x1C, "payload_hex": "34120000", "trace_key": "server:01", "event_seq": 1, "send_attempt_id": 3,
+    }
+    hello = {
+        "flow": "listener", "direction": "recv", "protocol_marker": 0xE3, "opcode": 0x01,
+        "payload_hex": "10" + target_hash.hex(), "remote_addr": "192.0.2.7:61001",
+        "trace_key": "listener:target", "event_seq": 2,
+    }
+    startup = {
+        "flow": "source_probe", "direction": "send", "remote_addr": startup_endpoint, "event_seq": 3,
+        "file_hash": file_hash.hex(), "peer_hash": target_hash.hex(), "phase": "file_request", "trace_key": "probe:target",
+    }
+    source_reply = {
+        "flow": "server", "direction": "recv", "trace_key": "server:01", "opcode": 0x42,
+        "payload_hex": file_hash.hex() + "00", "event_seq": 0, "remote_addr": server,
+    }
+    send_outcome = {
+        "family": "ed2k_tcp", "event": "send_outcome",
+        "body": {"traceKey": "server:01", "sendAttemptId": 3, "outcome": "send_succeeded"},
+    }
+    capture = SimpleNamespace(records=[send_outcome], selected_segments=[tmp_path / "rust.ndjson"])
+    monkeypatch.setattr(module.converged_live_wire, "load_current_diag_capture", lambda *args, **kwargs: capture)
+    monkeypatch.setattr(module, "ed2k_tcp_packet_views", lambda records: [source_reply, callback, hello, startup])
+    options = dict(process_id=7, server=server, target_id=0x1234, target_hash=target_hash, file_hash=file_hash)
+    if startup_endpoint == hello["remote_addr"]:
+        evidence = module.require_native_sx2_callback_transfer(tmp_path, **options)
+        assert evidence["originalFileStartup"] == startup
+    else:
+        with pytest.raises(RuntimeError, match="original download"):
+            module.require_native_sx2_callback_transfer(tmp_path, **options)
+
+
 def test_native_large_file_status_boundary() -> None:
     from emule_test_harness import native_large_file_status as probe
 
@@ -1814,6 +1854,7 @@ def test_write_server_met_entries_preserves_anchor_then_low_priority_target(
                 "name": "stale-target",
                 "description": "stale-before-udp-metadata",
                 "priority": module.SERVER_PRIORITY_LOW,
+                "udp_flags": 0x0121,
             },
         ],
     )
@@ -1824,6 +1865,7 @@ def test_write_server_met_entries_preserves_anchor_then_low_priority_target(
     assert b"anchor" in data
     assert b"stale-target" in data
     assert b"stale-before-udp-metadata" in data
+    assert data.endswith(bytes.fromhex("03 01 00 92 21 01 00 00"))
 
 
 def test_deterministic_transfer_uses_canonical_server_facade() -> None:
@@ -1842,7 +1884,7 @@ def test_deterministic_transfer_uses_canonical_server_facade() -> None:
     assert "windows_client_address=server_connect_address" in script_text
     assert "ed2k_address=p2p_address" in script_text
     assert "address=server_address" in script_text
-    assert script_text.count("p2p_bind_addr=p2p_address") == 1
+    assert script_text.count("p2p_bind_addr=native_target_bind_address or p2p_address") == 1
     assert "'network.p2p.bindIp': p2p_address" in script_text
     assert "rust_client.start_rust_client_executable(" in script_text
     assert "converged_live_wire.resolve_rust_diagnostics_exe(" in script_text

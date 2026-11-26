@@ -44,6 +44,7 @@ def configure_profile(
     additional_shared_dirs: tuple[Path, ...] = (),
     create_sparse_files: bool = True,
     flush_partial_fixture: bool = False,
+    bind_address: str = "",
 ) -> None:
     """Writes the minimal deterministic profile consumed by official `amuled`."""
 
@@ -58,7 +59,7 @@ MaxDownload=0
 Port={tcp_port}
 UDPPort={udp_port}
 UDPEnable=1
-Address=
+Address={bind_address}
 NetworkInterface=
 Autoconnect=1
 Reconnect=0

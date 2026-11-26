@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import math
 import socket
 import struct
 import time
@@ -17,6 +18,12 @@ PROTO_EMULE = 0xC5
 PROTO_PACKED = 0xD4
 
 OP_LOGINREQUEST = 0x01
+OP_HELLO = 0x01
+OP_HELLOANSWER = 0x4C
+OP_SETREQFILEID = 0x4F
+OP_FILESTATUS = 0x50
+OP_REQUESTFILENAME = 0x58
+OP_REQFILENAMEANSWER = 0x59
 OP_OFFERFILES = 0x15
 OP_SEARCHREQUEST = 0x16
 OP_GETSOURCES = 0x19
@@ -38,9 +45,12 @@ OP_GLOBGETSOURCES = 0x9A
 OP_GLOBFOUNDSOURCES = 0x9B
 OP_SERVER_DESC_REQ = 0xA2
 OP_SERVER_DESC_RES = 0xA3
+OP_REQUESTSOURCES2 = 0x83
+OP_ANSWERSOURCES2 = 0x84
 
 CT_NAME = 0x01
 CT_SERVER_FLAGS = 0x20
+CT_EMULE_MISCOPTIONS2 = 0xFE
 FT_FILENAME = 0x01
 FT_FILESIZE = 0x02
 FT_SOURCES = 0x15
@@ -89,6 +99,8 @@ LOW_ID_CEILING = 0x0100_0000
 IPV6_SOURCE_SENTINEL = 0xFFFF_FFFF
 COMPLETE_FILE_ID = 0xFBFB_FBFB
 COMPLETE_FILE_PORT = 0xFBFB
+PARTIAL_FILE_ID = 0xFCFC_FCFC
+PARTIAL_FILE_PORT = 0xFCFC
 MAX_FRAME_BYTES = 8_000_000
 LEGACY_FILE_SIZE_MAX = 4_290_048_000
 MAX_PART_REQUEST_BYTES = 3 * 180 * 1024  # stock AddReqBlock: three EMBLOCKSIZE blocks
@@ -283,6 +295,80 @@ def peer_hello_payload(
         raise ValueError("Peer HELLO requires a 16-byte user hash")
     tags = b"".join(struct.pack("<BHBI", TAGTYPE_UINT32, 1, tag_id, value) for tag_id, value in numeric_tags)
     return b"\x10" + user_hash + struct.pack("<IHI", client_id, tcp_port, len(numeric_tags)) + tags + bytes(6)
+
+
+def serve_solicited_sx2_low_id(
+    stream: socket.socket,
+    *,
+    seed: tuple[str, int],
+    seed_user_hash: bytes,
+    file_hash: bytes,
+    file_name: str,
+    target_id: int,
+    target_port: int,
+    target_user_hash: bytes,
+    server: tuple[str, int],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Answer one real SX2 v4 request with a controlled server-qualified LowID row."""
+    if not 0 < target_id < LOW_ID_CEILING:
+        raise ValueError("SX2 fixture target must have a server-assigned LowID")
+    if len(file_hash) != 16 or len(target_user_hash) != 16:
+        raise ValueError("SX2 fixture requires 16-byte file and target user hashes")
+    if not 0 < target_port <= 0xFFFF or not 0 < server[1] <= 0xFFFF:
+        raise ValueError("SX2 fixture requires nonzero target and server ports")
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("SX2 fixture requires a positive finite timeout")
+
+    seed_id = int.from_bytes(ipaddress.IPv4Address(seed[0]).packed, "little")
+    encoded_name = file_name.encode("ascii")
+    filename_reply = file_hash + struct.pack("<H", len(encoded_name)) + encoded_name
+    hello = peer_hello_payload(seed_user_hash, seed_id, seed[1], ((CT_EMULE_MISCOPTIONS2, 1 << 10),))
+    row = (
+        struct.pack("<IH", target_id, target_port)
+        + ipaddress.IPv4Address(server[0]).packed
+        + struct.pack("<H", server[1])
+        + target_user_hash
+        + b"\x00"
+    )
+    answer = b"\x04" + file_hash + struct.pack("<H", 1) + row
+    deadline = time.monotonic() + timeout_seconds
+
+    def read_frame() -> Ed2kFrame:
+        stream.settimeout(max(0.001, deadline - time.monotonic()))
+        header = _recv_exact(stream, 6)
+        size = int.from_bytes(header[1:5], "little")
+        if not 1 <= size <= 65_536:
+            raise Ed2kWireError(f"Unexpected SX2 fixture frame length {size}")
+        stream.settimeout(max(0.001, deadline - time.monotonic()))
+        return decode_frame_bytes(header + _recv_exact(stream, size - 1), peer_protocol=True)
+
+    greeting = read_frame()
+    if (greeting.marker, greeting.opcode) != (PROTO_EDONKEY, OP_HELLO) or (
+        len(greeting.payload) < 33 or greeting.payload[0] != 16
+    ):
+        raise Ed2kWireError("SX2 fixture expected a stock-shaped peer HELLO")
+    stream.sendall(encode_frame(OP_HELLOANSWER, hello[1:]))
+    while time.monotonic() < deadline:
+        request = read_frame()
+        if (request.marker, request.opcode, request.payload) == (PROTO_EDONKEY, OP_REQUESTFILENAME, file_hash):
+            stream.sendall(encode_frame(OP_REQFILENAMEANSWER, filename_reply))
+            continue
+        if (request.marker, request.opcode, request.payload) == (PROTO_EDONKEY, OP_SETREQFILEID, file_hash):
+            stream.sendall(encode_frame(OP_FILESTATUS, file_hash + bytes(2)))
+            continue
+        if (request.marker, request.opcode) != (PROTO_EMULE, OP_REQUESTSOURCES2):
+            continue
+        if request.payload != b"\x04\x00\x00" + file_hash:
+            raise Ed2kWireError("SX2 fixture expected an optionless v4 request for the original file")
+        reply = Ed2kFrame(PROTO_EMULE, OP_ANSWERSOURCES2, answer)
+        stream.sendall(struct.pack("<BIB", reply.marker, len(answer) + 1, reply.opcode) + answer)
+        return {
+            "greeting": greeting.evidence("rx"),
+            "request": request.evidence("rx"),
+            "answer": reply.evidence("tx"),
+        }
+    raise TimeoutError("SX2 fixture did not receive a matching request before its deadline")
 
 
 def encode_login_request(
@@ -900,17 +986,38 @@ def decode_tag_sequence(payload: bytes, count: int) -> list[tuple[int | str, Any
     return tags
 
 
+def _server_file_rows(reader: _Reader) -> Iterable[tuple[bytes, int, int, dict[int | str, Any]]]:
+    for _ in range(reader.u32()):
+        digest = reader.take(16)
+        source_id, source_port = reader.u32(), reader.u16()
+        tags = dict(_decode_tag(reader) for _ in range(reader.u32()))
+        yield digest, source_id, source_port, tags
+
+
+def decode_offer_files(payload: bytes) -> list[dict[str, object]]:
+    """Decodes OFFERFILES while preserving the original size-tag presence."""
+    reader = _Reader(payload)
+    rows = [
+        {
+            "fileHash": digest.hex(),
+            "sourceId": source_id,
+            "sourcePort": source_port,
+            "sizeLow": tags.get(FT_FILESIZE),
+            "sizeHigh": tags.get(FT_FILESIZE_HI),
+        }
+        for digest, source_id, source_port, tags in _server_file_rows(reader)
+    ]
+    if reader.remaining:
+        raise Ed2kWireError(f"OFFERFILES has {reader.remaining} trailing bytes")
+    return rows
+
+
 def decode_search_results(payload: bytes) -> list[dict[str, object]]:
     """Decodes one SEARCHRESULT page into normalized file rows."""
 
     reader = _Reader(payload)
-    count = reader.u32()
     rows: list[dict[str, object]] = []
-    for _ in range(count):
-        file_hash = reader.take(16)
-        source_id = reader.u32()
-        source_port = reader.u16()
-        tags = dict(_decode_tag(reader) for _ in range(reader.u32()))
+    for file_hash, source_id, source_port, tags in _server_file_rows(reader):
         size = int(tags.get(FT_FILESIZE, 0)) | (int(tags.get(FT_FILESIZE_HI, 0)) << 32)
         rows.append(
             {

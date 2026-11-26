@@ -70,11 +70,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--source-withdraw-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=1800.0)
-    parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--fixture-size-bytes", type=int)
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--verify-native-large-file-status", action="store_true")
     parser.add_argument("--verify-native-partial-threshold", action="store_true")
+    parser.add_argument("--verify-native-sx2-callback", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
     parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--ed2k-server-repo")
@@ -92,6 +93,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Require one optional matrix scenario without requiring every optional client.",
     )
     args = parser.parse_args(argv)
+    if args.fixture_size_bytes is None:
+        args.fixture_size_bytes = (
+            dtt.NATIVE_SX2_FIXTURE_SIZE_BYTES if args.verify_native_sx2_callback else dtt.DEFAULT_FIXTURE_SIZE_BYTES
+        )
     browse_bucket_counts = (args.native_browse_buckets, args.native_reverse_browse_buckets)
     if any(not 0 <= count <= dtt.NATIVE_BROWSE_MAX_BUCKETS for count in browse_bucket_counts):
         parser.error("Native browse bucket counts must be between 0 and 271")
@@ -262,6 +267,8 @@ def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_exe
 
     scenario_artifacts = paths.source_artifacts_dir / "e4"
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    if args.verify_native_sx2_callback:
+        command.extend(["--transfer-scenario", dtt.NATIVE_SX2_CALLBACK])
     if args.verify_native_large_file_status:
         command.append("--verify-native-large-file-status")
     if args.verify_native_partial_threshold:
@@ -299,6 +306,8 @@ def run_amule_transfer_scenario(
 
     scenario_artifacts = paths.source_artifacts_dir / "a7"
     command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    if args.verify_native_sx2_callback:
+        command.extend(["--transfer-scenario", dtt.NATIVE_SX2_CALLBACK])
     if args.verify_native_large_file_status:
         command.append("--verify-native-large-file-status")
     if args.verify_native_partial_threshold:

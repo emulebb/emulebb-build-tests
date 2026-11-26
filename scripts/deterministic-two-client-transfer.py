@@ -31,6 +31,7 @@ from emule_test_harness import amule_client  # noqa: E402
 from emule_test_harness import buddy_callback_diagnostic_evidence  # noqa: E402
 from emule_test_harness import buddy_callback_probe  # noqa: E402
 from emule_test_harness import converged_live_wire  # noqa: E402
+from emule_test_harness.diag_event_diff import ed2k_tcp_packet_views  # noqa: E402
 from emule_test_harness import direct_callback_diagnostic_evidence  # noqa: E402
 from emule_test_harness import direct_callback_probe  # noqa: E402
 from emule_test_harness import docker_ed2k_source_publisher  # noqa: E402
@@ -44,6 +45,7 @@ from emule_test_harness import rust_local_ed2k  # noqa: E402
 from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness import server_login_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_callback_diagnostic_evidence  # noqa: E402
+from emule_test_harness.server_failure_accounting import ANSI_ESCAPE_RE  # noqa: E402
 from emule_test_harness import server_search_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_source_diagnostic_evidence  # noqa: E402
 from emule_test_harness import server_tcp_metadata_diagnostic_evidence  # noqa: E402
@@ -93,6 +95,8 @@ FULL_METADATA_LINK = "full-metadata-link"
 HASH_ONLY_METADATA_RECOVERY = "hash-only-metadata-recovery"
 SERVER_LOGIN_REQUEST = "server-login-request"
 SERVER_CALLBACK_REPLY = "server-callback-reply"
+NATIVE_SX2_CALLBACK = "native-sx2-callback"
+NATIVE_SX2_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
 DIRECT_CALLBACK = "direct-callback"
 BUDDY_CALLBACK = "buddy-callback"
 RELAYED_REASK = "relayed-reask"
@@ -165,6 +169,7 @@ TRANSFER_SCENARIOS = (
     HASH_ONLY_METADATA_RECOVERY,
     SERVER_LOGIN_REQUEST,
     SERVER_CALLBACK_REPLY,
+    NATIVE_SX2_CALLBACK,
     DIRECT_CALLBACK,
     BUDDY_CALLBACK,
     RELAYED_REASK,
@@ -183,6 +188,7 @@ TAGTYPE_UINT32 = 0x03
 ST_SERVERNAME = 0x01
 ST_DESCRIPTION = 0x0B
 ST_PREFERENCE = 0x0E
+ST_UDPFLAGS = 0x92
 SERVER_PRIORITY_NORMAL = 0
 SERVER_PRIORITY_HIGH = 1
 SERVER_PRIORITY_LOW = 2
@@ -262,7 +268,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.fixture_size_bytes is None:
         args.fixture_size_bytes = (
-            DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
+            NATIVE_SX2_FIXTURE_SIZE_BYTES if args.transfer_scenario == NATIVE_SX2_CALLBACK
+            else DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES
             if args.transfer_scenario
             in {
                 SERVER_LOGIN_REQUEST,
@@ -283,6 +290,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
+
+    if args.transfer_scenario == NATIVE_SX2_CALLBACK and (
+        args.client2_identity not in {"stock_emule", "amule"} or args.verify_source_lifecycle
+    ):
+        raise ValueError("The native SX2 callback requires stock eMule or aMule with an isolated server index.")
 
     browse_bucket_counts = (args.native_browse_buckets, args.native_reverse_browse_buckets)
     if any(not 0 <= count <= NATIVE_BROWSE_MAX_BUCKETS for count in browse_bucket_counts):
@@ -1571,6 +1583,8 @@ def write_server_met_entries(path: Path, entries: list[dict[str, object]]) -> No
             ),
             build_old_ed2k_u32_tag(ST_PREFERENCE, priority),
         ]
+        if "udp_flags" in entry:
+            tags.append(build_old_ed2k_u32_tag(ST_UDPFLAGS, int(entry["udp_flags"])))
         payload.extend(ipaddress.IPv4Address(address).packed)
         payload.extend(struct.pack("<HI", port, len(tags)))
         for tag in tags:
@@ -2718,6 +2732,71 @@ def native_browse_fixture_link(fixture: Path, expected_sha256: str) -> str:
     return amule_client.file_link(fixture.name, size, file_hash)
 
 
+def require_native_sx2_callback_transfer(
+    rust_diagnostics_dir: Path,
+    *,
+    process_id: int,
+    server: str,
+    target_id: int,
+    target_hash: bytes,
+    file_hash: bytes,
+) -> dict[str, object]:
+    """Correlate the server request, the native inbound HELLO, and original download startup."""
+    capture = converged_live_wire.load_current_diag_capture(
+        rust_diagnostics_dir, side="rust", process_id=process_id, allow_incomplete_active_tail=True,
+    )
+    packets = ed2k_tcp_packet_views(capture.records)
+    callback_id = struct.pack("<I", target_id).hex()
+    callbacks = [
+        packet for packet in packets
+        if packet["flow"] == "server" and packet["remote_addr"] == server
+        and packet["direction"] == "send" and packet["protocol_marker"] == ed2k_wire.PROTO_EDONKEY
+        and packet["opcode"] == ed2k_wire.OP_CALLBACKREQUEST and packet["payload_hex"] == callback_id
+    ]
+    native_hellos = [
+        packet for packet in packets
+        if packet["flow"] == "listener" and packet["direction"] == "recv"
+        and packet["protocol_marker"] == ed2k_wire.PROTO_EDONKEY and packet["opcode"] == ed2k_wire.OP_HELLO
+        and packet["payload_hex"].startswith("10" + target_hash.hex())
+    ]
+    if len(callbacks) != 1 or len(native_hellos) != 1:
+        raise RuntimeError(
+            f"Expected one eD2K callback and matching native HELLO; found {len(callbacks)} and {len(native_hellos)}"
+        )
+    callback, hello = callbacks[0], native_hellos[0]
+    send_outcomes = [
+        record for record in capture.records
+        if record.get("family") == "ed2k_tcp" and record.get("event") == "send_outcome"
+        and record["body"].get("traceKey") == callback["trace_key"]
+        and record["body"].get("sendAttemptId") == callback.get("send_attempt_id")
+        and record["body"].get("outcome") == "send_succeeded"
+    ]
+    by_file = [
+        packet for packet in packets
+        if packet["remote_addr"] == hello["remote_addr"] and packet["direction"] == "send"
+        and packet["flow"] == "source_probe" and packet["phase"] == "file_request"
+        and str(packet["peer_hash"] or "").lower() == target_hash.hex()
+        and packet["event_seq"] > hello["event_seq"]
+        and str(packet["file_hash"] or "").lower() == file_hash.hex()
+    ]
+    if len(send_outcomes) != 1 or callback["event_seq"] >= hello["event_seq"] or not by_file:
+        raise RuntimeError("Native callback did not causally start the original download on its inbound connection")
+    empty_server_sources = [
+        packet for packet in packets
+        if packet["trace_key"] == callback["trace_key"] and packet["direction"] == "recv"
+        and packet["opcode"] == ed2k_wire.OP_FOUNDSOURCES and packet["payload_hex"] == file_hash.hex() + "00"
+        and packet["event_seq"] < callback["event_seq"]
+    ]
+    if not empty_server_sources:
+        raise RuntimeError("The same Rust server connection did not prove an empty source lookup")
+    return {
+        "callbackRequest": callback, "nativeHello": hello, "originalFileStartup": by_file[0],
+        "callbackSendOutcome": send_outcomes[0],
+        "emptyServerSourceReplies": empty_server_sources,
+        "diagnosticSegments": [str(path) for path in capture.selected_segments],
+    }
+
+
 def verify_native_browse_catalog(fetch, first_page, expected) -> None:
     """Compare the complete, paged native listing against the on-disk fixture."""
     total = len(expected)
@@ -3796,6 +3875,8 @@ def main(argv: list[str] | None = None) -> int:
     server_udp_source_evidence: dict[str, object] | None = None
     test_high_id_pool: LanIpPool | None = None
     test_high_id_address: str | None = None
+    native_sx2_callback = args.transfer_scenario == NATIVE_SX2_CALLBACK
+    native_target_bind_address = ""
     verify_amule_browse = args.verify_peer_browse and args.client2_identity == "amule"
     # The baseline checks both directions. Each scale input selects its publisher.
     forward_scale = args.native_browse_buckets > 0
@@ -3809,7 +3890,7 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_interface_address=args.p2p_bind_interface_address,
         )
-        if args.transfer_scenario == RELAYED_REASK or verify_amule_browse:
+        if args.transfer_scenario == RELAYED_REASK or verify_amule_browse or native_sx2_callback:
             if args.p2p_bind_interface_name or args.p2p_bind_interface_address:
                 raise ValueError(
                     "This scenario owns its deterministic HighID address; "
@@ -3820,8 +3901,13 @@ def main(argv: list[str] | None = None) -> int:
                 test_high_id_pool,
                 test_high_id_address,
                 windows_route_address,
-            ) = provision_windows_high_id_address(amule_source_link=verify_amule_browse)
+            ) = provision_windows_high_id_address(
+                amule_source_link=verify_amule_browse or native_sx2_callback,
+            )
             p2p_address = test_high_id_address
+            if native_sx2_callback:
+                # The server's public alias leads exclusively to the Rust listener.
+                native_target_bind_address = windows_route_address
         server_connect_address = resolve_ed2k_server_connect_address(
             args.ed2k_server_connect_address
         )
@@ -3851,6 +3937,55 @@ def main(argv: list[str] | None = None) -> int:
                 "ephemeral": True,
             }
 
+        fixture_dir = paths.source_artifacts_dir / "client2-shared"
+        fixture_name = (
+            "deterministic-transfer-Unicode-é-漢.bin"
+            if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
+            else "deterministicserverlogin-fixture.bin"
+            if args.transfer_scenario == SERVER_LOGIN_REQUEST
+            else "deterministicservercallback-transfer.bin"
+            if args.transfer_scenario == SERVER_CALLBACK_REPLY
+            else "deterministic-native-sx2-transfer.bin"
+            if native_sx2_callback
+            else "deterministicdirectcallback-transfer.bin"
+            if args.transfer_scenario == DIRECT_CALLBACK
+            else "deterministicbuddycallback-transfer.bin"
+            if args.transfer_scenario == BUDDY_CALLBACK
+            else "deterministicserversearch-transfer.bin"
+            if args.transfer_scenario in SERVER_SEARCH_VARIANTS
+            else "deterministicserversource-transfer.bin"
+            if args.transfer_scenario == SERVER_TCP_SOURCE
+            else "deterministicservertcpmetadata-transfer.bin"
+            if args.transfer_scenario == SERVER_TCP_METADATA
+            else "deterministicserverudpmetadata-transfer.bin"
+            if args.transfer_scenario == SERVER_UDP_METADATA
+            else f"deterministicserverudpsourcev{udp_source_request_version}-transfer.bin"
+            if udp_source_request_version is not None
+            else "deterministic-two-client-transfer.bin"
+        )
+        fixture_file = fixture_dir / fixture_name
+        fixture_pattern = (
+            protocol_case.fixture_pattern
+            if protocol_case is not None
+            else ed2k_protocol_cases.LOW_COMPRESSIBILITY
+        )
+        fixture_sha256 = ed2k_protocol_cases.write_fixture(
+            fixture_file,
+            args.fixture_size_bytes,
+            fixture_pattern,
+        )
+        report["fixture"] = {
+            "path": str(fixture_file),
+            "name": fixture_file.name,
+            "size": args.fixture_size_bytes,
+            "sha256": fixture_sha256,
+            "pattern": fixture_pattern,
+        }
+        native_sx2_link = native_browse_fixture_link(fixture_file, fixture_sha256) if native_sx2_callback else None
+        unindexed_fixture_hashes = (
+            (str(parse_ed2k_file_link(native_sx2_link)["hash"]),) if native_sx2_link is not None else ()
+        )
+
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
         server_launch = ed2k_server.launch_ed2k_server(
@@ -3867,7 +4002,7 @@ def main(argv: list[str] | None = None) -> int:
             protocol_obfuscation=(
                 protocol_case.server_protocol_obfuscation
                 if protocol_case is not None
-                else True
+                else not native_sx2_callback
             ),
             offerfiles_v1=args.verify_offerfiles_v1_stock_fallback,
             server_udp=(
@@ -3875,6 +4010,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             advertised_address_override=test_high_id_address,
             hairpin_lan_clients=test_high_id_address is not None,
+            unindexed_fixture_hashes=unindexed_fixture_hashes,
         )
         server_process = server_launch.process
         admin_base_url = server_launch.admin_base_url
@@ -3898,6 +4034,8 @@ def main(argv: list[str] | None = None) -> int:
         report["network"]["p2p_bind_interface_address"] = p2p_address
         report["network"]["ed2k_server_connect_address"] = server_address
         report["network"]["ed2k_server_address"] = server_address
+        if native_sx2_callback:
+            report["network"]["native_low_id_bind_address"] = native_target_bind_address
 
         if args.transfer_scenario == DIRECT_CALLBACK:
             rust_isolated_kad_seed = kad_nodes.BootstrapContact(
@@ -4239,48 +4377,6 @@ def main(argv: list[str] | None = None) -> int:
                 "publication": source_publication,
             }
 
-        fixture_dir = paths.source_artifacts_dir / "client2-shared"
-        fixture_name = (
-            "deterministic-transfer-Unicode-é-漢.bin"
-            if args.transfer_scenario == HASH_ONLY_METADATA_RECOVERY
-            else "deterministicserverlogin-fixture.bin"
-            if args.transfer_scenario == SERVER_LOGIN_REQUEST
-            else "deterministicservercallback-transfer.bin"
-            if args.transfer_scenario == SERVER_CALLBACK_REPLY
-            else "deterministicdirectcallback-transfer.bin"
-            if args.transfer_scenario == DIRECT_CALLBACK
-            else "deterministicbuddycallback-transfer.bin"
-            if args.transfer_scenario == BUDDY_CALLBACK
-            else "deterministicserversearch-transfer.bin"
-            if args.transfer_scenario in SERVER_SEARCH_VARIANTS
-            else "deterministicserversource-transfer.bin"
-            if args.transfer_scenario == SERVER_TCP_SOURCE
-            else "deterministicservertcpmetadata-transfer.bin"
-            if args.transfer_scenario == SERVER_TCP_METADATA
-            else "deterministicserverudpmetadata-transfer.bin"
-            if args.transfer_scenario == SERVER_UDP_METADATA
-            else f"deterministicserverudpsourcev{udp_source_request_version}-transfer.bin"
-            if udp_source_request_version is not None
-            else "deterministic-two-client-transfer.bin"
-        )
-        fixture_file = fixture_dir / fixture_name
-        fixture_pattern = (
-            protocol_case.fixture_pattern
-            if protocol_case is not None
-            else ed2k_protocol_cases.LOW_COMPRESSIBILITY
-        )
-        fixture_sha256 = ed2k_protocol_cases.write_fixture(
-            fixture_file,
-            args.fixture_size_bytes,
-            fixture_pattern,
-        )
-        report["fixture"] = {
-            "path": str(fixture_file),
-            "name": fixture_file.name,
-            "size": args.fixture_size_bytes,
-            "sha256": fixture_sha256,
-            "pattern": fixture_pattern,
-        }
         browse_leaves, browse_catalog = [], None
         if args.native_browse_buckets:
             current_phase = "generate_native_browse_catalog"
@@ -4344,7 +4440,9 @@ def main(argv: list[str] | None = None) -> int:
                 'network.p2p.tcpPort': ports['client1_tcp'],
                 'network.nickname': CLIENT01.nick,
                 'network.p2p.udpPort': ports['client1_udp'],
-                'security.obfuscationEnabled': protocol_case.client_crypt_supported if protocol_case is not None else True,
+                'security.obfuscationEnabled': (
+                    protocol_case.client_crypt_supported if protocol_case is not None else not native_sx2_callback
+                ),
                 'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA,
                 'network.connections.connectTimeoutSeconds': 10,
                 'network.servers.reconnectIntervalSeconds': 60,
@@ -4447,6 +4545,7 @@ def main(argv: list[str] | None = None) -> int:
                 additional_shared_dirs=tuple(browse_leaves),
                 create_sparse_files=not (args.verify_native_large_file_status or args.verify_native_partial_threshold),
                 flush_partial_fixture=args.verify_native_partial_threshold,
+                bind_address=native_target_bind_address,
             )
         else:
             configure_client_profile(
@@ -4464,7 +4563,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.client2_identity == "mfc_oracle"
                 ),
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
-                p2p_bind_addr=p2p_address,
+                p2p_bind_addr=native_target_bind_address or p2p_address,
                 network_kademlia=(
                     args.transfer_scenario
                     in {DIRECT_CALLBACK, BUDDY_CALLBACK, RELAYED_REASK}
@@ -4675,7 +4774,34 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(
                     "Could not resolve the launched client2 process identity."
                 )
-        if browse_catalog is not None:
+        if native_sx2_callback:
+            if native_sx2_link is None:
+                raise RuntimeError("Native SX2 callback file link was not initialized")
+            current_phase = "native_sx2_low_id_login"
+            connected = server_control.wait_for_client(
+                client2_identity.nick, args.server_connect_timeout_seconds,
+            )
+            if connected.get("high_id") is not False:
+                raise RuntimeError(f"Expected the native publisher to have LowID: {connected!r}")
+            if args.client2_identity == "amule":
+                amule_client.wait_for_shared_file_count(
+                    client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                    expected=1, timeout_seconds=args.server_publish_timeout_seconds,
+                )
+            else:
+                wait_for_stock_browse_catalog(client2_app, 1)
+            exported_link = native_sx2_link
+            link_info = parse_ed2k_file_link(exported_link)
+            transfer_hash = str(link_info["hash"])
+            isolated = file_observer.observe(transfer_hash, int(link_info["size"]))
+            if isolated["indexed"] or isolated["sources"] != 0:
+                raise RuntimeError("The native SX2 fixture unexpectedly appeared in server search or sources")
+            report["checks"]["native_sx2_server_isolation"] = isolated
+            report["checks"]["client2_server_client"] = connected
+            report["checks"]["client2_shared_file_link"] = {
+                "adapter": "unindexed-native-publisher", "link": exported_link, "parsed": link_info,
+            }
+        elif browse_catalog is not None:
             current_phase = "native_browse_catalog_ready"
             if args.client2_identity == "stock_emule":
                 wait_for_stock_browse_catalog(client2_app, len(browse_catalog) + 1)
@@ -5832,7 +5958,59 @@ def main(argv: list[str] | None = None) -> int:
             },
         }
         current_phase = "add_transfer"
-        admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
+        if native_sx2_callback:
+            if report["checks"]["client1_server_client"].get("high_id") is not True:
+                raise RuntimeError("Native SX2 callback requires a server-verified Rust HighID")
+            def native_low_id_assignment() -> tuple[str, int] | None:
+                log = server_launch.log_path.read_text(encoding="utf-8", errors="replace")
+                for line in reversed(ANSI_ESCAPE_RE.sub("", log).splitlines()):
+                    if "client logged in" not in line or f"nick={client2_identity.nick} " not in line:
+                        continue
+                    match = re.search(r"\bid=(\d+) high_id=false\b", line)
+                    if match is not None:
+                        return line, int(match.group(1))
+                return None
+
+            target_login, target_id = live_common.wait_for(
+                native_low_id_assignment, 15.0, 0.25, "server-recorded native LowID assignment",
+            )
+            target_user_hash = mfc_profile_import.read_preferences_dat_user_hash(
+                Path(client2["config_dir"]) / "preferences.dat",
+            )
+            if args.client2_identity == "amule":
+                # Fresh aMule profiles can persist the generated bytes before setting its eMule marker.
+                target_user_hash = target_user_hash[:5] + b"\x0e" + target_user_hash[6:14] + b"\x6f" + target_user_hash[15:]
+            seed_host = test_high_id_pool.acquire(1)[0]
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as seed_listener:
+                seed_listener.bind((seed_host, 0))
+                seed_listener.listen(1)
+                seed_listener.settimeout(30)
+                seed_port = seed_listener.getsockname()[1]
+                seed_link = rust_local_ed2k.ed2k_link_with_source(exported_link, seed_host, seed_port)
+                report["checks"]["client1_transfer_stimulus"].update({
+                    "mode": "solicited-sx2-low-id", "transferLink": seed_link,
+                    "source": {"host": seed_host, "port": seed_port},
+                })
+                admission = add_download(base_url, args.api_key, seed_link, transfer_hash)
+                current_phase = "native_sx2_solicitation"
+                stream, _ = seed_listener.accept()
+                with stream:
+                    current_phase = "native_sx2_seed_session"
+                    receipt = ed2k_wire.serve_solicited_sx2_low_id(
+                        stream,
+                        seed=(seed_host, seed_port), seed_user_hash=bytes.fromhex("FC18432949914E25BCF165525D104F70"),
+                        file_hash=bytes.fromhex(transfer_hash), file_name=fixture_file.name,
+                        target_id=target_id, target_port=ports["client2_tcp"],
+                        target_user_hash=target_user_hash, server=(server_address, ports["ed2k_tcp"]),
+                        timeout_seconds=10,
+                    )
+            report["checks"]["native_sx2_solicitation"] = {
+                "serverLogin": target_login, "targetUserHash": target_user_hash.hex(),
+                "targetId": target_id, "serverIndexMissing": True, "peerFrames": receipt,
+            }
+            current_phase = "complete_native_sx2_callback_transfer"
+        else:
+            admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
         download_id = admission["jobId"]
         report["checks"]["client1_transfer_add"] = admission
         if verify_forward_browse:
@@ -5852,9 +6030,20 @@ def main(argv: list[str] | None = None) -> int:
                 expected_size=int(link_info["size"]),
                 expected_sha256=fixture_sha256,
                 expected_delivery_path=rust_incoming / fixture_file.name,
-                timeout_seconds=args.transfer_completion_timeout_seconds,
+                timeout_seconds=min(args.transfer_completion_timeout_seconds, 180.0)
+                if native_sx2_callback else args.transfer_completion_timeout_seconds,
             )
         )
+        if native_sx2_callback:
+            current_phase = "verify_native_sx2_callback_transfer"
+            report["checks"]["native_sx2_callback_transfer"] = require_native_sx2_callback_transfer(
+                rust_diagnostics_dir,
+                process_id=client1_process.pid,
+                server=f"{server_address}:{ports['ed2k_tcp']}",
+                target_id=target_id,
+                target_hash=target_user_hash,
+                file_hash=bytes.fromhex(transfer_hash),
+            )
         if args.verify_source_lifecycle:
             report["source_lifecycle"]["completed"] = report["checks"][
                 "client1_transfer_completed_file"
@@ -6250,6 +6439,7 @@ def main(argv: list[str] | None = None) -> int:
             test_high_id_pool.release()
             cleanup_key = (
                 "relayed_reask_high_id_address" if args.transfer_scenario == RELAYED_REASK
+                else "native_sx2_high_id_address" if native_sx2_callback
                 else "amule_browse_high_id_address"
             )
             close_results[cleanup_key] = {
