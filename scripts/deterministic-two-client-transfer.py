@@ -253,6 +253,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--verify-native-large-file-status", action="store_true")
+    parser.add_argument("--verify-native-partial-threshold", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
     parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
@@ -290,10 +291,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Native browse buckets require --verify-peer-browse.")
     if args.native_browse_buckets and args.verify_source_lifecycle:
         raise ValueError("Run server source lifecycle separately from native catalog browsing.")
-    if args.verify_native_large_file_status and (
+    if (args.verify_native_large_file_status or args.verify_native_partial_threshold) and (
         args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
     ):
-        raise ValueError("Native standalone status requires a stock or aMule full-link transfer.")
+        raise ValueError("Native file metadata checks require a stock or aMule full-link transfer.")
     if args.verify_peer_browse and (
         args.client2_identity not in {"stock_emule", "amule"} or args.transfer_scenario != FULL_METADATA_LINK
     ):
@@ -4444,7 +4445,7 @@ def main(argv: list[str] | None = None) -> int:
                 ec_password=args.api_key,
                 allow_peer_browse=args.verify_peer_browse,
                 additional_shared_dirs=tuple(browse_leaves),
-                create_sparse_files=not args.verify_native_large_file_status,
+                create_sparse_files=not (args.verify_native_large_file_status or args.verify_native_partial_threshold),
             )
         else:
             configure_client_profile(
@@ -5945,6 +5946,29 @@ def main(argv: list[str] | None = None) -> int:
             report["checks"]["native_standalone_large_file_status"] = native_large_file_status.observe(
                 args.client2_identity, p2p_address, ports["client2_tcp"], Path(client2["temp_dir"]),
             )
+        if args.verify_native_partial_threshold:
+            from emule_test_harness.native_partial_threshold import observe_threshold
+
+            def submit_partial_link(link: str) -> None:
+                if args.client2_identity == "stock_emule":
+                    submit_stock_download_link(client2_app, link)
+                else:
+                    amule_client.run_command(
+                        client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
+                        command=f"add {link}",
+                    )
+
+            current_phase = "native_partial_metadata_threshold"
+            _, route_address = ed2k_server.resolve_managed_server_windows_route()
+            with LanIpPool(
+                route_address, prefix_length=32, candidate_network=AMULE_BROWSE_HIGH_ID_NETWORK,
+                first_octet4=RELAYED_REASK_HIGH_ID_FIRST_OCTET4, last_octet4=RELAYED_REASK_HIGH_ID_LAST_OCTET4,
+            ) as source_pool:
+                first, second = source_pool.acquire(2)
+                report["checks"]["native_partial_metadata_threshold"] = observe_threshold(
+                    identity=args.client2_identity, host=p2p_address, port=ports["client2_tcp"],
+                    temp_dir=Path(client2["temp_dir"]), aliases=(first, second), submit_link=submit_partial_link,
+                )
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )
