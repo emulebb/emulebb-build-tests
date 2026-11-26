@@ -35,8 +35,16 @@ def option_value(command: list[str], option: str) -> str | None:
 
 @pytest.mark.native
 @pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
-@pytest.mark.parametrize("browse_peer", [None, "stock", "amule"], ids=["transfer", "stock_browse", "amule_browse"])
-def test_native_stock_and_amule_transfers(browse_peer: str | None) -> None:
+@pytest.mark.parametrize(
+    ("browse_peer", "fixture_size"),
+    [
+        pytest.param(None, 10 * 1024 * 1024, id="transfer"),
+        pytest.param("stock", 10 * 1024 * 1024, id="stock_browse"),
+        pytest.param("amule", 10 * 1024 * 1024, id="amule_browse"),
+        pytest.param(None, 8 * 9_728_000, id="exact_eight_parts"),
+    ],
+)
+def test_native_stock_and_amule_transfers(browse_peer: str | None, fixture_size: int) -> None:
     """Run only the two independent native client rows under Builder."""
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
@@ -44,7 +52,7 @@ def test_native_stock_and_amule_transfers(browse_peer: str | None) -> None:
     module = load_suite_module()
     arguments = [
         "--lan-bind-addr", lan_host,
-        "--fixture-size-bytes", str(10 * 1024 * 1024),
+        "--fixture-size-bytes", str(fixture_size),
         "--transfer-completion-timeout-seconds", "300",
     ]
     rows = {"stock": module.STOCK_EMULE_TRANSFER_SCENARIO_ID, "amule": module.AMULE_TRANSFER_SCENARIO_ID}
