@@ -12,7 +12,7 @@ from pathlib import Path
 
 def browse_rust_shares(
     *, process_id: int, peer_name: str, anchor_name: str, file_name: str,
-    timeout_seconds: float = 90.0,
+    timeout_seconds: float = 90.0, expected_count: int | None = None,
 ) -> dict[str, object]:
     """Select a newly browsed file for download in isolated monolithic aMule."""
     if not 0 < timeout_seconds <= 300:
@@ -21,6 +21,7 @@ def browse_rust_shares(
         "process_id": process_id, "peer_name": peer_name, "anchor_name": anchor_name,
         "file_name": file_name,
         "timeout_seconds": timeout_seconds,
+        "expected_count": expected_count,
     }
     # Bound synchronous Win32 calls even if the GUI stops pumping messages.
     # The worker only attaches to the existing GUI; a timeout kills only the worker.
@@ -33,7 +34,7 @@ def browse_rust_shares(
     return json.loads(child.stdout)
 
 
-def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeout_seconds):
+def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeout_seconds, expected_count=None):
     """Drive the frozen Windows controls from a PID-scoped pywinauto connection."""
     import psutil
     from pywinauto import Application
@@ -136,6 +137,22 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
     switch_page(10347)  # Searches
     result = wait("new peer browse result list", lambda: body_by_id(notebook, result_id))
 
+    if expected_count is not None:
+        from pywinauto.controls.common_controls import TabControlWrapper
+
+        tab = TabControlWrapper(notebook.element_info)
+        expected_label = f"{peer_name} ({expected_count})"
+
+        def complete_count():
+            # Frozen SearchDlg.cpp displays the count in the CMuleNotebook tab.
+            if tab.tab_count() == 1:
+                return expected_count if tab.get_tab_text(0) == expected_label else None
+            accessible = Application(backend="uia").connect(process=process_id)
+            labels = accessible.window(handle=notebook.handle).descendants(control_type="TabItem")
+            return expected_count if any(item.element_info.name == expected_label for item in labels) else None
+
+        wait(f"exact result tab {expected_label}", complete_count)
+
     # The native Download button becomes enabled only after the list has
     # received a row and selected it. Then type-to-select the canary.
     def select_result():
@@ -149,7 +166,8 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
     result.type_keys(file_name, pause=0.04, set_foreground=False, vk_packet=False)
     download.click_input()
     return {"peerName": peer_name, "anchorName": anchor_name,
-            "resultWindow": result.handle, "processId": process_id}
+            "resultWindow": result.handle, "processId": process_id,
+            **({"resultCount": expected_count} if expected_count is not None else {})}
 
 
 if __name__ == "__main__":

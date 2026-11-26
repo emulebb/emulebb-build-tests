@@ -61,6 +61,30 @@ def test_observe_native_peer_browse_matches_endpoint_and_fixture(monkeypatch: py
     assert report["file"] == fixture
 
 
+def test_reverse_browse_catalog_includes_the_already_shared_transfer(tmp_path: Path, monkeypatch) -> None:
+    from emule_test_harness import rust_rest_contract
+
+    module = load_suite_module()
+    share = tmp_path / "reverse-share"
+    counts = iter([1, 370])
+    monkeypatch.setattr(module.rust_local_ed2k, "request_json", lambda *_args: {"meta": {"total": next(counts)}})
+    monkeypatch.setattr(module.rust_local_ed2k, "publish_shared_tree", lambda *_args, **_kwargs: {
+        "directories": {"id": "test"},
+        "sharedFiles": {"matched": {"hash": "12" * 16, "ed2kLink": "ed2k://|file|anchor|10|" + "12" * 16 + "|/"}},
+    })
+    canary_name = "000000RustBrowseCanary.bin"
+    monkeypatch.setattr(rust_rest_contract, "iter_library_files", lambda *_args, **_kwargs: iter([
+        {"displayName": canary_name, "sizeBytes": 4096, "hash": "13" * 16},
+    ]))
+
+    fixture = module.publish_reverse_browse_fixture("http://test", "fixture", share, host="192.0.2.10", port=4662, buckets=1)
+
+    assert fixture.expected_count == 370
+    assert len(list(share.rglob("*.bin"))) == 369
+    assert (share / "Canary" / canary_name).stat().st_size == 4096
+    assert fixture.anchor_sha256 == module.file_sha256(share / fixture.anchor_name)
+
+
 def test_transfer_diagnostics_preserves_retired_hashset_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

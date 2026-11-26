@@ -74,6 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
+    parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")
@@ -89,10 +90,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Require one optional matrix scenario without requiring every optional client.",
     )
     args = parser.parse_args(argv)
-    if not 0 <= args.native_browse_buckets <= dtt.NATIVE_BROWSE_MAX_BUCKETS:
-        parser.error("--native-browse-buckets must be between 0 and 271")
-    if args.native_browse_buckets and not args.verify_peer_browse:
-        parser.error("--native-browse-buckets requires --verify-peer-browse")
+    browse_bucket_counts = (args.native_browse_buckets, args.native_reverse_browse_buckets)
+    if any(not 0 <= count <= dtt.NATIVE_BROWSE_MAX_BUCKETS for count in browse_bucket_counts):
+        parser.error("Native browse bucket counts must be between 0 and 271")
+    if any(browse_bucket_counts) and not args.verify_peer_browse:
+        parser.error("Native browse buckets require --verify-peer-browse")
     if args.native_browse_buckets and args.verify_source_lifecycle:
         parser.error("Run server source lifecycle separately from native catalog browsing")
     return args
@@ -262,6 +264,8 @@ def run_stock_emule_transfer_scenario(paths, args: argparse.Namespace, stock_exe
         command.append("--verify-peer-browse")
     if args.native_browse_buckets:
         command.extend(["--native-browse-buckets", str(args.native_browse_buckets)])
+    if args.native_reverse_browse_buckets:
+        command.extend(["--native-reverse-browse-buckets", str(args.native_reverse_browse_buckets)])
     command.extend(
         [
             "--client2-app-exe",
@@ -293,6 +297,8 @@ def run_amule_transfer_scenario(
         command.append("--verify-peer-browse")
     if args.native_browse_buckets:
         command.extend(["--native-browse-buckets", str(args.native_browse_buckets)])
+    if args.native_reverse_browse_buckets:
+        command.extend(["--native-reverse-browse-buckets", str(args.native_reverse_browse_buckets)])
     command.extend(
         [
             "--client2-app-exe",

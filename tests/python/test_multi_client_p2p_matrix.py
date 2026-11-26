@@ -66,15 +66,19 @@ def test_native_stock_and_amule_transfers(browse_peer: str | None, fixture_size:
 @pytest.mark.native
 @pytest.mark.skipif(sys.platform != "win32", reason="The independent clients are staged Windows builds")
 @pytest.mark.parametrize(
-    ("peer", "buckets"),
+    ("peer", "buckets", "reverse"),
     [
-        pytest.param("stock", 2, id="stock_paged_browse"),
-        pytest.param("amule", 2, id="amule_paged_browse"),
-        pytest.param("stock", 271, id="stock_100k_browse"),
-        pytest.param("amule", 271, id="amule_100k_browse"),
+        pytest.param("stock", 2, False, id="stock_paged_browse"),
+        pytest.param("amule", 2, False, id="amule_paged_browse"),
+        pytest.param("stock", 271, False, id="stock_100k_browse"),
+        pytest.param("amule", 271, False, id="amule_100k_browse"),
+        pytest.param("stock", 2, True, id="stock_reverse_paged_browse"),
+        pytest.param("amule", 2, True, id="amule_reverse_paged_browse"),
+        pytest.param("stock", 271, True, id="stock_reverse_100k_browse"),
+        pytest.param("amule", 271, True, id="amule_reverse_100k_browse"),
     ],
 )
-def test_native_publisher_browse_catalog(peer: str, buckets: int) -> None:
+def test_native_publisher_browse_catalog(peer: str, buckets: int, reverse: bool) -> None:
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
         pytest.fail("X_LOCAL_IP is required for the selected native client matrix")
@@ -86,7 +90,7 @@ def test_native_publisher_browse_catalog(peer: str, buckets: int) -> None:
         "--transfer-completion-timeout-seconds", "300",
         "--require-scenario", scenario,
         "--verify-peer-browse",
-        "--native-browse-buckets", str(buckets),
+        "--native-reverse-browse-buckets" if reverse else "--native-browse-buckets", str(buckets),
     ]) == 0
 
 

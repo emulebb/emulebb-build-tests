@@ -16,7 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -252,6 +252,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-source-lifecycle", action="store_true")
     parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
+    parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -280,9 +281,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
 
-    if not 0 <= args.native_browse_buckets <= NATIVE_BROWSE_MAX_BUCKETS:
+    browse_bucket_counts = (args.native_browse_buckets, args.native_reverse_browse_buckets)
+    if any(not 0 <= count <= NATIVE_BROWSE_MAX_BUCKETS for count in browse_bucket_counts):
         raise ValueError("Native browse accepts at most 271 fixture buckets.")
-    if args.native_browse_buckets and not args.verify_peer_browse:
+    if any(browse_bucket_counts) and not args.verify_peer_browse:
         raise ValueError("Native browse buckets require --verify-peer-browse.")
     if args.native_browse_buckets and args.verify_source_lifecycle:
         raise ValueError("Run server source lifecycle separately from native catalog browsing.")
@@ -2734,7 +2736,7 @@ def verify_native_browse_catalog(fetch, first_page, expected) -> None:
 
 
 def require_native_browse_transfer_progress(
-    diagnostics: Path, *, process_id: int, peer: str, file_hash: str,
+    diagnostics: Path, *, process_id: int, peer: str | None, file_hash: str, upload: bool = False,
 ) -> dict[str, object]:
     """Require accepted transfer payload between directory requests and replies."""
     from datetime import datetime
@@ -2742,19 +2744,22 @@ def require_native_browse_transfer_progress(
     from emule_test_harness.diag_event_runs import load_diag_event_segment, select_latest_diag_run
 
     paths = select_latest_diag_run(diagnostics.glob("*.jsonl"), client="rust", process_id=process_id)
+    flow = "listener" if upload else "native_download"
+    request_outcome, reply_outcome = ("accepted", "send_succeeded") if upload else ("send_succeeded", "accepted")
     browse_start = browse_end = None
     covered_bytes = files_at_last_reply = 0
     for path in paths:
         for event in load_diag_event_segment(path, allow_incomplete_tail=True):
             keys, body = event.get("keys", {}), event.get("body", {})
-            if keys.get("peer") != peer or body.get("flow") != "native_download":
+            if body.get("flow") != flow or (peer is not None and keys.get("peer") != peer):
                 continue
             operation, outcome = body.get("opcodeName"), body.get("outcome")
-            if operation == "OP_ASKSHAREDDIRS" and outcome == "send_succeeded":
+            if operation == "OP_ASKSHAREDDIRS" and outcome == request_outcome:
                 if browse_start is not None:
                     raise RuntimeError("More than one native browse start on the download")
                 browse_start = event
-            elif browse_start is not None and outcome == "accepted":
+                peer = keys["peer"]
+            elif browse_start is not None and outcome == reply_outcome:
                 if operation == "OP_SENDINGPART" and keys.get("fileHash") == file_hash:
                     covered_bytes += body["payloadLen"] - 24
                 elif operation == "OP_ASKSHAREDFILESDIRANS":
@@ -2830,31 +2835,86 @@ def observe_native_peer_browse(
             "total": page["total"], "file": matches[0]}
 
 
+@dataclass(frozen=True)
+class ReverseBrowseFixture:
+    anchor_name: str
+    anchor_hash: str
+    anchor_sha256: str
+    anchor_size: int
+    source_link: str
+    canary: dict[str, object]
+    expected_count: int | None
+
+
 def publish_reverse_browse_fixture(
-    base_url: str, api_key: str, share: Path, *, host: str, port: int, canary_size: int = 4096,
-) -> tuple[str, str, dict[str, object]]:
+    base_url: str, api_key: str, share: Path, *, host: str, port: int,
+    canary_size: int = 4096, buckets: int = 0,
+) -> ReverseBrowseFixture:
     """Publish an anchor with a direct link and a separate unrequested canary."""
     from emule_test_harness.rust_rest_contract import iter_library_files
 
     anchor = share / "RustBrowseAnchor.bin"
-    canary = share / "Canary" / "RustBrowseCanary.bin"
-    write_fixture_file(anchor, 10 * 1024 * 1024, seed=148)
+    canary = share / "Canary" / ("000000RustBrowseCanary.bin" if buckets else "RustBrowseCanary.bin")
+    expected_count = None
+    if buckets:
+        count_route = "/api/v1/library/files?view=shared&limit=1&countTotal=true"
+        before = rust_local_ed2k.request_json(base_url, "GET", count_route, api_key).get("meta", {}).get("total")
+        if type(before) is not int or before not in (0, 1):
+            raise RuntimeError("Unexpected existing share count in the isolated reverse-browse profile")
+        generator = load_script_module("native_peer_browse_fixture", "create-long-paths-tree.py")
+        catalog = share / "catalog"
+        generated_count = buckets * NATIVE_BROWSE_FILES_PER_BUCKET
+        generator.build_shared_directory_browse_stress(
+            catalog, bucket_count=buckets, files_per_bucket=NATIVE_BROWSE_FILES_PER_BUCKET,
+            min_file_count=generated_count,
+        )
+        # Reserve one generated entry for the canary, then add the transfer anchor.
+        canary.parent.mkdir(parents=True)
+        first_bucket = catalog / "group_000_browse buckets" / "bucket_00000"
+        (first_bucket / generator.make_browse_stress_file_name(0, 0)).rename(canary)
+        if before:
+            # Rust also shares the fresh file completed by the forward transfer.
+            (first_bucket / generator.make_browse_stress_file_name(0, 1)).unlink()
+        expected_count = generated_count + 1
+    anchor_sha256 = write_fixture_file(anchor, 10 * 1024 * 1024, seed=148)
     write_fixture_file(canary, canary_size, seed=149)
-    publication = rust_local_ed2k.publish_shared_tree(base_url, api_key, root=share, file_name=anchor.name)
-    base_link = publication["sharedFiles"]["matched"]["ed2kLink"]
+    publication = rust_local_ed2k.publish_shared_tree(
+        base_url, api_key, root=share, file_name=anchor.name,
+        timeout_seconds=NATIVE_BROWSE_READY_SECONDS if buckets else 60,
+    )
+    root_id = str(publication["directories"]["id"])
+    if expected_count is not None:
+        def full_catalog():
+            page = rust_local_ed2k.request_json(base_url, "GET", count_route, api_key)
+            return page.get("meta", {}).get("total") == expected_count
+
+        live_common.wait_for(full_catalog, NATIVE_BROWSE_READY_SECONDS, 1, "Rust reverse browse catalog ready")
+    anchor_row = publication["sharedFiles"]["matched"]
     # Stock parses sources from the extension after the first slash.
-    link = f"{base_link}|sources,{host}:{port}|/"
+    link = f"{anchor_row['ed2kLink']}|sources,{host}:{port}|/"
     rows = iter_library_files(
         lambda path: rust_local_ed2k.request_json(base_url, "GET", "/api/v1" + path, api_key),
-        view="shared", root_id=str(publication["directories"]["id"]), search=canary.name,
+        view="shared", root_id=root_id, search=canary.name,
     )
     expected = rust_local_ed2k.require_library_file(rows, canary.name)
-    return anchor.name, link, expected
+    return ReverseBrowseFixture(
+        anchor.name, str(anchor_row["hash"]), anchor_sha256, anchor.stat().st_size,
+        link, expected, expected_count,
+    )
+
+
+def wait_for_reverse_browse_upload(base_url: str, api_key: str, file_hash: str) -> None:
+    """Start the native browse after Rust has already served part of the anchor."""
+    def active_anchor():
+        rows = rows_from_result(rest_smoke.http_request(base_url, "/api/v1/uploads", api_key=api_key))
+        return any(row.get("requestedFileHash") == file_hash and row.get("uploadedBytes", 0) > 0 for row in rows)
+
+    live_common.wait_for(active_anchor, 45, 0.1, "active Rust reverse-browse anchor upload")
 
 
 def observe_stock_browsing_rust(
-    app, base_url: str, api_key: str, share: Path, *,
-    host: str, port: int, server_control: ed2k_server.Ed2kServerControl,
+    app, base_url: str, api_key: str, fixture: ReverseBrowseFixture, *,
+    server_control: ed2k_server.Ed2kServerControl,
 ) -> dict[str, object]:
     """Use the native stock source command and look for an unrequested canary."""
     import win32con
@@ -2862,7 +2922,7 @@ def observe_stock_browsing_rust(
     import win32process
 
     ui = load_script_module("stock_peer_browse_search_ui", "search-ui-live.py")
-    anchor_name, link, expected = publish_reverse_browse_fixture(base_url, api_key, share, host=host, port=port)
+    anchor_name, link, expected = fixture.anchor_name, fixture.source_link, fixture.canary
 
     main = live_common.find_process_main_window(app)
     pid = live_common.resolve_app_process_id(app)
@@ -2921,9 +2981,18 @@ def observe_stock_browsing_rust(
 
         index, _ = live_common.wait_for(find_rust_source, 30, 0.2, "Rust source row")
         ui.select_list_row(handle, downloads, index)
+        if fixture.expected_count is not None:
+            wait_for_reverse_browse_upload(base_url, api_key, fixture.anchor_hash)
         win32gui.SendMessage(downloads, win32con.WM_COMMAND, 10106, 0)  # MP_SHOWLIST
         ui.open_search_page(main.handle)
         results = ui.find_control(main.handle, 2172, "SysListView32")  # IDC_SEARCHLIST
+        result_count = None
+        if fixture.expected_count is not None:
+            def complete_stock_count():
+                count = ui.get_list_count(results)
+                return count if count == fixture.expected_count else None
+
+            result_count = live_common.wait_for(complete_stock_count, 300, 0.2, "complete stock peer result count")
         index, _ = live_common.wait_for(
             lambda: find_row(results, expected["displayName"]), 30, 0.2, "stock remote canary",
         )
@@ -2933,7 +3002,10 @@ def observe_stock_browsing_rust(
     size = ui.parse_display_size_bytes(row["size"])
     if row["hash"] != expected["hash"] or size != expected["sizeBytes"]:
         raise RuntimeError("Stock remote canary differs from the Rust catalog")
-    return {"status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": size}
+    return {
+        "status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": size,
+        **({"resultCount": result_count} if result_count is not None else {}),
+    }
 
 
 def wait_for_transfer(
@@ -5725,33 +5797,43 @@ def main(argv: list[str] | None = None) -> int:
                 rust_diagnostics_dir, process_id=client1_process.pid,
                 peer=f"{p2p_address}:{ports['client2_tcp']}", file_hash=transfer_hash,
             )
-        if args.verify_peer_browse and args.client2_identity == "stock_emule":
+        reverse_browse = None
+        if args.verify_peer_browse:
+            current_phase = "publish_rust_reverse_browse_fixture"
+            if verify_amule_browse and report["checks"]["client1_server_client"].get("high_id") is not True:
+                raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
+            reverse_browse = publish_reverse_browse_fixture(
+                base_url, args.api_key, paths.source_artifacts_dir / "rust-browse-share",
+                host=p2p_address, port=ports["client1_tcp"], canary_size=137 if verify_amule_browse else 4096,
+                buckets=args.native_reverse_browse_buckets,
+            )
+            reverse_destination = Path(client2["incoming_dir"]) / reverse_browse.anchor_name
+            if reverse_destination.exists():
+                raise RuntimeError("Native incoming directory already contains the browse anchor")
+        if reverse_browse is not None and args.client2_identity == "stock_emule":
             current_phase = "stock_browses_rust_publisher"
             report["checks"]["stock_browses_rust_publisher"] = observe_stock_browsing_rust(
-                client2_app, base_url, args.api_key, paths.source_artifacts_dir / "rust-browse-share",
-                host=p2p_address, port=ports["client1_tcp"], server_control=server_control,
+                client2_app, base_url, args.api_key, reverse_browse, server_control=server_control,
             )
-        elif verify_amule_browse:
+        elif reverse_browse is not None:
             from emule_test_harness.amule_browse_ui import browse_rust_shares
             from emule_test_harness.emule_met_dump import dump_file
 
             current_phase = "amule_browses_rust_publisher"
-            if report["checks"]["client1_server_client"].get("high_id") is not True:
-                raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
-            browse_share = paths.source_artifacts_dir / "rust-browse-share"
-            anchor, link, canary = publish_reverse_browse_fixture(
-                base_url, args.api_key, browse_share,
-                host=p2p_address, port=ports["client1_tcp"], canary_size=137,
-            )
             amule_client.run_command(
                 client2_control_exe, ec_port=ports["client2_ec"], ec_password=args.api_key,
-                command=f"add {link}",
+                command=f"add {reverse_browse.source_link}",
             )
+            if reverse_browse.expected_count is not None:
+                wait_for_reverse_browse_upload(base_url, args.api_key, reverse_browse.anchor_hash)
+            canary = reverse_browse.canary
             canary_name = canary["displayName"]
             amule_temp = Path(client2["temp_dir"])
             before_browse = set(amule_temp.glob("*.part.met"))
             browse = browse_rust_shares(
-                process_id=client2_app.pid, peer_name="eMule", anchor_name=anchor, file_name=canary_name,
+                process_id=client2_app.pid, peer_name="eMule", anchor_name=reverse_browse.anchor_name,
+                file_name=canary_name, expected_count=reverse_browse.expected_count,
+                timeout_seconds=300 if reverse_browse.expected_count is not None else 90,
             )
             current_phase = "amule_verifies_native_browse_result"
 
@@ -5771,6 +5853,17 @@ def main(argv: list[str] | None = None) -> int:
 
             browse.update(live_common.wait_for(browse_metadata, 15, 0.25, "aMule native browse canary metadata"))
             report["checks"]["amule_browses_rust_publisher"] = browse
+        if reverse_browse is not None and reverse_browse.expected_count is not None:
+            current_phase = "verify_native_reverse_browse_transfer"
+            report["checks"]["native_reverse_browse_completed_anchor"] = wait_for_completed_file(
+                reverse_destination, expected_size=reverse_browse.anchor_size,
+                expected_sha256=reverse_browse.anchor_sha256,
+                timeout_seconds=args.transfer_completion_timeout_seconds,
+            )
+            report["checks"]["native_reverse_browse_transfer_progress"] = require_native_browse_transfer_progress(
+                rust_diagnostics_dir, process_id=client1_process.pid,
+                peer=None, file_hash=reverse_browse.anchor_hash, upload=True,
+            )
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )
