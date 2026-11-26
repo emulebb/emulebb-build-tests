@@ -4443,6 +4443,7 @@ def main(argv: list[str] | None = None) -> int:
                 ec_password=args.api_key,
                 allow_peer_browse=args.verify_peer_browse,
                 additional_shared_dirs=tuple(browse_leaves),
+                create_sparse_files=not args.verify_native_large_file_status,
             )
         else:
             configure_client_profile(

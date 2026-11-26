@@ -42,6 +42,7 @@ def configure_profile(
     ec_password: str,
     allow_peer_browse: bool = False,
     additional_shared_dirs: tuple[Path, ...] = (),
+    create_sparse_files: bool = True,
 ) -> None:
     """Writes the minimal deterministic profile consumed by official `amuled`."""
 
@@ -71,6 +72,7 @@ ConnectToED2K=1
 TempDir={_config_path(temp_dir)}
 IncomingDir={_config_path(incoming_dir)}
 CheckDiskspace=0
+CreateSparseFiles={int(create_sparse_files)}
 FirstRunWizardDone=1
 GeoIPEnabled=0
 GeoIPAutoUpdate=0

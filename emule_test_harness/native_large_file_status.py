@@ -49,15 +49,23 @@ def classify_status(
 
 def observe(identity: str, host: str, port: int, temp_dir: Path) -> dict[str, object]:
     """Confirm native admission before issuing two requests per HELLO profile."""
+    expected = {(name, size, digest.hex()) for name, size, digest in JOBS}
+
     def admitted():
-        rows = set()
+        part_lengths = {}
         for path in temp_dir.glob("*.part.met"):
             for record in emule_met_dump.dump_file(path, summary=True, strict=True)["records"]:
                 fields = record["fields"]
-                rows.add((fields.get("fileName"), fields.get("sizeBytes"), record.get("ed2kHash")))
-        return True if all((name, size, digest.hex()) in rows for name, size, digest in JOBS) else None
+                key = (fields.get("fileName"), fields.get("sizeBytes"), record.get("ed2kHash"))
+                if key in expected:
+                    part_lengths[key[0]] = path.with_suffix("").stat().st_size
+        if len(part_lengths) != len(expected):
+            return None
+        if any(part_lengths.values()):
+            raise RuntimeError("Source-less native status jobs must have empty part files")
+        return part_lengths
 
-    rust_local_ed2k.wait_for(
+    part_lengths = rust_local_ed2k.wait_for(
         admitted, timeout_seconds=30, interval_seconds=0.25,
         description="native legacy-boundary part metadata", retry_exceptions=(OSError, emule_met_dump.MetParseError),
     )
@@ -81,4 +89,4 @@ def observe(identity: str, host: str, port: int, temp_dir: Path) -> dict[str, ob
                     "replyOpcode": reply.opcode, "replyPayload": reply.payload.hex(),
                 })
         sessions.append({"supportsLargeFiles": capable, "helloPayload": hello.hex(), "requests": results})
-    return {"nativeClient": identity, "sessions": sessions}
+    return {"nativeClient": identity, "partFileLengths": part_lengths, "sessions": sessions}

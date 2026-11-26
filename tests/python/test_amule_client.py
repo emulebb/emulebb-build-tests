@@ -28,6 +28,7 @@ def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path, allow
         ec_port=4712,
         ec_password="secret",
         allow_peer_browse=allow_browse,
+        create_sparse_files=not allow_browse,
     )
 
     text = (config_dir / "amule.conf").read_text(encoding="utf-8")
@@ -38,6 +39,7 @@ def test_configure_profile_writes_isolated_daemon_settings(tmp_path: Path, allow
     assert "NewVersionCheck=0" in text
     assert (config_dir / "lastversion").read_text(encoding="utf-8").splitlines() == ["3.0.1"]
     assert f"SeeShare={0 if allow_browse else 2}" in text
+    assert f"CreateSparseFiles={int(not allow_browse)}\n" in text
     assert f"MaxUpload={1024 if allow_browse else 0}" in text
     assert "ECAddress=127.0.0.1" in text
     assert "ECPort=4712" in text
