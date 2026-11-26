@@ -3737,6 +3737,11 @@ def main(argv: list[str] | None = None) -> int:
     test_high_id_pool: LanIpPool | None = None
     test_high_id_address: str | None = None
     verify_amule_browse = args.verify_peer_browse and args.client2_identity == "amule"
+    # The baseline checks both directions. Each scale input selects its publisher.
+    forward_scale = args.native_browse_buckets > 0
+    reverse_scale = args.native_reverse_browse_buckets > 0
+    verify_forward_browse = args.verify_peer_browse and (forward_scale or not reverse_scale)
+    verify_reverse_browse = args.verify_peer_browse and (reverse_scale or not forward_scale)
     current_phase = "initializing"
 
     try:
@@ -5767,7 +5772,7 @@ def main(argv: list[str] | None = None) -> int:
         admission = add_download(base_url, args.api_key, direct_source_link, transfer_hash)
         download_id = admission["jobId"]
         report["checks"]["client1_transfer_add"] = admission
-        if args.verify_peer_browse:
+        if verify_forward_browse:
             current_phase = "rust_browses_native_publisher"
             report["checks"]["rust_browses_native_publisher"] = observe_native_peer_browse(
                 base_url, args.api_key, download_id, host=p2p_address, port=ports["client2_tcp"],
@@ -5798,7 +5803,7 @@ def main(argv: list[str] | None = None) -> int:
                 peer=f"{p2p_address}:{ports['client2_tcp']}", file_hash=transfer_hash,
             )
         reverse_browse = None
-        if args.verify_peer_browse:
+        if verify_reverse_browse:
             current_phase = "publish_rust_reverse_browse_fixture"
             if verify_amule_browse and report["checks"]["client1_server_client"].get("high_id") is not True:
                 raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
