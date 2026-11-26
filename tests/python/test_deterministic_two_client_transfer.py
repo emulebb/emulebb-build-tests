@@ -85,6 +85,22 @@ def test_reverse_browse_catalog_includes_the_already_shared_transfer(tmp_path: P
     assert fixture.anchor_sha256 == module.file_sha256(share / fixture.anchor_name)
 
 
+def test_stock_login_wait_ignores_pre_reconnect_id_and_handles_rotation(tmp_path: Path) -> None:
+    module = load_suite_module()
+    log = tmp_path / "eMule.log"
+    log.write_text("26/11/2026 10:47:01: New client ID is 4\n", encoding="utf-16")
+    previous = log.stat()
+    assert module.stock_client_id_after(log, previous) is None
+
+    with log.open("ab") as stream:
+        stream.write("26/11/2026 10:48:59: New client ID is 6\r\n".encode("utf-16-le"))
+    assert module.stock_client_id_after(log, previous) == 6
+
+    log.rename(tmp_path / "rotated.log")
+    log.write_text("26/11/2026 10:48:59: New client ID is 7\n", encoding="utf-16")
+    assert module.stock_client_id_after(log, previous) == 7
+
+
 def test_transfer_diagnostics_preserves_retired_hashset_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

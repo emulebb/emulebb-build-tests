@@ -2912,9 +2912,22 @@ def wait_for_reverse_browse_upload(base_url: str, api_key: str, file_hash: str) 
     live_common.wait_for(active_anchor, 45, 0.1, "active Rust reverse-browse anchor upload")
 
 
+def stock_client_id_after(log: Path, previous: os.stat_result) -> int | None:
+    """Read a stock OP_IDCHANGE acknowledgement written after a reconnect."""
+    with log.open("rb") as stream:
+        current = os.fstat(stream.fileno())
+        same_file = (current.st_dev, current.st_ino) == (previous.st_dev, previous.st_ino)
+        offset = previous.st_size if same_file and current.st_size >= previous.st_size else 0
+        offset = max(offset, current.st_size - 128 * 1024)
+        stream.seek(offset + offset % 2)
+        tail = stream.read(128 * 1024).decode("utf-16-le", errors="replace")
+    client_ids = re.findall(r"New client ID is ([1-9][0-9]*)\s*$", tail, flags=re.MULTILINE)
+    return int(client_ids[-1]) if client_ids else None
+
+
 def observe_stock_browsing_rust(
     app, base_url: str, api_key: str, fixture: ReverseBrowseFixture, *,
-    server_control: ed2k_server.Ed2kServerControl,
+    server_control: ed2k_server.Ed2kServerControl, stock_log_dir: Path,
 ) -> dict[str, object]:
     """Use the native stock source command and look for an unrequested canary."""
     import win32con
@@ -2957,8 +2970,13 @@ def observe_stock_browsing_rust(
     win32gui.PostMessage(win32gui.GetDlgItem(dialog, win32con.IDOK), win32con.BM_CLICK, 0, 0)
     live_common.wait_for(lambda: not win32gui.IsWindowVisible(dialog), 10, 0.1, "stock link admission")
     # Stock schedules peer connections only while connected to a network.
+    stock_log = stock_log_dir / "eMule.log"
+    previous_log = stock_log.stat()
     win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10209, 0)  # MP_HM_CON
     server_control.wait_for_client(CLIENT_IDENTITIES["stock_emule"].nick, 15)
+    client_id = live_common.wait_for(
+        lambda: stock_client_id_after(stock_log, previous_log), 120, 0.2, "stock processed server login",
+    )
     win32gui.SendMessage(main.handle, win32con.WM_COMMAND, 10211, 0)  # MP_HM_TRANSFER
     downloads = ui.find_control(main.handle, 2048, "SysListView32")  # IDC_DOWNLOADLIST
     handle = ui.open_process(pid)
@@ -3004,6 +3022,7 @@ def observe_stock_browsing_rust(
         raise RuntimeError("Stock remote canary differs from the Rust catalog")
     return {
         "status": "complete", "displayName": row["name"], "fileHash": row["hash"], "sizeBytes": size,
+        "nativeServerClientId": client_id,
         **({"resultCount": result_count} if result_count is not None else {}),
     }
 
@@ -5819,6 +5838,7 @@ def main(argv: list[str] | None = None) -> int:
             current_phase = "stock_browses_rust_publisher"
             report["checks"]["stock_browses_rust_publisher"] = observe_stock_browsing_rust(
                 client2_app, base_url, args.api_key, reverse_browse, server_control=server_control,
+                stock_log_dir=Path(client2["log_dir"]),
             )
         elif reverse_browse is not None:
             from emule_test_harness.amule_browse_ui import browse_rust_shares
