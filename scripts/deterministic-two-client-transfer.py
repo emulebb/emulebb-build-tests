@@ -4391,10 +4391,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"Client2 {client2_availability.identity.product} control was not found: "
                 f"{client2_availability.reason}."
             )
-        if verify_amule_browse:
+        # Publication uses the official daemon. Only the requester test needs wx controls.
+        if verify_amule_browse and verify_reverse_browse:
             client2_app_exe = client2_app_exe.with_name("amule.exe")
             if not client2_app_exe.is_file():
-                raise RuntimeError("The staged monolithic aMule GUI is required for native browse")
+                raise RuntimeError("The staged monolithic aMule GUI is required for native requester browse")
             client2_availability = replace(client2_availability, executable=client2_app_exe)
         if args.client2_identity == "amule":
             amule_client.configure_profile(
