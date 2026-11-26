@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import random
 import shutil
 import socket
@@ -382,6 +384,32 @@ def test_prepare_server_binary_accepts_explicit_staged_binary(monkeypatch, tmp_p
 
     assert prepared.server_exe == server_exe.resolve()
     assert prepared.build["skipped"] is True
+
+
+@pytest.mark.unit
+def test_require_matching_upstream_server_receipt_for_staged_bytes(monkeypatch, tmp_path: Path) -> None:
+    stage = tmp_path / "upstream"
+    binary = stage / "bin" / "ed2k-server"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"upstream")
+    receipt = {
+        "schema": "emulebb.ed2k-server-upstream-build/1",
+        "sourceRevision": "1" * 40,
+        "upstreamTip": "2" * 40,
+        "builderRevision": "3" * 40,
+        "target": "x86_64-unknown-linux-gnu",
+        "binary": "bin/ed2k-server",
+        "sha256": hashlib.sha256(b"upstream").hexdigest(),
+    }
+    (stage / "build-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setattr(rust_ed2k, "reject_windows_temp_path", lambda *_args: None)
+
+    prepared = rust_ed2k.prepare_server_binary(tmp_path / "workspace", exe_override=str(binary))
+    assert prepared.build["source_build"] == receipt
+
+    binary.write_bytes(b"different server")
+    with pytest.raises(RuntimeError, match="binary digest differs"):
+        rust_ed2k.prepare_server_binary(tmp_path / "workspace", exe_override=str(binary))
 
 
 @pytest.mark.unit

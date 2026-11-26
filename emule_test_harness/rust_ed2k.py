@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -159,7 +161,31 @@ def prepare_server_binary(
         repo_override=repo_override,
         exe_override=effective_override,
     )
+    if effective_override and server_exe.parent.name == "bin":
+        receipt_path = server_exe.parent.parent / "build-receipt.json"
+        if receipt_path.is_file():
+            build["source_build"] = verify_upstream_server_stage(server_exe, receipt_path)
     return RustEd2kServerBinary(server_exe=server_exe, build=build)
+
+
+def verify_upstream_server_stage(server_exe: Path, receipt_path: Path) -> dict[str, object]:
+    """Verify the exact executable bytes associated with an upstream Builder stage."""
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema") != "emulebb.ed2k-server-upstream-build/1"
+        or receipt.get("binary") != "bin/ed2k-server"
+        or receipt_path.parent / "bin" / "ed2k-server" != server_exe
+        or receipt.get("target") != "x86_64-unknown-linux-gnu"
+        or any(not re.fullmatch(r"[0-9a-f]{40}", str(receipt.get(field, "")))
+               for field in ("sourceRevision", "upstreamTip", "builderRevision"))
+    ):
+        raise RuntimeError(f"Invalid upstream ed2k-server build receipt: {receipt_path}")
+    with server_exe.open("rb") as binary:
+        digest = hashlib.file_digest(binary, "sha256").hexdigest()
+    if digest != receipt.get("sha256"):
+        raise RuntimeError(f"Upstream ed2k-server binary digest differs from its build receipt: {server_exe}")
+    return receipt
 
 
 def _wsl_command(distribution: str | None, *arguments: str) -> list[str]:
