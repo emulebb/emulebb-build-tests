@@ -247,18 +247,28 @@ def wait_for_shared_file_count(
     """Wait for the native Statistics count without transferring the complete EC list."""
     deadline = time.monotonic() + timeout_seconds
     observed = None
-    while time.monotonic() < deadline:
-        output = run_command(
-            control_exe, ec_port=ec_port, ec_password=ec_password, command="Statistics",
-        )
-        match = re.search(r"^[ \t]*(?:>[ \t]*)?Number of Shared Files:[ \t]*(\d+)[ \t]*$", output, re.MULTILINE)
-        if match is None:
-            raise RuntimeError("aMule Statistics did not report its shared-file count")
-        observed = int(match.group(1))
-        if observed == expected:
-            return
-        time.sleep(1)
-    raise RuntimeError(f"Timed out waiting for {expected} aMule shared files, last count {observed}")
+    last_error = None
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            output = run_command(
+                control_exe, ec_port=ec_port, ec_password=ec_password, command="Statistics",
+                timeout_seconds=min(60, remaining),
+            )
+        except (RuntimeError, subprocess.TimeoutExpired) as error:
+            last_error = type(error).__name__
+        else:
+            match = re.search(r"^[ \t]*(?:>[ \t]*)?Number of Shared Files:[ \t]*(\d+)[ \t]*$", output, re.MULTILINE)
+            if match is None:
+                last_error = "Statistics omitted its shared-file count"
+            else:
+                observed = int(match.group(1))
+                last_error = None
+                if observed == expected:
+                    return
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+    raise RuntimeError(
+        f"Timed out waiting for {expected} aMule shared files, last count {observed}, last EC error {last_error}"
+    )
 
 
 def shutdown_daemon(

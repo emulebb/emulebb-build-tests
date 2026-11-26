@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -90,12 +91,19 @@ def test_file_link_encodes_name_and_uppercases_hash() -> None:
     )
 
 
-def test_shared_file_count_accepts_prefixed_amulecmd_statistics(monkeypatch: pytest.MonkeyPatch) -> None:
-    def run_command(_exe, *, ec_port, ec_password, command):
+def test_shared_file_count_accepts_prefixed_amulecmd_statistics_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = iter([subprocess.TimeoutExpired("amulecmd", 0.1), " >   Number of Shared Files: 100000\n"])
+
+    def run_command(_exe, *, ec_port, ec_password, command, timeout_seconds):
         assert command == "Statistics"
-        return " >  Shared Files\n >   Number of Shared Files: 100000\n"
+        assert 0 < timeout_seconds <= 1
+        response = next(responses)
+        if isinstance(response, subprocess.TimeoutExpired):
+            raise response
+        return response
 
     monkeypatch.setattr(amule_client, "run_command", run_command)
+    monkeypatch.setattr(amule_client.time, "sleep", lambda _seconds: None)
     amule_client.wait_for_shared_file_count(
         Path("amulecmd"), ec_port=4712, ec_password="fixture", expected=100_000, timeout_seconds=1,
     )
