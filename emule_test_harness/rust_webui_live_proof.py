@@ -28,20 +28,20 @@ DEFAULT_TAB_WAIT_SECONDS = 1.5
 DEFAULT_MAX_MAIN_THREAD_BUSY_RATIO = 0.25
 WEBUI_API_KEY_STORAGE_KEY = "emulebb.webui.apiKey"
 TAB_LABELS = (
-    "Overview",
-    "Transfers",
+    "Dashboard",
     "Search",
-    "Sharing",
-    "Library",
+    "Downloads",
     "Uploads",
-    "Network",
-    "Servers",
-    "Kad",
+    "Library",
+    "Sharing",
     "Categories",
     "Friends",
+    "Servers",
+    "KAD",
+    "Network",
     "Settings",
-    "Diagnostics",
     "Logs",
+    "Diagnostics",
 )
 
 
@@ -104,7 +104,7 @@ def file_link_confirmation(page, *, base_url: str, api_key: str, link: str,
     if any(item.get("hash", "").lower() == file_hash for item in baseline):
         raise RuntimeError("File-link proof requires its own absent transfer hash")
     page.on("request", observe)
-    handoff_url = base_url.rstrip("/") + "/transfers#" + urlencode({"ed2k": link})
+    handoff_url = base_url.rstrip("/") + "/downloads#" + urlencode({"ed2k": link})
     from .rust_local_ed2k import request_json
 
     try:
@@ -233,18 +233,9 @@ def require_file_link_browser() -> None:
         raise RuntimeError("APK qualification requires its installed offline Playwright/Chromium image") from None
 
 
-def _primary_nav_item(page, label: str):
-    nav_item = page.get_by_role("link", name=label, exact=True)
-    if nav_item.count() == 0:
-        # Compatibility with packages built before primary navigation became
-        # canonical history-routing links.
-        nav_item = page.get_by_role("button", name=label, exact=True)
-    return nav_item
-
-
 def _click_primary_nav(page, label: str, *, timeout_ms: int | None = None) -> None:
     options = {} if timeout_ms is None else {"timeout": timeout_ms}
-    _primary_nav_item(page, label).click(**options)
+    page.get_by_role("link", name=label, exact=True).click(**options)
 
 
 ALLOWED_REPEATED_STEADY_PREFIXES = ("snapshot?",)
@@ -896,7 +887,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     server_status = connected_server() or server_status
     initial_server_stats = server_status.get("stats", {})
 
-    _click_primary_nav(page, "Kad")
+    _click_primary_nav(page, "KAD")
     kad_panel = page.locator("section.panel").filter(
         has=page.get_by_role("heading", name="Kad", exact=True)
     )
@@ -957,7 +948,7 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
     )
     reconnected_server_stats = reconnected_server_status.get("stats", {})
 
-    _click_primary_nav(page, "Kad")
+    _click_primary_nav(page, "KAD")
     kad_panel.get_by_role("button", name="Stop", exact=True).click()
     page.get_by_text("Kad stopped; the server connection remains available", exact=True).wait_for(
         timeout=int(options.network_timeout_seconds * 1000)
@@ -1124,9 +1115,9 @@ def _consumer_network_actions(page, *, base_url: str, api_key: str, options: Con
 
     if not transfer_triggered:
         raise RuntimeError("no sourced PDF inside the strict size bound was found in rendered search results")
-    _click_primary_nav(page, "Transfers")
+    _click_primary_nav(page, "Downloads")
     transfer_panel = page.locator("section.panel").filter(
-        has=page.get_by_role("heading", name="Transfers", exact=True)
+        has=page.get_by_role("heading", name="Downloads", exact=True)
     )
 
     def active_transfer() -> dict[str, Any] | None:
@@ -1640,7 +1631,7 @@ def verify_about_build_identity(page, expected_identity: dict[str, str], *,
     """Compare the rendered About values with the verified package identity."""
     if public_capture_path is not None:
         # WHY: only the fresh synthetic package owner opts in. Never capture
-        # Overview's interface data or an authentication form in public images.
+        # Dashboard interface data or an authentication form in public images.
         page.set_viewport_size({"width": 1280, "height": 720})
         _click_primary_nav(page, "Search", timeout_ms=30_000)
         page.get_by_role("heading", name="Search", exact=True).wait_for(state="visible")
@@ -1855,13 +1846,13 @@ def run_webui_live_proof(
                     report["checks"]["consumerNetworkWorkflow"] = workflow_result
                     consumer_workflow_failed = not bool(workflow_result.get("ok"))
 
-                _click_primary_nav(page, "Transfers", timeout_ms=int(timeout_seconds * 1000))
+                _click_primary_nav(page, "Downloads", timeout_ms=int(timeout_seconds * 1000))
                 page.wait_for_timeout(int(tab_wait_seconds * 1000))
                 transfer_dom = page.evaluate(
                     """() => {
                         const panels = Array.from(document.querySelectorAll('section.panel'));
                         const panel = panels.find((candidate) =>
-                            candidate.querySelector('h2')?.textContent?.trim() === 'Transfers'
+                            candidate.querySelector('h2')?.textContent?.trim() === 'Downloads'
                         );
                         if (!panel) {
                             return { rows: [], emptyVisible: false };
@@ -1877,7 +1868,7 @@ def run_webui_live_proof(
                             .filter((row) => row.state || row.progress);
                         return {
                             rows,
-                            emptyVisible: panel.textContent?.includes('No transfers.') || false
+                            emptyVisible: panel.textContent?.includes('No downloads.') || false
                         };
                     }"""
                 )
@@ -1900,7 +1891,7 @@ def run_webui_live_proof(
                         visibility: document.visibilityState,
                         nodeCount: document.getElementsByTagName('*').length,
                         heapBytes: performance.memory ? performance.memory.usedJSHeapSize : null,
-                        activeTab: document.querySelector('button.tab.active')?.textContent?.trim() || null
+                        activeTab: document.querySelector('#primary-views [aria-current="page"]')?.getAttribute('aria-label') || null
                     })"""
                 )
                 report["checks"]["pageMetrics"] = metrics
