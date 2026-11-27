@@ -1325,6 +1325,8 @@ def main() -> int:
     parser.add_argument("--platform", required=True, choices=("x64", "ARM64"))
     parser.add_argument("--linux-libc", choices=("gnu", "musl"), help="Test the selected portable Linux archive.")
     parser.add_argument("--expected-source-sha", required=True, help="Full clean source revision required for every tested package.")
+    parser.add_argument("--expected-harness-sha", help="Full harness revision for a retained Windows ARM64 replay.")
+    parser.add_argument("--retained-package-sha256", help="Independently supplied digest of a retained Windows ARM64 package.")
     parser.add_argument("--expected-channel", choices=("development", "candidate", "beta", "nightly"),
                         help="Require matching REST, CLI and rendered About build identity.")
     parser.add_argument("--capture-public-webui", action="store_true",
@@ -1349,6 +1351,18 @@ def main() -> int:
     harness_before = require_clean_git_source(REPO_ROOT, label="Package smoke harness")
     stem = f"emulebb-rust-v{args.release_version}"
     arch = args.platform.lower()
+    if args.expected_harness_sha is not None or args.retained_package_sha256 is not None:
+        if (args.target_os, arch, platform.machine().lower()) not in {
+            ("windows", "arm64", "arm64"), ("windows", "arm64", "aarch64"),
+        } or sys.platform != "win32":
+            parser.error("Retained package replay requires native Windows ARM64")
+        if (not args.expected_channel or not args.report_path
+                or args.expected_harness_sha != harness_before.revision
+                or not re.fullmatch(r"[0-9a-f]{64}", args.retained_package_sha256 or "")):
+            parser.error("Retained package replay requires matching harness identity, digest, channel and report")
+        retained = args.release_dir / f"{stem}-windows-arm64.zip"
+        if not retained.is_file() or file_sha256(retained) != args.retained_package_sha256:
+            parser.error("Retained Windows ARM64 package differs from its expected SHA-256")
     expected_identity = None if args.expected_channel is None else {
         "version": args.release_version, "build": "release", "platform": arch,
         "channel": args.expected_channel, "sourceRevision": args.expected_source_sha,
