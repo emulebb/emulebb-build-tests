@@ -6,6 +6,7 @@ import argparse
 from contextlib import ExitStack
 from dataclasses import asdict
 import importlib.util
+import os
 import socket
 import struct
 import sys
@@ -90,8 +91,10 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
     with ExitStack() as owned:
         modes = ("reject-hello", "silent", "silent") if firewall_case == "silent" else (firewall_case,) * 2
         candidates = []
-        for index, mode in enumerate(modes, start=21):
-            tester = LocalKadPeer(f"127.0.0.{index}", {bind}, firewall_reply=mode)
+        # Each referral needs a separate /24 to exercise the production
+        # response admission limit without introducing any external route.
+        for index, mode in enumerate(modes, start=1):
+            tester = LocalKadPeer(f"127.0.{index}.21", {bind}, firewall_reply=mode)
             owned.callback(tester.close)
             tester.start()
             candidates.append(tester)
@@ -113,9 +116,9 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
                 for peer in reporters
             ]
 
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as external_listener:
-            external_listener.bind((bind, 0))
-            external_port = external_listener.getsockname()[1]
+        external_listener = owned.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        external_listener.bind((bind, 0))
+        external_port = external_listener.getsockname()[1]
         for suffix in range(2, 12):
             reporter = LocalKadPeer(
                 f"127.0.0.{suffix}", {bind}, route_referrals=referrals, nodes_contacts=known_contacts,
@@ -198,9 +201,14 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
             description="native Kad proof's ten known loopback reporters",
         )
         arm_referrals.set()
+        with output.open("rb") as log_file:
+            log_offset = log_file.seek(0, os.SEEK_END)
         request_json(base, "POST", "/api/v1/kad/operations/recheck-firewall", args.api_key, {})
+
         def round_summary() -> str | None:
-            log = output.read_text(encoding="utf-8", errors="replace")
+            with output.open("rb") as log_file:
+                log_file.seek(log_offset)
+                log = log_file.read().decode("utf-8", errors="replace")
             if firewall_case == "disconnect" and "Kad UDP firewall check: firewalled" in log:
                 return "firewalled"
             if firewall_case == "keyed-probe" and log.count("Kad UDP firewall check completed from") >= 2:
@@ -240,6 +248,7 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
             "executableSha256": dtt.file_sha256(executable),
             "runnerRevision": dtt.git_head_revision(REPO_ROOT),
             "knownContacts": contacts["contactCount"],
+            "distinctPongReporters": sum(bool(peer.evidence().get("pongReplies")) for peer in reporters),
             "ed2kServerLowId": assigned_low_id,
             "verdict": verdict,
             "testerWitnesses": witnesses,
