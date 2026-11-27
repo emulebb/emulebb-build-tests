@@ -115,6 +115,8 @@ def sample_buddy_tags(bind: str, tcp_port: int) -> tuple[int, int] | None:
             user_hash=b"fixture-inspect!", client_id=11, tcp_port=own_port,
         ))
         marker, opcode, payload = receive_frame(stream)
+        if (marker, opcode) == (ed2k_wire.PROTO_EMULE, 0x01):
+            marker, opcode, payload = receive_frame(stream)
     if (marker, opcode) != (ed2k_wire.PROTO_EDONKEY, 0x4C) or len(payload) < 32:
         raise ed2k_wire.Ed2kWireError("Buddy advertisement probe did not receive a HELLOANSWER")
     count = struct.unpack_from("<I", payload, 22)[0]

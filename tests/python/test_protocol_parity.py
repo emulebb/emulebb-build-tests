@@ -43,7 +43,7 @@ def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> 
         for coverage_id in group["coverageIds"]
     ]
 
-    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 108
+    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 109
     assert len(coverage_ids) == len(set(coverage_ids))
     assert set(coverage_ids) == REQUIRED_STOCK_COVERAGE_IDS
     assert payload["stockAuthority"]["requiredCoverageCount"] == len(
@@ -60,24 +60,24 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
 
     assert report["valid"] is True
     assert report["coverage"] == {
-        "coveredGroupCount": 5,
-        "coveredIdCount": 35,
+        "coveredGroupCount": 6,
+        "coveredIdCount": 36,
         "groupVerdictCounts": {
-            "parity": 5,
+            "parity": 6,
             "divergence": 0,
             "evidence-incomplete": 15,
             "not-observed": 0,
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 35,
+            "parity": 36,
             "divergence": 0,
             "evidence-incomplete": 73,
             "not-observed": 0,
             "intentional-difference": 0,
         },
-        "requiredGroupCount": 20,
-        "requiredIdCount": 108,
+        "requiredGroupCount": 21,
+        "requiredIdCount": 109,
     }
     assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {

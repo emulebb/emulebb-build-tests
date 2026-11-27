@@ -310,6 +310,19 @@
       "verdict": "parity"
     },
     {
+      "coverageId": "download.slot-recycle-regrant",
+      "evidenceLayers": [
+        "codec-transcript",
+        "deterministic-state-machine",
+        "local-cross-client"
+      ],
+      "reason": "Rust and frozen stock each preserved the prefix and completed via a same-socket regrant.",
+      "receiptIds": [
+        "rust-stock-download-slot-recycle-20261127t133448z"
+      ],
+      "verdict": "parity"
+    },
+    {
       "coverageId": "lowid.buddy-callback",
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC each accepted the same FINDBUDDY identity, attached the matching held buddy socket, received byte-identical KADEMLIA_CALLBACK_REQ traffic, and emitted byte-identical OP_CALLBACK relays at diagnostic sequences 27/29.",
@@ -2390,6 +2403,34 @@
           "authorityId": "ed2k-server-dependency",
           "executableSha256": "ffb5655198a882156627e0ff6d5d5a3a94ce02a423023f3b94f0bd8c00569886",
           "sourceRevision": "d6a6dd672815a13265393ff22622c7fd97b58eee"
+        }
+      ]
+    },
+    {
+      "artifactLocator": "output-root:reports/live-e2e-suite/20261127T133448Z-emulebb-main-release-6680/native-download-slot-recycle/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "e924740daaf33ea27d50bc6e4c18a971e9f51f8a043ad3b25088796481bff95e",
+      "coverageIds": [
+        "download.slot-recycle-regrant"
+      ],
+      "evidenceLayers": [
+        "codec-transcript",
+        "deterministic-state-machine",
+        "local-cross-client"
+      ],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-stock-download-slot-recycle-20261127t133448z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "e6d6ece238cdcdc29c17ecd1a9c6ff7fb6d58f3d",
+      "subjects": [
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "669a86152f81e9e8c647eb3f091c22f05d5adc02899bfa1029005fbcacbcd0ba",
+          "sourceRevision": "e255750557a63714b637f896c4aa153b9828e200"
+        },
+        {
+          "authorityId": "stock-instrumented",
+          "executableSha256": "fa775bad9a66719cb0fcd6ab81fd15f716a421e0f5c78aeede3547a228878e2b",
+          "sourceRevision": "c547b7cf2b6b59d971600111e425330ec8d2944d"
         }
       ]
     }

@@ -177,6 +177,9 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
             rest_port=rest_port,
             api_key=args.api_key,
             server_endpoint=f"{bind}:{server_port}",
+            server_entry=dtt.ed2k_protocol_cases.rust_server_entry(
+                dtt.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"], bind, server_port,
+            ),
             replace_servers=True,
             local_only_discovery=True,
             local_kad_seed=known_contacts()[0],
@@ -378,9 +381,10 @@ def observe_outbound_buddy(
         return str(shared["sharedFiles"]["matched"]["hash"]).lower()
 
     def relay_publication(target: str) -> dict[str, object] | None:
+        wire_target = _kad_uint128_wire_bytes(bytes.fromhex(target), "source target").hex()
         return next((
             row for reporter in reporters for row in reporter.evidence()["sourceShapes"]
-            if row["target"] == target and row["sourceType"] in {3, 5} and row["buddyHashPresent"]
+            if row["target"] == wire_target and row["sourceType"] in {3, 5} and row["buddyHashPresent"]
         ), None)
 
     first_hash = share_fixture("buddy-callback-payload")
