@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from dataclasses import asdict
 import importlib.util
 import socket
+import struct
 import sys
 import threading
 import time
@@ -18,9 +19,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_mfc_oracle_client  # noqa: E402
-from emule_test_harness import kad_nodes, rust_client  # noqa: E402
-from emule_test_harness.local_kad_peer import LocalKadPeer  # noqa: E402
-from emule_test_harness.rust_local_ed2k import request_json, wait_for  # noqa: E402
+from emule_test_harness import ed2k_wire, kad_nodes, rust_client  # noqa: E402
+from emule_test_harness.local_kad_peer import LocalKadPeer, receive_frame  # noqa: E402
+from emule_test_harness.rust_local_ed2k import request_json, wait_for, wait_for_ed2k_connected  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -124,6 +125,9 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
             reporters.append(reporter)
         for reporter in reporters:
             reporter.start()
+        server = owned.enter_context(socket.create_server((bind, 0)))
+        server.settimeout(15)
+        server_port = server.getsockname()[1]
         with (
             socket.create_server((bind, 0)) as rest_listener,
             socket.create_server((bind, 0)) as tcp_listener,
@@ -139,10 +143,12 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
             rest_addr=bind,
             rest_port=rest_port,
             api_key=args.api_key,
+            server_endpoint=f"{bind}:{server_port}",
+            replace_servers=True,
             local_only_discovery=True,
             local_kad_seed=known_contacts()[0],
             settings={
-                "network.ed2kEnabled": False,
+                "network.ed2kEnabled": True,
                 "network.kadEnabled": True,
                 "network.p2p.bindIp": bind,
                 "network.p2p.tcpPort": tcp_port,
@@ -162,6 +168,17 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
         owned.callback(rust_client.stop_process_tree, process)
         base = f"http://{bind}:{rest_port}"
         rest_smoke.wait_for_rest_ready(base, args.api_key, args.rest_ready_timeout_seconds)
+        request_json(base, "POST", "/api/v1/servers/operations/connect", args.api_key, {})
+        stream, _ = server.accept()
+        owned.enter_context(stream)
+        stream.settimeout(10)
+        marker, opcode, payload = receive_frame(stream)
+        if (marker, opcode) != (ed2k_wire.PROTO_EDONKEY, ed2k_wire.OP_LOGINREQUEST):
+            raise RuntimeError("Local witness did not receive a plaintext eD2K login")
+        ed2k_wire.decode_login_request(payload)
+        assigned_low_id = 7
+        stream.sendall(ed2k_wire.encode_frame(ed2k_wire.OP_IDCHANGE, struct.pack("<II", assigned_low_id, 0)))
+        wait_for_ed2k_connected(base, args.api_key, 15)
         request_json(base, "POST", "/api/v1/kad/operations/start", args.api_key, {})
         request_json(
             base, "POST", "/api/v1/kad/operations/import-nodes-url", args.api_key,
@@ -223,6 +240,7 @@ def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object
             "executableSha256": dtt.file_sha256(executable),
             "runnerRevision": dtt.git_head_revision(REPO_ROOT),
             "knownContacts": contacts["contactCount"],
+            "ed2kServerLowId": assigned_low_id,
             "verdict": verdict,
             "testerWitnesses": witnesses,
         }

@@ -21,6 +21,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import TCPServer
 from typing import Literal
 
 from .docker_ed2k_source_publisher import encode_hello_answer
@@ -31,6 +32,14 @@ from . import ed2k_wire
 KAD_HEADER = 0xE4
 FIREWALL_UDP = 0x62
 USER_HASH = bytes.fromhex("b6120eb263ab40d09def36531b168590")
+
+
+class _FixtureHttpServer(HTTPServer):
+    def server_bind(self) -> None:
+        # The fixture already owns a numeric bind address. HTTPServer's normal
+        # reverse DNS lookup is unnecessary and can reach the host resolver.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def receive_frame(stream: socket.socket) -> tuple[int, int, bytes]:
@@ -123,7 +132,7 @@ class LocalKadPeer:
                 pass
 
         try:
-            self._http = HTTPServer((self.bind_ip, 0), NodesHandler)
+            self._http = _FixtureHttpServer((self.bind_ip, 0), NodesHandler)
         except Exception:
             self._udp.close()
             self._tcp.close()
