@@ -348,7 +348,9 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
             rest_addr='127.0.0.1',
             rest_port=20027,
             api_key=PEER_KEY,
-            server_endpoint='127.0.0.1:20031',
+            # The listener probe registers its own loopback endpoint. The
+            # profile helper's seeded-server mode requires an explicit bind.
+            server_endpoint=None if automatic_route else '127.0.0.1:20031',
             replace_servers=True,
             local_only_discovery=True,
             settings={

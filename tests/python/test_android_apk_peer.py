@@ -27,6 +27,31 @@ def test_physical_peer_inherits_only_the_automatic_route(prefix, bind_ip, interf
     assert subject._uses_automatic_peer_route(prefix, effective) is expected
 
 
+def test_automatic_peer_seeds_no_explicit_bind_or_server(tmp_path, monkeypatch):
+    from emule_test_harness import rust_client
+
+    class ProfileSeeded(Exception):
+        pass
+
+    def seed(_profile, **options):
+        assert options["server_endpoint"] is None
+        assert options["replace_servers"] and options["local_only_discovery"]
+        assert options["settings"]["network.p2p.bindIp"] is None
+        assert options["settings"]["network.p2p.bindInterface"] is None
+        raise ProfileSeeded
+
+    def command(*_args, **_kwargs):
+        pytest.fail("Profile seeding must precede device access")
+
+    monkeypatch.setattr(rust_client, "write_rust_profile", seed)
+    peer = {"files": {"emulebb-rust": {"sha256": "a" * 64}}}
+    with pytest.raises(ProfileSeeded):
+        with subject.production_peer(command, peer, adb="adb", child={}, report_dir=tmp_path,
+                                     rust_source=tmp_path, bind_ip="192.0.2.10", bind_interface="wifi",
+                                     automatic_route=True):
+            pytest.fail("Peer must finish seeding before launch")
+
+
 @pytest.mark.parametrize("response,presence", [
     ({"id": "12", "hash": "b" * 32, "state": "delivering", "progress": 1.0}, "present"),
     ({"id": "12", "hash": "c" * 32, "state": "delivering", "progress": 1.0}, "ambiguous"),
