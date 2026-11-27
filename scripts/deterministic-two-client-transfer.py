@@ -4714,6 +4714,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("The staged monolithic aMule GUI is required for native requester browse")
             client2_availability = replace(client2_availability, executable=client2_app_exe)
         if args.client2_identity == "amule":
+            # For the requester proof, reproduce the server-verified HighID
+            # route instead of relying on Windows to select the managed alias.
+            amule_bind_address = (
+                p2p_address if verify_amule_browse and verify_reverse_browse else native_target_bind_address
+            )
             amule_client.configure_profile(
                 config_dir=Path(client2["config_dir"]),
                 incoming_dir=Path(client2["incoming_dir"]),
@@ -4728,7 +4733,7 @@ def main(argv: list[str] | None = None) -> int:
                 additional_shared_dirs=tuple(browse_leaves),
                 create_sparse_files=not (args.verify_native_large_file_status or args.verify_native_partial_threshold),
                 flush_partial_fixture=args.verify_native_partial_threshold,
-                bind_address=native_target_bind_address,
+                bind_address=amule_bind_address,
             )
         else:
             fixture_crypt_override = False if args.verify_download_slot_recycle else None
@@ -6252,8 +6257,12 @@ def main(argv: list[str] | None = None) -> int:
         reverse_browse = None
         if verify_reverse_browse:
             current_phase = "publish_rust_reverse_browse_fixture"
-            if verify_amule_browse and report["checks"]["client1_server_client"].get("high_id") is not True:
-                raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
+            if verify_amule_browse:
+                if report["checks"]["client1_server_client"].get("high_id") is not True:
+                    raise RuntimeError("Native aMule browse requires a server-verified Rust HighID")
+                native_client = report["checks"]["client2_server_client"]
+                if native_client.get("high_id") is not True or native_client.get("ip") != p2p_address:
+                    raise RuntimeError("Native aMule requester did not register HighID on the managed address")
             reverse_browse = publish_reverse_browse_fixture(
                 base_url, args.api_key, paths.source_artifacts_dir / "rust-browse-share",
                 host=p2p_address, port=ports["client1_tcp"], canary_size=137 if verify_amule_browse else 4096,
