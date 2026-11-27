@@ -331,15 +331,27 @@ def observe_target_correlation(
         ("source", _kad_uint128_wire_bytes(file_target, "file target").hex(), 17),
         ("keyword", _kad_uint128_wire_bytes(keyword_target, "keyword target").hex(), 63),
     }
-    lines = output.read_text(encoding="utf-8", errors="replace").splitlines()
-    for family, target, load in expected_acks:
-        if not any(
-            f"family={family} step=ack" in line
-            and f"contact_addr={peer.bind_ip}:{peer.udp_port} " in line
-            and line.endswith(f"response_target={target} response_load={load}")
-            for line in lines
+    def consumed_replies() -> bool | None:
+        lines = output.read_text(encoding="utf-8", errors="replace").splitlines()
+        if all(
+            any(
+                f"family={family} step=ack" in line
+                and f"contact_addr={peer.bind_ip}:{peer.udp_port} " in line
+                and line.endswith(f"response_target={target} response_load={load}")
+                for line in lines
+            )
+            for family, target, load in expected_acks
         ):
-            raise RuntimeError(f"Rust did not consume the matched {family} publish response")
+            return True
+        return None
+
+    # The ACK is sent at ingress, while publish collects its fan-out before
+    # consuming each response. Wait for both operations to finish that batch.
+    wait_for(
+        consumed_replies, timeout_seconds=15, interval_seconds=0.25,
+        description="the Rust source and keyword operations consuming their matched replies",
+    )
+    witness["matchedPublishOperations"] = sorted(family for family, _, _ in expected_acks)
     return witness
 
 
