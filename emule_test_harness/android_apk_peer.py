@@ -303,9 +303,21 @@ def admit_peer(root: Path, *, manifest_sha256: str, identity: dict, expected_abi
     return {**value, "payloadRoot": str(root)}
 
 
+def _uses_automatic_peer_route(prefix, effective: dict) -> bool:
+    if prefix == PREFIX:
+        return False
+    p2p = effective["network"]["p2p"]
+    guard = effective["security"]["vpnGuard"]
+    return (
+        p2p["bindIp"] is None and p2p["bindInterface"] is None
+        and guard["mode"] == "off"
+    )
+
+
 @contextmanager
 def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: Path, rust_source: Path, bind_ip: str,
-                    prefix=PREFIX, bind_interface: str | None = None, spawn_daemon=None, stop_client=None, campaign=None):
+                    prefix=PREFIX, bind_interface: str | None = None, automatic_route: bool = False,
+                    spawn_daemon=None, stop_client=None, campaign=None):
     """Own a disjoint CLI profile and verify kernel process identity before signals."""
     from .android_emulator import _app_identity, _daemon_identity, _rest_app, _start_production_daemon, _stop_group
     from .rust_client import write_rust_profile
@@ -343,8 +355,10 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
                 'storage.incomingDirectory': str(Path(home) / 'incoming'),
                 'network.autoConnect': False,
                 'network.kadEnabled': False,
-                'network.p2p.bindIp': bind_ip if bind_interface is None else None,
-                'network.p2p.bindInterface': bind_interface,
+                # Physical peers inherit the test app's automatic route. An explicit
+                # bind would require interface pinning even on older Android kernels.
+                'network.p2p.bindIp': bind_ip if bind_interface is None and not automatic_route else None,
+                'network.p2p.bindInterface': None if automatic_route else bind_interface,
                 'network.p2p.tcpPort': 20029,
                 'network.p2p.udpPort': 20030,
                 'network.nat.enabled': False,
@@ -418,6 +432,11 @@ def production_peer(command, peer: dict, *, adb: str, child: dict, report_dir: P
             if time.monotonic() >= deadline:
                 raise RuntimeError("APK peer REST readiness timed out")
             time.sleep(0.5)
+        if automatic_route:
+            stage("peer-verify-automatic-route")
+            network = request_json(f"http://127.0.0.1:{forward}", "GET", "/api/v1/network", PEER_KEY)
+            if network["binding"]["activeConfiguredAddress"] != bind_ip:
+                raise RuntimeError("APK peer automatic route differs from the selected app address")
         stage("peer-ready")
         yield home, forward
         stage("peer-graceful-shutdown")
@@ -517,6 +536,7 @@ def probe_local_listeners(command, peer: dict, *, apk_port: int, api_key: str, a
             with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
                     rust_source=rust_source, bind_ip=str(address), prefix=prefix,
                     bind_interface=binding.get("activeInterfaceId") or None,
+                    automatic_route=_uses_automatic_peer_route(prefix, original["data"]["effective"]),
                     spawn_daemon=spawn_daemon, stop_client=stop_client, campaign=campaign) as (_home, peer_port):
                 with local_listener(f"http://127.0.0.1:{peer_port}", PEER_KEY, role="peer", campaign=campaign):
                     app_attempted = True
@@ -654,6 +674,7 @@ def _transfer_proof(command, peer: dict, *, apk_port: int, api_key: str, adb: st
         interface = network.get("binding", {}).get("activeInterfaceId") or None
         with production_peer(command, peer, adb=adb, child=child, report_dir=report_dir,
                 rust_source=rust_source, bind_ip=bind_ip, prefix=prefix, bind_interface=interface,
+                automatic_route=_uses_automatic_peer_route(prefix, effective["effective"]),
                 spawn_daemon=spawn_daemon, stop_client=stop_client, campaign=campaign) as (home, port):
             campaign.mark("peer-shared-fixture-push")
             shared = home + "/shared"
