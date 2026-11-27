@@ -264,6 +264,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-peer-browse", action="store_true")
     parser.add_argument("--verify-native-large-file-status", action="store_true")
     parser.add_argument("--verify-native-partial-threshold", action="store_true")
+    parser.add_argument("--verify-download-slot-recycle", action="store_true")
     parser.add_argument("--native-browse-buckets", type=int, default=0)
     parser.add_argument("--native-reverse-browse-buckets", type=int, default=0)
     parser.add_argument("--verify-offerfiles-v1-stock-fallback", action="store_true")
@@ -294,6 +295,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects unsupported deterministic transfer evidence combinations."""
+
+    if args.verify_download_slot_recycle and args.client2_identity != "stock_emule":
+        raise ValueError("Download slot recycle comparison requires the stock eMule adapter")
 
     if args.transfer_scenario in {NATIVE_SX2_CALLBACK, NATIVE_SERVER_SIZE_BOUNDARY} and (
         args.client2_identity not in {"stock_emule", "amule"} or args.verify_source_lifecycle
@@ -4615,7 +4619,8 @@ def main(argv: list[str] | None = None) -> int:
                 'network.nickname': CLIENT01.nick,
                 'network.p2p.udpPort': ports['client1_udp'],
                 'security.obfuscationEnabled': (
-                    protocol_case.client_crypt_supported if protocol_case is not None else not native_sx2_callback
+                    protocol_case.client_crypt_supported if protocol_case is not None
+                    else not (native_sx2_callback or args.verify_download_slot_recycle)
                 ),
                 'network.servers.acceptServerListUpdates': args.transfer_scenario == SERVER_TCP_METADATA,
                 'network.connections.connectTimeoutSeconds': 10,
@@ -4722,6 +4727,7 @@ def main(argv: list[str] | None = None) -> int:
                 bind_address=native_target_bind_address,
             )
         else:
+            fixture_crypt_override = False if args.verify_download_slot_recycle else None
             configure_client_profile(
                 config_dir=Path(client2["config_dir"]),
                 app_exe=client2_app_exe,
@@ -4745,17 +4751,17 @@ def main(argv: list[str] | None = None) -> int:
                 crypt_layer_supported=(
                     protocol_case.client_crypt_supported
                     if protocol_case is not None
-                    else None
+                    else fixture_crypt_override
                 ),
                 crypt_layer_requested=(
                     protocol_case.client_crypt_requested
                     if protocol_case is not None
-                    else None
+                    else fixture_crypt_override
                 ),
                 crypt_layer_required=(
                     protocol_case.client_crypt_required
                     if protocol_case is not None
-                    else None
+                    else fixture_crypt_override
                 ),
                 crypt_tcp_padding_length=(
                     ed2k_protocol_cases.PROTOCOL_PADDING_LENGTH
@@ -6344,6 +6350,36 @@ def main(argv: list[str] | None = None) -> int:
                     identity=args.client2_identity, host=p2p_address, port=ports["client2_tcp"],
                     temp_dir=Path(client2["temp_dir"]), aliases=(first, second), submit_link=submit_partial_link,
                 )
+        if args.verify_download_slot_recycle:
+            from emule_test_harness import native_slot_recycle
+
+            current_phase = "native_download_slot_recycle"
+            _, route_address = ed2k_server.resolve_managed_server_windows_route()
+            with LanIpPool(
+                route_address,
+                prefix_length=32,
+                candidate_network=AMULE_BROWSE_HIGH_ID_NETWORK,
+                first_octet4=RELAYED_REASK_HIGH_ID_FIRST_OCTET4,
+                last_octet4=RELAYED_REASK_HIGH_ID_LAST_OCTET4,
+            ) as source_pool:
+                (fixture_address,) = source_pool.acquire(1)
+                witnesses = {}
+                for identity, variant, submit_link, incoming in (
+                    ("rust", 1, lambda link, file_hash: add_download(
+                        base_url, args.api_key, link, file_hash
+                    ), rust_incoming),
+                    ("stock_emule", 2, lambda link, _file_hash: submit_stock_download_link(client2_app, link),
+                     Path(client2["incoming_dir"])),
+                ):
+                    witness = native_slot_recycle.observe(fixture_address, variant, submit_link)
+                    witness["delivery"] = wait_for_completed_file(
+                        incoming / native_slot_recycle.FILE_NAME,
+                        expected_size=len(native_slot_recycle.PAYLOAD),
+                        expected_sha256=witness["sha256"],
+                        timeout_seconds=45,
+                    )
+                    witnesses[identity] = witness
+                report["checks"]["native_download_slot_recycle"] = witnesses
         final_transfer = rest_smoke.http_request(
             base_url, f"/api/v1/downloads/{download_id}", api_key=args.api_key
         )

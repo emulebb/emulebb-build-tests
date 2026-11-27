@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from dataclasses import asdict
 import importlib.util
+import os
+import socket
+import struct
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -15,6 +20,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_mfc_oracle_client  # noqa: E402
+from emule_test_harness import ed2k_wire, kad_nodes, rust_client  # noqa: E402
+from emule_test_harness.buddy_callback_probe import _kad_uint128_wire_bytes  # noqa: E402
+from emule_test_harness.local_kad_peer import LocalKadPeer, receive_frame  # noqa: E402
+from emule_test_harness.native_kad_buddy import BuddyCandidate, OutboundBuddyOffers, sample_buddy_tags  # noqa: E402
+from emule_test_harness.native_kad_correlation import CorrelationPeer, FILE_NAME, fixture_targets  # noqa: E402
+from emule_test_harness.rust_local_ed2k import publish_shared_tree, request_json, wait_for, wait_for_ed2k_connected  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -64,7 +75,368 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--swarm-ready-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--bootstrap-throttle-seconds", type=float, default=DEFAULT_BOOTSTRAP_THROTTLE_SECONDS)
     parser.add_argument("--min-contacts-per-emule-client", type=int, default=DEFAULT_MIN_CONTACTS_PER_EMULE_CLIENT)
+    parser.add_argument("--native-firewall-case", choices=("disconnect", "keyed-probe", "silent", "buddy", "correlation"))
     return parser.parse_args(argv)
+
+
+def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Drive one fresh native Kad round through reachable, closed, or silent helpers."""
+    profile = paths.source_artifacts_dir / "rust-native-firewall"
+    rust_repo = dtt.resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    runtime = rust_client.verified_runtime_stage(rust_repo, dtt.get_workspace_output_root(), diagnostics=True)
+    executable = Path(runtime["executable"])
+    bind = "127.0.0.1"
+    arm_referrals = threading.Event()
+    referral_used = threading.Event()
+    referral_lock = threading.Lock()
+    offers = OutboundBuddyOffers() if args.native_firewall_case == "buddy" else None
+    correlation = fixture_targets() if args.native_firewall_case == "correlation" else None
+    firewall_case = args.native_firewall_case
+    if offers:
+        firewall_case = "disconnect"
+    if correlation:
+        firewall_case = "keyed-probe"
+
+    with ExitStack() as owned:
+        modes = ("reject-hello", "silent", "silent") if firewall_case == "silent" else (firewall_case,) * 2
+        candidates = []
+        # Each referral needs a separate /24 to exercise the production
+        # response admission limit without introducing any external route.
+        for index, mode in enumerate(modes, start=1):
+            tester = LocalKadPeer(f"127.0.{index}.21", {bind}, firewall_reply=mode)
+            owned.callback(tester.close)
+            tester.start()
+            candidates.append(tester)
+        testers = tuple(candidates)
+
+        def referrals(_target: bytes) -> tuple[LocalKadPeer, ...]:
+            with referral_lock:
+                if not arm_referrals.is_set() or referral_used.is_set():
+                    return ()
+                if sum(bool(peer.evidence().get("pongReplies")) for peer in reporters) < 2:
+                    return ()
+                referral_used.set()
+                return testers
+
+        reporters: list[LocalKadPeer] = []
+        def known_contacts() -> list[kad_nodes.BootstrapContact]:
+            return [
+                kad_nodes.BootstrapContact(peer.bind_ip, peer.udp_port, peer.tcp_port)
+                for peer in reporters
+            ]
+
+        external_listener = owned.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        external_listener.bind((bind, 0))
+        external_port = external_listener.getsockname()[1]
+        used_prefixes: set[int] = set()
+        for suffix in range(2, 32):
+            reporter_options = {
+                "route_referrals": referrals, "nodes_contacts": known_contacts, "reported_udp_port": external_port,
+            }
+            if correlation:
+                reporter = CorrelationPeer(
+                    f"127.0.0.{suffix}", {bind}, targets=correlation[1:], **reporter_options,
+                )
+                # Distinct high bytes give the two similarly prefixed targets
+                # the same ordering of every imported reporter.
+                prefix = reporter.node_id[3]
+                if prefix in used_prefixes:
+                    reporter.close()
+                    continue
+                used_prefixes.add(prefix)
+            elif offers:
+                reporter = BuddyCandidate(f"127.0.0.{suffix}", {bind}, offers=offers, **reporter_options)
+            else:
+                reporter = LocalKadPeer(f"127.0.0.{suffix}", {bind}, **reporter_options)
+            owned.callback(reporter.close)
+            reporters.append(reporter)
+            if len(reporters) == 10:
+                break
+        if len(reporters) != 10:
+            raise RuntimeError("Unable to provision the ten known Kad reporters")
+        for reporter in reporters:
+            reporter.start()
+        if offers:
+            owned.callback(offers.stop)
+        server = owned.enter_context(socket.create_server((bind, 0)))
+        server.settimeout(15)
+        server_port = server.getsockname()[1]
+        with (
+            socket.create_server((bind, 0)) as rest_listener,
+            socket.create_server((bind, 0)) as tcp_listener,
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_listener,
+        ):
+            udp_listener.bind((bind, 0))
+            rest_port = rest_listener.getsockname()[1]
+            tcp_port = tcp_listener.getsockname()[1]
+            udp_port = udp_listener.getsockname()[1]
+        rust_client.write_rust_profile(
+            profile,
+            rust_repo=rust_repo,
+            rest_addr=bind,
+            rest_port=rest_port,
+            api_key=args.api_key,
+            server_endpoint=f"{bind}:{server_port}",
+            server_entry=dtt.ed2k_protocol_cases.rust_server_entry(
+                dtt.ed2k_protocol_cases.PROTOCOL_CASE_MAP["plain-server-plain-clients"], bind, server_port,
+            ),
+            replace_servers=True,
+            local_only_discovery=True,
+            local_kad_seed=known_contacts()[0],
+            settings={
+                "network.ed2kEnabled": True,
+                "network.kadEnabled": True,
+                "network.p2p.bindIp": bind,
+                "network.p2p.tcpPort": tcp_port,
+                "network.p2p.udpPort": udp_port,
+                "security.obfuscationEnabled": correlation is not None,
+            },
+        )
+        output = paths.source_artifacts_dir / "rust-native-firewall.out"
+        child_env = dtt.rust_diagnostics_child_env(paths.source_artifacts_dir / "diagnostics" / "rust")
+        child_env["RUST_LOG"] = "info,emulebb_core::kad_udp_firewall_check=debug"
+        if correlation:
+            child_env["RUST_LOG"] += ",emulebb_kad_dht::publish=debug"
+        process = rust_client.start_rust_client_executable(
+            executable,
+            profile,
+            output,
+            env=child_env,
+        )
+        owned.callback(rust_client.stop_process_tree, process)
+        base = f"http://{bind}:{rest_port}"
+        rest_smoke.wait_for_rest_ready(base, args.api_key, args.rest_ready_timeout_seconds)
+        request_json(base, "POST", "/api/v1/servers/operations/connect", args.api_key, {})
+        stream, _ = server.accept()
+        owned.enter_context(stream)
+        stream.settimeout(10)
+        marker, opcode, payload = receive_frame(stream)
+        if (marker, opcode) != (ed2k_wire.PROTO_EDONKEY, ed2k_wire.OP_LOGINREQUEST):
+            raise RuntimeError("Local witness did not receive a plaintext eD2K login")
+        login = ed2k_wire.decode_login_request(payload)
+        assigned_low_id = 7
+        stream.sendall(ed2k_wire.encode_frame(ed2k_wire.OP_IDCHANGE, struct.pack("<II", assigned_low_id, 0)))
+        wait_for_ed2k_connected(base, args.api_key, 15)
+        request_json(base, "POST", "/api/v1/kad/operations/start", args.api_key, {})
+        request_json(
+            base, "POST", "/api/v1/kad/operations/import-nodes-url", args.api_key,
+            {"url": reporters[0].nodes_url},
+        )
+
+        def get_ready() -> dict[str, object] | None:
+            state = request_json(base, "GET", "/api/v1/kad", args.api_key)
+            if state.get("connected") is True and int(state.get("contactCount", 0)) >= len(reporters):
+                return state
+            return None
+
+        contacts = wait_for(
+            get_ready,
+            timeout_seconds=args.kad_running_timeout_seconds,
+            interval_seconds=1,
+            description="native Kad proof's ten known loopback reporters",
+        )
+        arm_referrals.set()
+        with output.open("rb") as log_file:
+            log_offset = log_file.seek(0, os.SEEK_END)
+        request_json(base, "POST", "/api/v1/kad/operations/recheck-firewall", args.api_key, {})
+
+        def round_summary() -> str | None:
+            with output.open("rb") as log_file:
+                log_file.seek(log_offset)
+                log = log_file.read().decode("utf-8", errors="replace")
+            if firewall_case == "disconnect" and "Kad UDP firewall check: firewalled" in log:
+                return "firewalled"
+            if firewall_case == "keyed-probe" and log.count("Kad UDP firewall check completed from") >= 2:
+                if f"external_udp_port={external_port}" in log and "external_udp_port=0" in log:
+                    return "open-internal-preferred"
+            if firewall_case == "silent" and "Kad UDP firewall check round produced no verdict" in log:
+                if testers[0].evidence().get("closedBeforeRequest") == 1 and all(
+                    tester.evidence().get("silentRequests") == 1 for tester in testers[1:]
+                ):
+                    return "inconclusive"
+            return None
+
+        verdict = wait_for(
+            round_summary,
+            timeout_seconds=55,
+            interval_seconds=1,
+            description=f"Kad native {firewall_case} round verdict",
+        )
+        witnesses = [tester.evidence() for tester in testers]
+        accepted = [row for row in witnesses if row.get("unbiasedRequests") == 1]
+        if len(accepted) < (1 if firewall_case == "keyed-probe" else 2):
+            raise RuntimeError("Native round has too few fresh helper requests")
+        for row in accepted:
+            if row.get("priorUdpPackets", 0) or row["firewallRequestDetails"] != [{
+                "internalPort": udp_port,
+                "externalPort": external_port,
+                "senderKeyPresent": True,
+                "priorUdp": False,
+            }]:
+                raise RuntimeError("Native tester saw a biased request or unexpected UDP port or key")
+            if firewall_case == "disconnect" and row.get("closedAfterRequest") != 1:
+                raise RuntimeError("Closed verdict lacked a post-request helper disconnect")
+            if firewall_case == "keyed-probe" and row.get("keyedUdpProbeReplies") != 2:
+                raise RuntimeError("Open verdict lacked keyed external and internal probes")
+        report = {
+            "sourceRevision": runtime["source"]["revision"],
+            "executableSha256": dtt.file_sha256(executable),
+            "runnerRevision": dtt.git_head_revision(REPO_ROOT),
+            "knownContacts": contacts["contactCount"],
+            "distinctPongReporters": sum(bool(peer.evidence().get("pongReplies")) for peer in reporters),
+            "ed2kServerLowId": assigned_low_id,
+            "verdict": verdict,
+            "testerWitnesses": witnesses,
+        }
+        if offers:
+            report["buddy"] = observe_outbound_buddy(
+                offers, reporters, paths.source_artifacts_dir, base, args.api_key, bind, tcp_port, login["user_hash"],
+            )
+        if correlation:
+            report["targetCorrelation"] = observe_target_correlation(
+                correlation, reporters, paths.source_artifacts_dir, output, base, args.api_key,
+            )
+        return report
+
+
+def observe_target_correlation(
+    fixture: tuple[bytes, bytes, bytes],
+    reporters: list[LocalKadPeer],
+    artifacts: Path,
+    output: Path,
+    base: str,
+    api_key: str,
+) -> dict[str, object]:
+    """Drive the product's ordinary source and keyword publication at one peer."""
+    content, file_target, keyword_target = fixture
+    root = artifacts / "correlated-publish"
+    root.mkdir()
+    (root / FILE_NAME).write_bytes(content)
+    publish_shared_tree(base, api_key, root=root, file_name=FILE_NAME, timeout_seconds=20)
+
+    def witnessed_ack() -> tuple[CorrelationPeer, dict[str, object]] | None:
+        for peer in reporters:
+            if isinstance(peer, CorrelationPeer):
+                witness = peer.witness()
+                if witness is not None:
+                    return peer, witness
+        return None
+
+    peer, witness = wait_for(
+        witnessed_ack,
+        timeout_seconds=55, interval_seconds=0.25, description="reordered Kad replies and the alternate-port ACK",
+        retry_exceptions=(),
+    )
+    expected_acks = {
+        ("source", _kad_uint128_wire_bytes(file_target, "file target").hex(), 17),
+        ("keyword", _kad_uint128_wire_bytes(keyword_target, "keyword target").hex(), 63),
+    }
+    def consumed_replies() -> bool | None:
+        lines = output.read_text(encoding="utf-8", errors="replace").splitlines()
+        if all(
+            any(
+                f"family={family} step=ack" in line
+                and f"contact_addr={peer.bind_ip}:{peer.udp_port} " in line
+                and line.endswith(f"response_target={target} response_load={load}")
+                for line in lines
+            )
+            for family, target, load in expected_acks
+        ):
+            return True
+        return None
+
+    # The ACK is sent at ingress, while publish collects its fan-out before
+    # consuming each response. Wait for both operations to finish that batch.
+    wait_for(
+        consumed_replies, timeout_seconds=15, interval_seconds=0.25,
+        description="the Rust source and keyword operations consuming their matched replies",
+    )
+    witness["matchedPublishOperations"] = sorted(family for family, _, _ in expected_acks)
+    return witness
+
+
+def observe_outbound_buddy(
+    offers: OutboundBuddyOffers,
+    reporters: list[LocalKadPeer],
+    artifacts: Path,
+    base: str,
+    api_key: str,
+    bind: str,
+    tcp_port: int,
+    user_hash: str,
+) -> dict[str, object]:
+    """Prove outgoing HELLO readiness, callback relay, and withdrawn publish eligibility."""
+    if not offers.first_hello.wait(55) or not offers.reserve_offer.wait(3):
+        raise RuntimeError("Native Buddy search did not produce two distinct offers")
+    if sample_buddy_tags(bind, tcp_port) is not None:
+        raise RuntimeError("An incomplete buddy handshake was advertised")
+
+    offers.fail_first.set()
+    if not offers.ready_socket.wait(6) or offers.reserve is None:
+        raise RuntimeError("Reserve buddy did not receive the next TCP handshake")
+    expected_tags = (
+        int.from_bytes(socket.inet_aton(offers.reserve.bind_ip), "little"),
+        offers.reserve.udp_port,
+    )
+
+    def published_tags() -> tuple[int, int] | None:
+        tags = sample_buddy_tags(bind, tcp_port)
+        return tags if tags == expected_tags else None
+
+    wait_for(published_tags, timeout_seconds=6, interval_seconds=0.25, description="ready buddy HELLO tags")
+
+    def share_fixture(name: str) -> str:
+        root = artifacts / name
+        root.mkdir()
+        (root / f"{name}.bin").write_bytes((name.encode("ascii") + b"\x00") * 256)
+        shared = publish_shared_tree(base, api_key, root=root, file_name=f"{name}.bin", timeout_seconds=20)
+        return str(shared["sharedFiles"]["matched"]["hash"]).lower()
+
+    def relay_publication(target: str) -> dict[str, object] | None:
+        wire_target = _kad_uint128_wire_bytes(bytes.fromhex(target), "source target").hex()
+        return next((
+            row for reporter in reporters for row in reporter.evidence()["sourceShapes"]
+            if row["target"] == wire_target and row["sourceType"] in {3, 5} and row["buddyHashPresent"]
+        ), None)
+
+    first_hash = share_fixture("buddy-callback-payload")
+    publication = wait_for(
+        lambda: relay_publication(first_hash),
+        timeout_seconds=45, interval_seconds=0.5, description="source publication through the verified reserve",
+    )
+    with socket.create_server((bind, 0)) as requester:
+        requester.settimeout(6)
+        offers.relay(bytes.fromhex(first_hash), requester.getsockname())
+        callback, _ = requester.accept()
+        with callback:
+            callback.settimeout(2)
+            marker, opcode, payload = receive_frame(callback)
+            if (
+                (marker, opcode) != (ed2k_wire.PROTO_EDONKEY, 0x01)
+                or payload[:1] != b"\x10"
+                or payload[1:17].hex().upper() != user_hash
+            ):
+                raise RuntimeError("Native requester did not receive the verified daemon's callback HELLO")
+
+    offers.close_reserve.set()
+    wait_for(
+        lambda: True if sample_buddy_tags(bind, tcp_port) is None else None,
+        timeout_seconds=6, interval_seconds=0.25, description="buddy HELLO withdrawal on TCP closure",
+    )
+    withdrawn_hash = share_fixture("after-buddy-disconnect")
+    observation_end = time.monotonic() + 6
+    while time.monotonic() < observation_end:
+        if relay_publication(withdrawn_hash) is not None:
+            raise RuntimeError("Advertised a new source through the closed buddy relay")
+        time.sleep(0.25)
+    return {
+        "advertisedDuringInitialHandshake": False,
+        "reserveHelloVerified": True,
+        "sourcePublication": publication,
+        "callbackHelloMatched": True,
+        "advertisementWithdrawnAfterClosure": True,
+        "noNewSourcePublicationAfterClosure": True,
+    }
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -171,8 +543,8 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=args.native_firewall_case is None,
     )
-    profile_seed_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     report: dict[str, object] = {
         "suite": SUITE_NAME,
         "status": "running",
@@ -184,7 +556,14 @@ def main(argv: list[str] | None = None) -> int:
     current_phase = "initializing"
 
     try:
+        if args.native_firewall_case:
+            current_phase = f"native_firewall_{args.native_firewall_case}"
+            report["checks"]["nativeFirewall"] = observe_native_firewall(paths, args)
+            report["status"] = "passed"
+            return 0
+
         current_phase = "resolve_clients"
+        profile_seed_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
         mfc_oracle_client = resolve_required_mfc_oracle(paths, args)
 
         current_phase = "allocate_ports"

@@ -43,7 +43,7 @@ def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> 
         for coverage_id in group["coverageIds"]
     ]
 
-    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 108
+    assert len(REQUIRED_STOCK_COVERAGE_IDS) == 109
     assert len(coverage_ids) == len(set(coverage_ids))
     assert set(coverage_ids) == REQUIRED_STOCK_COVERAGE_IDS
     assert payload["stockAuthority"]["requiredCoverageCount"] == len(
@@ -60,24 +60,24 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
 
     assert report["valid"] is True
     assert report["coverage"] == {
-        "coveredGroupCount": 5,
-        "coveredIdCount": 35,
+        "coveredGroupCount": 6,
+        "coveredIdCount": 36,
         "groupVerdictCounts": {
-            "parity": 5,
+            "parity": 6,
             "divergence": 0,
             "evidence-incomplete": 15,
             "not-observed": 0,
             "intentional-difference": 0,
         },
         "idVerdictCounts": {
-            "parity": 35,
+            "parity": 36,
             "divergence": 0,
             "evidence-incomplete": 73,
             "not-observed": 0,
             "intentional-difference": 0,
         },
-        "requiredGroupCount": 20,
-        "requiredIdCount": 108,
+        "requiredGroupCount": 21,
+        "requiredIdCount": 109,
     }
     assert report["unconfiguredAuthorityIds"] == []
     assert report["assets"]["classificationCounts"] == {
@@ -116,6 +116,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "client-udp.v2",
         "client-udp.v3",
         "client-udp.v4",
+        "download.slot-recycle-regrant",
         "lowid.buddy-callback",
         "lowid.direct-callback",
         "lowid.relayed-reask",
@@ -280,7 +281,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.login.request",
         "transfer.block.uncompressed",
     ]
-    assert len(payload["evidenceReceipts"]) == 28
+    assert len(payload["evidenceReceipts"]) == 29
     assert payload["evidenceReceipts"][21]["coverageIds"] == ["client-udp.queue-full"]
     assert payload["evidenceReceipts"][22]["coverageIds"] == [
         "client-udp.file-not-found"
@@ -290,6 +291,12 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert payload["evidenceReceipts"][25]["coverageIds"] == ["client-udp.v3"]
     assert payload["evidenceReceipts"][26]["coverageIds"] == ["client-udp.v2"]
     assert payload["evidenceReceipts"][27]["coverageIds"] == ["client-udp.v1"]
+    recycle = payload["evidenceReceipts"][28]
+    assert recycle["coverageIds"] == ["download.slot-recycle-regrant"]
+    assert [subject["authorityId"] for subject in recycle["subjects"]] == [
+        "rust-product",
+        "stock-instrumented",
+    ]
     assert [
         subject["authorityId"]
         for subject in payload["evidenceReceipts"][24]["subjects"]
@@ -422,14 +429,16 @@ def test_catalog_cli_json_report_is_machine_readable(
 
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
-    assert report["coverage"]["coveredGroupCount"] == 5
+    assert report["coverage"]["coveredGroupCount"] == 6
 
 
 def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
     source = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(source.read_text(encoding="utf-8"))
-    payload["records"][-1]["payloadDigest"] = "sha256:" + "0" * 64
-    payload["coverageGroups"][-1]["coverageIds"].remove("queue.admission")
+    queue_group = next(group for group in payload["coverageGroups"] if group["groupId"] == "queue-upload-state")
+    queue_group["coverageIds"].remove("queue.admission")
+    queue_record = next(record for record in payload["records"] if record.get("recordId") == "stock.queue.state")
+    queue_record["payloadDigest"] = "sha256:" + "0" * 64
     manifest = tmp_path / "drifted.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 

@@ -202,7 +202,8 @@
       "coverageGroupIds": [
         "source-exchange-two",
         "lowid-callbacks",
-        "queue-upload-state"
+        "queue-upload-state",
+        "download-slot-recycle"
       ]
     },
     {
@@ -306,6 +307,19 @@
       "evidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "reason": "Rust and MFC emitted byte-identical direct V4 reasks and ACKs, then applied the same queue-rank and complete-source state through causally ordered bilateral diagnostics.",
       "receiptIds": ["rust-mfc-client-udp-v4-20261102t123752z"],
+      "verdict": "parity"
+    },
+    {
+      "coverageId": "download.slot-recycle-regrant",
+      "evidenceLayers": [
+        "codec-transcript",
+        "deterministic-state-machine",
+        "local-cross-client"
+      ],
+      "reason": "Rust and frozen stock each preserved the prefix and completed via a same-socket regrant.",
+      "receiptIds": [
+        "rust-stock-download-slot-recycle-20261127t133448z"
+      ],
       "verdict": "parity"
     },
     {
@@ -1599,6 +1613,34 @@
           "path": "srchybrid/UploadClient.cpp"
         }
       ]
+    },
+    {
+      "coverageIds": ["download.slot-recycle-regrant"],
+      "groupId": "download-slot-recycle",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.download.queue",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "keep the same socket responsive while queued and finish the exact remaining range after regrant",
+        "start": "the downloader has an active reservation and accepted a valid prefix from the uploader",
+        "stimulus": "send OP_OUTOFPARTREQS, queue rank, a public-IP barrier, then a second upload grant"
+      },
+      "recordIds": ["stock.download.slot-recycle"],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/anti_abuse.rs",
+          "selector": "fn recycled_download_releases_block_and_resumes_on_the_same_socket"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": ["case OP_OUTOFPARTREQS:", "client->SetDownloadState(DS_ONQUEUE", "client->ProcessAcceptUpload();"],
+          "path": "srchybrid/ListenSocket.cpp"
+        }
+      ]
     }
   ],
   "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
@@ -2363,6 +2405,34 @@
           "sourceRevision": "d6a6dd672815a13265393ff22622c7fd97b58eee"
         }
       ]
+    },
+    {
+      "artifactLocator": "output-root:reports/live-e2e-suite/20261127T133448Z-emulebb-main-release-6680/native-download-slot-recycle/deterministic-two-client-transfer-result.json",
+      "artifactSha256": "e924740daaf33ea27d50bc6e4c18a971e9f51f8a043ad3b25088796481bff95e",
+      "coverageIds": [
+        "download.slot-recycle-regrant"
+      ],
+      "evidenceLayers": [
+        "codec-transcript",
+        "deterministic-state-machine",
+        "local-cross-client"
+      ],
+      "profileAuthority": "harness-generated-ephemeral-local-profiles",
+      "receiptId": "rust-stock-download-slot-recycle-20261127t133448z",
+      "runnerPath": "scripts/deterministic-two-client-transfer.py",
+      "runnerRevision": "e6d6ece238cdcdc29c17ecd1a9c6ff7fb6d58f3d",
+      "subjects": [
+        {
+          "authorityId": "rust-product",
+          "executableSha256": "669a86152f81e9e8c647eb3f091c22f05d5adc02899bfa1029005fbcacbcd0ba",
+          "sourceRevision": "e255750557a63714b637f896c4aa153b9828e200"
+        },
+        {
+          "authorityId": "stock-instrumented",
+          "executableSha256": "fa775bad9a66719cb0fcd6ab81fd15f716a421e0f5c78aeede3547a228878e2b",
+          "sourceRevision": "c547b7cf2b6b59d971600111e425330ec8d2944d"
+        }
+      ]
     }
   ],
   "records": [
@@ -2976,6 +3046,19 @@
       "scenarioId": "stock.20.kad-ingress-admission.v1",
       "sequence": "decode;correlate-without-consume;ban-flood-port53-admit;reject-no-mutation;valid-learn-consume-dispatch",
       "transport": "udp"
+    },
+    {
+      "coverageIds": ["download.slot-recycle-regrant"],
+      "fixtureBase64": "Z3JhbnRlZD5yZXF1ZXN0ZWQ+cHJlZml4LXdyaXR0ZW4+cmVjeWNsZWQ+cmFua2VkPnNhbWUtc29ja2V0LXJlZ3JhbnQ+c3VmZml4LXJlcXVlc3RlZD5oYXNoLXZlcmlmaWVk",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 99,
+      "payloadDigest": "sha256:d27278a370f8543f6fefc25518215c4924a21e7778fdbff68cce235a6fbd3a8d",
+      "protocol": "ed2k",
+      "recordId": "stock.download.slot-recycle",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.21.download-slot-recycle.v1",
+      "sequence": "granted; requested; prefix written; recycled; ranked; same-socket regrant; suffix requested; hash verified",
+      "transport": "state"
     }
   ],
   "scenarioSource": "stock/community source anchors, native protocol fixtures, and diagnostic evidence normalization",
@@ -3117,12 +3200,18 @@
       "protocol": "kad2",
       "scenarioId": "stock.20.kad-ingress-admission.v1",
       "source": "community-stock-source"
+    },
+    {
+      "description": "Download-side upload slot recycle and regrant on a single TCP session.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.21.download-slot-recycle.v1",
+      "source": "community-stock-source"
     }
   ],
   "schema": "emulebb-build-tests.protocol-parity-catalog",
   "stockAuthority": {
     "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
-    "requiredCoverageCount": 108,
+    "requiredCoverageCount": 109,
     "sourcePath": "repos/emule-stock",
     "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
   }

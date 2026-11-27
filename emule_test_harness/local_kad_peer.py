@@ -14,19 +14,32 @@ from __future__ import annotations
 import ipaddress
 import hashlib
 import select
+import secrets
 import socket
 import struct
 import threading
 from collections import Counter
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import TCPServer
+from typing import Literal
 
 from .docker_ed2k_source_publisher import encode_hello_answer
 from .kad_nodes import BootstrapContact, encode_nodes_dat
+from .kad_fixture_envelope import encode_receiver_key_packet
 from . import ed2k_wire
 
 KAD_HEADER = 0xE4
 FIREWALL_UDP = 0x62
 USER_HASH = bytes.fromhex("b6120eb263ab40d09def36531b168590")
+
+
+class _FixtureHttpServer(HTTPServer):
+    def server_bind(self) -> None:
+        # The fixture already owns a numeric bind address. HTTPServer's normal
+        # reverse DNS lookup is unnecessary and can reach the host resolver.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def receive_frame(stream: socket.socket) -> tuple[int, int, bytes]:
@@ -51,9 +64,22 @@ def receive_frame(stream: socket.socket) -> tuple[int, int, bytes]:
 class LocalKadPeer:
     """Own one local TCP listener and UDP socket until explicit cleanup."""
 
-    def __init__(self, bind_ip: str, allowed_peers: set[str]) -> None:
+    def __init__(
+        self,
+        bind_ip: str,
+        allowed_peers: set[str],
+        *,
+        route_referrals: Callable[[bytes], tuple[LocalKadPeer, ...]] | None = None,
+        firewall_reply: Literal["probe", "keyed-probe", "disconnect", "silent", "reject-hello"] = "probe",
+        reported_udp_port: int | None = None,
+        nodes_contacts: Callable[[], list[BootstrapContact]] | None = None,
+    ) -> None:
         self.bind_ip = str(ipaddress.IPv4Address(bind_ip))
         self.allowed_peers = {str(ipaddress.IPv4Address(ip)) for ip in allowed_peers}
+        self._route_referrals = route_referrals
+        self._firewall_reply = firewall_reply
+        self._reported_udp_port = reported_udp_port
+        self._firewall_requests: list[dict[str, object]] = []
         self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -86,7 +112,7 @@ class LocalKadPeer:
                 if self.path != "/nodes.dat":
                     self.send_error(404)
                     return
-                body = encode_nodes_dat(
+                contacts = nodes_contacts() if nodes_contacts else (
                     [
                         BootstrapContact(
                             fixture.bind_ip,
@@ -95,6 +121,7 @@ class LocalKadPeer:
                         )
                     ]
                 )
+                body = encode_nodes_dat(contacts)
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -105,7 +132,7 @@ class LocalKadPeer:
                 pass
 
         try:
-            self._http = HTTPServer((self.bind_ip, 0), NodesHandler)
+            self._http = _FixtureHttpServer((self.bind_ip, 0), NodesHandler)
         except Exception:
             self._udp.close()
             self._tcp.close()
@@ -125,7 +152,7 @@ class LocalKadPeer:
         """Return counters without peer addresses or UDP verification keys."""
 
         shapes = []
-        for sources in self._sources.values():
+        for target, sources in self._sources.items():
             for size, record in sources.values():
                 tags = {
                     name: value
@@ -135,11 +162,13 @@ class LocalKadPeer:
                 }
                 shapes.append(
                     {
+                        "target": target.hex(),
                         "sizeBytes": size,
                         "sourceType": tags.get(0xFF),
                         "tcpPortPresent": bool(tags.get(0xFD)),
                         "udpPortPresent": bool(tags.get(0xFC)),
                         "connectOptions": tags.get(0xF3),
+                        "buddyHashPresent": bool(tags.get(0xF8)),
                     }
                 )
         return {
@@ -149,6 +178,7 @@ class LocalKadPeer:
             "lastSourceReplyHex": self._last_source_reply.hex()
             if self._last_source_reply
             else None,
+            "firewallRequestDetails": list(self._firewall_requests),
             **dict(self._counts),
         }
 
@@ -217,10 +247,18 @@ class LocalKadPeer:
         if opcode == 0x11 and len(body) >= 20:
             return b"\xe4\x19" + self.node_id + struct.pack("<HBB", self.tcp_port, 9, 0)
         if opcode == 0x60 and not body:
-            return b"\xe4\x61" + struct.pack("<H", peer[1])
+            self._counts["pongReplies"] += 1
+            return b"\xe4\x61" + struct.pack("<H", self._reported_udp_port or peer[1])
         if opcode == 0x21 and len(body) == 33 and body[17:] == self.node_id:
             self._counts["routingReplies"] += 1
-            return b"\xe4\x29" + body[1:17] + b"\x00"
+            referrals = self._route_referrals(body[1:17]) if self._route_referrals else ()
+            self._counts["routingReferrals"] += len(referrals)
+            return b"\xe4\x29" + body[1:17] + bytes([len(referrals)]) + b"".join(
+                target.node_id + struct.pack(
+                    "<IHHB", int(ipaddress.IPv4Address(target.bind_ip)), target.udp_port, target.tcp_port, 9
+                )
+                for target in referrals
+            )
         if opcode == 0x44:
             return self._store_source(body, peer[0])
         if opcode == 0x34:
@@ -308,6 +346,9 @@ class LocalKadPeer:
         marker, opcode, payload = receive_frame(stream)
         if marker != 0xE3 or opcode != 0x01 or len(payload) < 23 or payload[0] != 16:
             raise ValueError("firewall helper requires a complete HELLO")
+        if self._firewall_reply == "reject-hello":
+            self._counts["closedBeforeRequest"] += 1
+            return
         stream.sendall(
             encode_hello_answer(
                 user_hash=USER_HASH,
@@ -315,6 +356,7 @@ class LocalKadPeer:
                     ipaddress.IPv4Address(self.bind_ip).packed, "little"
                 ),
                 tcp_port=self.tcp_port,
+                kad_udp_port=self.udp_port,
             )
         )
         for _ in range(16):
@@ -323,7 +365,7 @@ class LocalKadPeer:
                 continue
             if len(payload) < 8:
                 raise ValueError("truncated OP_FWCHECKUDPREQ")
-            internal_port, external_port, _sender_key = struct.unpack_from(
+            internal_port, external_port, sender_key = struct.unpack_from(
                 "<HHI", payload
             )
             self._counts["firewallRequests"] += 1
@@ -334,6 +376,33 @@ class LocalKadPeer:
                 self._handle_udp()
             error = int(peer_ip in self._known_udp_ips)
             self._counts["biasedRequests" if error else "unbiasedRequests"] += 1
+            self._firewall_requests.append({
+                "internalPort": internal_port,
+                "externalPort": external_port,
+                "senderKeyPresent": sender_key != 0,
+                "priorUdp": bool(error),
+            })
+            if self._firewall_reply == "disconnect":
+                self._counts["closedAfterRequest"] += 1
+                stream.shutdown(socket.SHUT_WR)
+                return
+            if self._firewall_reply == "silent":
+                self._counts["silentRequests"] += 1
+                self._stop.wait(35)
+                return
+            if self._firewall_reply == "keyed-probe":
+                if not sender_key:
+                    raise ValueError("keyed fixture requires the request's sender verify key")
+                # Model destination port translation without changing the
+                # witness source. The external proof retains the original port
+                # in its payload while both datagrams arrive at the bound socket.
+                for port in dict.fromkeys(filter(None, (external_port, internal_port))):
+                    self._udp.sendto(encode_receiver_key_packet(
+                        bytes([KAD_HEADER, FIREWALL_UDP, error]) + struct.pack("<H", port),
+                        sender_key, secrets.randbits(16),
+                    ), (peer_ip, internal_port))
+                    self._counts["keyedUdpProbeReplies"] += 1
+                return
             for port in {internal_port, external_port} - {0}:
                 self._udp.sendto(
                     bytes([KAD_HEADER, FIREWALL_UDP, error]) + struct.pack("<H", port),
