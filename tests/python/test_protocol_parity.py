@@ -116,6 +116,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "client-udp.v2",
         "client-udp.v3",
         "client-udp.v4",
+        "download.slot-recycle-regrant",
         "lowid.buddy-callback",
         "lowid.direct-callback",
         "lowid.relayed-reask",
@@ -422,14 +423,16 @@ def test_catalog_cli_json_report_is_machine_readable(
 
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "emulebb-build-tests.protocol-parity-catalog-report"
-    assert report["coverage"]["coveredGroupCount"] == 5
+    assert report["coverage"]["coveredGroupCount"] == 6
 
 
 def test_stock_oracle_rejects_binary_digest_and_coverage_drift(tmp_path: Path) -> None:
     source = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(source.read_text(encoding="utf-8"))
-    payload["records"][-1]["payloadDigest"] = "sha256:" + "0" * 64
-    payload["coverageGroups"][-1]["coverageIds"].remove("queue.admission")
+    queue_group = next(group for group in payload["coverageGroups"] if group["groupId"] == "queue-upload-state")
+    queue_group["coverageIds"].remove("queue.admission")
+    queue_record = next(record for record in payload["records"] if record.get("recordId") == "stock.queue.state")
+    queue_record["payloadDigest"] = "sha256:" + "0" * 64
     manifest = tmp_path / "drifted.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
