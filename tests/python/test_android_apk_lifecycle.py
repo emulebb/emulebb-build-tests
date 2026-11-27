@@ -161,6 +161,17 @@ def test_source_and_actual_apk_bytes_are_bound(tmp_path):
                               expected_cert_sha256="b" * 64)
 
 
+def test_debug_smoke_admits_only_the_requested_abi_and_signer(tmp_path):
+    digest = payload(tmp_path, lambda value: value.update(debug=True, abis=["arm64-v8a"]))
+    options = dict(source_sha=SOURCE, manifest_sha256=digest, expected_cert_sha256="b" * 64)
+    admitted = subject.admit_debug_payload(tmp_path, "manifest.json", abi="arm64-v8a", **options)
+    assert admitted["abis"] == ["arm64-v8a"]
+    with pytest.raises(RuntimeError, match="selected single ABI"):
+        subject.admit_debug_payload(tmp_path, "manifest.json", abi="x86_64", **options)
+    with pytest.raises(RuntimeError, match="production release"):
+        subject.admit_payload(tmp_path, "manifest.json", **options)
+
+
 @pytest.mark.parametrize("field,value", [("status", "failed"), ("applicationId", "org.example.other"),
     ("minSdk", 34), ("targetSdk", 34), ("signerSha256", "unsigned"),
     ("versionCode", None), ("versionCode", True), ("versionCode", 0), ("versionCode", 2_100_000_001)])

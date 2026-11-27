@@ -136,6 +136,21 @@ def admit_production_certificate(payload: dict, *, expected_cert_sha256: str) ->
 def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_sha256: str,
                   expected_cert_sha256: str) -> dict:
     """Bind immutable release identities to one bounded, source-built signed APK."""
+    return _admit_payload(root, manifest_name, source_sha=source_sha, manifest_sha256=manifest_sha256,
+                          expected_cert_sha256=expected_cert_sha256, debug_abi=None)
+
+
+def admit_debug_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_sha256: str,
+                        expected_cert_sha256: str, abi: str) -> dict:
+    """Admit a single-ABI debug package for an isolated development smoke."""
+    if abi not in {"arm64-v8a", "x86_64"}:
+        raise ValueError("Select a supported debug ABI")
+    return _admit_payload(root, manifest_name, source_sha=source_sha, manifest_sha256=manifest_sha256,
+                          expected_cert_sha256=expected_cert_sha256, debug_abi=abi)
+
+
+def _admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_sha256: str,
+                   expected_cert_sha256: str, debug_abi: str | None) -> dict:
     if (re.fullmatch(r"[0-9a-f]{40}", source_sha) is None
             or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
             or Path(manifest_name).name != manifest_name or "\\" in manifest_name):
@@ -150,7 +165,11 @@ def admit_payload(root: Path, manifest_name: str, *, source_sha: str, manifest_s
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise RuntimeError("APK receipt must contain an object")
-    admit_production_certificate(value, expected_cert_sha256=expected_cert_sha256)
+    if debug_abi is None:
+        admit_production_certificate(value, expected_cert_sha256=expected_cert_sha256)
+    elif (re.fullmatch(r"[0-9a-f]{64}", expected_cert_sha256) is None or value.get("debug") is not True
+          or value.get("abis") != [debug_abi] or value.get("signerSha256") != expected_cert_sha256):
+        raise RuntimeError("Debug smoke requires the selected single ABI and exact debug signer")
     identity = value.get("buildIdentity", {})
     apk = value.get("apk", {})
     if (value.get("schema") != "emulebb.android.apk-package/1" or value.get("status") != "passed"
