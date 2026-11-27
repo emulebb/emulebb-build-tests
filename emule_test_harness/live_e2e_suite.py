@@ -122,6 +122,7 @@ DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS = 45.0
 DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS = 300.0
 ED2K_SERVER_EXE_SUITE_NAMES = {
     "deterministic-two-client-transfer",
+    "native-download-slot-recycle",
     "multi-client-p2p-matrix",
     "godzilla-local-swarm",
     "local-ed2k-search-soak",
@@ -131,6 +132,7 @@ ED2K_SERVER_EXE_SUITE_NAMES = {
 }
 CLIENT2_APP_EXE_SUITE_NAMES = {
     "deterministic-two-client-transfer",
+    "native-download-slot-recycle",
     "multi-client-p2p-matrix",
     "godzilla-local-swarm",
     "local-ed2k-search-soak",
@@ -210,6 +212,10 @@ LAN_BIND_ADDR_SUITE_NAMES = frozenset(
         "local-ed2k-search-soak",
         "shared-directory-browse-stress",
         "local-kad-mixed-client-swarm",
+        "native-kad-firewall-disconnect",
+        "native-kad-firewall-keyed-probe",
+        "native-kad-firewall-silence",
+        "native-download-slot-recycle",
         "local-kad-swarm",
         "multi-client-p2p-matrix",
         "package-helper-integration",
@@ -358,6 +364,34 @@ SUITE_SPECS = (
     ),
     SuiteSpec(
         name="local-kad-mixed-client-swarm",
+        script_name="local-kad-mixed-client-swarm.py",
+        category="protocol",
+        network_scope="lan",
+        default_enabled=False,
+    ),
+    SuiteSpec(
+        name="native-download-slot-recycle",
+        script_name="deterministic-two-client-transfer.py",
+        category="protocol",
+        network_scope="lan",
+        default_enabled=False,
+    ),
+    SuiteSpec(
+        name="native-kad-firewall-disconnect",
+        script_name="local-kad-mixed-client-swarm.py",
+        category="protocol",
+        network_scope="lan",
+        default_enabled=False,
+    ),
+    SuiteSpec(
+        name="native-kad-firewall-keyed-probe",
+        script_name="local-kad-mixed-client-swarm.py",
+        category="protocol",
+        network_scope="lan",
+        default_enabled=False,
+    ),
+    SuiteSpec(
+        name="native-kad-firewall-silence",
         script_name="local-kad-mixed-client-swarm.py",
         category="protocol",
         network_scope="lan",
@@ -1278,6 +1312,15 @@ def build_suite_command(
             command.extend(["--require-scenario", "rust-downloads-from-amule-stable"])
     if spec.name == "deterministic-two-client-transfer":
         command.extend(["--protocol-case", "obfuscated-preferred"])
+    if spec.name == "native-download-slot-recycle":
+        command.extend(["--client2-identity", "stock_emule", "--verify-download-slot-recycle"])
+    firewall_case = {
+        "native-kad-firewall-disconnect": "disconnect",
+        "native-kad-firewall-keyed-probe": "keyed-probe",
+        "native-kad-firewall-silence": "silent",
+    }.get(spec.name)
+    if firewall_case:
+        command.extend(["--native-firewall-case", firewall_case])
     if spec.name in ED2K_SERVER_EXE_SUITE_NAMES and ed2k_server_exe is not None:
         command.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
     if spec.name in CLIENT2_APP_EXE_SUITE_NAMES and client2_app_exe is not None:
@@ -1286,6 +1329,7 @@ def build_suite_command(
         spec.name
         in {
             "deterministic-two-client-transfer",
+            "native-download-slot-recycle",
             "multi-client-p2p-matrix",
             "godzilla-local-swarm",
             "local-ed2k-search-soak",
@@ -1302,6 +1346,7 @@ def build_suite_command(
         spec.name
         in {
             "deterministic-two-client-transfer",
+            "native-download-slot-recycle",
             "multi-client-p2p-matrix",
             "godzilla-local-swarm",
             "local-ed2k-search-soak",

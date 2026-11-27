@@ -8,10 +8,16 @@ import urllib.request
 import pytest
 
 from emule_test_harness import ed2k_wire
+from emule_test_harness.kad_fixture_envelope import encode_receiver_key_packet
 from emule_test_harness.local_kad_peer import LocalKadPeer, receive_frame
 from emule_test_harness.kad_nodes import BootstrapContact, encode_nodes_dat
 
 pytestmark = pytest.mark.unit
+
+
+def test_keyed_firewall_fixture_matches_receiver_key_vector() -> None:
+    packet = encode_receiver_key_packet(bytes.fromhex("e46200a028"), 0x10203040, 0x1234)
+    assert packet.hex() == "0234127a5ea09dd919f4a45f77e70fd471420dbdec"
 
 
 @pytest.fixture

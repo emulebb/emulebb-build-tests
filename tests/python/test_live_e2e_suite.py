@@ -1077,6 +1077,27 @@ def test_native_sx2_owns_its_bind_addresses(tmp_path: Path, selection: str | Non
     assert ("--p2p-bind-interface-address" in command) == (selection is None)
 
 
+def test_native_slot_recycle_preserves_exact_runtime_overrides(tmp_path: Path) -> None:
+    stock = tmp_path / "stock.exe"
+    server = tmp_path / "server.exe"
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("native-download-slot-recycle"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        lan_bind_addr="192.0.2.5",
+        client2_app_exe=stock,
+        ed2k_server_exe=server,
+    )
+    assert script_name(command) == "deterministic-two-client-transfer.py"
+    assert option_values(command, "--client2-identity") == ["stock_emule"]
+    assert option_values(command, "--client2-app-exe") == [str(stock)]
+    assert option_values(command, "--ed2k-server-exe") == [str(server)]
+    assert "--verify-download-slot-recycle" in command
+
+
 def test_multi_client_required_profile_enables_required_optional_clients(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

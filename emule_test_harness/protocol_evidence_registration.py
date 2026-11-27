@@ -21,6 +21,7 @@ from emule_test_harness import docker_ed2k_source_publisher
 from emule_test_harness import ed2k_protocol_cases
 from emule_test_harness import ed2k_wire
 from emule_test_harness import kad_nodes
+from emule_test_harness import native_slot_recycle
 from emule_test_harness import relayed_reask_diagnostic_evidence
 from emule_test_harness import rust_ed2k
 from emule_test_harness import server_callback_diagnostic_evidence
@@ -6790,6 +6791,82 @@ def build_client_udp_registration(
     raise ValueError(f"unsupported client-UDP scenario: {scenario!r}")
 
 
+def _build_native_slot_recycle_registration(
+    report: dict[str, Any], report_path: Path, relative_report: Path,
+) -> dict[str, Any]:
+    witnesses = _object(report["checks"]["native_download_slot_recycle"], "native slot recycle witnesses")
+    profiles = _object(report.get("profiles"), "profiles")
+    layers = ["codec-transcript", "deterministic-state-machine", "local-cross-client"]
+    expected_suffix = [
+        {"direction": "to-downloader", "opcode": 0x55},
+        {"direction": "from-downloader", "marker": 0xE3, "opcode": 0x47},
+        {"direction": "to-downloader", "sentRange": [0, 10_240]},
+        {"direction": "to-downloader", "opcode": 0x57},
+        {"direction": "to-downloader", "opcode": 0x5C, "rank": 7},
+        {"direction": "to-downloader", "marker": 0xC5, "opcode": 0x97},
+        {"direction": "from-downloader", "marker": 0xC5, "opcode": 0x98},
+        {"direction": "to-downloader", "opcode": 0x55},
+        {"direction": "from-downloader", "marker": 0xE3, "opcode": 0x47},
+        {"direction": "to-downloader", "sentRange": [10_240, 32_768]},
+    ]
+    subjects = []
+    for witness_key, client_key, authority, variant in (
+        ("rust", "emulebb_rust", "rust-product", 1),
+        ("stock_emule", "stock_emule", "stock-instrumented", 2),
+    ):
+        witness = _object(witnesses.get(witness_key), f"{witness_key} recycle witness")
+        delivered = _object(witness.get("delivery"), f"{witness_key} delivery")
+        trace = witness.get("trace")
+        expected_file_hash, expected_sha256 = native_slot_recycle.fixture_identity(variant)
+        if (
+            not isinstance(trace, list)
+            or trace[-len(expected_suffix):] != expected_suffix
+            or witness.get("firstRange") != [0, 32_768]
+            or witness.get("regrantedRange") != [10_240, 32_768]
+            or witness.get("fileHash") != expected_file_hash
+            or delivered.get("size") != 32_768
+            or delivered.get("sha256") != expected_sha256
+        ):
+            raise ValueError(f"{witness_key} did not prove the exact same-socket recycle sequence")
+        profile = _profile_by_client_key(profiles, client_key)
+        revision = profile.get("source_revision")
+        if authority == "stock-instrumented":
+            revision = _object(profile.get("availability"), "stock profile availability").get("source_revision")
+            if revision != "c547b7cf2b6b59d971600111e425330ec8d2944d":
+                raise ValueError("Slot recycle witness requires the frozen stock runtime")
+        subjects.append({
+            "authorityId": authority,
+            "executableSha256": _lower_hex(profile.get("app_sha256"), SHA256_PATTERN, "executable SHA-256"),
+            "sourceRevision": _lower_hex(revision, GIT_REVISION_PATTERN, "source revision"),
+        })
+    stamp = next((match.group("stamp").lower() for part in relative_report.parts
+                  if (match := RUN_DIRECTORY_PATTERN.match(part))), None)
+    if stamp is None:
+        raise ValueError("Slot recycle receipt must be in a timestamped native run")
+    coverage = "download.slot-recycle-regrant"
+    receipt_id = f"rust-stock-download-slot-recycle-{stamp}"
+    return {
+        "coverageEvidence": [{
+            "coverageId": coverage,
+            "evidenceLayers": layers,
+            "reason": "Rust and frozen stock each preserved the prefix and completed via a same-socket regrant.",
+            "receiptIds": [receipt_id],
+            "verdict": "parity",
+        }],
+        "evidenceReceipt": {
+            "artifactLocator": f"output-root:{relative_report.as_posix()}",
+            "artifactSha256": _file_sha256(report_path),
+            "coverageIds": [coverage],
+            "evidenceLayers": layers,
+            "profileAuthority": PROFILE_AUTHORITY,
+            "receiptId": receipt_id,
+            "runnerPath": TRANSFER_RUNNER_PATH,
+            "runnerRevision": _lower_hex(report.get("runner_revision"), GIT_REVISION_PATTERN, "runner revision"),
+            "subjects": subjects,
+        },
+    }
+
+
 def build_transfer_registration(
     report_path: Path, *, output_root: Path
 ) -> dict[str, Any]:
@@ -6809,19 +6886,20 @@ def build_transfer_registration(
         raise ValueError(
             "report must use an immutable timestamped run path, not latest"
         )
-    run_directory = resolved_report.parent
-    stamp_match = RUN_DIRECTORY_PATTERN.match(run_directory.name)
-    if stamp_match is None:
-        raise ValueError(
-            "report parent must be a timestamped deterministic transfer run directory"
-        )
-
     report = json.loads(resolved_report.read_text(encoding="utf-8"))
     if not isinstance(report, dict):
         raise ValueError("report must be a JSON object")
     if report.get("suite") != TRANSFER_SUITE or report.get("status") != "passed":
         raise ValueError(
             "report must be a passed deterministic-two-client-transfer receipt"
+        )
+    if isinstance(report.get("checks"), dict) and "native_download_slot_recycle" in report["checks"]:
+        return _build_native_slot_recycle_registration(report, resolved_report, relative_report)
+    run_directory = resolved_report.parent
+    stamp_match = RUN_DIRECTORY_PATTERN.match(run_directory.name)
+    if stamp_match is None:
+        raise ValueError(
+            "report parent must be a timestamped deterministic transfer run directory"
         )
     runner_revision = _lower_hex(
         report.get("runner_revision"), GIT_REVISION_PATTERN, "runner_revision"

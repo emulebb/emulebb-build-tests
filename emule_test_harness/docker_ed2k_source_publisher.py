@@ -653,6 +653,7 @@ def encode_hello_answer(
     user_hash: bytes,
     client_id: int,
     tcp_port: int,
+    kad_udp_port: int = 0,
 ) -> bytes:
     """Encodes the plain OP_HELLOANSWER shape used by stock eD2K clients."""
 
@@ -660,10 +661,18 @@ def encode_hello_answer(
     _validate_port(tcp_port, "tcp_port")
     if not 0 <= client_id <= 0xFFFF_FFFF:
         raise ValueError("client_id must fit in u32")
+    tags = b""
+    if kad_udp_port:
+        _validate_port(kad_udp_port, "kad_udp_port")
+        tags = (
+            struct.pack("<BHBI", 3, 1, 0xF9, kad_udp_port << 16)
+            + struct.pack("<BHBI", 3, 1, 0xFE, 9)
+        )
     payload = (
         user_hash
         + struct.pack("<IH", client_id, tcp_port)
-        + struct.pack("<I", 0)  # tag count
+        + struct.pack("<I", 2 if tags else 0)
+        + tags
         + struct.pack("<IH", 0, 0)  # server IPv4 and port
     )
     return ed2k_wire.encode_frame(OP_HELLOANSWER, payload)

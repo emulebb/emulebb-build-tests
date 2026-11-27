@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from dataclasses import asdict
 import importlib.util
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -15,6 +18,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_mfc_oracle_client  # noqa: E402
+from emule_test_harness import kad_nodes, rust_client  # noqa: E402
+from emule_test_harness.local_kad_peer import LocalKadPeer  # noqa: E402
+from emule_test_harness.rust_local_ed2k import request_json, wait_for  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -64,7 +70,162 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--swarm-ready-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--bootstrap-throttle-seconds", type=float, default=DEFAULT_BOOTSTRAP_THROTTLE_SECONDS)
     parser.add_argument("--min-contacts-per-emule-client", type=int, default=DEFAULT_MIN_CONTACTS_PER_EMULE_CLIENT)
+    parser.add_argument("--native-firewall-case", choices=("disconnect", "keyed-probe", "silent"))
     return parser.parse_args(argv)
+
+
+def observe_native_firewall(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Drive one fresh native Kad round through reachable, closed, or silent helpers."""
+    profile = paths.source_artifacts_dir / "rust-native-firewall"
+    rust_repo = dtt.resolve_selected_workspace_repo(REPO_ROOT, "emulebb-rust")
+    runtime = rust_client.verified_runtime_stage(rust_repo, dtt.get_workspace_output_root(), diagnostics=True)
+    executable = Path(runtime["executable"])
+    bind = "127.0.0.1"
+    arm_referrals = threading.Event()
+    referral_used = threading.Event()
+    referral_lock = threading.Lock()
+    firewall_case = args.native_firewall_case
+
+    with ExitStack() as owned:
+        modes = ("reject-hello", "silent", "silent") if firewall_case == "silent" else (firewall_case,) * 2
+        candidates = []
+        for index, mode in enumerate(modes, start=21):
+            tester = LocalKadPeer(f"127.0.0.{index}", {bind}, firewall_reply=mode)
+            owned.callback(tester.close)
+            tester.start()
+            candidates.append(tester)
+        testers = tuple(candidates)
+
+        def referrals(_target: bytes) -> tuple[LocalKadPeer, ...]:
+            with referral_lock:
+                if not arm_referrals.is_set() or referral_used.is_set():
+                    return ()
+                if sum(bool(peer.evidence().get("pongReplies")) for peer in reporters) < 2:
+                    return ()
+                referral_used.set()
+                return testers
+
+        reporters: list[LocalKadPeer] = []
+        def known_contacts() -> list[kad_nodes.BootstrapContact]:
+            return [
+                kad_nodes.BootstrapContact(peer.bind_ip, peer.udp_port, peer.tcp_port)
+                for peer in reporters
+            ]
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as external_listener:
+            external_listener.bind((bind, 0))
+            external_port = external_listener.getsockname()[1]
+        for suffix in range(2, 12):
+            reporter = LocalKadPeer(
+                f"127.0.0.{suffix}", {bind}, route_referrals=referrals, nodes_contacts=known_contacts,
+                reported_udp_port=external_port,
+            )
+            owned.callback(reporter.close)
+            reporters.append(reporter)
+        for reporter in reporters:
+            reporter.start()
+        with (
+            socket.create_server((bind, 0)) as rest_listener,
+            socket.create_server((bind, 0)) as tcp_listener,
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_listener,
+        ):
+            udp_listener.bind((bind, 0))
+            rest_port = rest_listener.getsockname()[1]
+            tcp_port = tcp_listener.getsockname()[1]
+            udp_port = udp_listener.getsockname()[1]
+        rust_client.write_rust_profile(
+            profile,
+            rust_repo=rust_repo,
+            rest_addr=bind,
+            rest_port=rest_port,
+            api_key=args.api_key,
+            local_only_discovery=True,
+            local_kad_seed=known_contacts()[0],
+            settings={
+                "network.ed2kEnabled": False,
+                "network.kadEnabled": True,
+                "network.p2p.bindIp": bind,
+                "network.p2p.tcpPort": tcp_port,
+                "network.p2p.udpPort": udp_port,
+                "security.obfuscationEnabled": False,
+            },
+        )
+        output = paths.source_artifacts_dir / "rust-native-firewall.out"
+        child_env = dtt.rust_diagnostics_child_env(paths.source_artifacts_dir / "diagnostics" / "rust")
+        child_env["RUST_LOG"] = "info,emulebb_core::kad_udp_firewall_check=debug"
+        process = rust_client.start_rust_client_executable(
+            executable,
+            profile,
+            output,
+            env=child_env,
+        )
+        owned.callback(rust_client.stop_process_tree, process)
+        base = f"http://{bind}:{rest_port}"
+        rest_smoke.wait_for_rest_ready(base, args.api_key, args.rest_ready_timeout_seconds)
+        request_json(base, "POST", "/api/v1/kad/operations/start", args.api_key, {})
+        request_json(
+            base, "POST", "/api/v1/kad/operations/import-nodes-url", args.api_key,
+            {"url": reporters[0].nodes_url},
+        )
+
+        def get_ready() -> dict[str, object] | None:
+            state = request_json(base, "GET", "/api/v1/kad", args.api_key)
+            if state.get("connected") is True and int(state.get("contactCount", 0)) >= len(reporters):
+                return state
+            return None
+
+        contacts = wait_for(
+            get_ready,
+            timeout_seconds=args.kad_running_timeout_seconds,
+            interval_seconds=1,
+            description="native Kad proof's ten known loopback reporters",
+        )
+        arm_referrals.set()
+        request_json(base, "POST", "/api/v1/kad/operations/recheck-firewall", args.api_key, {})
+        def round_summary() -> str | None:
+            log = output.read_text(encoding="utf-8", errors="replace")
+            if firewall_case == "disconnect" and "Kad UDP firewall check: firewalled" in log:
+                return "firewalled"
+            if firewall_case == "keyed-probe" and log.count("Kad UDP firewall check completed from") >= 2:
+                if f"external_udp_port={external_port}" in log and "external_udp_port=0" in log:
+                    return "open-internal-preferred"
+            if firewall_case == "silent" and "Kad UDP firewall check round produced no verdict" in log:
+                if testers[0].evidence().get("closedBeforeRequest") == 1 and all(
+                    tester.evidence().get("silentRequests") == 1 for tester in testers[1:]
+                ):
+                    return "inconclusive"
+            return None
+
+        verdict = wait_for(
+            round_summary,
+            timeout_seconds=55,
+            interval_seconds=1,
+            description=f"Kad native {firewall_case} round verdict",
+        )
+        witnesses = [tester.evidence() for tester in testers]
+        accepted = [row for row in witnesses if row.get("unbiasedRequests") == 1]
+        if len(accepted) < (1 if firewall_case == "keyed-probe" else 2):
+            raise RuntimeError("Native round has too few fresh helper requests")
+        for row in accepted:
+            if row.get("priorUdpPackets", 0) or row["firewallRequestDetails"] != [{
+                "internalPort": udp_port,
+                "externalPort": external_port,
+                "senderKeyPresent": True,
+                "priorUdp": False,
+            }]:
+                raise RuntimeError("Native tester saw a biased request or unexpected UDP port or key")
+            if firewall_case == "disconnect" and row.get("closedAfterRequest") != 1:
+                raise RuntimeError("Closed verdict lacked a post-request helper disconnect")
+            if firewall_case == "keyed-probe" and row.get("keyedUdpProbeReplies") != 2:
+                raise RuntimeError("Open verdict lacked keyed external and internal probes")
+        return {
+            "sourceRevision": runtime["source"]["revision"],
+            "executableSha256": dtt.file_sha256(executable),
+            "runnerRevision": dtt.git_head_revision(REPO_ROOT),
+            "knownContacts": contacts["contactCount"],
+            "verdict": verdict,
+            "testerWitnesses": witnesses,
+        }
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -171,8 +332,8 @@ def main(argv: list[str] | None = None) -> int:
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
+        require_app_exe=args.native_firewall_case is None,
     )
-    profile_seed_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     report: dict[str, object] = {
         "suite": SUITE_NAME,
         "status": "running",
@@ -184,7 +345,14 @@ def main(argv: list[str] | None = None) -> int:
     current_phase = "initializing"
 
     try:
+        if args.native_firewall_case:
+            current_phase = f"native_firewall_{args.native_firewall_case}"
+            report["checks"]["nativeFirewall"] = observe_native_firewall(paths, args)
+            report["status"] = "passed"
+            return 0
+
         current_phase = "resolve_clients"
+        profile_seed_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
         mfc_oracle_client = resolve_required_mfc_oracle(paths, args)
 
         current_phase = "allocate_ports"

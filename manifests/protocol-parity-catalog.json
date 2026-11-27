@@ -202,7 +202,8 @@
       "coverageGroupIds": [
         "source-exchange-two",
         "lowid-callbacks",
-        "queue-upload-state"
+        "queue-upload-state",
+        "download-slot-recycle"
       ]
     },
     {
@@ -1599,6 +1600,34 @@
           "path": "srchybrid/UploadClient.cpp"
         }
       ]
+    },
+    {
+      "coverageIds": ["download.slot-recycle-regrant"],
+      "groupId": "download-slot-recycle",
+      "authorityIds": ["stock-source", "stock-instrumented"],
+      "campaignIds": ["source-queue-callback"],
+      "deterministicRunner": "scripts/deterministic-two-client-transfer.py",
+      "protocolDomain": "ed2k.download.queue",
+      "publicDiscoveryRunner": null,
+      "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
+      "stateModel": {
+        "expected": "keep the same socket responsive while queued and finish the exact remaining range after regrant",
+        "start": "the downloader has an active reservation and accepted a valid prefix from the uploader",
+        "stimulus": "send OP_OUTOFPARTREQS, queue rank, a public-IP barrier, then a second upload grant"
+      },
+      "recordIds": ["stock.download.slot-recycle"],
+      "rustProofs": [
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/anti_abuse.rs",
+          "selector": "fn recycled_download_releases_block_and_resumes_on_the_same_socket"
+        }
+      ],
+      "sourceAnchors": [
+        {
+          "contains": ["case OP_OUTOFPARTREQS:", "client->SetDownloadState(DS_ONQUEUE", "client->ProcessAcceptUpload();"],
+          "path": "srchybrid/ListenSocket.cpp"
+        }
+      ]
     }
   ],
   "description": "Single eD2K/Kad coverage catalog with compact oracle evidence. Raw diagnostic JSONL and packet captures stay in generated reports.",
@@ -2930,6 +2959,19 @@
       "recordType": "state-sequence",
       "scenarioId": "stock.17.queue-upload.v1",
       "sequence": "waiting/ranked/granted/uploading/recycled; refused/silent; rank-flood/disconnect/ban; out-of-part/cooldown/quarantine",
+      "transport": "state"
+    },
+    {
+      "coverageIds": ["download.slot-recycle-regrant"],
+      "fixtureBase64": "Z3JhbnRlZD5yZXF1ZXN0ZWQ+cHJlZml4LXdyaXR0ZW4+cmVjeWNsZWQ+cmFua2VkPnNhbWUtc29ja2V0LXJlZ3JhbnQ+c3VmZml4LXJlcXVlc3RlZD5oYXNoLXZlcmlmaWVk",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 99,
+      "payloadDigest": "sha256:d27278a370f8543f6fefc25518215c4924a21e7778fdbff68cce235a6fbd3a8d",
+      "protocol": "ed2k",
+      "recordId": "stock.download.slot-recycle",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.download.slot-recycle.v1",
+      "sequence": "granted; requested; prefix written; recycled; ranked; same-socket regrant; suffix requested; hash verified",
       "transport": "state"
     },
     {
