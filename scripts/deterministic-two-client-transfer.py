@@ -85,6 +85,7 @@ DEFAULT_SERVER_PROTOCOL_FIXTURE_SIZE_BYTES = 10 * 1024 * 1024
 NATIVE_BROWSE_MAX_BUCKETS = 271
 NATIVE_BROWSE_FILES_PER_BUCKET = 369
 NATIVE_BROWSE_READY_SECONDS = 900
+NATIVE_BROWSE_CATALOG_TIMEOUT_SECONDS = 180
 DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
@@ -2964,8 +2965,11 @@ def observe_native_peer_browse(
         return None if page.get("status") == "pending" else page
 
     started_at = time.monotonic()
+    # Frozen aMule can still be answering the 9,964-row fixture after two
+    # minutes while the same connection continues to deliver file parts.
+    completion_timeout = NATIVE_BROWSE_CATALOG_TIMEOUT_SECONDS if expected_catalog is not None else 30
     page = live_common.wait_for(
-        completed_page, 120 if expected_catalog is not None else 30, 0.1, "completed native peer browse",
+        completed_page, completion_timeout, 0.1, "completed native peer browse",
     )
     if page.get("status") != "complete":
         raise RuntimeError(f"Native peer browse ended with status {page.get('status')!r}")
