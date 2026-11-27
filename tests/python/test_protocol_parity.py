@@ -281,7 +281,7 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
         "server.login.request",
         "transfer.block.uncompressed",
     ]
-    assert len(payload["evidenceReceipts"]) == 28
+    assert len(payload["evidenceReceipts"]) == 29
     assert payload["evidenceReceipts"][21]["coverageIds"] == ["client-udp.queue-full"]
     assert payload["evidenceReceipts"][22]["coverageIds"] == [
         "client-udp.file-not-found"
@@ -291,6 +291,12 @@ def test_catalog_report_records_per_id_evidence_and_complete_group_coverage() ->
     assert payload["evidenceReceipts"][25]["coverageIds"] == ["client-udp.v3"]
     assert payload["evidenceReceipts"][26]["coverageIds"] == ["client-udp.v2"]
     assert payload["evidenceReceipts"][27]["coverageIds"] == ["client-udp.v1"]
+    recycle = payload["evidenceReceipts"][28]
+    assert recycle["coverageIds"] == ["download.slot-recycle-regrant"]
+    assert [subject["authorityId"] for subject in recycle["subjects"]] == [
+        "rust-product",
+        "stock-instrumented",
+    ]
     assert [
         subject["authorityId"]
         for subject in payload["evidenceReceipts"][24]["subjects"]
