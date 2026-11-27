@@ -120,6 +120,7 @@ STOCK_ED2K_VECTOR_CONTRACTS = {
 # Rust proof selector.
 REQUIRED_STOCK_COVERAGE_IDS = frozenset(
     {
+        "download.slot-recycle-regrant",
         "client-udp.clear",
         "client-udp.encrypted",
         "client-udp.file-not-found",
@@ -384,7 +385,9 @@ def summarize_state_sequences(records: Iterable[dict[str, Any]], *, scenario_id:
     return sorted(sequence_records, key=_record_sort_key)
 
 
-def validate_protocol_catalog(path: Path, *, workspace_root: Path | None = None) -> ProtocolCatalogValidation:
+def validate_protocol_catalog(
+    path: Path, *, workspace_root: Path | None = None, rust_root: Path | None = None,
+) -> ProtocolCatalogValidation:
     """Validates the tracked protocol-parity catalog."""
 
     errors: list[str] = []
@@ -410,7 +413,7 @@ def validate_protocol_catalog(path: Path, *, workspace_root: Path | None = None)
 
     scenario_ids = _validate_scenarios(scenarios, errors)
     _validate_records(records, scenario_ids, errors)
-    _validate_stock_oracle(payload, records, errors, workspace_root=workspace_root)
+    _validate_stock_oracle(payload, records, errors, workspace_root=workspace_root, rust_root=rust_root)
     _validate_no_sensitive_payload(payload, errors)
     return ProtocolCatalogValidation(tuple(errors))
 
@@ -637,7 +640,12 @@ def run_validate_cli(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     manifest_path = (args.manifest_path or default_catalog_path(args.test_repo_root)).resolve()
     workspace_root = Path(os.environ["EMULEBB_WORKSPACE_ROOT"]) if os.environ.get("EMULEBB_WORKSPACE_ROOT") else None
-    validation = validate_protocol_catalog(manifest_path, workspace_root=workspace_root)
+    rust_root = None
+    if workspace_root and args.test_repo_root.resolve().is_relative_to(workspace_root.resolve() / "workspaces" / "agents"):
+        from .workspace_layout import resolve_selected_workspace_repo
+
+        rust_root = resolve_selected_workspace_repo(args.test_repo_root, "emulebb-rust")
+    validation = validate_protocol_catalog(manifest_path, workspace_root=workspace_root, rust_root=rust_root)
     payload = load_json(manifest_path)
     report = build_catalog_report(payload, validation) if isinstance(payload, dict) else {
         "schema": "emulebb-build-tests.protocol-parity-catalog-report",
@@ -1308,6 +1316,7 @@ def _validate_stock_oracle(
     errors: list[str],
     *,
     workspace_root: Path | None,
+    rust_root: Path | None,
 ) -> None:
     """Validates the source-anchored Phase-4 stock oracle coverage contract."""
 
@@ -1434,6 +1443,7 @@ def _validate_stock_oracle(
     if workspace_root is not None and isinstance(source_path, str) and isinstance(source_revision, str):
         _validate_stock_workspace_anchors(
             workspace_root.resolve(),
+            (rust_root or workspace_root / "repos" / "emulebb-rust").resolve(),
             source_path,
             source_revision,
             source_anchors,
@@ -1532,6 +1542,7 @@ def _validate_stock_ed2k_vector(
 
 def _validate_stock_workspace_anchors(
     workspace_root: Path,
+    rust_root: Path,
     source_path: str,
     source_revision: str,
     source_anchors: list[tuple[str, list[str], str]],
@@ -1539,7 +1550,6 @@ def _validate_stock_workspace_anchors(
     errors: list[str],
 ) -> None:
     baseline_root = (workspace_root / source_path).resolve()
-    rust_root = (workspace_root / "repos" / "emulebb-rust").resolve()
     if not baseline_root.is_dir():
         errors.append(f"stock oracle baseline path is missing: {baseline_root}")
         return

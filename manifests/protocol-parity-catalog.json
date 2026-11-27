@@ -2962,19 +2962,6 @@
       "transport": "state"
     },
     {
-      "coverageIds": ["download.slot-recycle-regrant"],
-      "fixtureBase64": "Z3JhbnRlZD5yZXF1ZXN0ZWQ+cHJlZml4LXdyaXR0ZW4+cmVjeWNsZWQ+cmFua2VkPnNhbWUtc29ja2V0LXJlZ3JhbnQ+c3VmZml4LXJlcXVlc3RlZD5oYXNoLXZlcmlmaWVk",
-      "fixtureEncoding": "utf8-state-sequence",
-      "fixtureLength": 99,
-      "payloadDigest": "sha256:d27278a370f8543f6fefc25518215c4924a21e7778fdbff68cce235a6fbd3a8d",
-      "protocol": "ed2k",
-      "recordId": "stock.download.slot-recycle",
-      "recordType": "state-sequence",
-      "scenarioId": "stock.download.slot-recycle.v1",
-      "sequence": "granted; requested; prefix written; recycled; ranked; same-socket regrant; suffix requested; hash verified",
-      "transport": "state"
-    },
-    {
       "coverageIds": ["server.offer.legacy-soft-budget"],
       "fixtureBase64": "bGVnYWN5LWxvZ2luO3NvZnQ9MzUwO2NhdGFsb2c9MTAwMDtvZmZlcj0yMDA7b2ZmZXI9MTUwO3N0b3A7cmVjb25uZWN0O2J1ZGdldC1yZXNldA==",
       "fixtureEncoding": "utf8-state-sequence",
@@ -3018,6 +3005,19 @@
       "scenarioId": "stock.20.kad-ingress-admission.v1",
       "sequence": "decode;correlate-without-consume;ban-flood-port53-admit;reject-no-mutation;valid-learn-consume-dispatch",
       "transport": "udp"
+    },
+    {
+      "coverageIds": ["download.slot-recycle-regrant"],
+      "fixtureBase64": "Z3JhbnRlZD5yZXF1ZXN0ZWQ+cHJlZml4LXdyaXR0ZW4+cmVjeWNsZWQ+cmFua2VkPnNhbWUtc29ja2V0LXJlZ3JhbnQ+c3VmZml4LXJlcXVlc3RlZD5oYXNoLXZlcmlmaWVk",
+      "fixtureEncoding": "utf8-state-sequence",
+      "fixtureLength": 99,
+      "payloadDigest": "sha256:d27278a370f8543f6fefc25518215c4924a21e7778fdbff68cce235a6fbd3a8d",
+      "protocol": "ed2k",
+      "recordId": "stock.download.slot-recycle",
+      "recordType": "state-sequence",
+      "scenarioId": "stock.21.download-slot-recycle.v1",
+      "sequence": "granted; requested; prefix written; recycled; ranked; same-socket regrant; suffix requested; hash verified",
+      "transport": "state"
     }
   ],
   "scenarioSource": "stock/community source anchors, native protocol fixtures, and diagnostic evidence normalization",
@@ -3159,12 +3159,18 @@
       "protocol": "kad2",
       "scenarioId": "stock.20.kad-ingress-admission.v1",
       "source": "community-stock-source"
+    },
+    {
+      "description": "Download-side upload slot recycle and regrant on a single TCP session.",
+      "protocol": "ed2k",
+      "scenarioId": "stock.21.download-slot-recycle.v1",
+      "source": "community-stock-source"
     }
   ],
   "schema": "emulebb-build-tests.protocol-parity-catalog",
   "stockAuthority": {
     "derivation": "Canonical synthetic fixtures transcribed from pinned stock wire layouts and state gates. Each coverage group is source-anchored and paired with executable Rust proof selectors.",
-    "requiredCoverageCount": 108,
+    "requiredCoverageCount": 109,
     "sourcePath": "repos/emule-stock",
     "sourceRevision": "ac3d52eafd88e9f6d9e0c2204c6dbead18db750b"
   }
