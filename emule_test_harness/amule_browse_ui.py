@@ -38,6 +38,7 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
     """Drive the frozen Windows controls from a PID-scoped pywinauto connection."""
     import psutil
     from pywinauto import Application
+    from pywinauto.win32defines import WM_CHAR, WM_COMMAND
 
     if Path(psutil.Process(process_id).exe()).name.lower() != "amule.exe":
         raise ValueError("Peer browse UI requires the isolated monolithic amule.exe PID")
@@ -65,14 +66,13 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
     main = wait("main window", lambda: unique([
         w for w in app.windows() if w.is_visible() and w.descendants(class_name="ToolbarWindow32")
     ]))
-    main.set_focus()
 
     def switch_page(command):
         for toolbar in main.descendants(class_name="ToolbarWindow32"):
             if toolbar.is_visible():
                 for index in range(toolbar.button_count()):
                     if toolbar.get_button_struct(index).idCommand == command:
-                        toolbar.button(index).click_input()
+                        toolbar.button(index).click()
                         return
         raise RuntimeError("aMule toolbar does not expose the requested page")
 
@@ -89,19 +89,15 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
         control = by_id(owner, control_id)
         return list_body(control) if control else None
 
-    def menu_item(body, label):
-        def row_menu():
-            body.click_input(coords=(25, 8))
-            body.click_input(button="right", coords=(25, 8))
-            return unique([w for w in app.windows(class_name="#32768") if w.is_visible()])
+    def row_command(body, command):
+        # The popup command belongs to the wx list, while its child renders
+        # the rows. Select through the child and post the menu's native command
+        # to its owner without taking foreground input from the desktop.
+        body.click(coords=(25, 8))
+        body.parent().post_message(WM_COMMAND, command)
 
-        popup = wait("owned context menu for " + label, row_menu)
-        item = unique([item for item in popup.menu().items()
-                       if item.text().replace("&", "").split("\t")[0].casefold() == label.casefold()])
-        if item is None or not item.is_enabled():
-            popup.type_keys("{ESC}")
-            raise RuntimeError(f"aMule menu action unavailable: {label}")
-        return item
+    def press_button(button):
+        button.parent().post_message(WM_COMMAND, button.control_id(), button.handle)
 
     def check_details(title, field_id, close_id, expected):
         dialog = wait(title, lambda: unique([w for w in app.windows(title=title) if w.is_visible()]))
@@ -112,7 +108,7 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
         finally:
             close_button = by_id(dialog, close_id)
             if close_button:
-                close_button.click_input()
+                press_button(close_button)
             else:
                 dialog.close()
         wait(title + " dismissal", lambda: True if main.is_enabled() else None)
@@ -127,13 +123,14 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
         raise RuntimeError("Isolated aMule already has a search result before View Files")
     switch_page(10348)  # Transfers
     anchor = wait("isolated download anchor list", lambda: body_by_id(main, 10028))
-    menu_item(anchor, "Show file details").click_input()
+    # Menu IDs from frozen src/include/common/MenuIDs.h (wxID_HIGHEST=5999).
+    row_command(anchor, 6036)  # MP_METINFO
     check_details("File Details", 10033, 5100, anchor_name)
-    anchor.click_input(coords=(25, 8))
+    anchor.click(coords=(25, 8))
     peers = wait("anchor's source list", lambda: body_by_id(main, 10031))
-    menu_item(peers, "Show Details").click_input()
+    row_command(peers, 6001)  # MP_DETAIL
     check_details("Client Details", 10091, 10112, peer_name)
-    menu_item(peers, "View Files").click_input()
+    row_command(peers, 6004)  # MP_SHOWLIST
     switch_page(10347)  # Searches
     result = wait("new peer browse result list", lambda: body_by_id(notebook, result_id))
 
@@ -156,15 +153,14 @@ def _read_native_browse(*, process_id, peer_name, anchor_name, file_name, timeou
     # The native Download button becomes enabled only after the list has
     # received a row and selected it. Then type-to-select the canary.
     def select_result():
-        result.click_input(coords=(25, 8))
+        result.click(coords=(25, 8))
         button = by_id(main, 10021)
         return button if button and button.is_enabled() else None
 
     download = wait("selectable peer browse result", select_result)
-    if not result.has_keyboard_focus():
-        raise RuntimeError("aMule peer browse list has no keyboard focus")
-    result.type_keys(file_name, pause=0.04, set_foreground=False, vk_packet=False)
-    download.click_input()
+    for character in file_name:
+        result.post_message(WM_CHAR, ord(character), 1)
+    press_button(download)
     return {"peerName": peer_name, "anchorName": anchor_name,
             "resultWindow": result.handle, "processId": process_id,
             **({"resultCount": expected_count} if expected_count is not None else {})}
