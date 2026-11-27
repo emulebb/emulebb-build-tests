@@ -12,6 +12,21 @@ from emule_test_harness import android_apk_peer as subject
 IDENTITY = {"sourceRevision": "a" * 40, "version": "0.1.0-test", "channel": "development"}
 
 
+@pytest.mark.parametrize("prefix,bind_ip,interface,vpn_mode,expected", [
+    (("-s", "device"), None, None, "off", True),
+    (("-s", "device"), "192.0.2.10", None, "off", False),
+    (("-s", "device"), None, "wifi", "off", False),
+    (("-s", "device"), None, None, "block", False),
+    (subject.PREFIX, None, None, "off", False),
+])
+def test_physical_peer_inherits_only_the_automatic_route(prefix, bind_ip, interface, vpn_mode, expected):
+    effective = {
+        "network": {"p2p": {"bindIp": bind_ip, "bindInterface": interface}},
+        "security": {"vpnGuard": {"mode": vpn_mode}},
+    }
+    assert subject._uses_automatic_peer_route(prefix, effective) is expected
+
+
 @pytest.mark.parametrize("response,presence", [
     ({"id": "12", "hash": "b" * 32, "state": "delivering", "progress": 1.0}, "present"),
     ({"id": "12", "hash": "c" * 32, "state": "delivering", "progress": 1.0}, "ambiguous"),
