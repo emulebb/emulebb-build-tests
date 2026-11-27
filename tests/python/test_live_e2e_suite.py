@@ -1077,8 +1077,8 @@ def test_native_sx2_owns_its_bind_addresses(tmp_path: Path, selection: str | Non
     assert ("--p2p-bind-interface-address" in command) == (selection is None)
 
 
-def test_native_slot_recycle_preserves_exact_runtime_overrides(tmp_path: Path) -> None:
-    stock = tmp_path / "stock.exe"
+def test_native_slot_recycle_uses_frozen_stock_and_owns_peer_binding(tmp_path: Path) -> None:
+    mfc = tmp_path / "emulebb.exe"
     server = tmp_path / "server.exe"
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("native-download-slot-recycle"),
@@ -1088,13 +1088,18 @@ def test_native_slot_recycle_preserves_exact_runtime_overrides(tmp_path: Path) -
         configuration="Release",
         artifacts_dir=tmp_path / "artifacts",
         lan_bind_addr="192.0.2.5",
-        client2_app_exe=stock,
+        client2_app_exe=mfc,
         ed2k_server_exe=server,
+        p2p_bind_interface_name="Test Ethernet",
+        p2p_bind_interface_address="192.0.2.5",
     )
     assert script_name(command) == "deterministic-two-client-transfer.py"
     assert option_values(command, "--client2-identity") == ["stock_emule"]
-    assert option_values(command, "--client2-app-exe") == [str(stock)]
+    assert option_values(command, "--client2-app-exe") == []
     assert option_values(command, "--ed2k-server-exe") == [str(server)]
+    assert option_values(command, "--transfer-scenario") == ["native-sx2-callback"]
+    assert "--p2p-bind-interface-name" not in command
+    assert "--p2p-bind-interface-address" not in command
     assert "--verify-download-slot-recycle" in command
 
 

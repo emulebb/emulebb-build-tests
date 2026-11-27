@@ -132,7 +132,6 @@ ED2K_SERVER_EXE_SUITE_NAMES = {
 }
 CLIENT2_APP_EXE_SUITE_NAMES = {
     "deterministic-two-client-transfer",
-    "native-download-slot-recycle",
     "multi-client-p2p-matrix",
     "godzilla-local-swarm",
     "local-ed2k-search-soak",
@@ -215,6 +214,8 @@ LAN_BIND_ADDR_SUITE_NAMES = frozenset(
         "native-kad-firewall-disconnect",
         "native-kad-firewall-keyed-probe",
         "native-kad-firewall-silence",
+        "native-kad-buddy-readiness",
+        "native-kad-target-correlation",
         "native-download-slot-recycle",
         "local-kad-swarm",
         "multi-client-p2p-matrix",
@@ -392,6 +393,20 @@ SUITE_SPECS = (
     ),
     SuiteSpec(
         name="native-kad-firewall-silence",
+        script_name="local-kad-mixed-client-swarm.py",
+        category="protocol",
+        network_scope="lan",
+        default_enabled=False,
+    ),
+    SuiteSpec(
+        name="native-kad-buddy-readiness",
+        script_name="local-kad-mixed-client-swarm.py",
+        category="protocol",
+        network_scope="lan",
+        default_enabled=False,
+    ),
+    SuiteSpec(
+        name="native-kad-target-correlation",
         script_name="local-kad-mixed-client-swarm.py",
         category="protocol",
         network_scope="lan",
@@ -1313,11 +1328,17 @@ def build_suite_command(
     if spec.name == "deterministic-two-client-transfer":
         command.extend(["--protocol-case", "obfuscated-preferred"])
     if spec.name == "native-download-slot-recycle":
-        command.extend(["--client2-identity", "stock_emule", "--verify-download-slot-recycle"])
+        command.extend([
+            "--client2-identity", "stock_emule",
+            "--transfer-scenario", "native-sx2-callback",
+            "--verify-download-slot-recycle",
+        ])
     firewall_case = {
         "native-kad-firewall-disconnect": "disconnect",
         "native-kad-firewall-keyed-probe": "keyed-probe",
         "native-kad-firewall-silence": "silent",
+        "native-kad-buddy-readiness": "buddy",
+        "native-kad-target-correlation": "correlation",
     }.get(spec.name)
     if firewall_case:
         command.extend(["--native-firewall-case", firewall_case])
@@ -1329,7 +1350,6 @@ def build_suite_command(
         spec.name
         in {
             "deterministic-two-client-transfer",
-            "native-download-slot-recycle",
             "multi-client-p2p-matrix",
             "godzilla-local-swarm",
             "local-ed2k-search-soak",
@@ -1346,7 +1366,6 @@ def build_suite_command(
         spec.name
         in {
             "deterministic-two-client-transfer",
-            "native-download-slot-recycle",
             "multi-client-p2p-matrix",
             "godzilla-local-swarm",
             "local-ed2k-search-soak",

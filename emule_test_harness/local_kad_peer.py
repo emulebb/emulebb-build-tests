@@ -152,7 +152,7 @@ class LocalKadPeer:
         """Return counters without peer addresses or UDP verification keys."""
 
         shapes = []
-        for sources in self._sources.values():
+        for target, sources in self._sources.items():
             for size, record in sources.values():
                 tags = {
                     name: value
@@ -162,11 +162,13 @@ class LocalKadPeer:
                 }
                 shapes.append(
                     {
+                        "target": target.hex(),
                         "sizeBytes": size,
                         "sourceType": tags.get(0xFF),
                         "tcpPortPresent": bool(tags.get(0xFD)),
                         "udpPortPresent": bool(tags.get(0xFC)),
                         "connectOptions": tags.get(0xF3),
+                        "buddyHashPresent": bool(tags.get(0xF8)),
                     }
                 )
         return {
