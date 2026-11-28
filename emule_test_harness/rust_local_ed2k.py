@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 from . import ed2k_wire, rust_client
+from .vm_guest_profiles import api_rows
 
 
 class ServerSearchFailure(RuntimeError):
@@ -266,11 +267,16 @@ def wait_for_server_list_metadata(
         status = request_json(base_url, "GET", "/api/v1/status", api_key)
         nested = status.get("servers")
         connection_status = nested if isinstance(nested, dict) else status
-        server_entity = request_json(
-            base_url,
-            "GET",
-            f"/api/v1/servers/{metadata_server_address}:{metadata_server_port}",
-            api_key,
+        # WHY: The fixture knows an endpoint, while REST entity routes use
+        # each client's own server ID. These isolated profiles have one page.
+        servers = api_rows(request_json(base_url, "GET", "/api/v1/servers", api_key), "servers")
+        server_entity = next(
+            (
+                server for server in servers
+                if str(server.get("address") or "").casefold() == metadata_server_address.casefold()
+                and server.get("port") == metadata_server_port
+            ),
+            {},
         )
         last_status.clear()
         last_status.update(
@@ -301,9 +307,6 @@ def wait_for_server_list_metadata(
             and str(current.get("address") or "").casefold()
             == current_server_address.casefold()
             and current.get("port") == current_server_port
-            and str(server_entity.get("address") or "").casefold()
-            == metadata_server_address.casefold()
-            and server_entity.get("port") == metadata_server_port
             and server_entity.get("name") == expected_name
             and server_entity.get("description") == expected_description
             and counters_match

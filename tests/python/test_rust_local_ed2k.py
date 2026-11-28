@@ -168,7 +168,11 @@ def test_wait_for_server_list_metadata_joins_active_server_to_distinct_entity(mo
 
     def request(_base_url, method, path, _api_key, _body=None):
         calls.append((method, path))
-        return next(status_responses) if path == "/api/v1/status" else next(entity_responses)
+        if path == "/api/v1/status":
+            return next(status_responses)
+        assert path == "/api/v1/servers"
+        entity = next(entity_responses)
+        return {"items": [{**entity, "port": 4661, "id": "1"}, {**entity, "id": "2"}]}
 
     monkeypatch.setattr(rust_local_ed2k, "request_json", request)
     monkeypatch.setattr(rust_local_ed2k.time, "sleep", lambda _seconds: None)
@@ -188,11 +192,12 @@ def test_wait_for_server_list_metadata_joins_active_server_to_distinct_entity(mo
     )
 
     assert result["serverEntity"]["name"] == "emulebb-local-e2e"
+    assert result["serverEntity"]["id"] == "2"
     assert calls == [
         ("GET", "/api/v1/status"),
-        ("GET", "/api/v1/servers/127.0.0.1:4761"),
+        ("GET", "/api/v1/servers"),
         ("GET", "/api/v1/status"),
-        ("GET", "/api/v1/servers/127.0.0.1:4761"),
+        ("GET", "/api/v1/servers"),
     ]
 
 
