@@ -110,6 +110,17 @@ def _positive_body_field(record: dict[str, Any], field: str) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
+def _accepted_exact_payload(record: dict[str, Any], file_hash: str, job_id: str | None) -> bool:
+    keys = record.get("keys")
+    if not isinstance(keys, dict) or not _positive_body_field(record, "bytes"):
+        return False
+    if "fileHash" in keys:
+        return record_file_hash(record) == file_hash
+    # WHY: Native payload events may identify the download solely by job ID.
+    # Only the job already tied to this exact file can supply this evidence.
+    return isinstance(job_id, str) and bool(job_id) and keys.get("jobId") == job_id
+
+
 def _outcome(record: dict[str, Any], field: str, expected: str) -> bool:
     return str(_body(record).get(field) or "").strip().lower() == expected
 
@@ -865,6 +876,12 @@ def build_transfer_diagnostic_evidence(
             expected_payload_encoding,
         ),
     }
+    rust_job_id = (
+        rust_manifest.get("job_id")
+        if rust_manifest and rust_manifest.get("file_hash") == normalized_hash
+        and rust_manifest.get("file_size") == expected_file_size
+        else None
+    )
     rust_checks = {
         "sourceEngaged": _check(
             "Rust accepted the exact source",
@@ -882,8 +899,7 @@ def build_transfer_diagnostic_evidence(
                 rust,
                 family="sched",
                 event="download_payload_accepted",
-                file_hash=normalized_hash,
-                predicate=lambda record: _positive_body_field(record, "bytes"),
+                predicate=lambda record: _accepted_exact_payload(record, normalized_hash, rust_job_id),
             ),
         ),
         "taskSettled": _check(

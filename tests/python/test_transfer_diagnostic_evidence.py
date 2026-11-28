@@ -332,6 +332,35 @@ def test_build_transfer_diagnostic_evidence_requires_complete_causal_chain() -> 
     evidence.require_transfer_diagnostic_evidence(report)
 
 
+@pytest.mark.parametrize(
+    ("event_keys", "expected"),
+    [
+        ({"jobId": "7", "generation": 1}, True),
+        ({"jobId": "8", "generation": 1}, False),
+        ({"jobId": "7", "fileHash": "22" * 16}, False),
+    ],
+)
+def test_payload_may_use_the_exact_admitted_job_id(event_keys, expected) -> None:
+    rust, mfc = complete_records()
+    for event in rust:
+        if event["event"] == "download_payload_accepted":
+            event["keys"] = event_keys
+
+    report = evidence.build_transfer_diagnostic_evidence(
+        file_hash=FILE_HASH,
+        expected_file_name=FILE_NAME,
+        expected_file_size=FILE_SIZE,
+        expected_transport_mode="plaintext",
+        expected_payload_encoding="uncompressed",
+        rust_manifest={**complete_manifest(), "job_id": "7"},
+        rust_records=rust,
+        mfc_records=mfc,
+    )
+
+    assert report["clients"]["rust"]["checks"]["payloadAccepted"]["ok"] is expected
+    assert report["ordering"]["rust"]["ok"] is expected
+
+
 def test_retired_completed_job_uses_explicit_verified_content_hashsets() -> None:
     rust, mfc = complete_records()
     manifest = complete_manifest()
