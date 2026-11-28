@@ -34,6 +34,40 @@ def test_tracked_protocol_oracle_manifest_validates() -> None:
     assert validation.errors == ()
 
 
+def test_recorded_authority_validation_still_requires_the_exact_commit(monkeypatch, tmp_path: Path) -> None:
+    checkout = tmp_path / "reference"
+    checkout.mkdir()
+    pinned = "a" * 40
+    observed = "b" * 40
+    available = True
+
+    def fake_run(command, **kwargs):
+        assert kwargs["cwd"] == checkout
+        if command == ["git", "rev-parse", "HEAD"]:
+            return protocol_parity.subprocess.CompletedProcess(command, 0, observed, "")
+        assert command == ["git", "rev-parse", "--verify", f"{pinned}^{{commit}}"]
+        return protocol_parity.subprocess.CompletedProcess(command, 0 if available else 1, pinned, "")
+
+    monkeypatch.setattr(protocol_parity.subprocess, "run", fake_run)
+    errors: list[str] = []
+    protocol_parity._validate_authority_checkout(
+        tmp_path, "reference", "reference", pinned, errors, verify_recorded_revision=False,
+    )
+    assert errors == [f"authority reference revision drift: expected {pinned}, got {observed}"]
+
+    errors.clear()
+    protocol_parity._validate_authority_checkout(
+        tmp_path, "reference", "reference", pinned, errors, verify_recorded_revision=True,
+    )
+    assert errors == []
+
+    available = False
+    protocol_parity._validate_authority_checkout(
+        tmp_path, "reference", "reference", pinned, errors, verify_recorded_revision=True,
+    )
+    assert errors == [f"authority reference recorded commit is unavailable: {pinned}"]
+
+
 def test_tracked_stock_oracle_owns_every_required_phase_four_behavior_once() -> None:
     manifest_path = default_catalog_path(Path(__file__).resolve().parents[2])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))

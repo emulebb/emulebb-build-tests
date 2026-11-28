@@ -386,7 +386,11 @@ def summarize_state_sequences(records: Iterable[dict[str, Any]], *, scenario_id:
 
 
 def validate_protocol_catalog(
-    path: Path, *, workspace_root: Path | None = None, rust_root: Path | None = None,
+    path: Path,
+    *,
+    workspace_root: Path | None = None,
+    rust_root: Path | None = None,
+    verify_recorded_authorities: bool = False,
 ) -> ProtocolCatalogValidation:
     """Validates the tracked protocol-parity catalog."""
 
@@ -401,6 +405,7 @@ def validate_protocol_catalog(
         errors,
         repo_root=path.resolve().parent.parent,
         workspace_root=workspace_root,
+        verify_recorded_authorities=verify_recorded_authorities,
     )
     scenarios = payload.get("scenarios")
     records = payload.get("records")
@@ -742,6 +747,7 @@ def _validate_catalog_contract(
     *,
     repo_root: Path,
     workspace_root: Path | None,
+    verify_recorded_authorities: bool,
 ) -> None:
     """Validates catalog ownership, evidence semantics, and executable routes."""
 
@@ -793,6 +799,7 @@ def _validate_catalog_contract(
                 path_value,
                 revision,
                 errors,
+                verify_recorded_revision=verify_recorded_authorities,
             )
 
     groups = payload.get("coverageGroups")
@@ -1228,6 +1235,8 @@ def _validate_authority_checkout(
     relative_path: str,
     revision: Any,
     errors: list[str],
+    *,
+    verify_recorded_revision: bool,
 ) -> None:
     root = (workspace_root / relative_path).resolve()
     if workspace_root not in root.parents or not root.is_dir():
@@ -1235,8 +1244,9 @@ def _validate_authority_checkout(
         return
     if revision is None:
         return
+    ref = ["--verify", f"{revision}^{{commit}}"] if verify_recorded_revision else ["HEAD"]
     completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", *ref],
         cwd=root,
         check=False,
         capture_output=True,
@@ -1244,7 +1254,10 @@ def _validate_authority_checkout(
     )
     observed = completed.stdout.strip() if completed.returncode == 0 else "unavailable"
     if observed != revision:
-        errors.append(f"authority {authority_id} revision drift: expected {revision}, got {observed}")
+        if verify_recorded_revision:
+            errors.append(f"authority {authority_id} recorded commit is unavailable: {revision}")
+        else:
+            errors.append(f"authority {authority_id} revision drift: expected {revision}, got {observed}")
 
 
 def _require_exact_string_list(
