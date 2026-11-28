@@ -37,7 +37,7 @@ def test_build_checks_reports_complete_binary_state_and_anchor_evidence() -> Non
         "binaryVectorCount": 19,
         "stateVectorCount": 6,
         "sourceAnchorCount": 31,
-        "rustProofSelectorCount": 57,
+        "rustProofSelectorCount": 62,
         "rustProofExecutionRequired": False,
         "rustProofExpectedPackageCount": 5,
         "rustProofPackageCount": 0,
