@@ -25,7 +25,7 @@
     {
       "authorityId": "ed2k-server-dependency",
       "path": "repos/ed2k-server",
-      "revision": "2af36de86368dde590abad980bcb5c92e9bce696",
+      "revision": "ce51a2b241520d97fdd86b5aaf6ad2a234761bd8",
       "role": "upstream-clean-deterministic-dependency"
     },
     {
@@ -37,7 +37,7 @@
     {
       "authorityId": "amule-head",
       "path": "repos/amule",
-      "revision": "8e2afa46b1a73177e6eff3a8a7a4ab6ce91a89ec",
+      "revision": "14f6e12371ca719432ac1e9223b3a198419628c3",
       "role": "analysis-only"
     }
   ],
