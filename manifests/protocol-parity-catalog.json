@@ -1275,6 +1275,10 @@
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/listener/session.rs",
           "selector": "fn held_buddy_uses_receive_lease_instead_of_upload_queue_timeout"
+        },
+        {
+          "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/serving.rs",
+          "selector": "fn held_inbound_buddy_expires_unless_received_activity_is_valid"
         }
       ],
       "sourceAnchors": [
@@ -1528,9 +1532,9 @@
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
       "stateModel": {
-        "expected": "complete supported records and bootstrap mode import correctly, and the Rust profile owner checkpoints and restores the active routing state",
-        "start": "nodes.dat is absent or contains a supported layout, with optional truncated or trailing bytes",
-        "stimulus": "decode versions 0 through 3 and checkpoint and restore the Rust runtime"
+        "expected": "ordinary imports retain complete routing records despite trailing or partial records. Version 3 edition 1 requires a nonzero count and exactly 25 bytes per record. Its 50 nearest eligible distinct endpoints are transient probe targets. A responding peer enters live routing through the bootstrap exchange, and SQLite restores durable routing after reopening",
+        "start": "ordinary nodes.dat sources and version 3 edition 1 archives with exact, truncated, trailing, or duplicate records",
+        "stimulus": "import the source, probe an edition 1 endpoint, and reopen the SQLite routing snapshot"
       },
       "recordIds": [
         "stock.nodes-dat.corpus"
@@ -1543,6 +1547,22 @@
         {
           "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
           "selector": "fn record_boundaries_preserve_complete_prefixes_and_ignore_trailing_bytes"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
+          "selector": "fn bootstrap_only_nodes_dat_requires_exact_nonempty_framing_and_deduplicates_endpoints"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
+          "selector": "fn bootstrap_only_nodes_dat_retains_only_the_nearest_fifty_endpoints"
+        },
+        {
+          "path": "crates/emulebb-kad-dht/src/node/bootstrap.rs",
+          "selector": "fn bootstrap_only_nodes_dat_learns_the_responder_after_a_wire_exchange"
+        },
+        {
+          "path": "crates/emulebb-core/src/tests/core_config.rs",
+          "selector": "fn bootstrap_only_nodes_dat_leaves_the_sqlite_routing_snapshot_unchanged"
         },
         {
           "path": "crates/emulebb-core/src/persistence_owner/kad_tests.rs",
@@ -1558,6 +1578,8 @@
           "contains": [
             "void CRoutingZone::ReadFile",
             "special bootstrap-only nodes.dat",
+            "void CRoutingZone::ReadBootstrapNodesDat",
+            "uNumContacts * 25ull",
             "Skipped storing nodes.dat"
           ],
           "path": "srchybrid/kademlia/routing/RoutingZone.cpp"
