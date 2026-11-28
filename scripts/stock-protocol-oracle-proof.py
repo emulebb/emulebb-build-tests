@@ -39,10 +39,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts-dir", type=Path)
     parser.add_argument("--manifest-path", type=Path)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--execute-rust-proofs",
         action="store_true",
         help="Run every Rust package containing a cited oracle proof through workspace orchestration.",
+    )
+    mode.add_argument(
+        "--verify-recorded-authorities",
+        action="store_true",
+        help="For a source-only audit, resolve recorded authority commits without requiring them to be checked out.",
     )
     return parser.parse_args(argv)
 
@@ -176,7 +182,11 @@ def main(argv: list[str] | None = None) -> int:
     latest_dir = output_root / "reports" / SUITE_NAME / "latest"
     started = datetime.now(UTC).isoformat()
 
-    validation = validate_protocol_catalog(manifest_path, workspace_root=workspace_root)
+    validation = validate_protocol_catalog(
+        manifest_path,
+        workspace_root=workspace_root,
+        verify_recorded_authorities=args.verify_recorded_authorities,
+    )
     manifest = load_json(manifest_path)
     rust_proof_runs = run_rust_proof_packages(workspace_root) if args.execute_rust_proofs else []
     checks = build_checks(
@@ -192,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         "startedAtUtc": started,
         "finishedAtUtc": datetime.now(UTC).isoformat(),
         "manifestPath": str(manifest_path),
+        "authorityVerification": "recorded-commits" if args.verify_recorded_authorities else "checked-out-commits",
         "rustProofExecutions": rust_proof_runs,
         "checks": {"stock_protocol_oracle_requirements": checks},
     }

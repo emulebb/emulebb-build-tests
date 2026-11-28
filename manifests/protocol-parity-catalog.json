@@ -964,7 +964,7 @@
         },
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
-          "selector": "fn active_download_applies_callback_firewall_ack_and_tolerates_unknown_opcodes"
+          "selector": "fn active_download_applies_callback_but_rejects_outbound_firewall_ack"
         }
       ],
       "sourceAnchors": [
@@ -1254,7 +1254,7 @@
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine", "local-cross-client"],
       "stateModel": {
-        "expected": "both established directions apply mutable identity and callback/firewall controls, tolerate a valid unknown opcode, and retain a held buddy until its receive lease expires",
+        "expected": "both directions apply established identity and callback controls, only an authorized inbound firewall ACK verifies reachability, valid unknown opcodes are tolerated, and a held buddy expires on its receive lease",
         "start": "HELLO-complete inbound and outbound peer connections with an accepted buddy socket",
         "stimulus": "deliver CHANGE_CLIENT_ID, CALLBACK, firewall ACK, one valid unknown frame, and deterministic buddy silence"
       },
@@ -1266,7 +1266,7 @@
         },
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/download/startup_metadata.rs",
-          "selector": "fn active_download_applies_callback_firewall_ack_and_tolerates_unknown_opcodes"
+          "selector": "fn active_download_applies_callback_but_rejects_outbound_firewall_ack"
         },
         {
           "path": "crates/emulebb-ed2k/src/ed2k_tcp/tests/listener/startup.rs",
@@ -1528,9 +1528,9 @@
       "publicDiscoveryRunner": null,
       "requiredEvidenceLayers": ["codec-transcript", "deterministic-state-machine"],
       "stateModel": {
-        "expected": "exact supported layout persists and reloads the same contacts and bootstrap mode",
-        "start": "nodes.dat is absent or contains one supported version",
-        "stimulus": "load, persist, and restart with versions 0 through 3"
+        "expected": "complete supported records and bootstrap mode import correctly, and the Rust profile owner checkpoints and restores the active routing state",
+        "start": "nodes.dat is absent or contains a supported layout, with optional truncated or trailing bytes",
+        "stimulus": "decode versions 0 through 3 and checkpoint and restore the Rust runtime"
       },
       "recordIds": [
         "stock.nodes-dat.corpus"
@@ -1542,11 +1542,15 @@
         },
         {
           "path": "crates/emulebb-kad-dht/src/bootstrap.rs",
-          "selector": "fn exact_record_sizes_reject_truncation_and_trailing_bytes"
+          "selector": "fn record_boundaries_preserve_complete_prefixes_and_ignore_trailing_bytes"
         },
         {
-          "path": "crates/emulebb-core/src/network_api.rs",
-          "selector": "fn learned_contact_is_atomically_persisted_and_reloaded_on_restart"
+          "path": "crates/emulebb-core/src/persistence_owner/kad_tests.rs",
+          "selector": "fn kad_runtime_checkpoints_only_changed_state_and_seals_on_finish"
+        },
+        {
+          "path": "crates/emulebb-core/src/persistence_owner/kad_tests.rs",
+          "selector": "fn attached_runtime_restores_all_saved_fields_and_bound_key"
         }
       ],
       "sourceAnchors": [
